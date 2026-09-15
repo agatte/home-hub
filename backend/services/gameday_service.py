@@ -374,9 +374,12 @@ class GameDayService:
             return False, "game already finalized"
 
         try:
+            house_state = self._automation.house_state
             current_mode = self._automation.current_mode
         except Exception:
-            return False, "automation mode unavailable"
+            return False, "automation authority unavailable"
+        if house_state != "home":
+            return False, f"house state={house_state}"
         if current_mode != "gameday":
             return False, f"automation mode={current_mode}"
         return True, "current Game Day authority"

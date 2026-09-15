@@ -105,6 +105,7 @@ def _make_orchestrator(
         automation.current_mode = automation_mode
         automation.house_state = house_state
         automation.is_dnd_active = MagicMock(return_value=dnd_active)
+        automation.transient_light_write_block_reason = MagicMock(return_value=None)
         automation.supersede_screen_sync_lights = MagicMock()
         automation.reapply_current_mode = AsyncMock()
 
@@ -348,6 +349,7 @@ async def test_transient_sequence_defers_then_reconciles_authoritative_mode(monk
     async def blocking_lights(*_args, **_kwargs):
         entered.set()
         await release.wait()
+        return {"1"}
 
     monkeypatch.setattr(orch, "_run_light_steps", blocking_lights)
     task = asyncio.create_task(orch._run_sequence("big_play", {}, play=None))
@@ -364,15 +366,14 @@ async def test_transient_sequence_defers_then_reconciles_authoritative_mode(monk
 
 
 @pytest.mark.asyncio
-async def test_transient_sequence_relinquishes_screen_sync_before_reconcile():
+async def test_transient_sequence_preserves_newer_screen_sync_owner_on_reconcile():
     orch, _, _, _, _ = _make_orchestrator()
     await orch._run_sequence("big_play", {}, play=None)
 
-    expected = {
-        str(step.light_id)
-        for step in CelebrationOrchestrator.SEQUENCES["big_play"].light_steps
-    }
-    orch._automation.supersede_screen_sync_lights.assert_called_once_with(expected)
+    # Reconciliation must never clear ScreenSync ownership. A fresh frame can
+    # acquire the lamp after the celebration releases the shared boundary but
+    # before TTS finishes; central reapply will preserve that newer owner.
+    orch._automation.supersede_screen_sync_lights.assert_not_called()
     orch._automation.reapply_current_mode.assert_awaited_once_with(
         force_resend=True,
     )
@@ -956,6 +957,8 @@ class TestEventLoggerWiring:
         automation = MagicMock()
         automation.current_mode = "gameday"
         automation.is_dnd_active = MagicMock(return_value=False)
+        automation.transient_light_write_block_reason = MagicMock(return_value=None)
+        automation.reapply_current_mode = AsyncMock()
 
         event_logger = MagicMock()
         event_logger.log_light_adjustment = AsyncMock(return_value=None)
@@ -1319,3 +1322,51 @@ class TestSemanticMomentumDispatch:
         assert semantic_peak == 215
         assert semantic_peak < big_play_peak
         assert semantic.tts_lines == []
+
+
+@pytest.mark.asyncio
+async def test_direct_celebration_skips_protected_light_before_hue_write():
+    orch, hue, _, _, _ = _make_orchestrator()
+    orch._automation.transient_light_write_block_reason.side_effect = (
+        lambda light_id: "protected light 2" if light_id == "2" else None
+    )
+    steps = [
+        LightStep(light_id="1", delay_ms=0, state={"on": True, "bri": 200}),
+        LightStep(light_id="2", delay_ms=0, state={"on": True, "bri": 200}),
+    ]
+
+    written = await orch._run_light_steps(steps, "big_play", play=None)
+
+    assert written == {"1"}
+    hue.set_light.assert_awaited_once_with(
+        "1", {"on": True, "bri": 200},
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_celebration_ownership_check_failure_fails_closed():
+    orch, hue, _, _, _ = _make_orchestrator()
+    orch._automation.transient_light_write_block_reason.side_effect = RuntimeError(
+        "ownership unavailable"
+    )
+    steps = [
+        LightStep(light_id="1", delay_ms=0, state={"on": True, "bri": 200}),
+    ]
+
+    written = await orch._run_light_steps(steps, "big_play", play=None)
+
+    assert written == set()
+    hue.set_light.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fully_blocked_sequence_does_not_reconcile_or_touch_hue():
+    orch, hue, _, _, _ = _make_orchestrator()
+    orch._automation.transient_light_write_block_reason = MagicMock(
+        return_value="protected by newer owner"
+    )
+
+    await orch._run_sequence("semantic_momentum", {}, play=None)
+
+    hue.set_light.assert_not_awaited()
+    orch._automation.reapply_current_mode.assert_not_awaited()

@@ -4925,6 +4925,24 @@ class AutomationEngine:
         """
         return self._applicator.protected_light_ids()
 
+    def transient_light_write_block_reason(self, light_id: str) -> Optional[str]:
+        """Return why a direct transient writer must not touch ``light_id``.
+
+        Celebration-style writers bypass :class:`LightApplicator` on purpose,
+        so they must explicitly inherit its ownership gates rather than
+        trampling user/transit/ScreenSync/external owners.  Mode-mapped native
+        scenes are whole-composition owners and therefore block every transient
+        Hue write until normal mode reconciliation changes that authority.
+        """
+        if self._external_off_detected:
+            return "away/external-off suppressed"
+        if self._active_scene_override_key is not None:
+            return "scene override active"
+        normalized = str(light_id)
+        if normalized in self._protected_light_ids():
+            return f"protected light {normalized}"
+        return None
+
     def register_external_light_owner(self, owner: Any) -> None:
         """Register a direct bridge writer for final-apply protection."""
         if owner not in self._external_light_owners:

@@ -7646,3 +7646,92 @@ class TestGeneralBedroomLux136:
         out = engine._compose_general_state(state, "day")
         assert out["2"]["bri"] == 190
         assert out["5"]["bri"] == 90
+
+
+# ---------------------------------------------------------------------------
+# #253 — direct transient writer ownership gate
+# ---------------------------------------------------------------------------
+
+def test_transient_light_write_gate_blocks_away_and_scene(engine):
+    engine._external_off_detected = True
+    assert engine.transient_light_write_block_reason("1") == (
+        "away/external-off suppressed"
+    )
+
+    engine._external_off_detected = False
+    engine._active_scene_override_key = (
+        "gameday", "day", "native-scene", "bridge",
+    )
+    assert engine.transient_light_write_block_reason("1") == (
+        "scene override active"
+    )
+
+
+def test_transient_light_write_gate_blocks_manual_and_transit(engine):
+    now = datetime.now(timezone.utc)
+    engine._state.manual_light_overrides["2"] = now
+    engine._state.transit_light_overrides["3"] = now + timedelta(minutes=5)
+
+    assert engine.transient_light_write_block_reason("2") == "protected light 2"
+    assert engine.transient_light_write_block_reason("3") == "protected light 3"
+
+
+def test_transient_light_write_gate_blocks_external_owner(engine):
+    owner = MagicMock()
+    owner.owned_light_targets.return_value = {
+        "4": {"on": True, "bri": 80, "ct": 300},
+    }
+    engine.register_external_light_owner(owner)
+
+    assert engine.transient_light_write_block_reason("4") == "protected light 4"
+
+
+def test_transient_light_write_gate_preserves_fresh_screen_sync(engine):
+    sync = MagicMock()
+    sync.fresh_owned_light_ids.return_value = {"5"}
+    engine._screen_sync = sync
+    engine._current_mode = "watching"
+
+    assert engine.transient_light_write_block_reason("5") == "protected light 5"
+
+
+def test_transient_light_write_gate_allows_unowned_light(engine):
+    assert engine.transient_light_write_block_reason("6") is None
+
+
+@pytest.fixture
+def engine(mock_hue, mock_hue_v2, mock_ws):
+    """Module-level engine for #253 ownership-gate contract tests."""
+    return AutomationEngine(
+        hue=mock_hue,
+        hue_v2=mock_hue_v2,
+        ws_manager=mock_ws,
+    )
+
+
+@pytest.mark.asyncio
+async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
+    engine, mock_hue,
+):
+    sync = ScreenSyncService(
+        mock_hue,
+        target_light_ids=["2", "5"],
+        transition_boundary=engine.lighting_transition_boundary,
+    )
+    engine._screen_sync = sync
+    engine._current_mode = "watching"
+    engine._get_time_period = lambda now=None: "day"
+
+    await engine._apply_mode("watching")
+    # Model the last Game Day pulse, then the first fresh Watching frame that
+    # wins the shared boundary before celebration cleanup re-applies the mode.
+    await mock_hue.set_light(
+        "5", {"on": True, "bri": 254, "hue": 1000, "sat": 254},
+    )
+    await sync.apply_color("5", 30, 90, 180, mode="watching", period="day")
+    screen_owned = mock_hue._lights["5"].copy()
+    assert "5" in engine._applicator.protected_light_ids()
+
+    await engine.reapply_current_mode(force_resend=True)
+
+    assert mock_hue._lights["5"] == screen_owned

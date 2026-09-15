@@ -82,6 +82,7 @@ def _make_automation_mock(
     test can read after."""
     mock = MagicMock()
     mock.current_mode = current_mode
+    mock.house_state = "home"
     mock.override_source = override_source
     mock.set_manual_override = AsyncMock()
     mock.clear_override = AsyncMock()
@@ -2203,3 +2204,27 @@ class TestSemanticEventExtraction:
 
         assert len(out) == 1
         assert out[0].play_type == expected
+
+
+@pytest.mark.asyncio
+async def test_celebration_authority_rejects_away_even_if_mode_still_gameday():
+    automation = _make_automation_mock(current_mode="gameday")
+    automation.house_state = "away"
+    svc = _make_service(automation=automation)
+    svc._current_game_id = "away-live-game"
+    svc._current_state = GameDayState(
+        status="in-progress",
+        opponent="Baltimore Ravens",
+        kickoff_utc=datetime.now(timezone.utc),
+        score_colts=14,
+        score_opp=10,
+        quarter=2,
+        clock="12:07",
+        possession="colts",
+        last_play=None,
+    )
+
+    allowed, reason = svc.celebration_eligibility(game_id="away-live-game")
+
+    assert allowed is False
+    assert reason == "house state=away"

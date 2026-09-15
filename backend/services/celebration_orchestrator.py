@@ -857,10 +857,14 @@ class CelebrationOrchestrator:
     async def _reconcile_steady_state(
         self, sequence_key: str, successful_lights: set[str],
     ) -> None:
+        if not successful_lights:
+            return
         automation = self._automation
-        supersede = getattr(automation, "supersede_screen_sync_lights", None)
-        if callable(supersede) and successful_lights:
-            supersede(successful_lights)
+        # Never revoke ScreenSync here. A new Watching/Gaming frame may have
+        # taken ownership after the celebration released the shared boundary;
+        # the central compositor must observe and preserve that newer owner.
+        # If no owner is active, the normal reapply below restores the current
+        # mode and invalidates stale ScreenSync dedup state on acknowledged writes.
         reapply = getattr(automation, "reapply_current_mode", None)
         if not callable(reapply):
             return
@@ -872,6 +876,21 @@ class CelebrationOrchestrator:
             logger.exception(
                 "celebration: steady-state reconcile failed for %s", sequence_key,
             )
+
+    def _light_write_block_reason(self, light_id: str) -> Optional[str]:
+        """Ask AutomationEngine whether a direct transient Hue write is safe."""
+        checker = getattr(self._automation, "transient_light_write_block_reason", None)
+        if not callable(checker):
+            return None
+        try:
+            reason = checker(str(light_id))
+        except Exception:
+            logger.exception(
+                "celebration: transient light ownership check failed light=%s",
+                light_id,
+            )
+            return "ownership check failed"
+        return str(reason) if reason else None
 
     async def _run_light_steps(
         self,
@@ -921,6 +940,14 @@ class CelebrationOrchestrator:
                     sequence_key, reason,
                 )
                 break
+
+            ownership_block = self._light_write_block_reason(step.light_id)
+            if ownership_block is not None:
+                logger.info(
+                    "celebration: skipping protected light=%s sequence=%s — %s",
+                    step.light_id, sequence_key, ownership_block,
+                )
+                continue
 
             # Snapshot prev BEFORE the write so log_light_adjustment gets
             # accurate before/after pairs. We re-read on each step rather

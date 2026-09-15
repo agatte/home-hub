@@ -225,6 +225,15 @@ class CelebrationOrchestrator:
     async def on_play_event(self, evt: PlayEvent) -> None: ...
     async def on_state_transition(self, transition: GameDayStateTransition) -> None: ...
 
+**Transient lighting ownership (#253 hardening):** provider-driven celebrations
+require `house_state=home` and `current_mode=gameday`. Before every direct Hue
+step, the orchestrator asks `AutomationEngine.transient_light_write_block_reason`
+so Away/external-off, active mode scenes, per-light manual/transit overrides,
+fresh ScreenSync ownership, and registered external light owners remain
+authoritative. Cleanup never clears ScreenSync ownership; it force-reapplies the
+current mode through the normal compositor, which preserves any owner that became
+authoritative while the transient sequence was ending.
+
     async def _run_sequence(self, key: str, context: dict) -> None: ...
 ```
 
