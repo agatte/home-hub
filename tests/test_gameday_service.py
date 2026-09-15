@@ -2235,6 +2235,21 @@ async def test_celebration_authority_rejects_away_even_if_mode_still_gameday():
 # ---------------------------------------------------------------------------
 
 class TestRealScoringShapes253:
+    @pytest.mark.parametrize(("text", "player", "yards"), [
+        ("Jonathan Taylor 1 Yd Rush (Spencer Shrader Kick)", "Jonathan Taylor", 1),
+        ("Michael Pittman Jr. 27 Yd pass from Daniel Jones (Spencer Shrader Kick)", "Michael Pittman Jr.", 27),
+    ])
+    def test_offensive_touchdown_preserves_provider_yardage(self, text, player, yards):
+        svc = _make_service()
+        play = svc._parse_play({
+            "id": f"td-{yards}", "text": text, "scoringPlay": True,
+            "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Rushing Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        })
+        assert play.player == player
+        assert play.yards == yards
+
     def test_special_teams_return_touchdowns_are_not_defensive_tds(self):
         svc = _make_service()
         examples = [

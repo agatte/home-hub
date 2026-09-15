@@ -96,8 +96,8 @@ def _provider_phase(status_type: dict[str, Any]) -> Optional[str]:
 #       "S.Shrader 24 yard field goal is GOOD, ..."
 # We try canonical patterns first, then fall back to abbreviated. Verified
 # against tests/fixtures/espn_colts_2025_summary.json (spec §7).
-_TD_PASS_RE = re.compile(r"^(.+?)\s+\d+\s+Yd\s+pass\s+from\s+", re.IGNORECASE)
-_TD_RUSH_RE = re.compile(r"^(.+?)\s+\d+\s+Yd\s+(?:Rush|Run)\b", re.IGNORECASE)
+_TD_PASS_RE = re.compile(r"^(.+?)\s+(\d+)\s+Yd\s+pass\s+from\s+", re.IGNORECASE)
+_TD_RUSH_RE = re.compile(r"^(.+?)\s+(\d+)\s+Yd\s+(?:Rush|Run)\b", re.IGNORECASE)
 _TD_ABBREV_RE = re.compile(r"^([A-Z]\.[A-Za-z'\-]+)")
 _FG_FULL_RE = re.compile(r"^(.+?)\s+(\d+)\s+Yd\s+Field\s+Goal", re.IGNORECASE)
 _FG_ABBREV_RE = re.compile(
@@ -1522,6 +1522,11 @@ class GameDayService:
                 m = rx.match(text)
                 if m:
                     player = m.group(1).strip()
+                    if rx in (_TD_PASS_RE, _TD_RUSH_RE):
+                        try:
+                            yards = int(m.group(2))
+                        except (IndexError, ValueError):
+                            yards = None
                     break
         elif play_type == "field_goal":
             for rx in (_FG_FULL_RE, _FG_ABBREV_RE):

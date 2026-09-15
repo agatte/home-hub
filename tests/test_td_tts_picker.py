@@ -11,7 +11,13 @@ import random
 from backend.services.td_tts_picker import (
     BIG_PLAY_WPA_THRESHOLD,
     GAME_CHANGING_WPA_THRESHOLD,
+    LONG_TD_MIN_YARDS,
+    SHORT_TD_MAX_YARDS,
+    _LONG_DISTANCE_LINES,
     _POOLS,
+    _SHORT_DISTANCE_LINES,
+    _candidate_lines,
+    _distance_bucket,
     _pool_key_for_wpa,
     pick_td_tts,
 )
@@ -76,25 +82,59 @@ class TestPickerSelection:
         assert line in _POOLS["standard"]
 
 
+class TestDistanceSemantics:
+    def test_distance_buckets_are_conservative(self):
+        assert _distance_bucket(None) == "neutral"
+        assert _distance_bucket(-1) == "neutral"
+        assert _distance_bucket(SHORT_TD_MAX_YARDS) == "short"
+        assert _distance_bucket(SHORT_TD_MAX_YARDS + 1) == "neutral"
+        assert _distance_bucket(LONG_TD_MIN_YARDS - 1) == "neutral"
+        assert _distance_bucket(LONG_TD_MIN_YARDS) == "long"
+
+    def test_short_td_never_gets_long_distance_wording(self):
+        lines = _candidate_lines("standard", 1)
+        assert _SHORT_DISTANCE_LINES["standard"][0] in lines
+        assert _LONG_DISTANCE_LINES["standard"][0] not in lines
+
+    def test_long_td_never_gets_short_distance_wording(self):
+        lines = _candidate_lines("standard", 60)
+        assert _LONG_DISTANCE_LINES["standard"][0] in lines
+        assert _SHORT_DISTANCE_LINES["standard"][0] not in lines
+
+    def test_unknown_and_midrange_td_use_only_neutral_wording(self):
+        for yards in (None, 6, 15, 29):
+            assert _candidate_lines("standard", yards) == _POOLS["standard"]
+
+    def test_wpa_tier_stays_independent_from_distance(self):
+        assert pick_td_tts(wpa=0.15, yards=1, rng=random.Random(42)) in (
+            _POOLS["big_play"] + _SHORT_DISTANCE_LINES["big_play"]
+        )
+        assert pick_td_tts(wpa=0.30, yards=60, rng=random.Random(42)) in _POOLS["game_changing"]
+
+
 class TestPoolIntegrity:
+    @staticmethod
+    def _all_groups():
+        return (_POOLS, _SHORT_DISTANCE_LINES, _LONG_DISTANCE_LINES)
+
     def test_every_line_has_player_placeholder(self):
-        for pool_key, lines in _POOLS.items():
-            for line in lines:
-                assert "{player}" in line, (
-                    f"{pool_key}: missing {{player}}: {line!r}"
-                )
+        for groups in self._all_groups():
+            for pool_key, lines in groups.items():
+                for line in lines:
+                    assert "{player}" in line, (
+                        f"{pool_key}: missing {{player}}: {line!r}"
+                    )
 
     def test_no_yards_or_kicker_placeholders(self):
-        # TD lines reference {player} only — never {yards} (that's FG)
-        # or {kicker} (also FG).
-        for pool_key, lines in _POOLS.items():
-            for line in lines:
-                assert "{yards}" not in line, (
-                    f"{pool_key}: stray {{yards}}: {line!r}"
-                )
-                assert "{kicker}" not in line, (
-                    f"{pool_key}: stray {{kicker}}: {line!r}"
-                )
+        for groups in self._all_groups():
+            for pool_key, lines in groups.items():
+                for line in lines:
+                    assert "{yards}" not in line, (
+                        f"{pool_key}: stray {{yards}}: {line!r}"
+                    )
+                    assert "{kicker}" not in line, (
+                        f"{pool_key}: stray {{kicker}}: {line!r}"
+                    )
 
     def test_every_pool_has_minimum_lines(self):
         # Avoid future trims to fewer than 4 lines per pool — repetition

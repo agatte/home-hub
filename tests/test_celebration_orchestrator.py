@@ -148,6 +148,21 @@ def _td_event(
     )
 
 
+def test_touchdown_picker_receives_yardage(monkeypatch):
+    orch, *_ = _make_orchestrator()
+    captured = {}
+
+    def fake_pick_td_tts(*, wpa=None, yards=None, rng=None):
+        captured.update(wpa=wpa, yards=yards)
+        return "Touchdown Colts! {player} in for six!"
+
+    monkeypatch.setattr("backend.services.td_tts_picker.pick_td_tts", fake_pick_td_tts)
+    line = orch._pick_touchdown_template({"wpa": "0.15", "yards": "3"})
+
+    assert line == "Touchdown Colts! {player} in for six!"
+    assert captured == {"wpa": 0.15, "yards": 3}
+
+
 def _fg_event(
     kicker: str = "Spencer Shrader",
     yards: int = 42,

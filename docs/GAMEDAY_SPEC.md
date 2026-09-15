@@ -52,7 +52,7 @@ mode on      celebration     (TD/FG)              (wind-down)
 
 - **Trigger**: ESPN play event with `scoringPlay=true` AND `scoringType.abbreviation='TD'` for the Colts side.
 - **Lights**: 5–8 second custom sequence. Specifics TBD; placeholder pattern: blue/white pulse rotation across L1→L2/L5→L3+L4 (350ms each, L5 mirrors L2 on the same beat as a Phase A placeholder), then 3s sustained sparkle-style multi-pulse across all five lights, then fade to gameday baseline. L5 (Bedroom Lamp Right, installed 2026-05-11) is currently mirrored — Phase C curator review will differentiate it from L2 once the clear-housing visual character is exercised. Free choice per event (Decision 1.3b) — final values land in `CelebrationOrchestrator.SEQUENCES["touchdown"]`.
-- **TTS**: One randomized line from the TD pool (3-5 variations). ESPN play description is parsed for player name where format permits. `TTSService` plays the line on Sonos using the dynamic section 9 volume policy, then restores prior Sonos playback/volume. Alexa remains a manual Game Day control surface, not the live announcement speaker.
+- **TTS**: One randomized line from the TD pool. ESPN play description is parsed for player name and distance where format permits; distance-sensitive phrases are gated conservatively (5 yards or fewer = short, 30+ yards = long; everything else neutral) so touchdown speech never implies the wrong play shape. `TTSService` plays the line on Sonos using the dynamic section 9 volume policy, then restores prior Sonos playback/volume. Alexa remains a manual Game Day control surface, not the live announcement speaker.
 - **Cooldown**: 8 seconds between any two celebration sequences (prevents stomping).
 
 #### Field goal
@@ -174,7 +174,7 @@ class PlayEvent:
     description: str         # raw ESPN play text
     player: str | None       # parsed from description, best-effort
     kicker: str | None       # for FG events, best-effort
-    yards: int | None        # for FG events
+    yards: int | None        # for TD/FG events when ESPN exposes distance
     scoring_team: Literal["colts", "opp"] | None
 
 @dataclass

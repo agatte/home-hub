@@ -1217,7 +1217,12 @@ class CelebrationOrchestrator:
             wpa = float(raw_wpa) if raw_wpa is not None else None
         except (TypeError, ValueError):
             wpa = None
-        return pick_td_tts(wpa=wpa)
+        raw_yards = context.get("yards")
+        try:
+            yards = int(raw_yards) if raw_yards not in (None, "") else None
+        except (TypeError, ValueError):
+            yards = None
+        return pick_td_tts(wpa=wpa, yards=yards)
 
     def _pick_field_goal_template(self, context: dict) -> str:
         """Dispatch to `fg_tts_picker.pick_fg_tts` with the kick distance
