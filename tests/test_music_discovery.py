@@ -70,11 +70,12 @@ class FakeTasteProvider:
         return self._snapshot
 
 
-def _snapshot(*, artists=None, recommendations=None):
+def _snapshot(*, artists=None, recommendations=None, feedback=None):
     return build_music_taste_snapshot(
         artists=artists or [],
         recommendations=recommendations or [],
         playback_events=[],
+        explicit_feedback=feedback or [],
         generated_at=NOW,
     )
 
@@ -96,6 +97,19 @@ def _rec(artist, track, status, *, mode="gaming"):
         track_name=track,
         status=status,
         source_mode=mode,
+        created_at=NOW,
+    )
+
+
+def _feedback(artist, action, *, mode="gaming"):
+    return SimpleNamespace(
+        artist_name=artist,
+        action=action,
+        target_kind="artist",
+        target_track_name=None,
+        provider="itunes_search",
+        provider_id=f"{artist}-1",
+        mode=mode,
         created_at=NOW,
     )
 
@@ -304,3 +318,30 @@ async def test_itunes_discovery_verifies_exact_artist_and_dedupes(monkeypatch):
 
     assert [track["provider_id"] for track in tracks] == ["1", "3"]
     assert all(track["artist_name"] == "Wanted Artist" for track in tracks)
+
+
+@pytest.mark.asyncio
+async def test_explicit_feedback_suppresses_rejected_artist_and_boosts_fit_artist():
+    snapshot = _snapshot(feedback=[
+        _feedback("Best Fit", "fits_me"),
+        _feedback("No Fit", "not_for_me"),
+    ])
+    source = FakeSource([
+        _artist_candidate("Neutral", match=0.80),
+        _artist_candidate("Best Fit", match=0.80),
+        _artist_candidate("No Fit", match=0.95),
+    ])
+    service = MusicDiscoveryService(source=source, taste_provider=FakeTasteProvider(snapshot))
+
+    result = await service.preview("gaming", policy="gentle")
+
+    names = [cluster.artist_name for cluster in result.clusters]
+    assert "No Fit" not in names
+    assert names[0] == "Best Fit"
+    assert any(
+        "explicit_feedback:fits_me" in source
+        for source in result.clusters[0].tracks[0].taste_sources
+    )
+    assert result.clusters[0].tracks[0].taste_classification == "exploratory"
+    assert result.clusters[0].artist_preference > 0.7
+    assert "explicit feedback: Fits me" in result.clusters[0].reasons

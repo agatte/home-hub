@@ -26,7 +26,7 @@
   let capability = null
   /** @type {any | null} */
   let result = null
-  /** @type {Record<string, string>} */
+  /** @type {Record<string, { action: string, state: string, clientEventId: string }>} */
   let evaluations = {}
 
   export async function refreshStatus() {
@@ -47,6 +47,7 @@
     loading = true
     error = null
     result = null
+    evaluations = {}
     try {
       const query = new URLSearchParams({
         mode: activeMode,
@@ -67,9 +68,39 @@
     }
   }
 
-  /** @param {string} artist @param {string} value */
-  function evaluate(artist, value) {
-    evaluations = { ...evaluations, [artist]: value }
+  function feedbackEventId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+    return `music-feedback-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  /** @param {any} cluster @param {string} action */
+  async function evaluate(cluster, action) {
+    const artist = cluster?.artist_name
+    const track = cluster?.tracks?.[0]
+    if (!artist || !track?.provider || !track?.provider_id) return
+    const current = evaluations[artist]
+    if (current?.action === action && current?.state === 'saved') return
+    const clientEventId = current?.action === action && current?.clientEventId
+      ? current.clientEventId
+      : feedbackEventId()
+
+    evaluations = { ...evaluations, [artist]: { action, state: 'saving', clientEventId } }
+    try {
+      await apiPost('/api/music/discovery/feedback', {
+        client_event_id: clientEventId,
+        action,
+        target_kind: 'artist',
+        artist_name: artist,
+        provider: track.provider,
+        provider_id: track.provider_id,
+        mode: activeMode,
+        policy,
+        intent: intent.trim() || null,
+      })
+      evaluations = { ...evaluations, [artist]: { action, state: 'saved', clientEventId } }
+    } catch {
+      evaluations = { ...evaluations, [artist]: { action, state: 'error', clientEventId } }
+    }
   }
 
   /** @param {number | null | undefined} value */
@@ -216,21 +247,30 @@
             </ul>
           </details>
           <div class="evaluation-row">
-            <span>Session note</span>
+            <span>Teach HomeHub</span>
             {#each [
-              ['fits', 'Fits me'],
+              ['fits_me', 'Fits me'],
               ['interesting', 'Interesting'],
-              ['miss', 'Not for me'],
+              ['not_for_me', 'Not for me'],
             ] as item (item[0])}
               <button
                 type="button"
-                class:active={evaluations[cluster.artist_name] === item[0]}
-                on:click={() => evaluate(cluster.artist_name, item[0])}
+                class:active={evaluations[cluster.artist_name]?.action === item[0]}
+                disabled={evaluations[cluster.artist_name]?.state === 'saving'}
+                on:click={() => evaluate(cluster, item[0])}
               >
                 {item[1]}
               </button>
             {/each}
-            <small>Not saved or learned yet</small>
+            {#if evaluations[cluster.artist_name]?.state === 'saving'}
+              <small>Saving explicit feedback…</small>
+            {:else if evaluations[cluster.artist_name]?.state === 'saved'}
+              <small>Saved · next preview will use this</small>
+            {:else if evaluations[cluster.artist_name]?.state === 'error'}
+              <small class="evaluation-error">Couldn’t save feedback</small>
+            {:else}
+              <small>Explicit feedback only · no playback</small>
+            {/if}
           </div>
         </article>
       {/each}

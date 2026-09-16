@@ -30,6 +30,19 @@ def _event(title, event_type, *, triggered_by="manual", mode="social"):
     )
 
 
+def _feedback(artist, action, *, target_kind="artist", track=None, mode="gaming"):
+    return SimpleNamespace(
+        artist_name=artist,
+        action=action,
+        target_kind=target_kind,
+        target_track_name=track,
+        provider="itunes_search",
+        provider_id=f"{artist}-{track or 'artist'}",
+        mode=mode,
+        created_at=NOW,
+    )
+
+
 def _candidate(media_type, title, *, artist=None, track=None):
     metadata = {}
     if artist:
@@ -43,10 +56,11 @@ def _candidate(media_type, title, *, artist=None, track=None):
     )
 
 
-def _snapshot(*, artists=None, recommendations=None, events=None, bandit=None):
+def _snapshot(*, artists=None, recommendations=None, events=None, feedback=None, bandit=None):
     return build_music_taste_snapshot(
         artists=artists or [], recommendations=recommendations or [],
-        playback_events=events or [], bandit_status=bandit, generated_at=NOW,
+        playback_events=events or [], explicit_feedback=feedback or [],
+        bandit_status=bandit, generated_at=NOW,
     )
 
 
@@ -157,3 +171,66 @@ def test_same_track_title_for_different_artists_keeps_separate_evidence():
     assert liked.preference > 0
     assert dismissed.classification == "rejected"
     assert dismissed.preference < 0
+
+
+def test_explicit_artist_feedback_changes_affinity_without_inventing_familiarity():
+    snapshot = _snapshot(feedback=[_feedback("Wardruna", "fits_me")])
+    artist = snapshot.classify_candidate(
+        _candidate("artist", "Wardruna", artist="Wardruna"), mode="gaming"
+    )
+    unseen_track = snapshot.classify_candidate(
+        _candidate("track", "Helvegen", artist="Wardruna", track="Helvegen"),
+        mode="gaming",
+    )
+    assert artist.classification == "exploratory"
+    assert artist.familiarity == 0.0
+    assert artist.preference > 0.7
+    assert unseen_track.classification == "exploratory"
+    assert unseen_track.familiarity == 0.0
+    assert unseen_track.preference > 0.0
+    assert any(source.startswith("explicit_feedback:fits_me") for source in artist.sources)
+
+
+def test_interesting_is_weaker_than_fits_me_and_not_for_me_rejects_artist():
+    interesting = _snapshot(feedback=[_feedback("Maybe", "interesting")])
+    fits = _snapshot(feedback=[_feedback("Maybe", "fits_me")])
+    rejected = _snapshot(feedback=[_feedback("Maybe", "not_for_me")])
+    interesting_match = interesting.classify_candidate(
+        _candidate("artist", "Maybe", artist="Maybe")
+    )
+    fits_match = fits.classify_candidate(_candidate("artist", "Maybe", artist="Maybe"))
+    rejected_match = rejected.classify_candidate(
+        _candidate("artist", "Maybe", artist="Maybe")
+    )
+    assert 0 < interesting_match.preference < fits_match.preference
+    assert rejected_match.classification == "rejected"
+    assert rejected_match.preference < -0.5
+
+
+def test_contradictory_explicit_feedback_preserves_both_sides():
+    snapshot = _snapshot(feedback=[
+        _feedback("Mixed", "fits_me"),
+        _feedback("Mixed", "not_for_me"),
+    ])
+    match = snapshot.classify_candidate(_candidate("artist", "Mixed", artist="Mixed"))
+    assert match.classification == "exploratory"
+    assert match.positive_weight == 3.0
+    assert match.negative_weight == 3.0
+    assert abs(match.preference) < 0.01
+
+
+def test_track_feedback_is_identity_safe_and_does_not_mark_track_familiar():
+    snapshot = _snapshot(feedback=[
+        _feedback("Artist One", "fits_me", target_kind="track", track="Home"),
+        _feedback("Artist Two", "not_for_me", target_kind="track", track="Home"),
+    ])
+    liked = snapshot.classify_candidate(
+        _candidate("track", "Home", artist="Artist One", track="Home")
+    )
+    rejected = snapshot.classify_candidate(
+        _candidate("track", "Home", artist="Artist Two", track="Home")
+    )
+    assert liked.classification == "exploratory"
+    assert liked.familiarity == 0.0
+    assert liked.preference > 0.6
+    assert rejected.classification == "rejected"

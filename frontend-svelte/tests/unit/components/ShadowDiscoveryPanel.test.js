@@ -100,7 +100,7 @@ describe('ShadowDiscoveryPanel', () => {
     expect(screen.getByText('Helvegen')).toBeInTheDocument()
   })
 
-  it('keeps evaluation feedback local to the current session', async () => {
+  it('persists deliberate evaluation feedback through the explicit feedback endpoint', async () => {
     const { component } = render(ShadowDiscoveryPanel)
     expect(apiPost).not.toHaveBeenCalled()
     await component.refreshStatus()
@@ -110,7 +110,52 @@ describe('ShadowDiscoveryPanel', () => {
     await fireEvent.click(fits)
 
     expect(fits.classList.contains('active')).toBe(true)
-    expect(screen.getByText('Not saved or learned yet')).toBeInTheDocument()
-    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText(/Saved .* next preview will use this/)).toBeInTheDocument()
+    expect(apiPost).toHaveBeenCalledTimes(2)
+    const [url, body] = vi.mocked(apiPost).mock.calls[1]
+    const feedbackBody = /** @type {any} */ (body)
+    expect(url).toBe('/api/music/discovery/feedback')
+    expect(feedbackBody).toMatchObject({
+      action: 'fits_me',
+      target_kind: 'artist',
+      artist_name: 'Wardruna',
+      provider: 'itunes_search',
+      provider_id: '1',
+      mode: 'gaming',
+      policy: 'gentle',
+      intent: null,
+    })
+    expect(feedbackBody.client_event_id).toBeTruthy()
+
+    await fireEvent.click(fits)
+    expect(apiPost).toHaveBeenCalledTimes(2)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Interesting' }))
+    expect(apiPost).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(apiPost).mock.calls[2][1]).toMatchObject({ action: 'interesting' })
   })
+
+  it('reuses the same event id when retrying an uncertain feedback save', async () => {
+    let feedbackCalls = 0
+    vi.mocked(apiPost).mockImplementation(async (url) => {
+      if (String(url).includes('/discovery/preview')) return previewPayload
+      feedbackCalls += 1
+      if (feedbackCalls === 1) throw new Error('response lost')
+      return { status: 'ok' }
+    })
+
+    const { component } = render(ShadowDiscoveryPanel)
+    await component.refreshStatus()
+    await fireEvent.click(screen.getByRole('button', { name: 'Preview recommendations' }))
+    const fits = await screen.findByRole('button', { name: 'Fits me' })
+    await fireEvent.click(fits)
+    expect(await screen.findByText(/Couldn’t save feedback/)).toBeInTheDocument()
+    const firstBody = /** @type {any} */ (vi.mocked(apiPost).mock.calls[1][1])
+
+    await fireEvent.click(fits)
+    expect(await screen.findByText(/Saved .* next preview will use this/)).toBeInTheDocument()
+    const secondBody = /** @type {any} */ (vi.mocked(apiPost).mock.calls[2][1])
+    expect(secondBody.client_event_id).toBe(firstBody.client_event_id)
+  })
+
 })

@@ -385,6 +385,21 @@ class MusicDiscoveryService:
             )
             if artist_match.artist_depth:
                 reasons.append(f"artist depth {artist_match.artist_depth}")
+            explicit_actions = sorted({
+                source.split(":", 2)[1]
+                for source in artist_match.sources
+                if source.startswith("explicit_feedback:") and ":" in source
+            })
+            if explicit_actions:
+                labels = {
+                    "fits_me": "Fits me",
+                    "interesting": "Interesting",
+                    "not_for_me": "Not for me",
+                }
+                reasons.append(
+                    "explicit feedback: "
+                    + ", ".join(labels.get(action, action) for action in explicit_actions)
+                )
         if semantic_match.available:
             matched = ", ".join(semantic_match.matched_concepts) or "none"
             reasons.append(

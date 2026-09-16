@@ -240,6 +240,34 @@ async def preview_discovery(
     return result.to_dict()
 
 
+@router.post("/discovery/feedback", dependencies=[Depends(require_api_key)])
+@limiter.limit("60/hour")
+async def submit_discovery_feedback(request: Request) -> dict:
+    """Persist deliberate discovery feedback; never actuates or trains the bandit."""
+    feedback = getattr(request.app.state, "music_feedback", None)
+    if feedback is None:
+        raise HTTPException(status_code=503, detail="Music feedback not initialized")
+    body = await request.json()
+    source = request.headers.get("X-HomeHub-Source") or "dashboard:music_discovery"
+    try:
+        row, duplicate = await feedback.record(
+            client_event_id=str(body.get("client_event_id") or ""),
+            action=str(body.get("action") or ""),
+            target_kind=str(body.get("target_kind") or "artist"),
+            artist_name=str(body.get("artist_name") or ""),
+            target_track_name=str(body.get("target_track_name") or "") or None,
+            provider=str(body.get("provider") or ""),
+            provider_id=str(body.get("provider_id") or ""),
+            mode=str(body.get("mode") or "") or None,
+            policy=str(body.get("policy") or "") or None,
+            intent=str(body.get("intent") or "") or None,
+            source=source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "duplicate": duplicate, "feedback": row}
+
+
 # ------------------------------------------------------------------
 # Recommendations
 # ------------------------------------------------------------------

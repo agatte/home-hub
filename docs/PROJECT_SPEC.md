@@ -388,6 +388,16 @@ explainable ranking evidence only: canonical taste rejection remains
 suppressive, novelty policy remains separate, and missing/provider-failed
 semantic evidence preserves the prior discovery ranking unchanged.
 
+**IMPLEMENTED/SHADOW (#261/#263).** The Music page exposes a deliberate
+non-actuating Discovery Lab for human evaluation. Explicit `Fits me`,
+`Interesting`, and `Not for me` judgments are durable, provider-qualified
+feedback events with context/provenance and idempotency protection; passive
+viewing is never preference evidence. These events feed the canonical taste
+snapshot and therefore later shadow ranking, but do not write MusicBandit
+rewards or authorize playback. Artist-level feedback changes affinity only: it
+never makes unseen tracks familiar, and a later contradictory judgment remains
+in history and can reverse earlier ranking/suppression rather than deleting it.
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit

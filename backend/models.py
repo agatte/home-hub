@@ -145,6 +145,34 @@ class RecommendationFeedback(Base):
     )
 
 
+class MusicFeedbackEvent(Base):
+    """Explicit provider-qualified feedback for shared Music Intelligence."""
+
+    __tablename__ = "music_feedback_events"
+    __table_args__ = (
+        UniqueConstraint("client_event_id", name="uq_music_feedback_client_event_id"),
+        Index("ix_music_feedback_artist_created", "artist_name", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_event_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="artist")
+    artist_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_track_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    mode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    policy: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    intent: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Event logging — raw behavioral data for the future learning engine
 # ---------------------------------------------------------------------------

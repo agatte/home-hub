@@ -191,6 +191,42 @@ class TestMusicAPI:
         assert data["clusters"][0]["artist_name"] == "New Artist"
         assert data["clusters"][0]["tracks"][0]["track_name"] == "New Song"
 
+    def test_discovery_feedback_persists_explicit_event_only(self, client):
+        previous = app.state.music_feedback
+        calls = []
+
+        class FakeFeedback:
+            async def record(self, **kwargs):
+                calls.append(kwargs)
+                return ({"id": 9, **kwargs}, False)
+
+        app.state.music_feedback = FakeFeedback()
+        try:
+            resp = client.post(
+                "/api/music/discovery/feedback",
+                json={
+                    "client_event_id": "event-ui-1",
+                    "action": "fits_me",
+                    "target_kind": "artist",
+                    "artist_name": "Wardruna",
+                    "provider": "itunes_search",
+                    "provider_id": "123",
+                    "mode": "gaming",
+                    "policy": "explore",
+                    "intent": "Valheim",
+                },
+            )
+        finally:
+            app.state.music_feedback = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["duplicate"] is False
+        assert calls[0]["action"] == "fits_me"
+        assert calls[0]["artist_name"] == "Wardruna"
+        assert calls[0]["source"] == "dashboard:music_discovery"
+
     def test_curator_status_is_shadow_only(self, client):
         resp = client.get("/api/music/curator/status")
         assert resp.status_code == 200

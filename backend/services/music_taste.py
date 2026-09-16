@@ -15,9 +15,20 @@ from typing import Any, Optional, Protocol
 from sqlalchemy import select
 
 from backend.database import async_session
-from backend.models import MusicArtist, Recommendation, SonosPlaybackEvent, TasteProfile
+from backend.models import (
+    MusicArtist,
+    MusicFeedbackEvent,
+    Recommendation,
+    SonosPlaybackEvent,
+    TasteProfile,
+)
 
 PLAYBACK_LOOKBACK = timedelta(days=180)
+EXPLICIT_FEEDBACK_WEIGHTS = {
+    "fits_me": (3.0, 0.0),
+    "interesting": (0.5, 0.0),
+    "not_for_me": (0.0, 3.0),
+}
 
 
 def _key(value: str) -> str:
@@ -299,6 +310,7 @@ def build_music_taste_snapshot(
     artists: list[Any],
     recommendations: list[Any],
     playback_events: list[Any],
+    explicit_feedback: Optional[list[Any]] = None,
     profile: Any = None,
     bandit_status: Optional[dict[str, Any]] = None,
     generated_at: Optional[datetime] = None,
@@ -372,6 +384,55 @@ def build_music_taste_snapshot(
                 observed_at=observed_at,
                 mode=mode,
             )
+
+    for feedback in explicit_feedback or []:
+        action = str(getattr(feedback, "action", "") or "").casefold()
+        weights = EXPLICIT_FEEDBACK_WEIGHTS.get(action)
+        if weights is None:
+            continue
+        positive, negative = weights
+        target_kind = str(getattr(feedback, "target_kind", "artist") or "artist").casefold()
+        artist_name = str(getattr(feedback, "artist_name", "") or "").strip()
+        track_name = str(getattr(feedback, "target_track_name", "") or "").strip()
+        provider = str(getattr(feedback, "provider", "") or "unknown").strip().casefold()
+        source = f"explicit_feedback:{action}:{provider}"
+        observed_at = getattr(feedback, "created_at", None)
+        mode = str(getattr(feedback, "mode", "") or "").strip() or None
+        if not artist_name:
+            continue
+        if target_kind == "artist":
+            entity(artist_acc, "artist", artist_name).observe(
+                source=source,
+                positive=positive,
+                negative=negative,
+                observed_at=observed_at,
+                mode=mode,
+            )
+            continue
+        if target_kind != "track" or not track_name:
+            continue
+        track_key = _track_key(track_name, artist_name)
+        track = track_acc.get(track_key)
+        if track is None:
+            track = _Accumulator(kind="track", identity=track_name)
+            track_acc[track_key] = track
+        track.observe(
+            source=source,
+            positive=positive,
+            negative=negative,
+            observed_at=observed_at,
+            mode=mode,
+        )
+        artist = entity(artist_acc, "artist", artist_name)
+        artist.observe(
+            source=source,
+            positive=positive * 0.25,
+            negative=negative * 0.25,
+            observed_at=observed_at,
+            mode=mode,
+        )
+        if action == "fits_me":
+            artist.positive_tracks.add(_key(track_name))
 
     for event in playback_events:
         title = str(getattr(event, "favorite_title", "") or "").strip()
@@ -469,9 +530,13 @@ class MusicTasteService:
                     SonosPlaybackEvent.favorite_title.is_not(None),
                 )
             )
+            feedback_result = await session.execute(
+                select(MusicFeedbackEvent).order_by(MusicFeedbackEvent.created_at.asc())
+            )
             artists = list(artists_result.scalars().all())
             recommendations = list(recommendations_result.scalars().all())
             playback_events = list(playback_result.scalars().all())
+            explicit_feedback = list(feedback_result.scalars().all())
 
         bandit_status = None
         if self._bandit is not None:
@@ -483,6 +548,7 @@ class MusicTasteService:
             artists=artists,
             recommendations=recommendations,
             playback_events=playback_events,
+            explicit_feedback=explicit_feedback,
             profile=profile,
             bandit_status=bandit_status,
         )
