@@ -3,15 +3,12 @@ Music discovery and mode-playlist mapping endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
-from backend.api._guards import _check_sonos_available
 from backend.api.auth import require_api_key
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
-from backend.services.didl_lite import build_track_didl_lite
 from backend.services.music_curator import MusicCuratorError
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
-from backend.services.sonos_service import is_allowed_play_uri
 
 router = APIRouter(prefix="/api/music", tags=["music"])
 
@@ -286,46 +283,6 @@ async def submit_feedback(rec_id: int, request: Request) -> dict:
     if not found:
         raise HTTPException(status_code=404, detail="Recommendation not found")
     return {"status": "ok", "action": action}
-
-
-@router.post("/preview", dependencies=[Depends(require_api_key)])
-async def play_preview(request: Request) -> dict:
-    """Play a 30-second iTunes preview on Sonos.
-
-    Optional metadata fields (``track``, ``artist``, ``album``, ``artwork_url``)
-    populate Sonos's Now Playing card via a DIDL-Lite envelope — without them,
-    plain HTTP streams show blank metadata.
-    """
-    body = await request.json()
-    preview_url = body.get("preview_url")
-    if not preview_url:
-        raise HTTPException(status_code=400, detail="preview_url is required")
-
-    # SSRF guard: anyone authorized to hit write endpoints could otherwise
-    # aim the speaker at internal addresses. The allowlist matches iTunes
-    # preview clips + our own LAN-served TTS/static URLs and rejects
-    # everything else with a 400 (distinguishes "bad input" from a 503
-    # "Sonos broken" so we get useful telemetry).
-    if not is_allowed_play_uri(preview_url):
-        raise HTTPException(
-            status_code=400, detail="preview_url not on the allowlist"
-        )
-
-    sonos = request.app.state.sonos
-    _check_sonos_available(sonos)
-
-    # Build the DIDL-Lite envelope from any metadata the caller supplied.
-    # Empty string when no track/title — sonos_service.play_uri falls back
-    # to SoCo's default behavior in that case.
-    meta = build_track_didl_lite(
-        title=str(body.get("track") or "").strip(),
-        artist=str(body.get("artist") or "").strip() or None,
-        album=str(body.get("album") or "").strip() or None,
-        album_art_uri=str(body.get("artwork_url") or "").strip() or None,
-    )
-
-    success = await sonos.play_uri(preview_url, meta=meta or None)
-    return {"status": "ok" if success else "error"}
 
 
 @router.get("/taste")

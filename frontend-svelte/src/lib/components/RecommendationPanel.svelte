@@ -1,6 +1,5 @@
 <script>
   import RecommendationCard from './RecommendationCard.svelte'
-  import { apiPost } from '$lib/api.js'
 
   const MODES = [
     { key: 'gaming',  label: 'Gaming' },
@@ -66,22 +65,6 @@
     }
   }
 
-  /** @param {string} previewUrl @param {any} [rec] */
-  async function handlePreview(previewUrl, rec) {
-    try {
-      /** @type {Record<string, any>} */
-      const body = { preview_url: previewUrl }
-      if (rec) {
-        if (rec.track_name) body.track = rec.track_name
-        if (rec.artist_name) body.artist = rec.artist_name
-        if (rec.album_name) body.album = rec.album_name
-        if (rec.artwork_url) body.artwork_url = rec.artwork_url
-      }
-      await apiPost('/api/music/preview', body)
-    } catch {
-      /* ignore */
-    }
-  }
 </script>
 
 <div class="rec-panel">
@@ -103,7 +86,7 @@
            jump the scroll position. Dim it slightly while loading. -->
       <div class="rec-list" class:rec-list-loading={loading}>
         {#each recs as rec (rec.id)}
-          <RecommendationCard {rec} onFeedback={handleFeedback} onPreview={handlePreview} />
+          <RecommendationCard {rec} onFeedback={handleFeedback} />
         {/each}
       </div>
     {:else if loading}

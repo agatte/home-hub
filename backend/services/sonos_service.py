@@ -28,15 +28,11 @@ logger = logging.getLogger("home_hub.sonos")
 STATUS_FRESHNESS_SECONDS = 10.0
 
 
-# play_uri() makes the speaker fetch arbitrary URLs. Without an
-# allowlist any caller authorized to hit /api/music/preview can use
-# the speaker as an SSRF probe (it can GET internal admin pages,
-# metadata services, etc.). The legitimate sources are narrow:
-# iTunes preview clips for the recommendation feed and our own
-# locally-served TTS / static audio.
+# play_uri() makes the speaker fetch arbitrary URLs. Keep generic URL
+# playback deliberately narrow so callers cannot use the speaker as an SSRF
+# probe. The generic source is HomeHub-local TTS/static audio; admin-curated
+# ambient internet streams are admitted separately by exact URL below.
 _ALLOWED_PLAY_URI_PATTERNS: tuple[re.Pattern, ...] = (
-    re.compile(r"^https://[a-z0-9-]+\.itunes\.apple\.com/", re.IGNORECASE),
-    re.compile(r"^https://[a-z0-9-]+\.mzstatic\.com/", re.IGNORECASE),
     re.compile(
         rf"^http://{re.escape(settings.LOCAL_IP)}(:\d+)?/",
         re.IGNORECASE,
@@ -77,13 +73,12 @@ def register_allowed_stream_uris(uris: set[str]) -> None:
 def is_allowed_play_uri(uri: str) -> bool:
     """True if a URI is on the allowlist for sonos.play_uri().
 
-    Used both at the route-handler level (so /api/music/preview can
-    reject with a clear 400) and inside play_uri itself as
-    defense-in-depth — any future caller that forgets to validate
-    still gets gated.
+    Enforced inside ``play_uri`` as defense-in-depth so every current or
+    future caller remains constrained even if it forgets to pre-validate.
 
-    Accepts: iTunes/mzstatic previews, locally-served assets (LOCAL_IP),
-    and exact-match members of the curated ambient-stream allowlist.
+    Accepts locally-served assets (LOCAL_IP) and exact-match members of the
+    curated ambient-stream allowlist. Promotional catalog preview hosts are
+    intentionally not generic playback sources.
     """
     if not uri:
         return False
@@ -447,8 +442,8 @@ class SonosService:
             volume: If set, volume is applied atomically before playback starts.
             meta: Optional DIDL-Lite XML envelope. Sonos sources Now Playing's
                 title/artist/album/album-art from this — without it, plain HTTP
-                streams (iTunes previews, self-hosted MP3s) show empty Now
-                Playing. Build via ``backend.services.didl_lite.build_track_didl_lite``.
+                self-hosted HTTP audio may show empty Now Playing. Build via
+                ``backend.services.didl_lite.build_track_didl_lite``.
                 Empty string or None falls through to SoCo's default behavior.
             force_radio: Treat the URI as a continuous internet-radio stream.
                 SoCo rewrites it to the ``x-rincon-mp3radio:`` scheme that Sonos
@@ -456,11 +451,8 @@ class SonosService:
                 stream URL is otherwise rejected). Use for the ambient
                 nature-radio streams; leave False for finite files (TTS, loops).
 
-        URIs are validated against ``_ALLOWED_PLAY_URI_PATTERNS`` —
-        the route handler at /api/music/preview should also gate via
-        ``is_allowed_play_uri`` so the user gets a 400 instead of a
-        silent False, but this layer is the last-line defense-in-depth
-        against SSRF.
+        URIs are validated by ``is_allowed_play_uri`` here as the last-line
+        defense-in-depth against SSRF for every caller.
         """
         if not is_allowed_play_uri(uri):
             logger.warning(

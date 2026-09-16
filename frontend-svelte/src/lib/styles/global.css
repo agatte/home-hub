@@ -1687,10 +1687,6 @@ button:active, .btn:active, [role="button"]:active {
   text-decoration: none;
 }
 
-.rec-preview-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 
 .rec-like-btn:hover {
   border-color: var(--success);

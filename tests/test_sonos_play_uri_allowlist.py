@@ -7,10 +7,10 @@ so the unit tests use that value directly rather than monkeypatching
 
 Two layers are exercised:
 
-1. ``is_allowed_play_uri`` — pure predicate; covers the patterns and
-   common bypass attempts (suffix injection, exotic schemes, empty input).
-2. ``POST /api/music/preview`` — route smoke; confirms a non-allowlisted
-   URL is rejected with 400 before it ever reaches the speaker.
+1. ``is_allowed_play_uri`` — pure predicate; covers local/curated sources and
+   common bypass attempts (including retired promotional preview hosts).
+2. ``POST /api/music/preview`` — confirms the promotional-preview actuator
+   route itself has been retired.
 """
 from __future__ import annotations
 
@@ -31,13 +31,13 @@ def client():
 class TestIsAllowedPlayUri:
     """Unit tests for the predicate itself."""
 
-    def test_itunes_apple_subdomain_allowed(self):
-        assert is_allowed_play_uri(
+    def test_itunes_promotional_preview_rejected(self):
+        assert not is_allowed_play_uri(
             "https://audio-ssl.itunes.apple.com/itunes-assets/preview.m4a"
         )
 
-    def test_mzstatic_subdomain_allowed(self):
-        assert is_allowed_play_uri("https://a1.mzstatic.com/some/preview.mp3")
+    def test_mzstatic_promotional_preview_rejected(self):
+        assert not is_allowed_play_uri("https://a1.mzstatic.com/some/preview.mp3")
 
     def test_local_ip_with_port_allowed(self):
         # TTS path: http://{LOCAL_IP}:8000/static/tts/foo.mp3
@@ -96,42 +96,14 @@ class TestIsAllowedPlayUri:
         assert not is_allowed_play_uri(None)  # type: ignore[arg-type]
 
 
-class TestPlayUriRouteAllowlist:
-    """End-to-end: the /api/music/preview route enforces the allowlist."""
+class TestPromotionalPreviewRouteRetired:
+    """The old iTunes-preview entertainment actuator must stay unavailable."""
 
-    def test_evil_url_rejected_with_400(self, client):
-        resp = client.post(
-            "/api/music/preview",
-            json={"preview_url": "https://evil.com/x.mp3"},
-        )
-        assert resp.status_code == 400, resp.text
-        assert "allowlist" in resp.json()["detail"].lower()
-
-    def test_file_scheme_rejected_with_400(self, client):
-        resp = client.post(
-            "/api/music/preview",
-            json={"preview_url": "file:///etc/passwd"},
-        )
-        assert resp.status_code == 400
-        assert "allowlist" in resp.json()["detail"].lower()
-
-    def test_missing_preview_url_still_400(self, client):
-        # Pre-existing behavior — we want to confirm the allowlist guard
-        # didn't displace the "preview_url is required" check.
-        resp = client.post("/api/music/preview", json={})
-        assert resp.status_code == 400
-        assert "required" in resp.json()["detail"].lower()
-
-    def test_valid_itunes_url_not_rejected_by_allowlist(self, client):
-        # We can't assert 200 here — the test env's Sonos may not be
-        # connected, in which case the route returns 503. We just need to
-        # confirm the allowlist didn't bounce the request with 400.
-        resp = client.post(
-            "/api/music/preview",
-            json={
-                "preview_url": (
-                    "https://audio-ssl.itunes.apple.com/itunes-assets/preview.m4a"
-                )
-            },
-        )
-        assert resp.status_code != 400, resp.text
+    def test_music_preview_post_route_is_not_registered(self):
+        matching = [
+            route
+            for route in app.routes
+            if getattr(route, "path", None) == "/api/music/preview"
+            and "POST" in (getattr(route, "methods", None) or set())
+        ]
+        assert matching == []

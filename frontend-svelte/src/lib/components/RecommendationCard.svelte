@@ -6,10 +6,6 @@
   export let rec
   /** @type {(id: number, action: 'liked' | 'dismissed') => void} */
   export let onFeedback = () => {}
-  /** @type {(previewUrl: string, rec?: any) => Promise<void>} */
-  export let onPreview = async () => {}
-
-  let previewing = false
   let qrOpen = false
   let qrDataUrl = ''
   /** @type {HTMLButtonElement | undefined} */
@@ -31,13 +27,6 @@
   /** @param {KeyboardEvent} e */
   function handleKeydown(e) {
     if (e.key === 'Escape' && qrOpen) qrOpen = false
-  }
-
-  async function handlePreview() {
-    if (!rec.preview_url) return
-    previewing = true
-    await onPreview(rec.preview_url, rec)
-    setTimeout(() => { previewing = false }, 3000)
   }
 
   async function openQrModal() {
@@ -78,13 +67,6 @@
     {/if}
   </div>
   <div class="rec-actions">
-    {#if rec.preview_url}
-      <button class="rec-action-btn rec-preview-btn" on:click={handlePreview} disabled={previewing} title="Play 30s preview on Sonos">
-        <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor" stroke="none">
-          <polygon points="6,4 18,10 6,16" />
-        </svg>
-      </button>
-    {/if}
     <button class="rec-action-btn rec-like-btn" on:click={() => onFeedback(rec.id, 'liked')} title="Like">
       <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="4,10 8,14 16,6" />
