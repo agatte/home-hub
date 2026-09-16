@@ -2,6 +2,7 @@
   import TasteProfileCard from '$lib/components/TasteProfileCard.svelte'
   import ModePlaylistMapper from '$lib/components/ModePlaylistMapper.svelte'
   import RecommendationPanel from '$lib/components/RecommendationPanel.svelte'
+  import ShadowDiscoveryPanel from '$lib/components/ShadowDiscoveryPanel.svelte'
 
   /** @type {any} */
   export let data = undefined
@@ -20,6 +21,10 @@
     <section class="widget">
       <h2 class="widget-title">Mode → Playlist</h2>
       <ModePlaylistMapper />
+    </section>
+
+    <section class="widget widget-full discovery-lab-wrap">
+      <ShadowDiscoveryPanel />
     </section>
 
     <section class="widget widget-full">
@@ -42,6 +47,11 @@
 
   .widget-full {
     grid-column: 1 / -1;
+  }
+
+  .discovery-lab-wrap {
+    padding: 0;
+    overflow: hidden;
   }
 
   @media (max-width: 900px) {
