@@ -215,6 +215,11 @@ class MusicTasteSnapshot:
             "top_favorites": top(self.favorites),
             "genre_distribution": self.genre_distribution,
             "mode_genre_map": self.mode_genre_map,
+            "evidence_policy": {
+                "playback_source": "sonos_playback_events",
+                "bandit_posterior_injected": False,
+                "bandit_role": "music_mapper_selection_model",
+            },
         }
 
 
@@ -226,7 +231,6 @@ class MusicTasteProvider(Protocol):
 class _ContextAccumulator:
     positive: float = 0.0
     negative: float = 0.0
-    bandit_mean: Optional[float] = None
 
 
 @dataclass
@@ -273,23 +277,15 @@ class _Accumulator:
     def finalize(self) -> TasteEntityEvidence:
         contexts: dict[str, ContextTasteEvidence] = {}
         for mode, context in self.contexts.items():
-            base = _preference(context.positive, context.negative)
-            if context.bandit_mean is None:
-                preference = base
-            else:
-                bandit_pref = (2.0 * context.bandit_mean) - 1.0
-                if context.positive + context.negative > 0:
-                    preference = (0.6 * base) + (0.4 * bandit_pref)
-                else:
-                    preference = bandit_pref
+            preference = _preference(context.positive, context.negative)
             contexts[mode] = ContextTasteEvidence(
                 positive_weight=round(context.positive, 4),
                 negative_weight=round(context.negative, 4),
                 preference=round(max(-1.0, min(1.0, preference)), 4),
-                bandit_mean=(
-                    round(context.bandit_mean, 4)
-                    if context.bandit_mean is not None else None
-                ),
+                # Compatibility field only. The MusicBandit posterior is a
+                # derived model of SonosPlaybackEvent and is intentionally not
+                # injected back into canonical taste (issue #266).
+                bandit_mean=None,
             )
         return TasteEntityEvidence(
             kind=self.kind,
@@ -312,7 +308,6 @@ def build_music_taste_snapshot(
     playback_events: list[Any],
     explicit_feedback: Optional[list[Any]] = None,
     profile: Any = None,
-    bandit_status: Optional[dict[str, Any]] = None,
     generated_at: Optional[datetime] = None,
 ) -> MusicTasteSnapshot:
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -458,37 +453,6 @@ def build_music_taste_snapshot(
             mode=str(getattr(event, "mode_at_time", "") or "").strip() or None,
         )
 
-    if isinstance(bandit_status, dict):
-        top_arms = bandit_status.get("top_arms") or {}
-        if isinstance(top_arms, dict):
-            for mode, by_weather in top_arms.items():
-                if not isinstance(by_weather, dict):
-                    continue
-                per_title: dict[str, list[float]] = {}
-                display: dict[str, str] = {}
-                for entries in by_weather.values():
-                    if not isinstance(entries, list):
-                        continue
-                    for entry in entries:
-                        if not isinstance(entry, dict) or not entry.get("title"):
-                            continue
-                        try:
-                            mean = float(entry.get("mean"))
-                        except (TypeError, ValueError):
-                            continue
-                        title = str(entry["title"]).strip()
-                        if not title:
-                            continue
-                        key = _key(title)
-                        display.setdefault(key, title)
-                        per_title.setdefault(key, []).append(max(0.0, min(1.0, mean)))
-                for key, means in per_title.items():
-                    acc = entity(favorite_acc, "favorite", display[key])
-                    acc.sources.add("music_bandit")
-                    acc.familiarity = max(acc.familiarity, 1.0)
-                    context = acc.contexts.setdefault(str(mode), _ContextAccumulator())
-                    context.bandit_mean = sum(means) / len(means)
-
     profile_imported_at = _utc_iso(getattr(profile, "last_import_at", None)) if profile else None
     genre_distribution = dict(getattr(profile, "genre_distribution", {}) or {}) if profile else {}
     mode_genre_map = dict(getattr(profile, "mode_genre_map", {}) or {}) if profile else {}
@@ -507,8 +471,7 @@ def build_music_taste_snapshot(
 class MusicTasteService:
     """Build snapshots from current durable evidence; performs no writes."""
 
-    def __init__(self, *, bandit: Any = None, session_factory=async_session) -> None:
-        self._bandit = bandit
+    def __init__(self, *, session_factory=async_session) -> None:
         self._session_factory = session_factory
 
     async def snapshot(self) -> MusicTasteSnapshot:
@@ -538,17 +501,10 @@ class MusicTasteService:
             playback_events = list(playback_result.scalars().all())
             explicit_feedback = list(feedback_result.scalars().all())
 
-        bandit_status = None
-        if self._bandit is not None:
-            try:
-                bandit_status = self._bandit.get_status()
-            except Exception:
-                bandit_status = None
         return build_music_taste_snapshot(
             artists=artists,
             recommendations=recommendations,
             playback_events=playback_events,
             explicit_feedback=explicit_feedback,
             profile=profile,
-            bandit_status=bandit_status,
         )

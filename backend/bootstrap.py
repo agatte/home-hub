@@ -603,7 +603,7 @@ async def lifespan(app: FastAPI):
     music_catalog = SonosFavoritesCatalog(sonos)
     music_feedback = MusicFeedbackService()
     app.state.music_feedback = music_feedback
-    music_taste = MusicTasteService(bandit=music_bandit)
+    music_taste = MusicTasteService()
     app.state.music_taste = music_taste
     music_discovery = MusicDiscoveryService(
         source=rec_service,

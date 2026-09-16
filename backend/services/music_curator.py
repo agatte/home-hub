@@ -496,7 +496,6 @@ class MusicCuratorContextBuilder:
         suppression = self._automation_facts(facts)
         self._weather_fact(facts)
         self._mapping_facts(adapter, facts)
-        self._bandit_facts(mode, facts)
         adapter_suppression = await adapter.augment(facts, now)
         suppression = suppression or adapter_suppression
 
@@ -564,17 +563,6 @@ class MusicCuratorContextBuilder:
             facts["deterministic_fallback_titles"] = CuratorFact(
                 list(adapter.fallback_titles), f"{adapter.mode}_deterministic_policy",
             )
-
-    def _bandit_facts(self, mode: str, facts: dict[str, CuratorFact]) -> None:
-        bandit = getattr(self._app_state, "music_bandit", None)
-        if bandit is None:
-            return
-        try:
-            top = bandit.get_status().get("top_arms", {}).get(mode, {})
-        except Exception:
-            return
-        facts["bandit_top_arms"] = CuratorFact(top, "music_bandit")
-
 
 class MusicCurator:
     """Non-actuating curator that ranks only provider-verified candidates."""

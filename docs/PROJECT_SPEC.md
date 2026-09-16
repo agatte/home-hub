@@ -426,6 +426,18 @@ MusicMapper, queue, or MusicBandit mutation. This is the music-domain target
 that shared command ingress (#262) may call later; #262 still owns Alexa/text/
 voice transport and command routing.
 
+**IMPLEMENTED/SHADOW (#266).** MusicBandit and canonical Music Intelligence now
+have explicit evidence ownership. Durable `SonosPlaybackEvent` rows are the
+canonical preference evidence consumed by `MusicTasteSnapshot`; the
+`MusicBandit` posterior is a derived Thompson-sampling selection model over that
+same history and is therefore not blended back into taste or injected into
+curator context. This prevents one play/skip from influencing the same shared
+ranking twice and prevents prior-only/cold bandit arms from manufacturing
+familiarity. `MusicMapper` continues to use MusicBandit for context/weather-aware
+playlist selection, and the curator may consult posterior means only as a
+read-only fallback when canonical taste is unavailable. Explicit #263 feedback
+remains separate evidence and never becomes a bandit reward.
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit
@@ -443,8 +455,10 @@ multiple tracks because a useful new artist is one where several songs may fit,
 not merely one isolated recommendation. Quick/repeated skips, full listens,
 manual replay/selection, saves/favorites, explicit feedback, "what is this?",
 and early stops of Home Hub-started music contribute with source/context
-provenance; ambiguous actions must not be overlearned. Existing `MusicBandit`
-remains preference evidence rather than being replaced.
+provenance; ambiguous actions must not be overlearned. `MusicBandit` remains the
+learned selection model for mapped favorites, while the durable playback events
+that train it are the canonical shared preference evidence; the derived posterior
+must not be counted again as independent taste evidence.
 
 **DECIDED TARGET.** Autonomy graduates by consequence and evidence: shadow
 curation first, recommendation/approval next, narrow assisted playback only for

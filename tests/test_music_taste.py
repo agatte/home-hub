@@ -56,11 +56,11 @@ def _candidate(media_type, title, *, artist=None, track=None):
     )
 
 
-def _snapshot(*, artists=None, recommendations=None, events=None, feedback=None, bandit=None):
+def _snapshot(*, artists=None, recommendations=None, events=None, feedback=None):
     return build_music_taste_snapshot(
         artists=artists or [], recommendations=recommendations or [],
         playback_events=events or [], explicit_feedback=feedback or [],
-        bandit_status=bandit, generated_at=NOW,
+        generated_at=NOW,
     )
 
 
@@ -139,21 +139,19 @@ def test_conflicting_explicit_artist_feedback_stays_familiar_not_proven():
     assert match.negative_weight == 3.0
 
 
-def test_bandit_context_is_evidence_without_replacing_raw_history():
-    bandit = {
-        "top_arms": {
-            "gameday": {
-                "clear": [{"title": "It's Lit!", "mean": 0.9}],
-                "any": [{"title": "It's Lit!", "mean": 0.7}],
-            }
-        }
+def test_playback_history_is_canonical_and_bandit_posterior_is_not_reinjected():
+    snapshot = _snapshot(events=[_event("Known Favorite", "play", mode="gameday")])
+    evidence = snapshot.favorites["known favorite"]
+    context = evidence.contexts["gameday"]
+    assert evidence.sources == ("sonos_playback",)
+    assert evidence.positive_weight == 1.5
+    assert context.positive_weight == 1.5
+    assert context.bandit_mean is None
+    assert snapshot.summary()["evidence_policy"] == {
+        "playback_source": "sonos_playback_events",
+        "bandit_posterior_injected": False,
+        "bandit_role": "music_mapper_selection_model",
     }
-    snapshot = _snapshot(bandit=bandit)
-    evidence = snapshot.favorites["it's lit!"]
-    assert evidence.preference == 0.0
-    assert evidence.contexts["gameday"].bandit_mean == 0.8
-    assert evidence.contexts["gameday"].preference == 0.6
-    assert "music_bandit" in evidence.sources
 
 
 def test_same_track_title_for_different_artists_keeps_separate_evidence():

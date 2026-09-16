@@ -228,6 +228,31 @@ async def test_bandit_evidence_ranks_without_mutation():
 
 
 @pytest.mark.asyncio
+async def test_context_builder_does_not_inject_derived_bandit_posterior():
+    class Automation:
+        house_state = "home"
+        current_mode = "social"
+
+        def is_dnd_active(self):
+            return False
+
+    class Mapper:
+        mapping = {"social": []}
+
+    bandit = FakeBandit()
+    state = SimpleNamespace(
+        automation=Automation(), music_mapper=Mapper(), music_bandit=bandit,
+        weather_service=None, sonos=None,
+    )
+    builder = MusicCuratorContextBuilder(state)
+
+    context = await builder.build("social")
+
+    assert "bandit_top_arms" not in context.facts
+    assert bandit.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_context_builder_uses_provenance_and_team_form_without_inference():
     now = datetime(2026, 9, 16, 0, 0, tzinfo=timezone.utc)
 
@@ -504,6 +529,7 @@ async def test_taste_snapshot_ranks_proven_above_rejected_without_double_bandit(
     assert result.suggestions[1].taste_classification == "rejected"
     assert result.suggestions[0].bandit_mean is None
     assert taste.calls == 1
+    assert curator._bandit.calls == 0
 
 
 @pytest.mark.asyncio
