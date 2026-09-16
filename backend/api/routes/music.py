@@ -197,6 +197,50 @@ async def get_taste_profile(request: Request) -> dict:
 
 
 # ------------------------------------------------------------------
+# Shadow discovery (#257)
+# ------------------------------------------------------------------
+
+@router.get("/discovery/status")
+async def get_discovery_status(request: Request) -> dict:
+    """Return non-actuating discovery capability without external calls."""
+    discovery = getattr(request.app.state, "music_discovery", None)
+    if discovery is None:
+        raise HTTPException(status_code=503, detail="Music discovery not initialized")
+    return discovery.status()
+
+
+@router.post("/discovery/preview", dependencies=[Depends(require_api_key)])
+@limiter.limit("4/hour")
+async def preview_discovery(
+    request: Request,
+    mode: str = "gaming",
+    policy: str = "gentle",
+    count: int = 6,
+    tracks_per_artist: int = 3,
+) -> dict:
+    """Generate explainable suggestions only; never actuates or persists rows."""
+    if count < 1 or count > 10:
+        raise HTTPException(status_code=400, detail="count must be between 1 and 10")
+    if tracks_per_artist < 1 or tracks_per_artist > 5:
+        raise HTTPException(
+            status_code=400, detail="tracks_per_artist must be between 1 and 5"
+        )
+    discovery = getattr(request.app.state, "music_discovery", None)
+    if discovery is None:
+        raise HTTPException(status_code=503, detail="Music discovery not initialized")
+    try:
+        result = await discovery.preview(
+            mode,
+            policy=policy,
+            count=count,
+            tracks_per_artist=tracks_per_artist,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result.to_dict()
+
+
+# ------------------------------------------------------------------
 # Recommendations
 # ------------------------------------------------------------------
 

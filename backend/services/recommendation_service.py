@@ -59,6 +59,84 @@ class RecommendationService:
         """Whether recommendations are available (requires Last.fm API key)."""
         return bool(self._lastfm_key)
 
+    async def _load_profile(self) -> Optional[TasteProfile]:
+        """Load the current imported taste profile without mutating it."""
+        async with async_session() as session:
+            result = await session.execute(select(TasteProfile).limit(1))
+            return result.scalar_one_or_none()
+
+    async def discover_artist_candidates(
+        self,
+        mode: str,
+        *,
+        count: int = 8,
+        tracks_per_artist: int = 3,
+    ) -> list[dict]:
+        """Return non-persisting, provider-verified discovery candidates.
+
+        Last.fm supplies artist adjacency; iTunes verifies concrete track
+        identities and metadata.  This method deliberately does not create or
+        update Recommendation rows: the shared Music Intelligence layer owns
+        ranking/explanations, while durable feedback remains explicit.
+        """
+        if not self._lastfm_key:
+            return []
+        profile = await self._load_profile()
+        if not profile:
+            return []
+        seeds = self._get_seed_artists(profile, mode)
+        if not seeds:
+            return []
+
+        owned_artists = {
+            str(a.get("name") or "").strip().casefold()
+            for a in profile.top_artists
+            if isinstance(a, dict) and a.get("name")
+        }
+        candidates: dict[str, dict] = {}
+        for seed_name in seeds[:5]:
+            similar = await self._get_similar_artists(
+                seed_name, persist_cache=False,
+            )
+            for artist_info in similar:
+                name = str(artist_info.get("name") or "").strip()
+                if not name:
+                    continue
+                key = name.casefold()
+                if key in owned_artists:
+                    continue
+                try:
+                    match = max(0.0, min(1.0, float(artist_info.get("match", 0.0))))
+                except (TypeError, ValueError):
+                    match = 0.0
+                current = candidates.get(key)
+                if current is None or match > current["source_match"]:
+                    candidates[key] = {
+                        "artist_name": name,
+                        "seed_artist": seed_name,
+                        "source_match": match,
+                    }
+
+        ranked = sorted(
+            candidates.values(),
+            key=lambda item: (-item["source_match"], item["artist_name"].casefold()),
+        )
+        results: list[dict] = []
+        for candidate in ranked:
+            tracks = await self._search_itunes_tracks(
+                candidate["artist_name"], limit=tracks_per_artist,
+            )
+            if not tracks:
+                continue
+            results.append({
+                **candidate,
+                "source": "lastfm_similar+itunes_search",
+                "tracks": tracks,
+            })
+            if len(results) >= max(1, count):
+                break
+        return results
+
     async def generate_recommendations(
         self, mode: str, count: int = 10
     ) -> list[dict]:
@@ -77,9 +155,7 @@ class RecommendationService:
             return []
 
         # Load taste profile
-        async with async_session() as session:
-            result = await session.execute(select(TasteProfile).limit(1))
-            profile = result.scalar_one_or_none()
+        profile = await self._load_profile()
 
         if not profile:
             logger.warning("No taste profile found — import library first")
@@ -273,7 +349,9 @@ class RecommendationService:
 
         return seeds
 
-    async def _get_similar_artists(self, artist_name: str) -> list[dict]:
+    async def _get_similar_artists(
+        self, artist_name: str, *, persist_cache: bool = True,
+    ) -> list[dict]:
         """
         Get similar artists from Last.fm (with DB cache).
 
@@ -296,8 +374,9 @@ class RecommendationService:
         # Query Last.fm
         similar = await self._query_lastfm_similar(artist_name)
 
-        # Cache result
-        if similar:
+        # Cache result for the legacy durable recommendation path only.
+        # Shadow discovery may read this cache but never writes it.
+        if similar and persist_cache:
             async with async_session() as session:
                 if db_artist:
                     await session.execute(
@@ -349,6 +428,57 @@ class RecommendationService:
 
             except Exception as e:
                 logger.error(f"Last.fm query failed for '{artist_name}': {e}")
+                return []
+
+    async def _search_itunes_tracks(
+        self, artist_name: str, *, limit: int = 3,
+    ) -> list[dict]:
+        """Return verified iTunes tracks for exactly the requested artist."""
+        async with self._api_sem:
+            try:
+                resp = await self._http.get(
+                    ITUNES_SEARCH,
+                    params={
+                        "term": artist_name,
+                        "media": "music",
+                        "entity": "song",
+                        "limit": max(5, min(25, limit * 3)),
+                    },
+                )
+                await asyncio.sleep(0.5)
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+                results = data.get("results", [])
+                verified: list[dict] = []
+                seen: set[str] = set()
+                wanted = artist_name.strip().casefold()
+                for result in results:
+                    if not isinstance(result, dict):
+                        continue
+                    result_artist = str(result.get("artistName") or "").strip()
+                    track_name = str(result.get("trackName") or "").strip()
+                    provider_id = str(result.get("trackId") or "").strip()
+                    if result_artist.casefold() != wanted or not track_name or not provider_id:
+                        continue
+                    if provider_id in seen:
+                        continue
+                    seen.add(provider_id)
+                    verified.append({
+                        "provider": "itunes_search",
+                        "provider_id": provider_id,
+                        "artist_name": result_artist,
+                        "track_name": track_name,
+                        "album_name": result.get("collectionName"),
+                        "preview_url": result.get("previewUrl"),
+                        "artwork_url": result.get("artworkUrl100"),
+                        "external_url": result.get("trackViewUrl"),
+                    })
+                    if len(verified) >= max(1, limit):
+                        break
+                return verified
+            except Exception as exc:
+                logger.error("iTunes discovery search failed for '%s': %s", artist_name, exc)
                 return []
 
     async def _search_itunes(self, artist_name: str) -> dict:

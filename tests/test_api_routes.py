@@ -141,6 +141,56 @@ class TestMusicAPI:
         assert "top_artists" in data
         assert "top_favorites" in data
 
+    def test_discovery_status_is_shadow_only(self, client):
+        resp = client.get("/api/music/discovery/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["shadow"] is True
+        assert data["actuation_allowed"] is False
+        assert set(data["policies"]) == {"gentle", "explore"}
+
+    def test_discovery_preview_returns_fake_explainable_clusters(self, client):
+        previous = app.state.music_discovery
+
+        class FakeResult:
+            def to_dict(self):
+                return {
+                    "status": "shadow_ready",
+                    "shadow": True,
+                    "actuation_allowed": False,
+                    "policy": "explore",
+                    "clusters": [{
+                        "artist_name": "New Artist",
+                        "artist_depth": 2,
+                        "novelty_ratio": 1.0,
+                        "reasons": ["taste-adjacent"],
+                        "tracks": [{"track_name": "New Song"}],
+                    }],
+                }
+
+        class FakeDiscovery:
+            async def preview(self, mode, *, policy, count, tracks_per_artist):
+                assert mode == "gaming"
+                assert policy == "explore"
+                assert count == 4
+                assert tracks_per_artist == 2
+                return FakeResult()
+
+        app.state.music_discovery = FakeDiscovery()
+        try:
+            resp = client.post(
+                "/api/music/discovery/preview?mode=gaming&policy=explore&count=4&tracks_per_artist=2"
+            )
+        finally:
+            app.state.music_discovery = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["shadow"] is True
+        assert data["actuation_allowed"] is False
+        assert data["clusters"][0]["artist_name"] == "New Artist"
+        assert data["clusters"][0]["tracks"][0]["track_name"] == "New Song"
+
     def test_curator_status_is_shadow_only(self, client):
         resp = client.get("/api/music/curator/status")
         assert resp.status_code == 200
