@@ -133,6 +133,62 @@ class TestMusicAPI:
         data = resp.json()
         assert isinstance(data, dict)
 
+    def test_music_taste_returns_read_only_summary(self, client):
+        resp = client.get("/api/music/taste?limit=3")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data["entity_counts"]) == {"artists", "tracks", "favorites"}
+        assert "top_artists" in data
+        assert "top_favorites" in data
+
+    def test_curator_status_is_shadow_only(self, client):
+        resp = client.get("/api/music/curator/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["shadow"] is True
+        assert data["actuation_allowed"] is False
+        assert set(data["supported_modes"]) == {"gameday", "social"}
+
+    def test_curator_preview_rejects_unsupported_mode_without_model_call(self, client):
+        resp = client.post("/api/music/curator/preview?mode=working")
+        assert resp.status_code == 400
+        assert "Unsupported curator mode" in resp.json()["detail"]
+
+    def test_curator_preview_returns_fake_shadow_result(self, client):
+        previous = app.state.music_curator
+
+        class FakeResult:
+            def to_dict(self):
+                return {
+                    "status": "shadow_ready",
+                    "shadow": True,
+                    "actuation_allowed": False,
+                    "suggestions": [{"candidate": {"title": "Verified Favorite"}}],
+                }
+
+        class FakeCurator:
+            supported_modes = ("gameday", "social")
+
+            def supports_mode(self, mode):
+                return mode in self.supported_modes
+
+            async def preview(self, mode, *, limit):
+                assert mode == "gameday"
+                assert limit == 3
+                return FakeResult()
+
+        app.state.music_curator = FakeCurator()
+        try:
+            resp = client.post("/api/music/curator/preview?mode=gameday&limit=3")
+        finally:
+            app.state.music_curator = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["shadow"] is True
+        assert data["actuation_allowed"] is False
+        assert data["suggestions"][0]["candidate"]["title"] == "Verified Favorite"
+
 
 # ---------------------------------------------------------------------------
 # Routines

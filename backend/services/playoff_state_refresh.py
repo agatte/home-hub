@@ -158,6 +158,8 @@ def compute_team_form(
     today = today or datetime.now(timezone.utc)
     outcomes: list[str] = []
     wins = losses = ties = 0
+    last_game_result: str | None = None
+    last_game_margin: int | None = None
 
     for event in schedule_events:
         comps = event.get("competitions") or []
@@ -180,15 +182,19 @@ def compute_team_form(
         if colts_score is None or opp_score is None:
             continue
 
-        if colts_score > opp_score:
+        margin = colts_score - opp_score
+        if margin > 0:
             wins += 1
-            outcomes.append("W")
-        elif colts_score < opp_score:
+            outcome = "W"
+        elif margin < 0:
             losses += 1
-            outcomes.append("L")
+            outcome = "L"
         else:
             ties += 1
-            outcomes.append("T")
+            outcome = "T"
+        outcomes.append(outcome)
+        last_game_result = outcome
+        last_game_margin = margin
 
     recent = outcomes[-4:]
     win_streak = 0
@@ -203,6 +209,8 @@ def compute_team_form(
         "win_streak": win_streak,
         "season_record": [wins, losses, ties],
         "games_played": len(outcomes),
+        "last_game_result": last_game_result,
+        "last_game_margin": last_game_margin,
         "refreshed_at": today.replace(microsecond=0).isoformat(),
     }
 

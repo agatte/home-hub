@@ -9,6 +9,7 @@ from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
 from backend.services.didl_lite import build_track_didl_lite
+from backend.services.music_curator import MusicCuratorError
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 from backend.services.sonos_service import is_allowed_play_uri
 
@@ -281,6 +282,61 @@ async def play_preview(request: Request) -> dict:
 
     success = await sonos.play_uri(preview_url, meta=meta or None)
     return {"status": "ok" if success else "error"}
+
+
+@router.get("/taste")
+async def get_music_taste(request: Request, limit: int = 10) -> dict:
+    """Return read-only taste/familiarity diagnostics for Music Intelligence."""
+    if limit < 1 or limit > 25:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 25")
+    taste = getattr(request.app.state, "music_taste", None)
+    if taste is None:
+        raise HTTPException(status_code=503, detail="Music taste service not initialized")
+    try:
+        snapshot = await taste.snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Music taste snapshot unavailable") from exc
+    return snapshot.summary(limit=limit)
+
+
+@router.get("/curator/status")
+async def get_curator_status(request: Request) -> dict:
+    """Return shadow-curator capability/status without running the model."""
+    curator = getattr(request.app.state, "music_curator", None)
+    if curator is None:
+        raise HTTPException(status_code=503, detail="Music curator not initialized")
+    return curator.status()
+
+
+@router.post("/curator/preview", dependencies=[Depends(require_api_key)])
+@limiter.limit("6/hour")
+async def preview_curator(
+    request: Request, mode: str = "gameday", limit: int = 6,
+) -> dict:
+    """Generate a non-actuating, provider-verified curator preview.
+
+    This endpoint may incur one bounded intent-provider call, so it is authenticated.
+    The result is suggestions only: it cannot play Sonos, mutate mappings, or
+    update bandit rewards.
+    """
+    curator = getattr(request.app.state, "music_curator", None)
+    if curator is None:
+        raise HTTPException(status_code=503, detail="Music curator not initialized")
+    if not curator.supports_mode(mode):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported curator mode '{mode}'. Must be one of: "
+                f"{', '.join(curator.supported_modes)}"
+            ),
+        )
+    if limit < 1 or limit > 12:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 12")
+    try:
+        result = await curator.preview(mode, limit=limit)
+    except MusicCuratorError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return result.to_dict()
 
 
 @router.get("/bandit-status")

@@ -357,6 +357,8 @@ class TestComputeTeamForm:
         assert form["last4_record"] == [0, 0]
         assert form["win_streak"] == 0
         assert form["games_played"] == 0
+        assert form["last_game_result"] is None
+        assert form["last_game_margin"] is None
 
     def test_recent_form_and_streak_use_regular_season_finals_only(self):
         form = compute_team_form(
@@ -374,6 +376,8 @@ class TestComputeTeamForm:
         assert form["last4_record"] == [3, 1]
         assert form["win_streak"] == 2
         assert form["games_played"] == 5
+        assert form["last_game_result"] == "W"
+        assert form["last_game_margin"] == 10
 
     def test_january_belongs_to_prior_nfl_season(self):
         form = compute_team_form(

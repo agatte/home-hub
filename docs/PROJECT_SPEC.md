@@ -367,19 +367,47 @@ play supported Sonos favorites/playlists, generate Last.fm/iTunes-preview
 recommendations, and choose among playable mappings with a contextual bandit.
 It cannot arbitrarily browse Apple Music and reliably queue any catalog item.
 
-**DECIDED TARGET.** The Music Curator learns which playlists, stations,
-genres, artists, and ambience sources fit each context without requiring
-Anthony to pre-curate every candidate. Gentle discovery defaults to roughly
-one unfamiliar track per four or five familiar tracks, adjacent to established
-taste and current context. “Alexa, ask Home Hub to help me find new music”
-starts a more exploratory session. Feedback weight increases from quick skip,
-to repeated similar skips, to full listen, to save/replay/volume increase or
-“what is this?”; stopping Home Hub-started music soon after start is a
-contextual negative. A first slice may improve already-playable context-tagged
-pools.
+**DECIDED TARGET - 2026-09-16.** Music intelligence is one shared system, not
+separate Game Day, Social, gaming, mood, and recommendation engines. Those
+contexts supply source-qualified facts through adapters; the shared core turns
+that context into musical intent, combines it with Anthony's taste/familiarity
+evidence, verifies real provider candidates, uses learned preference evidence,
+and only then hands an allowed candidate to the existing playback boundary.
+Sonos is a playback surface, not the conceptual music catalog. AI/model vendors
+and music-analysis models remain replaceable behind provider-neutral
+interfaces; no generic language model may fabricate a playable provider item.
 
-**RESEARCH NEEDED.** Arbitrary Apple Music catalog search and reliable Sonos
-queue playback.
+**DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
+default to roughly one unfamiliar selection per four or five familiar ones and
+expand outward from demonstrated taste rather than maximize novelty. Explicit
+requests such as "play new music" may raise the exploration budget, while
+requests such as "I'm feeling energetic" should convert the requested mood into
+structured musical intent and use the same taste/catalog pipeline. Gaming may
+add semantic context such as Valheim -> Norse/Viking/folk/ritual/epic without
+requiring a hard-coded playlist per game. Game Day and Social are initial
+consumers of the same architecture.
+
+**DECIDED TARGET.** Familiarity is identity-specific. A familiar artist can
+make an unfamiliar track adjacent or promising, but does not make the track
+itself familiar. Artist-level discovery should prefer coherent evidence across
+multiple tracks because a useful new artist is one where several songs may fit,
+not merely one isolated recommendation. Quick/repeated skips, full listens,
+manual replay/selection, saves/favorites, explicit feedback, "what is this?",
+and early stops of Home Hub-started music contribute with source/context
+provenance; ambiguous actions must not be overlearned. Existing `MusicBandit`
+remains preference evidence rather than being replaced.
+
+**DECIDED TARGET.** Autonomy graduates by consequence and evidence: shadow
+curation first, recommendation/approval next, narrow assisted playback only for
+approved/proven candidates, controlled exploration when explicitly requested,
+and a trusted contextual/session DJ only after real evidence. DND, Sleeping,
+Away, lifecycle, ownership, and playback-safety gates remain authoritative.
+
+**RESEARCH NEEDED.** Rich arbitrary provider catalog search, representative
+audio access for semantic analysis/embeddings, and reliable provider-to-Sonos
+queue playback. Track these under shared Music Intelligence issue #254 and its
+bounded taste/familiarity foundation #255 rather than creating parallel
+curators.
 
 ### Desk, kitchen, Winding Down, and mornings
 

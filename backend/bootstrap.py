@@ -585,6 +585,34 @@ async def lifespan(app: FastAPI):
     )
     app.state.recommendation_service = rec_service
 
+    # Music Curator (#254) - shadow-only semantic discovery over provider-
+    # verified, already-playable Sonos favorites.  The intent provider emits a
+    # intent brief only; catalog verification and ranking are separate, and
+    # this service has no playback or mapping mutation capability.
+    from backend.services.music_curator import (
+        UnavailableMusicIntentProvider,
+        MusicCurator,
+        MusicCuratorContextBuilder,
+    )
+    from backend.services.music_taste import MusicTasteService
+    from backend.services.playlist_catalog import SonosFavoritesCatalog
+    music_taste = MusicTasteService(bandit=music_bandit)
+    app.state.music_taste = music_taste
+    music_curator = MusicCurator(
+        context_builder=MusicCuratorContextBuilder(
+            app.state, setting_loader=load_setting,
+        ),
+        intent_provider=UnavailableMusicIntentProvider(),
+        catalog=SonosFavoritesCatalog(sonos),
+        bandit=music_bandit,
+        taste_provider=music_taste,
+    )
+    app.state.music_curator = music_curator
+    app_logger.info(
+        "Music curator initialized (shadow-only, intent_provider_configured=%s)",
+        music_curator.configured,
+    )
+
     # Plant app integration (external app, cached 10 min). The service
     # refuses to construct against http:// without the explicit
     # PLANT_APP_ALLOW_INSECURE escape hatch — catch and skip rather
