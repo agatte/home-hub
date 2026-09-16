@@ -26,6 +26,7 @@ from backend.services.pregame_audio_policy import (
     TIER_SUPPRESSED,
     TIER_VICTORY_LAP,
     compute_pregame_audio,
+    decision_for_tier,
 )
 
 
@@ -219,12 +220,18 @@ class TestStandard:
         d = _call(season_week=1)
         assert d.tier == TIER_STANDARD
         assert d.tts_line is not None
-        assert d.sonos_hype_play is False
+        assert d.sonos_hype_play is True
 
     def test_standard_no_signals(self):
         """Mid-season but no playoff data → standard."""
         d = _call(season_week=10)
         assert d.tier == TIER_STANDARD
+        assert d.sonos_hype_play is True
+
+    def test_standard_direct_tier_requests_hype(self):
+        d = decision_for_tier(TIER_STANDARD, "Kansas City Chiefs")
+        assert d.tier == TIER_STANDARD
+        assert d.sonos_hype_play is True
 
     def test_standard_renders_opponent(self):
         d = _call(season_week=1, opponent="Jacksonville Jaguars")

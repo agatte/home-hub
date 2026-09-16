@@ -201,8 +201,9 @@ def _classify_tier(
     ):
         return TIER_BIG_STAKES, _TTS_LINES_BIG_STAKES, True, None
 
-    # Standard / early season — catch-all. No hype, just announce.
-    return TIER_STANDARD, _TTS_LINES_STANDARD, False, None
+    # Standard regular season: normal Game Day gets the T-30 hype bed too.
+    # Stakes may change its flavor; only explicit suppressions/preseason stay quiet.
+    return TIER_STANDARD, _TTS_LINES_STANDARD, True, None
 
 
 def decision_for_tier(
@@ -262,7 +263,7 @@ def decision_for_tier(
     if tier == TIER_STANDARD:
         line = _pick_line(_TTS_LINES_STANDARD, line_index, opponent)
         return PregameAudioDecision(
-            tier=TIER_STANDARD, tts_line=line, sonos_hype_play=False,
+            tier=TIER_STANDARD, tts_line=line, sonos_hype_play=True,
         )
     raise ValueError(f"Unknown tier: {tier!r}. Valid: {sorted(VALID_TIERS)}")
 

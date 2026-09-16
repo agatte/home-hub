@@ -473,7 +473,7 @@ The pre-game window is the hour leading up to kickoff. The current architecture 
 
 - **New mode `pregameday`**, priority 6 (matches `gameday`). gameday_service auto-flips the apartment to `pregameday` at T-60 and to `gameday` at T-30 (existing flip mechanic). `pregameday` clears at T-30 by way of being displaced; it doesn't have an independent clear path.
 - **Lighting** is a "full pre-game palette" — all 4 lights take a Colts-tinted feel, distinct from the in-game gameday baseline. Kitchen pair held. Time-of-day variants (day / evening / night / late_night) parallel the existing gameday baseline structure in `light_state_calculator.py`.
-- **Audio** is **playoff-stakes-aware** — same design philosophy as the WPA-driven celebration volume policy. Big-implication game → TTS announcement at T-30 + Sonos hype playlist auto-play. Out-of-playoff-running game → silent, lights only. Early-season fallback rules cover the period before playoff odds stabilize.
+- **Audio** is **playoff-stakes-aware**: normal regular-season Game Day gets TTS + a pregame hype bed by default; stakes can change flavor/intensity. Eliminated, Sleeping, and DND remain hard suppressions; preseason remains TTS-only. Early-season fallback rules cover the period before playoff odds stabilize.
 - **Verification** uses synthetic time injection on `gameday_service` (a `--mock-now` test hook) so the auto-flip can be exercised in dev without waiting for an actual kickoff window.
 
 ### 10.2 Lighting
@@ -519,7 +519,8 @@ def compute_pregame_audio(
 | **Big stakes** | `playoff_probability ∈ [0.20, 0.80]` AND `season_week >= 8` | line from "big-stakes" pool | True |
 | **Late-season clutch** | `season_week >= 14` AND `division_gap_games <= 1` | line from "clutch" pool | True |
 | **Locked playoff seed** | `playoff_probability >= 0.95` AND `season_week >= 15` | line from "victory-lap" pool | True (mellow playlist) |
-| **Standard / early season** | preseason OR `season_week <= 7` OR no special tier | line from "standard" pool | False (lights + TTS only) |
+| **Preseason** | `is_preseason=True` | line from "preseason" pool | False (TTS only) |
+| **Standard / regular season** | no special tier | line from "standard" pool | True (normal Game Day hype) |
 
 **TTS line pools** (authoring tracked in [#6](https://github.com/agatte/home-hub/issues/6); placeholder values below):
 - "standard": `["Colts kick off in 30 minutes against the {opponent}.", "Game day. Colts and {opponent} in 30."]`
@@ -528,7 +529,7 @@ def compute_pregame_audio(
 - "victory-lap": `["Playoffs locked, Colts and {opponent} in 30. Resting starters?", ...]`
 - (Preseason override: `["Preseason kickoff in 30 minutes — Colts and {opponent}. Tuning the apparatus."]`)
 
-**Sonos hype playlist** wired via the existing `mode_playlists` table — add a `pregameday` row with the user's pre-game playlist favorite_title. MusicMapper's existing on_mode_change callback handles the dispatch when the mode flips.
+**Sonos hype playlist** uses the existing `mode_playlists` table. An explicit `pregameday` mapping is authoritative and remains user-tunable. If no mapping exists, normal/big/clutch Game Day may use the exact queueable Sonos favorite `It's Lit!` as a bounded fallback; missing/non-queueable fallback remains observable and fails quiet. Victory-lap still prefers an explicitly mapped mellow/background option. The T-60 `pregameday` entry stays silent; dispatch occurs only at the T-30 `pregameday -> gameday` transition.
 
 **Apartment-context modifiers (mirror celebration volume policy):**
 - `sleeping_mode` or `dnd_active` → both `tts_line=None` AND `sonos_hype_play=False` (lights still flip).
@@ -596,7 +597,7 @@ This means the current automatic stakes behavior is intentionally conservative: 
 
 - **Early-season stakes computation** — week 1-3 has no ESPN playoff odds. Fallback to record-only is crude (1-0 vs 0-1 isn't meaningfully predictive). Acceptable for v1; revisit if real-game data shows the early-season tier mis-classifies often.
 - **Playoff-odds refresh cadence** — Tuesday 06:00 may be too coarse if a game ends Monday night and the user has a Wednesday pre-game window. Consider per-game refresh on T-90 instead (out of scope for v1 ship).
-- **Sonos hype playlist content** — user picks a Colts-themed playlist; mode_playlists row gets the favorite_title. Iteration knob for later.
+- **Sonos hype playlist content** - explicit `pregameday` mapping remains the user-tunable authority. Until one is configured, the exact queueable `It's Lit!` favorite is the bounded normal/big/clutch fallback. Shared discovery/curation belongs to #254, not this sprint.
 - **TTS line authoring** — pools per stakes tier are placeholder values. Run through curator + user authoring before preseason.
 - **Multi-game days** — Sunday with a 1pm and 4pm Colts game? Out of scope (Colts plays once a week).
 - **Postseason** — playoff games shift the stakes math entirely. Out of scope for v1; revisit if Colts make the playoffs.

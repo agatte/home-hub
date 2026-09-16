@@ -23,6 +23,8 @@ logger = logging.getLogger("home_hub.music")
 # for the T-30 room announcement. Keep this local to Game Day.
 PREGAME_TTS_VOLUME = 24
 PREGAME_TTS_LATE_NIGHT_CAP = 18
+# Bounded Game Day fallback only. Any explicit pregameday mapping wins.
+DEFAULT_PREGAME_HYPE_FAVORITE = "It's Lit!"
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -477,9 +479,16 @@ class MusicMapper:
                 optional sonos_vibe.
 
         Returns:
-            Dict summarizing what fired: {tts_fired, sonos_fired, picked_title}.
+            Dict summarizing what fired, including whether hype was requested and why
+            Sonos did or did not start.
         """
-        result = {"tts_fired": False, "sonos_fired": False, "picked_title": None}
+        result = {
+            "tts_fired": False,
+            "sonos_fired": False,
+            "picked_title": None,
+            "sonos_hype_requested": bool(decision.sonos_hype_play),
+            "sonos_reason": "not_requested" if not decision.sonos_hype_play else None,
+        }
 
         if decision.tts_line and self._tts_service:
             try:
@@ -500,6 +509,16 @@ class MusicMapper:
             # gives transport time to settle into "stopped" before play_favorite.
             await asyncio.sleep(2.0)
             picked = self._pick_pregame_hype(decision.sonos_vibe)
+            pick_source = "mapping"
+            # If no explicit mapping exists, normal/big/clutch Game Day may
+            # fall back to the already-existing queueable Sonos favorite. A
+            # user-configured pregameday mapping always remains authoritative.
+            if picked is None and decision.sonos_vibe is None:
+                if not self._sonos.connected:
+                    result["sonos_reason"] = "sonos_disconnected"
+                else:
+                    picked = await self._default_pregame_hype_fallback()
+                    pick_source = "fallback"
             if picked:
                 try:
                     success = await asyncio.wait_for(
@@ -509,11 +528,13 @@ class MusicMapper:
                     if success:
                         result["sonos_fired"] = True
                         result["picked_title"] = picked["favorite_title"]
+                        result["sonos_reason"] = "played"
                         logger.info(
-                            "pregame hype playing: title=%s vibe=%s tier=%s",
+                            "pregame hype playing: title=%s vibe=%s tier=%s source=%s",
                             picked["favorite_title"],
                             picked.get("vibe"),
                             decision.tier,
+                            pick_source,
                         )
                         await self._ws_manager.broadcast("music_auto_played", {
                             "mode": "gameday",
@@ -521,16 +542,57 @@ class MusicMapper:
                             "vibe": picked.get("vibe"),
                             "source": "pregame_audio",
                         })
+                    else:
+                        result["sonos_reason"] = "play_failed"
+                        logger.warning(
+                            "pregame Sonos play_favorite returned false: title=%s source=%s",
+                            picked["favorite_title"], pick_source,
+                        )
                 except asyncio.TimeoutError:
+                    result["sonos_reason"] = "timeout"
                     logger.warning("pregame Sonos play_favorite timed out")
                 except Exception:
+                    result["sonos_reason"] = "error"
                     logger.exception("pregame Sonos dispatch failed")
             else:
-                logger.info(
-                    "pregame hype suppressed — no pregameday playlist mapped"
+                if result["sonos_reason"] is None:
+                    result["sonos_reason"] = "no_mapping_or_fallback"
+                logger.warning(
+                    "pregame hype requested but unavailable: reason=%s fallback=%r tier=%s",
+                    result["sonos_reason"], DEFAULT_PREGAME_HYPE_FAVORITE, decision.tier,
                 )
 
         return result
+
+    async def _default_pregame_hype_fallback(self) -> Optional[dict]:
+        """Resolve the bounded default favorite when no pregameday mapping exists.
+
+        The fallback is intentionally discovery-based rather than a DB seed: it
+        only applies when Sonos currently exposes the exact queueable favorite,
+        and any explicit pregameday mapping takes precedence.
+        """
+        if not self._sonos.connected:
+            return None
+        try:
+            favorites = await asyncio.wait_for(self._sonos.get_favorites(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("pregame fallback favorite lookup timed out")
+            return None
+        except Exception:
+            logger.exception("pregame fallback favorite lookup failed")
+            return None
+
+        for favorite in favorites:
+            title = str(favorite.get("title") or "")
+            uri = str(favorite.get("uri") or "")
+            if title.casefold() == DEFAULT_PREGAME_HYPE_FAVORITE.casefold() and uri:
+                return {
+                    "favorite_title": title,
+                    "vibe": "hype",
+                    "auto_play": True,
+                    "priority": -1,
+                }
+        return None
 
     def _pick_pregame_hype(self, sonos_vibe: Optional[str]) -> Optional[dict]:
         """Pick the hype playlist entry for pregameday→gameday audio.

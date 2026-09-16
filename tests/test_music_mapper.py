@@ -5,11 +5,12 @@ Uses mock Sonos/WebSocket services from conftest. Cache is set directly
 to avoid database round-trips.
 """
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from backend.services.music_mapper import (
+    DEFAULT_PREGAME_HYPE_FAVORITE,
     PREGAME_TTS_LATE_NIGHT_CAP,
     PREGAME_TTS_VOLUME,
     MusicMapper,
@@ -294,15 +295,67 @@ class TestDispatchPregameAudio:
         assert result["picked_title"] == "Colts Hype Mix"
         assert mapper._sonos._state["state"] == "PLAYING"
 
-    async def test_hype_skipped_when_no_playlist_mapped(self, mapper):
-        # Empty cache for pregameday
+    async def test_hype_unavailable_when_no_mapping_or_default_favorite(self, mapper):
         d = _decision(sonos_hype_play=True)
         async def _async_noop(*_a, **_k):
             return None
         with patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop):
             result = await mapper.dispatch_pregame_audio(d)
-        assert result["tts_fired"] is True  # TTS still fires
-        assert result["sonos_fired"] is False  # No Sonos — no row to pick
+        assert result["tts_fired"] is True
+        assert result["sonos_fired"] is False
+        assert result["sonos_hype_requested"] is True
+        assert result["sonos_reason"] == "no_mapping_or_fallback"
+
+    async def test_no_mapping_uses_queueable_its_lit_fallback(self, mapper):
+        mapper._sonos.get_favorites = AsyncMock(return_value=[
+            {"title": DEFAULT_PREGAME_HYPE_FAVORITE, "uri": "x-rincon-cpcontainer:playlist"},
+        ])
+        d = _decision(tier="standard", sonos_hype_play=True)
+        async def _async_noop(*_a, **_k):
+            return None
+        with patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop):
+            result = await mapper.dispatch_pregame_audio(d)
+        assert result["sonos_fired"] is True
+        assert result["picked_title"] == DEFAULT_PREGAME_HYPE_FAVORITE
+        assert result["sonos_reason"] == "played"
+        assert mapper._sonos._state["track"] == DEFAULT_PREGAME_HYPE_FAVORITE
+
+    async def test_explicit_pregameday_mapping_beats_fallback(self, mapper):
+        mapper._cache["pregameday"] = [
+            _entry("Configured Colts Mix", "hype", auto_play=True, priority=20),
+        ]
+        mapper._sonos.get_favorites = AsyncMock(return_value=[
+            {"title": DEFAULT_PREGAME_HYPE_FAVORITE, "uri": "x-rincon-cpcontainer:playlist"},
+        ])
+        d = _decision(tier="standard", sonos_hype_play=True)
+        async def _async_noop(*_a, **_k):
+            return None
+        with patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop):
+            result = await mapper.dispatch_pregame_audio(d)
+        assert result["picked_title"] == "Configured Colts Mix"
+        mapper._sonos.get_favorites.assert_not_awaited()
+
+    async def test_disconnected_sonos_reports_distinct_hype_reason(self, mapper):
+        mapper._sonos.connected = False
+        d = _decision(sonos_hype_play=True)
+        async def _async_noop(*_a, **_k):
+            return None
+        with patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop):
+            result = await mapper.dispatch_pregame_audio(d)
+        assert result["sonos_fired"] is False
+        assert result["sonos_reason"] == "sonos_disconnected"
+
+    async def test_nonqueueable_its_lit_is_not_used_as_fallback(self, mapper):
+        mapper._sonos.get_favorites = AsyncMock(return_value=[
+            {"title": DEFAULT_PREGAME_HYPE_FAVORITE, "uri": ""},
+        ])
+        d = _decision(sonos_hype_play=True)
+        async def _async_noop(*_a, **_k):
+            return None
+        with patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop):
+            result = await mapper.dispatch_pregame_audio(d)
+        assert result["sonos_fired"] is False
+        assert result["sonos_reason"] == "no_mapping_or_fallback"
 
     async def test_mellow_vibe_prefers_mellow_entry(self, mapper):
         """Victory-lap tier sets sonos_vibe='mellow' — picker should prefer
