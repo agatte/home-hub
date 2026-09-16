@@ -62,6 +62,10 @@ class LastFmTagSource(Protocol):
 INTENT_PRESETS: dict[str, tuple[tuple[str, float], ...]] = {
     "energetic": (("energetic", 1.0), ("upbeat", 0.9), ("powerful", 0.8), ("fast", 0.7), ("positive", 0.5)),
     "gameday": (("sport", 1.0), ("energetic", 1.0), ("powerful", 0.9), ("epic", 0.8), ("party", 0.6), ("upbeat", 0.6)),
+    "gameday_big_stakes": (("sport", 1.0), ("powerful", 1.0), ("epic", 1.0), ("energetic", 0.9), ("upbeat", 0.5)),
+    "gameday_clutch": (("powerful", 1.0), ("epic", 1.0), ("sport", 0.9), ("energetic", 0.8), ("upbeat", 0.4)),
+    "gameday_victory_lap": (("fun", 1.0), ("upbeat", 0.9), ("party", 0.7), ("sport", 0.5), ("chill", 0.4)),
+    "gameday_preseason": (("sport", 0.8), ("upbeat", 0.8), ("fun", 0.7), ("energetic", 0.5), ("chill", 0.4)),
     "social": (("party", 1.0), ("fun", 0.9), ("upbeat", 0.9), ("dance", 0.8), ("energetic", 0.7)),
     "gaming": (("energetic", 0.7), ("epic", 0.6), ("atmospheric", 0.5), ("focus", 0.4)),
     "valheim": (("norse", 1.0), ("viking", 1.0), ("folk", 0.9), ("epic", 0.8), ("atmospheric", 0.8), ("medieval", 0.6), ("metal", 0.5)),

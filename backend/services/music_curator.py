@@ -264,22 +264,28 @@ class GameDayContextAdapter:
             )
         elif gameday is not None:
             try:
-                upcoming = await gameday.get_upcoming_schedule(limit=1)
+                peek = getattr(gameday, "peek_upcoming_schedule", None)
+                if callable(peek):
+                    upcoming = peek(limit=1)
+                    schedule_source = "gameday_schedule_cache"
+                else:
+                    upcoming = await gameday.get_upcoming_schedule(limit=1)
+                    schedule_source = "gameday_schedule"
             except Exception:
                 upcoming = []
             if upcoming:
                 game = upcoming[0]
                 facts["opponent"] = CuratorFact(
-                    game.get("opponent"), "gameday_schedule",
+                    game.get("opponent"), schedule_source,
                 )
                 facts["home_away"] = CuratorFact(
                     "home" if game.get("colts_are_home") else "away",
-                    "gameday_schedule",
+                    schedule_source,
                 )
                 kickoff = game.get("kickoff_utc")
                 facts["kickoff_utc"] = CuratorFact(
                     kickoff.isoformat() if isinstance(kickoff, datetime) else kickoff,
-                    "gameday_schedule",
+                    schedule_source,
                 )
 
         if self._setting_loader is None:
@@ -338,7 +344,20 @@ class SocialContextAdapter:
         facts: dict[str, CuratorFact],
         now: datetime,
     ) -> Optional[str]:
-        del now
+        automation = getattr(self._app_state, "automation", None)
+        if automation is not None:
+            active = getattr(automation, "current_mode", None) == "social"
+            facts["social_active"] = CuratorFact(active, "automation_engine")
+            changed = getattr(automation, "last_activity_change", None)
+            if active and isinstance(changed, datetime):
+                if changed.tzinfo is None:
+                    changed = changed.replace(tzinfo=now.tzinfo or timezone.utc)
+                age = max(0.0, (now - changed).total_seconds())
+                phase = "arrival" if age < 30 * 60 else "steady" if age < 2 * 60 * 60 else "long_session"
+                facts["social_session_phase"] = CuratorFact(
+                    phase, "automation_engine", changed.isoformat(),
+                )
+
         sonos = getattr(self._app_state, "sonos", None)
         if sonos is None or not getattr(sonos, "connected", False):
             facts["sonos_connected"] = CuratorFact(False, "sonos")
@@ -353,6 +372,69 @@ class SocialContextAdapter:
             current = status.get("title") or status.get("track")
             if current:
                 facts["current_track"] = CuratorFact(current, "sonos")
+        return None
+
+
+class GamingContextAdapter:
+    """Trusted Gaming facts; a running background game is never game identity."""
+
+    mode = "gaming"
+    mapping_mode = "gaming"
+    fallback_titles: tuple[str, ...] = ()
+    _MAX_PROCESS_AGE_SECONDS = 30.0
+    _FOREGROUND_QUALIFICATIONS = {"foreground_game", "foreground_runelite_java"}
+
+    def __init__(self, app_state: Any) -> None:
+        self._app_state = app_state
+
+    async def augment(
+        self,
+        facts: dict[str, CuratorFact],
+        now: datetime,
+    ) -> Optional[str]:
+        del now
+        automation = getattr(self._app_state, "automation", None)
+        if automation is None:
+            facts["gaming_active"] = CuratorFact(False, "automation_engine")
+            return None
+        try:
+            context = automation.get_activity_context()
+        except Exception:
+            context = {}
+        active = context.get("current_activity") == "gaming"
+        facts["gaming_active"] = CuratorFact(active, "automation_engine")
+        facts["gaming_activity_source"] = CuratorFact(
+            context.get("current_activity_source"), "automation_engine",
+        )
+        desktop = (context.get("process_observations_by_device") or {}).get("desktop") or {}
+        qualification = desktop.get("gaming_qualification")
+        observed_at = desktop.get("received_at")
+        try:
+            age = float(desktop.get("age_seconds"))
+        except (TypeError, ValueError):
+            age = float("inf")
+        foreground = bool(
+            active
+            and 0.0 <= age <= self._MAX_PROCESS_AGE_SECONDS
+            and desktop.get("candidate_mode") == "gaming"
+            and qualification in self._FOREGROUND_QUALIFICATIONS
+        )
+        facts["gaming_qualification"] = CuratorFact(
+            qualification, "automation_engine:desktop_process", observed_at,
+            usable=(0.0 <= age <= self._MAX_PROCESS_AGE_SECONDS),
+        )
+        facts["gaming_identity_trusted"] = CuratorFact(
+            foreground, "automation_engine:desktop_process", observed_at,
+        )
+        game = getattr(automation, "current_game", None)
+        if game:
+            facts["game"] = CuratorFact(
+                game,
+                "automation_engine:desktop_foreground_game" if foreground
+                else "automation_engine:untrusted_game_context",
+                observed_at,
+                usable=foreground,
+            )
         return None
 
 
@@ -387,6 +469,7 @@ class MusicCuratorContextBuilder:
             adapters = [
                 GameDayContextAdapter(app_state, setting_loader=setting_loader),
                 SocialContextAdapter(app_state),
+                GamingContextAdapter(app_state),
             ]
         self._adapters = {adapter.mode: adapter for adapter in adapters}
         if len(self._adapters) != len(adapters):

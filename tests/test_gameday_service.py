@@ -322,6 +322,17 @@ class TestSchedule:
         assert upcoming[0]["opponent"] == "Miami Dolphins"
         assert upcoming[0]["id"] == "401001"
 
+    async def test_schedule_peek_never_refreshes_provider(self):
+        svc = _make_service()
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([{"events": [_schedule_event("401001", future)]}])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+        with patch("backend.services.gameday_service.httpx.AsyncClient") as provider:
+            upcoming = svc.peek_upcoming_schedule(limit=1)
+            assert not provider.called
+        assert [game["id"] for game in upcoming] == ["401001"]
+
     async def test_cache_ttl(self):
         svc = _make_service()
         future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%MZ")

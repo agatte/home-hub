@@ -19,24 +19,35 @@
   let policy = 'gentle'
   let intent = ''
   let loading = false
+  let runKind = null
   let statusLoading = true
   /** @type {string | null} */
   let error = null
   /** @type {any | null} */
   let capability = null
   /** @type {any | null} */
+  let liveCapability = null
+  /** @type {any | null} */
+  let liveContext = null
+  /** @type {string | null} */
+  let liveStatus = null
+  /** @type {any | null} */
   let result = null
+  let feedbackMode = activeMode
+  let feedbackPolicy = policy
+  /** @type {string | null} */
+  let feedbackIntent = null
   /** @type {Record<string, { action: string, state: string, clientEventId: string }>} */
   let evaluations = {}
 
   export async function refreshStatus() {
-    try {
-      capability = await apiGet('/api/music/discovery/status')
-    } catch {
-      capability = null
-    } finally {
-      statusLoading = false
-    }
+    const [discoveryStatus, currentContext] = await Promise.all([
+      apiGet('/api/music/discovery/status').catch(() => null),
+      apiGet('/api/music/live-context/status').catch(() => null),
+    ])
+    capability = discoveryStatus
+    liveCapability = currentContext
+    statusLoading = false
   }
 
   onMount(() => {
@@ -45,9 +56,15 @@
 
   async function preview() {
     loading = true
+    runKind = 'manual'
     error = null
     result = null
+    liveContext = null
+    liveStatus = null
     evaluations = {}
+    feedbackMode = activeMode
+    feedbackPolicy = policy
+    feedbackIntent = intent.trim() || null
     try {
       const query = new URLSearchParams({
         mode: activeMode,
@@ -65,6 +82,32 @@
       error = 'Discovery preview failed'
     } finally {
       loading = false
+      runKind = null
+    }
+  }
+
+  async function previewLive() {
+    loading = true
+    runKind = 'live'
+    error = null
+    result = null
+    liveContext = null
+    liveStatus = null
+    evaluations = {}
+    try {
+      const query = new URLSearchParams({ policy, count: '6', tracks_per_artist: '3' })
+      const payload = await apiPost(`/api/music/live-context/preview?${query}`, undefined, { timeout: 30000 })
+      liveStatus = payload?.status || null
+      liveContext = payload?.live_context || null
+      result = payload?.discovery || null
+      feedbackMode = liveContext?.consumer || activeMode
+      feedbackPolicy = policy
+      feedbackIntent = liveContext?.semantic_request || null
+    } catch {
+      error = 'Live-context discovery preview failed'
+    } finally {
+      loading = false
+      runKind = null
     }
   }
 
@@ -93,9 +136,9 @@
         artist_name: artist,
         provider: track.provider,
         provider_id: track.provider_id,
-        mode: activeMode,
-        policy,
-        intent: intent.trim() || null,
+        mode: feedbackMode,
+        policy: feedbackPolicy,
+        intent: feedbackIntent,
       })
       evaluations = { ...evaluations, [artist]: { action, state: 'saved', clientEventId } }
     } catch {
@@ -128,6 +171,11 @@
         Last.fm source ready{capability?.semantic_enabled ? ' · semantics ready' : ''}
       {:else}
         Discovery source unavailable
+      {/if}
+      {#if !statusLoading && liveCapability?.status === 'active'}
+        <span class="live-capability">Live: {liveCapability.consumer}{liveCapability.semantic_request ? ` · ${liveCapability.semantic_request}` : ''}</span>
+      {:else if !statusLoading}
+        <span class="live-capability live-capability-off">No live music context active</span>
       {/if}
     </div>
   </div>
@@ -162,15 +210,24 @@
       </div>
     </div>
 
-    <button
-      class="run-btn"
-      type="button"
-      on:click={preview}
+    <button class="run-btn" type="button" on:click={preview}
+      disabled={loading || statusLoading || capability?.source_enabled === false}>
+      {loading && runKind === 'manual' ? 'Thinking…' : 'Preview manual'}
+    </button>
+    <button class="live-run-btn" type="button" on:click={previewLive}
       disabled={loading || statusLoading || capability?.source_enabled === false}
-    >
-      {loading ? 'Thinking…' : 'Preview recommendations'}
+      title={liveCapability?.semantic_reason || 'Uses current trusted HomeHub context'}>
+      {loading && runKind === 'live' ? 'Reading HomeHub…' : 'Preview live context'}
     </button>
   </div>
+
+  {#if liveContext}
+    <div class="live-context-banner">
+      <strong>Live {liveContext.consumer}</strong>
+      {#if liveContext.semantic_request}<span>{liveContext.semantic_request}</span>{/if}
+      {#if liveContext.semantic_reason}<span>{liveContext.semantic_reason}</span>{/if}
+    </div>
+  {/if}
 
   {#if error}
     <div class="lab-message lab-error">{error}</div>
@@ -178,6 +235,10 @@
     <div class="lab-message">Discovery is unavailable because the source is not configured.</div>
   {:else if result?.status === 'no_candidates'}
     <div class="lab-message">No verified candidates matched this request yet.</div>
+  {:else if liveStatus === 'inactive'}
+    <div class="lab-message">No Game Day, Social, or Gaming context is active right now.</div>
+  {:else if liveStatus === 'suppressed'}
+    <div class="lab-message">Live music context is currently suppressed by HomeHub safety state.</div>
   {/if}
   {#if result?.clusters?.length}
     <div class="result-summary">
@@ -278,7 +339,7 @@
   {:else if !loading && !result}
     <div class="lab-idle">
       <strong>Nothing runs until you ask.</strong>
-      <span>Pick a context, optionally describe the mood, then preview the shadow ranking.</span>
+      <span>Use a manual context/mood, or preview HomeHub’s current trusted Game Day, Social, or Gaming context.</span>
     </div>
   {/if}
 </div>
@@ -303,6 +364,27 @@
     justify-content: space-between;
     gap: 20px;
   }
+
+  .live-capability {
+    display: block;
+    margin-top: 4px;
+    color: var(--accent);
+    font-size: 10px;
+  }
+
+  .live-capability-off { color: var(--text-muted); }
+  .live-context-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-size: 11px;
+  }
+  .live-context-banner strong { color: var(--text-primary); }
 
   .lab-header h3 {
     margin: 3px 0 4px;
@@ -409,7 +491,8 @@
     color: var(--bg-primary);
   }
 
-  .run-btn {
+  .run-btn,
+  .live-run-btn {
     min-height: 38px;
     padding: 8px 14px;
     border: 1px solid var(--accent);
@@ -420,7 +503,8 @@
     cursor: pointer;
   }
 
-  .run-btn:disabled {
+  .run-btn:disabled,
+  .live-run-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }

@@ -269,6 +269,43 @@ async def submit_discovery_feedback(request: Request) -> dict:
 
 
 # ------------------------------------------------------------------
+# Live context shadow discovery (#264)
+# ------------------------------------------------------------------
+
+@router.get("/live-context/status")
+async def get_live_music_context_status(request: Request) -> dict:
+    """Resolve current HomeHub music context without provider discovery calls."""
+    service = getattr(request.app.state, "music_live_context", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Live music context not initialized")
+    return await service.status()
+
+
+@router.post("/live-context/preview", dependencies=[Depends(require_api_key)])
+@limiter.limit("4/hour")
+async def preview_live_music_context(
+    request: Request,
+    policy: str = "gentle",
+    count: int = 6,
+    tracks_per_artist: int = 3,
+) -> dict:
+    """Run shared discovery from current trusted HomeHub context; never actuates."""
+    if count < 1 or count > 10:
+        raise HTTPException(status_code=400, detail="count must be between 1 and 10")
+    if tracks_per_artist < 1 or tracks_per_artist > 5:
+        raise HTTPException(status_code=400, detail="tracks_per_artist must be between 1 and 5")
+    service = getattr(request.app.state, "music_live_context", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Live music context not initialized")
+    try:
+        return await service.preview(
+            policy=policy, count=count, tracks_per_artist=tracks_per_artist,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
 # Recommendations
 # ------------------------------------------------------------------
 

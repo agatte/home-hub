@@ -467,16 +467,19 @@ class GameDayService:
             return False, f"automation mode={current_mode}"
         return True, "current Game Day authority"
 
-    async def get_upcoming_schedule(self, limit: int = 5) -> list[dict[str, Any]]:
-        """Return the next `limit` scheduled / in-progress games. Refreshes
-        cache if stale."""
-        await self._refresh_schedule_if_stale()
+    def peek_upcoming_schedule(self, limit: int = 5) -> list[dict[str, Any]]:
+        """Return held upcoming schedule facts without network refresh."""
         upcoming = [
             g for g in self._schedule_cache
             if self._schedule_game_phase(g) in ("pregame", "in-progress")
         ]
         upcoming.sort(key=lambda g: g["kickoff_utc"])
         return upcoming[:limit]
+
+    async def get_upcoming_schedule(self, limit: int = 5) -> list[dict[str, Any]]:
+        """Return upcoming games, refreshing the service-owned cache if stale."""
+        await self._refresh_schedule_if_stale()
+        return self.peek_upcoming_schedule(limit=limit)
 
     async def trigger_synthetic_pregame(
         self,

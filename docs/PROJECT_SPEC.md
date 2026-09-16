@@ -398,6 +398,19 @@ rewards or authorize playback. Artist-level feedback changes affinity only: it
 never makes unseen tracks familiar, and a later contradictory judgment remains
 in history and can reverse earlier ranking/suppression rather than deleting it.
 
+**IMPLEMENTED/SHADOW (#264).** Game Day, Social, and Gaming can resolve current
+source-qualified HomeHub facts into the same discovery engine used by the
+manual Discovery Lab. Game Day consumes held Game Day state/cache plus persisted
+stakes/team-form facts without initiating ESPN refreshes; Social uses bounded
+session-phase and current Sonos facts; Gaming requires fresh Desktop foreground
+game authority before a specific game identity such as Valheim may specialize
+semantic intent. A merely running/background or stale game process remains
+generic Gaming context. Live-context status is read-only and live preview is
+explicit, suggestion-only, and non-actuating; durable explicit feedback still
+feeds the canonical taste snapshot and is applied on the next preview. Existing
+Game Day playback policy, MusicMapper/Sonos ownership, DND, Sleeping, Away, and
+all actuator gates remain authoritative.
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit

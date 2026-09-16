@@ -227,13 +227,61 @@ class TestMusicAPI:
         assert calls[0]["artist_name"] == "Wardruna"
         assert calls[0]["source"] == "dashboard:music_discovery"
 
+    def test_live_music_context_status_is_shadow_only(self, client):
+        previous = app.state.music_live_context
+
+        class FakeLiveContext:
+            async def status(self):
+                return {
+                    "status": "active", "consumer": "gaming",
+                    "semantic_request": "valheim", "shadow": True,
+                    "actuation_allowed": False,
+                }
+
+        app.state.music_live_context = FakeLiveContext()
+        try:
+            resp = client.get("/api/music/live-context/status")
+        finally:
+            app.state.music_live_context = previous
+        assert resp.status_code == 200
+        assert resp.json()["semantic_request"] == "valheim"
+        assert resp.json()["actuation_allowed"] is False
+
+    def test_live_music_context_preview_delegates_without_actuation(self, client):
+        previous = app.state.music_live_context
+
+        class FakeLiveContext:
+            async def preview(self, *, policy, count, tracks_per_artist):
+                assert policy == "explore"
+                assert count == 4
+                assert tracks_per_artist == 2
+                return {
+                    "status": "shadow_ready", "shadow": True,
+                    "actuation_allowed": False,
+                    "live_context": {"consumer": "gaming", "semantic_request": "valheim"},
+                    "discovery": {"clusters": []},
+                }
+
+        app.state.music_live_context = FakeLiveContext()
+        try:
+            resp = client.post(
+                "/api/music/live-context/preview?policy=explore&count=4&tracks_per_artist=2"
+            )
+        finally:
+            app.state.music_live_context = previous
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["shadow"] is True
+        assert data["actuation_allowed"] is False
+        assert data["live_context"]["semantic_request"] == "valheim"
+
     def test_curator_status_is_shadow_only(self, client):
         resp = client.get("/api/music/curator/status")
         assert resp.status_code == 200
         data = resp.json()
         assert data["shadow"] is True
         assert data["actuation_allowed"] is False
-        assert set(data["supported_modes"]) == {"gameday", "social"}
+        assert set(data["supported_modes"]) == {"gameday", "gaming", "social"}
 
     def test_curator_preview_rejects_unsupported_mode_without_model_call(self, client):
         resp = client.post("/api/music/curator/preview?mode=working")

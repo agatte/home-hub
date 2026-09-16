@@ -17,6 +17,12 @@ const statusPayload = {
   policies: ['gentle', 'explore'],
 }
 
+const liveStatusPayload = {
+  status: 'active', consumer: 'gaming', semantic_request: 'valheim',
+  semantic_reason: 'trusted foreground game: valheim',
+  shadow: true, actuation_allowed: false,
+}
+
 const previewPayload = {
   status: 'shadow_ready',
   shadow: true,
@@ -50,7 +56,9 @@ const previewPayload = {
 }
 
 beforeEach(() => {
-  vi.mocked(apiGet).mockResolvedValue(statusPayload)
+  vi.mocked(apiGet).mockImplementation((url) => Promise.resolve(
+    String(url).includes('/live-context/status') ? liveStatusPayload : statusPayload
+  ))
   vi.mocked(apiPost).mockResolvedValue(previewPayload)
 })
 
@@ -65,8 +73,9 @@ describe('ShadowDiscoveryPanel', () => {
     await component.refreshStatus()
     await screen.findByText(/Last.fm source ready/)
 
-    expect(apiGet).toHaveBeenCalledTimes(1)
+    expect(apiGet).toHaveBeenCalledTimes(2)
     expect(apiGet).toHaveBeenCalledWith('/api/music/discovery/status')
+    expect(apiGet).toHaveBeenCalledWith('/api/music/live-context/status')
     expect(apiPost).not.toHaveBeenCalled()
     expect(screen.getByText('Nothing runs until you ask.')).toBeInTheDocument()
   })
@@ -83,7 +92,7 @@ describe('ShadowDiscoveryPanel', () => {
       target: { value: 'Valheim' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Explore' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview recommendations' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preview manual' }))
     expect(apiPost).toHaveBeenCalledTimes(1)
     const [url, body, options] = vi.mocked(apiPost).mock.calls[0]
     const parsed = new URL(String(url), 'http://homehub.local')
@@ -105,7 +114,7 @@ describe('ShadowDiscoveryPanel', () => {
     expect(apiPost).not.toHaveBeenCalled()
     await component.refreshStatus()
     await screen.findByText(/Last.fm source ready/)
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview recommendations' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preview manual' }))
     const fits = await screen.findByRole('button', { name: 'Fits me' })
     await fireEvent.click(fits)
 
@@ -135,6 +144,55 @@ describe('ShadowDiscoveryPanel', () => {
     expect(vi.mocked(apiPost).mock.calls[2][1]).toMatchObject({ action: 'interesting' })
   })
 
+  it('previews current trusted live context and saves feedback against it', async () => {
+    vi.mocked(apiPost).mockImplementation((url) => {
+      if (String(url).startsWith('/api/music/live-context/preview')) return Promise.resolve({
+        status: 'shadow_ready', shadow: true, actuation_allowed: false,
+        live_context: liveStatusPayload,
+        discovery: { ...previewPayload, policy: 'gentle' },
+      })
+      if (url === '/api/music/discovery/feedback') return Promise.resolve({ status: 'ok' })
+      return Promise.resolve(previewPayload)
+    })
+    const { component } = render(ShadowDiscoveryPanel)
+    await component.refreshStatus()
+    await screen.findByText(/Live: gaming/)
+    await fireEvent.click(screen.getByRole('button', { name: 'Preview live context' }))
+    expect(await screen.findByText('Live gaming')).toBeInTheDocument()
+    const liveCall = vi.mocked(apiPost).mock.calls.find(([url]) => String(url).startsWith('/api/music/live-context/preview'))
+    expect(liveCall).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { name: 'Explore' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Fits me' }))
+    const feedbackCall = vi.mocked(apiPost).mock.calls.find(([url]) => url === '/api/music/discovery/feedback')
+    expect(feedbackCall).toBeTruthy()
+    const liveFeedbackBody = /** @type {any} */ (feedbackCall?.[1])
+    expect(liveFeedbackBody).toMatchObject({ mode: 'gaming', policy: 'gentle', intent: 'valheim' })
+  })
+
+  it('re-resolves live context on demand even when the page-load snapshot was inactive', async () => {
+    vi.mocked(apiGet).mockImplementation((url) => Promise.resolve(
+      String(url).includes('/live-context/status')
+        ? { status: 'inactive', shadow: true, actuation_allowed: false }
+        : statusPayload
+    ))
+    vi.mocked(apiPost).mockImplementation((url) => {
+      if (String(url).startsWith('/api/music/live-context/preview')) return Promise.resolve({
+        status: 'shadow_ready', shadow: true, actuation_allowed: false,
+        live_context: liveStatusPayload,
+        discovery: { ...previewPayload, policy: 'gentle' },
+      })
+      return Promise.resolve(previewPayload)
+    })
+
+    const { component } = render(ShadowDiscoveryPanel)
+    await component.refreshStatus()
+    expect(await screen.findByText('No live music context active')).toBeInTheDocument()
+    const liveButton = screen.getByRole('button', { name: 'Preview live context' })
+    expect(liveButton).not.toBeDisabled()
+    await fireEvent.click(liveButton)
+    expect(await screen.findByText('Live gaming')).toBeInTheDocument()
+  })
+
   it('reuses the same event id when retrying an uncertain feedback save', async () => {
     let feedbackCalls = 0
     vi.mocked(apiPost).mockImplementation(async (url) => {
@@ -146,7 +204,7 @@ describe('ShadowDiscoveryPanel', () => {
 
     const { component } = render(ShadowDiscoveryPanel)
     await component.refreshStatus()
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview recommendations' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preview manual' }))
     const fits = await screen.findByRole('button', { name: 'Fits me' })
     await fireEvent.click(fits)
     expect(await screen.findByText(/Couldn’t save feedback/)).toBeInTheDocument()

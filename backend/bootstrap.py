@@ -609,10 +609,18 @@ async def lifespan(app: FastAPI):
         semantic_analyzer=LastFmSemanticAnalyzer(rec_service),
     )
     app.state.music_discovery = music_discovery
+    music_context_builder = MusicCuratorContextBuilder(
+        app.state, setting_loader=load_setting,
+    )
+    from backend.services.music_live_context import MusicLiveContextService
+    music_live_context = MusicLiveContextService(
+        app_state=app.state,
+        context_builder=music_context_builder,
+        discovery=music_discovery,
+    )
+    app.state.music_live_context = music_live_context
     music_curator = MusicCurator(
-        context_builder=MusicCuratorContextBuilder(
-            app.state, setting_loader=load_setting,
-        ),
+        context_builder=music_context_builder,
         intent_provider=UnavailableMusicIntentProvider(),
         catalog=SonosFavoritesCatalog(sonos),
         bandit=music_bandit,
