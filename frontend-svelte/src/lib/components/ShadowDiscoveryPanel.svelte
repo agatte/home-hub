@@ -32,6 +32,12 @@
   /** @type {string | null} */
   let liveStatus = null
   /** @type {any | null} */
+  let requestResolution = null
+  /** @type {string | null} */
+  let requestStatus = null
+  /** @type {any[]} */
+  let familiarSuggestions = []
+  /** @type {any | null} */
   let result = null
   let feedbackMode = activeMode
   let feedbackPolicy = policy
@@ -61,6 +67,9 @@
     result = null
     liveContext = null
     liveStatus = null
+    requestResolution = null
+    requestStatus = null
+    familiarSuggestions = []
     evaluations = {}
     feedbackMode = activeMode
     feedbackPolicy = policy
@@ -93,6 +102,9 @@
     result = null
     liveContext = null
     liveStatus = null
+    requestResolution = null
+    requestStatus = null
+    familiarSuggestions = []
     evaluations = {}
     try {
       const query = new URLSearchParams({ policy, count: '6', tracks_per_artist: '3' })
@@ -105,6 +117,40 @@
       feedbackIntent = liveContext?.semantic_request || null
     } catch {
       error = 'Live-context discovery preview failed'
+    } finally {
+      loading = false
+      runKind = null
+    }
+  }
+
+  /** @param {string} requestText */
+  async function previewRequest(requestText) {
+    loading = true
+    runKind = 'request'
+    error = null
+    result = null
+    liveContext = null
+    liveStatus = null
+    requestResolution = null
+    requestStatus = null
+    familiarSuggestions = []
+    evaluations = {}
+    try {
+      const payload = await apiPost('/api/music/request/preview', {
+        request: requestText,
+        mode: activeMode,
+        count: 6,
+        tracks_per_artist: 3,
+      }, { timeout: 30000 })
+      requestStatus = payload?.status || null
+      requestResolution = payload?.resolved_request || null
+      familiarSuggestions = payload?.familiar_suggestions || []
+      result = payload?.discovery || null
+      feedbackMode = requestResolution?.mode || activeMode
+      feedbackPolicy = requestResolution?.policy || policy
+      feedbackIntent = requestResolution?.semantic_request || null
+    } catch {
+      error = 'Music request preview failed'
     } finally {
       loading = false
       runKind = null
@@ -221,11 +267,57 @@
     </button>
   </div>
 
+  <div class="request-presets" aria-label="Quick music requests">
+    <div class="request-presets-copy">
+      <span>Quick requests</span>
+      <small>Same Music Intelligence contract future voice/text adapters can call.</small>
+    </div>
+    <button type="button" on:click={() => previewRequest('play something familiar')} disabled={loading || statusLoading}>
+      {loading && runKind === 'request' ? 'Thinking…' : 'Familiar'}
+    </button>
+    <button type="button" on:click={() => previewRequest('play new music')} disabled={loading || statusLoading}>New music</button>
+    <button type="button" on:click={() => previewRequest("I'm feeling energetic")} disabled={loading || statusLoading}>Energetic</button>
+  </div>
+
   {#if liveContext}
     <div class="live-context-banner">
       <strong>Live {liveContext.consumer}</strong>
       {#if liveContext.semantic_request}<span>{liveContext.semantic_request}</span>{/if}
       {#if liveContext.semantic_reason}<span>{liveContext.semantic_reason}</span>{/if}
+    </div>
+  {/if}
+
+  {#if requestResolution}
+    <div class="request-resolution-banner">
+      <strong>{requestResolution.kind}</strong>
+      <span>{requestResolution.rationale}</span>
+      <span>{percent(requestResolution.familiarity_target)}% familiar target · {percent(requestResolution.novelty_target)}% novelty target</span>
+      {#if requestResolution.semantic_key}<span>semantic: {requestResolution.semantic_key}</span>{/if}
+    </div>
+  {/if}
+
+  {#if familiarSuggestions.length}
+    <div class="familiar-list">
+      {#each familiarSuggestions as suggestion (suggestion.candidate.provider_id)}
+        <article class="familiar-card">
+          <div>
+            <span class="familiar-kicker">Verified familiar favorite</span>
+            <h4>{suggestion.candidate.title}</h4>
+            <div class="chips">
+              <span>{suggestion.taste_classification}</span>
+              <span>{percent(suggestion.score)}% request fit</span>
+            </div>
+          </div>
+          <details>
+            <summary>Why this is familiar</summary>
+            <ul>
+              {#each suggestion.reasons || [] as reason}
+                <li>{reason}</li>
+              {/each}
+            </ul>
+          </details>
+        </article>
+      {/each}
     </div>
   {/if}
 
@@ -239,6 +331,10 @@
     <div class="lab-message">No Game Day, Social, or Gaming context is active right now.</div>
   {:else if liveStatus === 'suppressed'}
     <div class="lab-message">Live music context is currently suppressed by HomeHub safety state.</div>
+  {:else if requestStatus === 'no_candidates' && !familiarSuggestions.length && !result}
+    <div class="lab-message">HomeHub does not have enough verified evidence to satisfy this request yet.</div>
+  {:else if requestStatus === 'source_unavailable' && !familiarSuggestions.length}
+    <div class="lab-message">The discovery source is unavailable for this request.</div>
   {/if}
   {#if result?.clusters?.length}
     <div class="result-summary">
@@ -336,10 +432,10 @@
         </article>
       {/each}
     </div>
-  {:else if !loading && !result}
+  {:else if !loading && !result && !familiarSuggestions.length && !requestStatus}
     <div class="lab-idle">
       <strong>Nothing runs until you ask.</strong>
-      <span>Use a manual context/mood, or preview HomeHub’s current trusted Game Day, Social, or Gaming context.</span>
+      <span>Use a quick request, manual context/mood, or preview HomeHub’s current trusted Game Day, Social, or Gaming context.</span>
     </div>
   {/if}
 </div>
@@ -385,6 +481,42 @@
     font-size: 11px;
   }
   .live-context-banner strong { color: var(--text-primary); }
+
+  .request-resolution-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-size: 11px;
+  }
+  .request-resolution-banner strong { color: var(--text-primary); text-transform: capitalize; }
+
+  .request-presets {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+  }
+  .request-presets-copy { display: flex; flex-direction: column; margin-right: auto; }
+  .request-presets-copy span { color: var(--text-primary); font-size: 11px; font-weight: 600; }
+  .request-presets-copy small { color: var(--text-muted); font-size: 9px; }
+  .request-presets button {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .request-presets button:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .lab-header h3 {
     margin: 3px 0 4px;
@@ -538,6 +670,24 @@
   .track-taste {
     padding: 4px 7px;
   }
+
+  .familiar-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .familiar-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+  }
+  .familiar-card h4 { margin: 2px 0 6px; color: var(--text-primary); font-size: 13px; }
+  .familiar-kicker { color: var(--accent); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
 
   .cluster-list {
     display: grid;
@@ -741,7 +891,8 @@
     }
 
     .lab-controls,
-    .cluster-list {
+    .cluster-list,
+    .familiar-list {
       grid-template-columns: minmax(0, 1fr);
     }
 

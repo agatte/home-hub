@@ -275,6 +275,64 @@ class TestMusicAPI:
         assert data["actuation_allowed"] is False
         assert data["live_context"]["semantic_request"] == "valheim"
 
+    def test_music_request_status_is_shadow_only(self, client):
+        previous = app.state.music_requests
+
+        class FakeRequests:
+            def status(self):
+                return {
+                    "shadow": True, "actuation_allowed": False,
+                    "supported_kinds": ["familiar", "discovery", "mood", "recommendation"],
+                }
+
+        app.state.music_requests = FakeRequests()
+        try:
+            resp = client.get("/api/music/request/status")
+        finally:
+            app.state.music_requests = previous
+        assert resp.status_code == 200
+        assert resp.json()["actuation_allowed"] is False
+        assert "familiar" in resp.json()["supported_kinds"]
+
+    def test_music_request_preview_preserves_source_and_structured_contract(self, client):
+        previous = app.state.music_requests
+        calls = []
+
+        class FakeResult:
+            def to_dict(self):
+                return {
+                    "status": "shadow_ready", "shadow": True,
+                    "actuation_allowed": False,
+                    "resolved_request": {"kind": "discovery", "policy": "explore"},
+                    "familiar_suggestions": [], "discovery": {"clusters": []},
+                }
+
+        class FakeRequests:
+            async def preview(self, music_request, *, count, tracks_per_artist):
+                calls.append((music_request, count, tracks_per_artist))
+                return FakeResult()
+
+        app.state.music_requests = FakeRequests()
+        try:
+            resp = client.post(
+                "/api/music/request/preview",
+                headers={"X-HomeHub-Source": "test:command"},
+                json={
+                    "request": "play new music", "mode": "gaming",
+                    "count": 4, "tracks_per_artist": 2,
+                },
+            )
+        finally:
+            app.state.music_requests = previous
+        assert resp.status_code == 200
+        music_request, count, tracks_per_artist = calls[0]
+        assert music_request.request_text == "play new music"
+        assert music_request.mode == "gaming"
+        assert music_request.source == "test:command"
+        assert count == 4
+        assert tracks_per_artist == 2
+        assert resp.json()["actuation_allowed"] is False
+
     def test_curator_status_is_shadow_only(self, client):
         resp = client.get("/api/music/curator/status")
         assert resp.status_code == 200

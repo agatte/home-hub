@@ -411,6 +411,21 @@ feeds the canonical taste snapshot and is applied on the next preview. Existing
 Game Day playback policy, MusicMapper/Sonos ownership, DND, Sleeping, Away, and
 all actuator gates remain authoritative.
 
+**IMPLEMENTED/SHADOW (#265).** Explicit user music requests now resolve through
+one provider-neutral suggestion contract rather than Alexa- or UI-specific music
+semantics. Strict familiarity requests return only provider-verified Sonos
+favorites that the canonical taste snapshot classifies as familiar/proven; the
+system abstains instead of relabeling exploratory identities. Explicit “new
+music” requests use the existing taste-adjacent discovery engine with elevated
+but bounded exploration. Ordinary mood/recommendation requests (for example,
+“I’m feeling energetic”) remain familiarity-heavy, targeting roughly five
+verified familiar/proven suggestions per one exploratory artist cluster at a
+six-result request size. Results expose resolved kind, mode, policy, semantic
+intent, rationale, source/provenance, and remain suggestion-only with no Sonos,
+MusicMapper, queue, or MusicBandit mutation. This is the music-domain target
+that shared command ingress (#262) may call later; #262 still owns Alexa/text/
+voice transport and command routing.
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit

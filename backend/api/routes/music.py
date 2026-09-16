@@ -8,6 +8,7 @@ from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
 from backend.services.music_curator import MusicCuratorError
+from backend.services.music_requests import MusicRequest
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
@@ -303,6 +304,49 @@ async def preview_live_music_context(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
+# Manual mood / deliberate-discovery requests (#265)
+# ------------------------------------------------------------------
+
+@router.get("/request/status")
+async def get_music_request_status(request: Request) -> dict:
+    """Return suggestion-only manual request capability."""
+    service = getattr(request.app.state, "music_requests", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Music request service not initialized")
+    return service.status()
+
+
+@router.post("/request/preview", dependencies=[Depends(require_api_key)])
+@limiter.limit("6/hour")
+async def preview_music_request(request: Request) -> dict:
+    """Resolve a manual music request and return verified suggestions only."""
+    service = getattr(request.app.state, "music_requests", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Music request service not initialized")
+    body = await request.json()
+    try:
+        count = int(body.get("count", 6))
+        tracks_per_artist = int(body.get("tracks_per_artist", 3))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="count and tracks_per_artist must be integers") from exc
+    source = request.headers.get("X-HomeHub-Source") or "dashboard:music_request"
+    music_request = MusicRequest(
+        request_text=str(body.get("request") or body.get("request_text") or ""),
+        kind=str(body.get("kind") or "") or None,
+        mode=str(body.get("mode") or "") or None,
+        semantic_request=str(body.get("intent") or body.get("semantic_request") or "") or None,
+        source=source,
+    )
+    try:
+        result = await service.preview(
+            music_request, count=count, tracks_per_artist=tracks_per_artist,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result.to_dict()
 
 
 # ------------------------------------------------------------------

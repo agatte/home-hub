@@ -216,4 +216,60 @@ describe('ShadowDiscoveryPanel', () => {
     expect(secondBody.client_event_id).toBe(firstBody.client_event_id)
   })
 
+  it('uses the shared request contract for Familiar and renders only verified familiar suggestions', async () => {
+    vi.mocked(apiPost).mockImplementation((url) => {
+      if (url === '/api/music/request/preview') return Promise.resolve({
+        status: 'shadow_ready', shadow: true, actuation_allowed: false,
+        resolved_request: {
+          kind: 'familiar', mode: 'gaming', policy: 'gentle',
+          familiarity_target: 1, novelty_target: 0, semantic_request: null,
+          semantic_key: null, rationale: 'Strict familiarity request.',
+        },
+        familiar_suggestions: [{
+          candidate: { provider: 'sonos_favorite', provider_id: 'fav-1', title: 'Road Trip Favorites' },
+          score: 0.94, taste_classification: 'proven', taste_preference: 0.8,
+          reasons: ['provider-verified Sonos favorite', 'taste proven (+0.80)'],
+        }],
+        discovery: null,
+      })
+      return Promise.resolve(previewPayload)
+    })
+    const { component } = render(ShadowDiscoveryPanel)
+    await component.refreshStatus()
+    await fireEvent.click(screen.getByRole('button', { name: 'Familiar' }))
+    expect(await screen.findByText('Road Trip Favorites')).toBeInTheDocument()
+    expect(screen.getByText('Verified familiar favorite')).toBeInTheDocument()
+    const [url, body] = vi.mocked(apiPost).mock.calls[0]
+    expect(url).toBe('/api/music/request/preview')
+    expect(body).toMatchObject({
+      request: 'play something familiar', mode: 'gaming', count: 6, tracks_per_artist: 3,
+    })
+    expect(screen.queryByRole('button', { name: 'Fits me' })).not.toBeInTheDocument()
+  })
+
+  it('preserves resolved New music policy when saving discovery feedback', async () => {
+    vi.mocked(apiPost).mockImplementation((url) => {
+      if (url === '/api/music/request/preview') return Promise.resolve({
+        status: 'shadow_ready', shadow: true, actuation_allowed: false,
+        resolved_request: {
+          kind: 'discovery', mode: 'gaming', policy: 'explore',
+          familiarity_target: 0.2, novelty_target: 0.8, semantic_request: null,
+          semantic_key: null, rationale: 'Explicit discovery request.',
+        },
+        familiar_suggestions: [],
+        discovery: { ...previewPayload, policy: 'explore' },
+      })
+      if (url === '/api/music/discovery/feedback') return Promise.resolve({ status: 'ok' })
+      return Promise.resolve(previewPayload)
+    })
+    const { component } = render(ShadowDiscoveryPanel)
+    await component.refreshStatus()
+    await fireEvent.click(screen.getByRole('button', { name: 'New music' }))
+    const fits = await screen.findByRole('button', { name: 'Fits me' })
+    await fireEvent.click(fits)
+    const feedbackCall = vi.mocked(apiPost).mock.calls.find(([url]) => url === '/api/music/discovery/feedback')
+    const body = /** @type {any} */ (feedbackCall?.[1])
+    expect(body).toMatchObject({ mode: 'gaming', policy: 'explore', intent: null })
+  })
+
 })
