@@ -14,13 +14,13 @@ let knownBuildId = null
 
 // Tracked so the module-level visibilitychange listener can poke the live
 // socket on tab resume without waiting out the exponential backoff timer.
-/** @type {HubSocket | null} */
-let activeSocket = null
+/** @type {Set<HubSocket>} */
+const activeSockets = new Set()
 
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return
-    activeSocket?.retryNowIfDead()
+    for (const socket of activeSockets) socket.retryNowIfDead()
   })
 }
 
@@ -46,7 +46,7 @@ export class HubSocket {
 
   connect() {
     this._closed = false
-    activeSocket = this
+    activeSockets.add(this)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${window.location.host}/ws`
 
@@ -122,7 +122,7 @@ export class HubSocket {
 
   close() {
     this._closed = true
-    if (activeSocket === this) activeSocket = null
+    activeSockets.delete(this)
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer)
       this._reconnectTimer = null

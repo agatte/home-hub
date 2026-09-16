@@ -2407,3 +2407,185 @@ class TestRealScoringShapes253:
         assert result["event"] == "return_td"
         svc.trigger_synthetic_play.assert_awaited_once_with("return_td")
         svc.trigger_synthetic_final.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_canonical_state_broadcast_precedes_viewer_state_queue():
+    order: list[str] = []
+    ws = _make_ws_mock()
+    ws.broadcast = AsyncMock(side_effect=lambda *_args, **_kwargs: order.append("canonical"))
+    viewer_sync = MagicMock()
+    viewer_sync.queue_state = MagicMock(side_effect=lambda *_args, **_kwargs: order.append("viewer"))
+    svc = _make_service(ws=ws)
+    svc.set_viewer_sync(viewer_sync)
+    play = PlayEvent(
+        timestamp=datetime(2026, 9, 15, 23, 30, tzinfo=timezone.utc),
+        play_type="other", description="First down", player=None, kicker=None,
+        yards=8, scoring_team="colts", synthetic=False,
+    )
+    state = GameDayState(
+        status="in-progress", opponent="Houston Texans", kickoff_utc=None,
+        score_colts=7, score_opp=3, quarter=2, clock="8:14",
+        possession="colts", last_play=play,
+    )
+
+    await svc._update_state(state)
+
+    assert order == ["canonical", "viewer"]
+    viewer_sync.queue_state.assert_called_once()
+    assert viewer_sync.queue_state.call_args.args[1] == play.timestamp
+
+@pytest.mark.asyncio
+async def test_tick_publishes_canonical_before_transition_callback_and_uses_provider_kickoff_anchor():
+    automation = _make_automation_mock(current_mode="gameday")
+    ws = _make_ws_mock()
+    order: list[str] = []
+
+    async def broadcast(kind, _payload):
+        order.append(kind)
+
+    ws.broadcast = AsyncMock(side_effect=broadcast)
+    svc = _make_service(automation=automation, ws=ws)
+    poll_time = datetime(2026, 9, 21, 0, 21, tzinfo=timezone.utc)
+    provider_time = datetime(2026, 9, 21, 0, 20, 18, tzinfo=timezone.utc)
+    svc._now_override = poll_time
+    raw = _schedule_event(
+        "kickoff-order", "2026-09-21T00:20Z",
+        opponent_name="Kansas City Chiefs", status="STATUS_SCHEDULED",
+    )
+    game = svc._normalize_schedule_event(raw)
+    assert game is not None
+    svc._schedule_cache = [game]
+    svc._schedule_cache_time = time.time()
+    svc._current_game_id = "kickoff-order"
+    svc._current_state = svc._pregame_state(game)
+    opening_play = {
+        "id": "opening-play",
+        "text": "Opening kickoff returned to the 27 yard line.",
+        "wallclock": provider_time.isoformat().replace("+00:00", "Z"),
+        "type": {"text": "Kickoff"},
+        "team": {"id": "15"},
+        "period": {"number": 1},
+        "clock": {"displayValue": "14:55"},
+    }
+    svc._fetch_summary = AsyncMock(return_value=_summary_payload(
+        period=1, clock="14:55", score_colts=0, score_opp=0,
+        plays=[opening_play],
+    ))
+    viewer_sync = MagicMock()
+    svc.set_viewer_sync(viewer_sync)
+    order.clear()
+    viewer_sync.queue_state.reset_mock()
+    transitions: list[GameDayStateTransition] = []
+
+    async def on_transition(transition):
+        order.append("transition_callback")
+        transitions.append(transition)
+
+    svc.register_on_state_transition(on_transition)
+    await svc._tick()
+
+    assert order[0] == "gameday_state"
+    assert order.index("gameday_state") < order.index("transition_callback")
+    assert len(transitions) == 1
+    assert transitions[0].timestamp == provider_time
+    assert viewer_sync.queue_state.call_args.args[1] == provider_time
+
+
+
+def test_viewer_delayed_play_can_finish_after_canonical_final_without_weakening_mode_gate():
+    automation = _make_automation_mock(current_mode="gameday")
+    svc = _make_service(automation=automation)
+    game_id = "viewer-delayed-final"
+    svc._current_game_id = game_id
+    svc._finalized_game_ids.add(game_id)
+    svc._current_state = GameDayState(
+        status="final", opponent="Houston Texans", kickoff_utc=None,
+        score_colts=27, score_opp=24, quarter=4, clock="0:00",
+        possession=None, last_play=None,
+    )
+    viewer = MagicMock()
+    viewer.queue_state = MagicMock()
+    viewer.snapshot.return_value = {"presentation_active": True}
+    svc.set_viewer_sync(viewer)
+
+    allowed, _ = svc.celebration_eligibility(
+        game_id=game_id, allow_viewer_delayed_play=True,
+    )
+    assert allowed is True
+    assert svc.celebration_eligibility(game_id=game_id)[0] is False
+
+    automation.current_mode = "watching"
+    assert svc.celebration_eligibility(
+        game_id=game_id, allow_viewer_delayed_play=True,
+    )[0] is False
+
+
+def test_final_transition_uses_provider_final_observation_not_duplicate_last_play_anchor():
+    svc = _make_service()
+    provider_time = datetime(2026, 9, 15, 23, 58, 42, tzinfo=timezone.utc)
+    poll_time = provider_time + timedelta(seconds=9)
+    last_play = PlayEvent(
+        timestamp=provider_time, play_type="other", description="Game ends",
+        player=None, kicker=None, yards=None, scoring_team=None,
+    )
+    state = GameDayState(
+        status="final", opponent="Houston Texans", kickoff_utc=None,
+        score_colts=27, score_opp=24, quarter=4, clock="0:00",
+        possession=None, last_play=last_play,
+    )
+
+    assert svc._viewer_transition_anchor("in-progress", state, poll_time) == poll_time
+
+
+
+@pytest.mark.asyncio
+async def test_provider_batch_assigns_shared_visual_anchor_to_each_new_play():
+    automation = _make_automation_mock(current_mode="gameday")
+    ws = _make_ws_mock()
+    svc = _make_service(automation=automation, ws=ws)
+    kickoff = datetime(2026, 9, 15, 23, 0, tzinfo=timezone.utc)
+    raw = _schedule_event(
+        "batch-game", kickoff.isoformat().replace("+00:00", "Z"),
+        opponent_name="Houston Texans", status="STATUS_IN_PROGRESS",
+    )
+    game = svc._normalize_schedule_event(raw)
+    assert game is not None
+    svc._schedule_cache = [game]
+    svc._schedule_cache_time = time.time()
+    svc._current_game_id = "batch-game"
+    svc._current_state = GameDayState(
+        status="in-progress", opponent="Houston Texans", kickoff_utc=kickoff,
+        score_colts=0, score_opp=0, quarter=1, clock="12:00",
+        possession="colts", last_play=None,
+    )
+
+    first_time = kickoff + timedelta(minutes=10)
+    second_time = first_time + timedelta(seconds=8)
+    first = _td_play("batch-1")
+    first["wallclock"] = first_time.isoformat().replace("+00:00", "Z")
+    second = _td_play("batch-2", "A.Richardson 2 yard run, TOUCHDOWN.")
+    second["wallclock"] = second_time.isoformat().replace("+00:00", "Z")
+    svc._fetch_summary = AsyncMock(return_value=_summary_payload(
+        period=2, clock="5:24", score_colts=14, score_opp=0,
+        plays=[first, second],
+    ))
+    seen: list[PlayEvent] = []
+
+    async def on_play(play):
+        seen.append(play)
+
+    svc.register_on_play_event(on_play)
+    viewer = MagicMock()
+    viewer.queue_state = MagicMock()
+    svc.set_viewer_sync(viewer)
+    viewer.queue_state.reset_mock()
+
+    await svc._tick()
+
+    assert [play.event_id for play in seen[:2]] == ["batch-1", "batch-2"]
+    assert seen[0].timestamp == first_time
+    assert seen[1].timestamp == second_time
+    assert seen[0].viewer_anchor == second_time
+    assert seen[1].viewer_anchor == second_time
+    assert viewer.queue_state.call_args.args[1] == second_time

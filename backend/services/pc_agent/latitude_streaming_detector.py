@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, Optional
@@ -47,6 +47,7 @@ _file_handler.setFormatter(_fmt)
 logger.addHandler(_file_handler)
 
 POLL_INTERVAL_SECONDS = 5.0
+VIEWER_CLOCK_INTERVAL_SECONDS = 1.0
 HEARTBEAT_INTERVAL_SECONDS = 15.0
 HEALTH_INTERVAL_SECONDS = 30.0
 STOP_DWELL_SECONDS = 20.0
@@ -91,6 +92,15 @@ class PlaybackSnapshot:
         return self.length_seconds - self.position_seconds
 
 
+@dataclass
+class ViewerClockSnapshot:
+    service: str
+    player: str
+    playback_status: str
+    media_timestamp: float
+    method: str = "mpris"
+
+
 class LatitudeStreamingDetector:
     """Detect active media playback on the Latitude."""
 
@@ -115,6 +125,32 @@ class LatitudeStreamingDetector:
         if pipewire.active:
             return pipewire
         return PlaybackSnapshot(active=False, processes=processes)
+
+    def viewer_clock_snapshot(self) -> Optional[ViewerClockSnapshot]:
+        names = sorted(
+            self._mpris_names(),
+            key=lambda name: (
+                0 if any(hint in name.lower() for hint in ("chromium", "chrome")) else 1,
+                name,
+            ),
+        )
+        for name in names:
+            if not self._browser_hint(name):
+                continue
+            metadata = self._mpris_metadata(name)
+            if not self._looks_like_streaming_page(metadata):
+                continue
+            status = self._mpris_playback_status(name)
+            position_us = self._mpris_position_us(name)
+            if status not in {"Playing", "Paused", "Stopped"} or position_us is None:
+                continue
+            return ViewerClockSnapshot(
+                service=self._streaming_service(metadata or name),
+                player=self._mpris_player_name(name),
+                playback_status=status,
+                media_timestamp=position_us / 1_000_000,
+            )
+        return None
 
     def mode_for_snapshot(self, snapshot: PlaybackSnapshot) -> Optional[str]:
         now = self._clock()
@@ -302,7 +338,14 @@ class LatitudeStreamingDetector:
         marker = re.search(r"mpris:length", metadata, re.IGNORECASE)
         if marker is None:
             return None
-        return LatitudeStreamingDetector._dbus_int(metadata[marker.end():marker.end() + 120])
+        value = LatitudeStreamingDetector._dbus_int(
+            metadata[marker.end():marker.end() + 120],
+        )
+        # Chromium uses INT64_MAX for indefinite/live media. Treat that
+        # sentinel as unknown, not a multi-million-year duration.
+        if value is not None and value >= (2**63 - 1):
+            return None
+        return value
 
     @staticmethod
     def _dbus_int(value: str) -> Optional[int]:
@@ -443,6 +486,25 @@ def _post_health(
         logger.debug("latitude streaming health POST failed", exc_info=True)
 
 
+def _post_viewer_clock(
+    client: httpx.Client,
+    endpoint: str,
+    snapshot: ViewerClockSnapshot,
+) -> None:
+    response = client.post(
+        endpoint,
+        json={
+            "service": snapshot.service,
+            "player": snapshot.player,
+            "playback_status": snapshot.playback_status,
+            "media_timestamp": snapshot.media_timestamp,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "method": snapshot.method,
+        },
+    )
+    response.raise_for_status()
+
+
 def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
@@ -451,11 +513,16 @@ def run_agent(
     base_url = server_url.rstrip("/")
     activity_endpoint = f"{base_url}/api/automation/activity"
     health_endpoint = f"{base_url}/api/automation/agent-health"
+    viewer_clock_endpoint = f"{base_url}/api/gameday/viewer-clock"
     detector = LatitudeStreamingDetector()
     stop = stop_event or threading.Event()
     started_at = time.time()
+    next_detection_at = 0.0
+    next_viewer_clock_at = 0.0
     last_health_at = 0.0
-    last_error: Optional[str] = None
+    last_viewer_log_at = 0.0
+    activity_error: Optional[str] = None
+    viewer_error: Optional[str] = None
 
     logger.info("Latitude streaming detector started - reporting to %s", activity_endpoint)
 
@@ -463,44 +530,69 @@ def run_agent(
         while not stop.is_set():
             if heartbeat is not None:
                 heartbeat()
-            try:
-                snapshot = detector.snapshot()
-                mode = detector.mode_for_snapshot(snapshot)
-                if mode is not None and detector.should_send(mode):
-                    payload = {
-                        "mode": mode,
-                        "source": "process",
-                        "detected_at": datetime.now().isoformat(),
-                        "factors": detector.build_factors(snapshot),
-                    }
-                    resp = client.post(activity_endpoint, json=payload)
-                    resp.raise_for_status()
-                    detector.mark_sent(mode)
-                    logger.info(
-                        "Reported latitude streaming mode=%s active=%s method=%s "
-                        "player=%s service=%s position_s=%s length_s=%s length_minus_position_s=%s",
-                        mode, snapshot.active, snapshot.method, snapshot.player,
-                        snapshot.service if snapshot.active else None,
-                        snapshot.position_seconds if snapshot.active else None,
-                        snapshot.length_seconds if snapshot.active else None,
-                        snapshot.length_minus_position_seconds if snapshot.active else None,
-                    )
-                last_error = None
-            except Exception as exc:
-                last_error = str(exc)
-                logger.warning("Latitude streaming iteration failed: %s", exc)
+            cadence_now = time.monotonic()
+
+            if cadence_now >= next_viewer_clock_at:
+                try:
+                    viewer = detector.viewer_clock_snapshot()
+                    if viewer is not None and viewer.service == "hulu":
+                        _post_viewer_clock(client, viewer_clock_endpoint, viewer)
+                        if cadence_now - last_viewer_log_at >= HEARTBEAT_INTERVAL_SECONDS:
+                            logger.info(
+                                "Reported Hulu viewer clock player=%s status=%s media_ts=%.3f",
+                                viewer.player, viewer.playback_status, viewer.media_timestamp,
+                            )
+                            last_viewer_log_at = cadence_now
+                    viewer_error = None
+                except Exception as exc:
+                    viewer_error = str(exc)
+                    logger.warning("Latitude viewer-clock iteration failed: %s", exc)
+                next_viewer_clock_at = cadence_now + VIEWER_CLOCK_INTERVAL_SECONDS
+
+            if cadence_now >= next_detection_at:
+                try:
+                    snapshot = detector.snapshot()
+                    mode = detector.mode_for_snapshot(snapshot)
+                    if mode is not None and detector.should_send(mode):
+                        payload = {
+                            "mode": mode,
+                            "source": "process",
+                            "detected_at": datetime.now().isoformat(),
+                            "factors": detector.build_factors(snapshot),
+                        }
+                        resp = client.post(activity_endpoint, json=payload)
+                        resp.raise_for_status()
+                        detector.mark_sent(mode)
+                        logger.info(
+                            "Reported latitude streaming mode=%s active=%s method=%s "
+                            "player=%s service=%s position_s=%s length_s=%s "
+                            "length_minus_position_s=%s",
+                            mode, snapshot.active, snapshot.method, snapshot.player,
+                            snapshot.service if snapshot.active else None,
+                            snapshot.position_seconds if snapshot.active else None,
+                            snapshot.length_seconds if snapshot.active else None,
+                            snapshot.length_minus_position_seconds if snapshot.active else None,
+                        )
+                    activity_error = None
+                except Exception as exc:
+                    activity_error = str(exc)
+                    logger.warning("Latitude streaming iteration failed: %s", exc)
+                next_detection_at = cadence_now + POLL_INTERVAL_SECONDS
 
             now = time.time()
             if now - last_health_at >= HEALTH_INTERVAL_SECONDS:
+                errors = [error for error in (activity_error, viewer_error) if error]
                 _post_health(
                     client,
                     health_endpoint,
                     started_at=started_at,
-                    last_error=last_error,
+                    last_error="; ".join(errors) if errors else None,
                 )
                 last_health_at = now
 
-            stop.wait(POLL_INTERVAL_SECONDS)
+            next_due = min(next_detection_at, next_viewer_clock_at)
+            sleep_for = max(0.05, min(0.5, next_due - time.monotonic()))
+            stop.wait(sleep_for)
 
 
 def main() -> None:

@@ -32,6 +32,23 @@ function formatKickoff(iso) {
   return { date, time, full: `${date} · ${time}` }
 }
 
+export function buildViewerSyncPendingPresentation(canonical) {
+  const opponent = (canonical?.opponent || 'TBD').toUpperCase()
+  return {
+    isLive: true,
+    opponent,
+    scoreColts: '--',
+    scoreOpp: '--',
+    periodLabel: 'SYNCING TO LIVE TV',
+    clock: '--',
+    subline: 'ALIGNING WITH HULU LIVE',
+    drive: null,
+    sideLabel: 'VIEWER SYNC',
+    sidePrimary: 'ALIGNING',
+    sideSecondary: 'NO SPOILERS',
+  }
+}
+
 export function buildPrototypePresentation(live, schedule = [], scheduleLoaded = false) {
   const isLive = Boolean(
     live && typeof live === 'object' && live.status !== 'no-game',

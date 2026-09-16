@@ -174,6 +174,10 @@ class PlayEvent:
     event_id: Optional[str] = None
     game_id: Optional[str] = None
     synthetic: bool = False
+    # Presentation-only anchor for a provider poll that contains multiple
+    # newly discovered plays. Effects may wait for this later snapshot time so
+    # they cannot outrun the score/clock frame that represents the batch.
+    viewer_anchor: Optional[datetime] = None
 
 
 @dataclass
@@ -215,6 +219,7 @@ def _play_event_payload(play: PlayEvent) -> dict[str, Any]:
     payload.pop("event_id", None)
     payload.pop("game_id", None)
     payload.pop("synthetic", None)
+    payload.pop("viewer_anchor", None)
     payload["timestamp"] = play.timestamp.isoformat()
     return payload
 
@@ -284,6 +289,9 @@ class GameDayService:
         # Subscribers.
         self._play_callbacks: list[PlayCallback] = []
         self._transition_callbacks: list[TransitionCallback] = []
+        # Optional presentation-only viewer clock. Canonical provider state
+        # never waits on this service; it only receives copies after publish.
+        self._viewer_sync: Any = None
 
         # Synthetic time injection for tests (GAMEDAY_SPEC §10.6). When set,
         # _now_utc() returns this instead of the real wall clock — lets tests
@@ -368,11 +376,42 @@ class GameDayService:
         """Subscribe to status transitions (pregame→in-progress→final)."""
         self._transition_callbacks.append(cb)
 
+    def set_viewer_sync(self, viewer_sync: Any) -> None:
+        """Late-bind presentation-only viewer synchronization."""
+        self._viewer_sync = viewer_sync
+        state = self._current_state
+        if state is not None:
+            viewer_sync.queue_state(
+                gameday_state_payload(state), self._viewer_state_anchor(state),
+            )
+
+    def _viewer_state_anchor(self, state: GameDayState) -> datetime:
+        """Timestamp a viewer snapshot without leaking later poll-time clock drift."""
+        if state.status == "in-progress" and state.last_play is not None:
+            return state.last_play.timestamp
+        return self._now_utc()
+
+    @staticmethod
+    def _viewer_transition_anchor(
+        old_status: str, new_state: GameDayState, observed_at: datetime,
+    ) -> datetime:
+        """Use provider media time for kickoff instead of backend poll time."""
+        if old_status == "pregame" and new_state.status == "in-progress":
+            if new_state.last_play is not None:
+                return new_state.last_play.timestamp
+            if new_state.kickoff_utc is not None:
+                return new_state.kickoff_utc
+        # ESPN does not provide a distinct trustworthy final-whistle wallclock.
+        # Keep final on the first provider-final observation rather than reusing
+        # the last play timestamp, which may already own an in-progress frame.
+        return observed_at
+
     def celebration_eligibility(
         self,
         *,
         game_id: Optional[str],
         allow_final: bool = False,
+        allow_viewer_delayed_play: bool = False,
     ) -> tuple[bool, str]:
         """Fail-closed authority check used immediately before actuation.
 
@@ -388,10 +427,33 @@ class GameDayService:
         if state is None:
             return False, "no current game state"
 
-        expected_status = "final" if allow_final else "in-progress"
-        if state.status != expected_status:
+        if allow_final:
+            if state.status != "final":
+                return False, f"game status={state.status}"
+        elif state.status == "in-progress":
+            pass
+        elif allow_viewer_delayed_play and state.status == "final":
+            # Canonical ESPN truth may reach final while a paused/delayed Hulu
+            # viewer is still in the fourth quarter. Permit only a sequence
+            # that was already deferred onto the still-active viewer timeline;
+            # normal/manual/lighting authority checks below remain unchanged.
+            viewer_sync = self._viewer_sync
+            if viewer_sync is None:
+                return False, "viewer sync unavailable after final"
+            try:
+                viewer_snapshot = viewer_sync.snapshot()
+            except Exception:
+                return False, "viewer sync authority unavailable after final"
+            if not viewer_snapshot.get("presentation_active"):
+                return False, "viewer timeline no longer active after final"
+        else:
             return False, f"game status={state.status}"
-        if not allow_final and game_id in self._finalized_game_ids:
+
+        if (
+            not allow_final
+            and not allow_viewer_delayed_play
+            and game_id in self._finalized_game_ids
+        ):
             return False, "game already finalized"
 
         try:
@@ -596,10 +658,27 @@ class GameDayService:
         if new_state.status == "final" and game_id:
             self._finalized_game_ids.add(game_id)
 
-        # Publish current authority internally before callbacks run. This lets
-        # the orchestrator recheck against the exact state that produced the
-        # event rather than the previous polling snapshot.
-        self._current_state = new_state
+        # Build lifecycle authority before any callbacks, then publish canonical
+        # provider truth immediately. Viewer synchronization only receives a
+        # copied snapshot after that canonical broadcast. No celebration, TTS,
+        # or physical actuation callback may delay gameday_state publication.
+        transition: Optional[GameDayStateTransition] = None
+        viewer_transition_anchor: Optional[datetime] = None
+        if new_state.status != old_status and old_status != "no-game":
+            viewer_transition_anchor = self._viewer_transition_anchor(
+                old_status, new_state, now_utc,
+            )
+            transition = GameDayStateTransition(
+                from_status=old_status,
+                to_status=new_state.status,
+                timestamp=viewer_transition_anchor,
+                game_id=game_id,
+            )
+
+        viewer_state_anchor = (
+            viewer_transition_anchor or self._viewer_state_anchor(new_state)
+        )
+        await self._update_state(new_state, viewer_anchor=viewer_state_anchor)
 
         hydrated_history = self._hydrate_event_history_if_pending(summary, game_id)
         if new_state.status == "in-progress" and not hydrated_history:
@@ -618,14 +697,20 @@ class GameDayService:
             new_semantic_plays = []
             new_momentum_plays = []
 
-        # Status transitions.
-        if new_state.status != old_status and old_status != "no-game":
-            transition = GameDayStateTransition(
-                from_status=old_status,
-                to_status=new_state.status,
-                timestamp=now_utc,
-                game_id=game_id,
+        # A single provider poll can discover several events while only one
+        # truthful score/clock snapshot exists. Keep each event's provider
+        # timestamp for skip detection, but gate its release no earlier than the
+        # shared visual snapshot anchor so effects never outrun presentation.
+        for play in (*new_plays, *new_semantic_plays, *new_momentum_plays):
+            play.viewer_anchor = (
+                viewer_state_anchor
+                if viewer_state_anchor > play.timestamp
+                else play.timestamp
             )
+
+        # Status-transition callbacks run only after canonical state has already
+        # been published and queued onto the shared viewer timeline.
+        if transition is not None:
             await self._fire_state_transition(transition)
 
         # Post-game auto-clear scheduling on final transition.
@@ -659,16 +744,27 @@ class GameDayService:
             except Exception:
                 logger.exception("ws broadcast gameday_play failed")
 
-        await self._update_state(new_state)
-
-    async def _update_state(self, new_state: Optional[GameDayState]) -> None:
+    async def _update_state(
+        self, new_state: Optional[GameDayState], *, viewer_anchor: Optional[datetime] = None,
+    ) -> None:
         self._current_state = new_state
         if new_state is None:
             return
+        payload = gameday_state_payload(new_state)
         try:
-            await self._ws_manager.broadcast("gameday_state", gameday_state_payload(new_state))
+            await self._ws_manager.broadcast("gameday_state", payload)
         except Exception:
             logger.exception("ws broadcast gameday_state failed")
+
+        # Presentation synchronization consumes a copy only after canonical
+        # state is already published. It never delays provider truth.
+        if self._viewer_sync is not None:
+            try:
+                self._viewer_sync.queue_state(
+                    payload, viewer_anchor or self._viewer_state_anchor(new_state),
+                )
+            except Exception:
+                logger.exception("viewer-sync state queue failed")
 
     # ------------------------------------------------------------------ Schedule
 

@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import { page } from '$app/stores'
   import { initStores } from '$lib/stores/init.js'
+  import { initGamedayFeed } from '$lib/stores/gameday.js'
   import { connectionLost } from '$lib/stores/connection.js'
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
   import { initAmbientAudio } from '$lib/ambientAudio.js'
@@ -40,13 +41,40 @@
   $: isGamedayRoute = $page.url.pathname === '/gameday'
 
   onMount(() => {
-    // Guest pages run behind the isolated guest gateway. Do not open the
-    // normal HomeHub websocket or initialize kiosk-only activity/ambient code.
-    if (window.location.pathname.startsWith('/guest') || window.location.pathname.startsWith('/gameday/prototype')) return () => {}
-    const cleanupStores = initStores()
-    const cleanupActivity = initActivityTracking()
-    const cleanupAmbient = initAmbientAudio()
-    return () => { cleanupStores(); cleanupActivity(); cleanupAmbient() }
+    let cleanupStores = null
+    let cleanupActivity = null
+    let cleanupAmbient = null
+    let cleanupGameday = null
+
+    const stopGeneral = () => {
+      cleanupStores?.(); cleanupStores = null
+      cleanupActivity?.(); cleanupActivity = null
+      cleanupAmbient?.(); cleanupAmbient = null
+    }
+    const startGeneral = () => {
+      if (cleanupStores) return
+      cleanupStores = initStores()
+      cleanupActivity = initActivityTracking()
+      cleanupAmbient = initAmbientAudio()
+    }
+    const stopGameday = () => { cleanupGameday?.(); cleanupGameday = null }
+
+    // Route-owned lifecycle keeps exactly one Game Day feed across client
+    // navigation. The prototype remains isolated from unrelated kiosk stores.
+    const unsubscribe = page.subscribe(($page) => {
+      const path = $page.url.pathname
+      const guest = path.startsWith('/guest')
+      const gamedayPath = path === '/gameday' || path.startsWith('/gameday/prototype')
+      if (guest) { stopGeneral(); stopGameday(); return }
+
+      if (gamedayPath && !cleanupGameday) cleanupGameday = initGamedayFeed()
+      if (!gamedayPath) stopGameday()
+
+      if (path.startsWith('/gameday/prototype')) stopGeneral()
+      else startGeneral()
+    })
+
+    return () => { unsubscribe(); stopGeneral(); stopGameday() }
   })
 </script>
 

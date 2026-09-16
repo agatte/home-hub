@@ -886,13 +886,18 @@ async def lifespan(app: FastAPI):
     # for play events / state transitions register here in later slices
     # (Slice B: CelebrationOrchestrator). Public read-only via /api/gameday/*.
     from backend.services.gameday_service import GameDayService
+    from backend.services.gameday_viewer_sync import GameDayViewerSync
     gameday = GameDayService(
         automation_engine=automation,
         ws_manager=ws_manager,
     )
+    gameday_viewer_sync = GameDayViewerSync(ws_manager=ws_manager)
+    await gameday_viewer_sync.start()
+    gameday.set_viewer_sync(gameday_viewer_sync)
     await gameday.connect()
     app.state.gameday = gameday
-    app_logger.info("GameDayService initialized")
+    app.state.gameday_viewer_sync = gameday_viewer_sync
+    app_logger.info("GameDayService + GameDayViewerSync initialized")
 
     # CelebrationOrchestrator (Phase B Slice B) — subscribes to GameDayService
     # play + state-transition events and runs light + TTS celebration sequences.
@@ -917,6 +922,7 @@ async def lifespan(app: FastAPI):
         # land in journalctl.
         event_logger=event_logger,
         transition_boundary=automation.lighting_transition_boundary,
+        viewer_sync=gameday_viewer_sync,
     )
     gameday.register_on_play_event(celebration.on_play_event)
     gameday.register_on_state_transition(celebration.on_state_transition)
@@ -1440,8 +1446,11 @@ async def lifespan(app: FastAPI):
             len(still_running), still_running,
         )
 
-    # 3. Close long-lived HTTP clients last — poll loops that used them are
-    #    already cancelled, so there's no race.
+    # 3. Close long-lived/service-owned work last — poll loops that used them
+    #    are already cancelled, so there's no race. Cancel queued viewer-sync
+    #    waits before Game Day shuts down so deploys cannot replay them later.
+    await _safe_shutdown("celebration_orchestrator", celebration.close)
+    await _safe_shutdown("gameday_viewer_sync", gameday_viewer_sync.close)
     await _safe_shutdown("weather_service", weather_service.close)
     await _safe_shutdown("hue_v2", hue_v2.close)
     await _safe_shutdown("rec_service", rec_service.close)

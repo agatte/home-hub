@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildPrototypePresentation,
+  buildViewerSyncPendingPresentation,
   formatGamePeriod,
 } from '$lib/gameday/presentation.js'
 
@@ -78,5 +79,20 @@ describe('buildPrototypePresentation', () => {
     expect(final.sideLabel).toBe('GAME STATUS')
     expect(final.sidePrimary).toBe('FINAL')
     expect(final.sideSecondary).toBe('DRIVE CLOSED')
+  })
+})
+
+
+describe('buildViewerSyncPendingPresentation', () => {
+  it('shows a truthful no-spoiler placeholder while the first viewer state catches up', () => {
+    const view = buildViewerSyncPendingPresentation({ opponent: 'Ravens' })
+
+    expect(view.isLive).toBe(true)
+    expect(view.opponent).toBe('RAVENS')
+    expect(view.scoreColts).toBe('--')
+    expect(view.scoreOpp).toBe('--')
+    expect(view.periodLabel).toBe('SYNCING TO LIVE TV')
+    expect(view.subline).toBe('ALIGNING WITH HULU LIVE')
+    expect(view.sideSecondary).toBe('NO SPOILERS')
   })
 })

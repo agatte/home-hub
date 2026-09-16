@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from backend.services.pc_agent.latitude_streaming_detector import (
     LatitudeStreamingDetector,
     PlaybackSnapshot,
@@ -333,3 +335,46 @@ Video
     snapshot = detector.snapshot()
 
     assert snapshot.active is False
+
+
+def test_chromium_live_length_sentinel_is_unknown():
+    metadata = (
+        "{'xesam:title': <'Hulu | Live TV'>, "
+        "'mpris:length': <int64 9223372036854775807>}"
+    )
+    assert LatitudeStreamingDetector._mpris_length_us(metadata) is None
+
+
+def test_viewer_clock_snapshot_prefers_chromium_hulu_and_keeps_pause():
+    firefox = "org.mpris.MediaPlayer2.firefox.instance42"
+    chromium = "org.mpris.MediaPlayer2.chromium.instance99"
+    list_cmd = (
+        "gdbus", "call", "--session", "--dest", "org.freedesktop.DBus",
+        "--object-path", "/org/freedesktop/DBus", "--method",
+        "org.freedesktop.DBus.ListNames",
+    )
+
+    def prop_cmd(name: str, prop: str) -> tuple[str, ...]:
+        return (
+            "gdbus", "call", "--session", "--dest", name,
+            "--object-path", "/org/mpris/MediaPlayer2", "--method",
+            "org.freedesktop.DBus.Properties.Get",
+            "org.mpris.MediaPlayer2.Player", prop,
+        )
+    detector = FakeDetector(outputs={
+        list_cmd: f"(['{firefox}', '{chromium}'],)",
+        prop_cmd(firefox, "Metadata"): "{'xesam:title': <'Hulu | Live TV'>}",
+        prop_cmd(firefox, "PlaybackStatus"): "(<('Playing',)>,)",
+        prop_cmd(firefox, "Position"): "(<int64 1789501000000000>,)",
+        prop_cmd(chromium, "Metadata"): "{'xesam:title': <'Hulu | Live TV'>}",
+        prop_cmd(chromium, "PlaybackStatus"): "(<('Paused',)>,)",
+        prop_cmd(chromium, "Position"): "(<int64 1789502000500000>,)",
+    })
+
+    snapshot = detector.viewer_clock_snapshot()
+
+    assert snapshot is not None
+    assert snapshot.player == "chromium"
+    assert snapshot.service == "hulu"
+    assert snapshot.playback_status == "Paused"
+    assert snapshot.media_timestamp == pytest.approx(1789502000.5)

@@ -24,6 +24,7 @@ from backend.services.gameday_service import (
     GameDayStateTransition,
     PlayEvent,
 )
+from backend.services.gameday_viewer_sync import ViewerReleaseResult
 
 logger = logging.getLogger("home_hub.celebration")
 
@@ -621,6 +622,7 @@ class CelebrationOrchestrator:
         camera_service: Any = None,
         event_logger: Any = None,
         transition_boundary: Any = None,
+        viewer_sync: Any = None,
     ) -> None:
         self._hue = hue_service
         self._tts = tts_service
@@ -643,6 +645,9 @@ class CelebrationOrchestrator:
         # exception must never bubble into _run_light_steps.
         self._event_logger = event_logger
         self._transition_boundary = transition_boundary
+        self._viewer_sync = viewer_sync
+        self._viewer_sync_wait_tasks: set[asyncio.Task] = set()
+        self._viewer_sync_active_tasks: set[asyncio.Task] = set()
         self._last_celebration_at: float = 0.0
         self._sequence_active: bool = False
 
@@ -659,6 +664,28 @@ class CelebrationOrchestrator:
         """Late-bind the camera service. Camera is opt-in and may not be
         on app.state at orchestrator construction time."""
         self._camera = camera_service
+
+    async def close(self) -> None:
+        """Cancel queued viewer waits; let already-started sequences finish."""
+        waiting = list(self._viewer_sync_wait_tasks)
+        for task in waiting:
+            if not task.done():
+                task.cancel()
+        if waiting:
+            await asyncio.gather(*waiting, return_exceptions=True)
+
+        active = [task for task in self._viewer_sync_active_tasks if not task.done()]
+        if not active:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*active, return_exceptions=True), timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            for task in active:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
 
     # ------------------------------------------------------------------ Subscribers
 
@@ -711,9 +738,157 @@ class CelebrationOrchestrator:
             evt.event_id
             and evt.event_id.endswith((":extra_point_good", ":two_point_conv"))
         )
+        if self._maybe_defer_for_viewer(
+            key, context, evt, bypass_cooldown=conversion_followup,
+        ):
+            return
         await self._run_sequence(
             key, context, play=evt, bypass_cooldown=conversion_followup,
         )
+
+    def _maybe_defer_for_viewer(
+        self,
+        key: str,
+        context: dict,
+        play: PlayEvent,
+        *,
+        bypass_cooldown: bool,
+        transition: Optional[GameDayStateTransition] = None,
+        target: Optional[datetime] = None,
+    ) -> bool:
+        viewer_sync = self._viewer_sync
+        if (
+            viewer_sync is None
+            or play.synthetic
+            or (transition is not None and transition.synthetic)
+        ):
+            return False
+        event_time = play.timestamp
+        target_time = target or play.viewer_anchor or event_time
+        try:
+            # Skip classification always uses the play's own provider time. A
+            # later batch/presentation anchor may delay release, but must never
+            # hide the fact that the actual play was jumped over.
+            event_decision = viewer_sync.release_decision(event_time)
+            if event_decision.drop:
+                logger.info(
+                    "celebration: dropping %s - viewer skipped provider_ts=%s",
+                    key, event_time.isoformat(),
+                )
+                return True
+            decision = (
+                event_decision
+                if target_time == event_time
+                else viewer_sync.release_decision(target_time)
+            )
+        except Exception:
+            logger.exception("celebration: viewer sync decision failed")
+            return False
+        if decision.drop:
+            logger.info(
+                "celebration: dropping %s - viewer skipped release_ts=%s",
+                key, target_time.isoformat(),
+            )
+            return True
+        if not decision.defer:
+            return False
+        task = asyncio.create_task(
+            self._run_viewer_synced_sequence(
+                key, context, play, target_time, decision.seek_generation,
+                bypass_cooldown, transition,
+            ),
+            name=f"gameday-viewer-sync:{key}",
+        )
+        self._viewer_sync_wait_tasks.add(task)
+        task.add_done_callback(self._forget_viewer_sync_task)
+        logger.info(
+            "celebration: deferred %s until viewer reaches provider_ts=%s",
+            key, target_time.isoformat(),
+        )
+        return True
+
+    def _forget_viewer_sync_task(self, task: asyncio.Task) -> None:
+        self._viewer_sync_wait_tasks.discard(task)
+        self._viewer_sync_active_tasks.discard(task)
+
+    async def _run_viewer_synced_sequence(
+        self,
+        key: str,
+        context: dict,
+        play: PlayEvent,
+        target: datetime,
+        seek_generation: int,
+        bypass_cooldown: bool,
+        transition: Optional[GameDayStateTransition],
+    ) -> None:
+        current = asyncio.current_task()
+        try:
+            try:
+                result = await self._viewer_sync.wait_until_visible(
+                    target, seek_generation=seek_generation,
+                )
+            except Exception:
+                logger.exception(
+                    "celebration: viewer sync wait failed for %s; using immediate fallback",
+                    key,
+                )
+                result = ViewerReleaseResult.UNAVAILABLE
+
+            if result in {ViewerReleaseResult.SKIPPED_BY_SEEK, ViewerReleaseResult.TIMEOUT}:
+                logger.info(
+                    "celebration: dropping deferred %s — viewer sync result=%s",
+                    key, result.value,
+                )
+                return
+
+            # Batch release may wait on a later visual anchor. Re-check the
+            # play's own provider timestamp after the wait so a Jump to Live
+            # that crossed the actual event can never replay it at the later
+            # batch frame.
+            try:
+                event_decision = self._viewer_sync.release_decision(play.timestamp)
+            except Exception:
+                logger.exception(
+                    "celebration: viewer sync post-wait decision failed for %s", key,
+                )
+                event_decision = None
+            if event_decision is not None and event_decision.drop:
+                logger.info(
+                    "celebration: dropping deferred %s ? provider event was skipped",
+                    key,
+                )
+                return
+
+            if current is not None:
+                self._viewer_sync_wait_tasks.discard(current)
+                self._viewer_sync_active_tasks.add(current)
+            viewer_delayed = result is ViewerReleaseResult.VISIBLE
+            allowed, reason = self._authority_allows(
+                play=play, transition=transition, viewer_delayed=viewer_delayed,
+            )
+            if not allowed:
+                logger.info(
+                    "celebration: dropping deferred %s — authority changed: %s",
+                    key, reason,
+                )
+                return
+            if result is ViewerReleaseResult.UNAVAILABLE:
+                logger.info(
+                    "celebration: viewer clock unavailable for %s; falling back immediate",
+                    key,
+                )
+            await self._run_sequence(
+                key,
+                context,
+                play=play,
+                transition=transition,
+                bypass_cooldown=bypass_cooldown,
+                viewer_delayed=viewer_delayed,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("celebration: deferred viewer-sync sequence failed: %s", key)
 
     async def on_state_transition(self, transition: GameDayStateTransition) -> None:
         """Celebrate real kickoff and final lifecycle transitions."""
@@ -737,9 +912,18 @@ class CelebrationOrchestrator:
                 game_id=transition.game_id,
                 synthetic=transition.synthetic,
             )
+            context = self._build_context(kickoff)
+            if self._maybe_defer_for_viewer(
+                "kickoff",
+                context,
+                kickoff,
+                bypass_cooldown=False,
+                transition=transition,
+                target=transition.timestamp,
+            ):
+                return
             await self._run_sequence(
-                "kickoff", self._build_context(kickoff),
-                play=kickoff, transition=transition,
+                "kickoff", context, play=kickoff, transition=transition,
             )
             return
 
@@ -772,8 +956,9 @@ class CelebrationOrchestrator:
         # Synthetic PlayEvent so the volume policy can apply apartment-
         # context modifiers (sleeping/DND/late-night/camera). End-of-game
         # has no WPA — the policy will fall through to per-event base.
+        final_anchor = transition.timestamp
         synthetic = PlayEvent(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=final_anchor,
             play_type="other",  # not used by policy
             description=f"end_of_game:{key}",
             player=None,
@@ -781,7 +966,18 @@ class CelebrationOrchestrator:
             yards=None,
             scoring_team="colts" if won else "opp",
             wpa=None,
+            game_id=transition.game_id,
+            synthetic=transition.synthetic,
         )
+        if self._maybe_defer_for_viewer(
+            key,
+            context,
+            synthetic,
+            bypass_cooldown=False,
+            transition=transition,
+            target=final_anchor,
+        ):
+            return
         await self._run_sequence(key, context, play=synthetic, transition=transition)
 
     # ------------------------------------------------------------------ Core
@@ -794,6 +990,7 @@ class CelebrationOrchestrator:
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
         bypass_cooldown: bool = False,
+        viewer_delayed: bool = False,
     ) -> None:
         """Broadcast WS flair, then run light steps + TTS in parallel.
 
@@ -810,7 +1007,9 @@ class CelebrationOrchestrator:
             logger.warning("celebration: unknown sequence key=%s", key)
             return
 
-        allowed, reason = self._authority_allows(play=play, transition=transition)
+        allowed, reason = self._authority_allows(
+            play=play, transition=transition, viewer_delayed=viewer_delayed,
+        )
         if not allowed:
             logger.info(
                 "celebration: skipping %s — authority changed: %s", key, reason,
@@ -858,6 +1057,7 @@ class CelebrationOrchestrator:
                     key,
                     play=play,
                     transition=transition,
+                    viewer_delayed=viewer_delayed,
                 ),
                 self._run_tts(
                     sequence,
@@ -866,6 +1066,7 @@ class CelebrationOrchestrator:
                     key,
                     play=play,
                     transition=transition,
+                    viewer_delayed=viewer_delayed,
                 ),
                 return_exceptions=True,
             )
@@ -888,16 +1089,19 @@ class CelebrationOrchestrator:
         *,
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
+        viewer_delayed: bool = False,
     ) -> set[str]:
         """Run direct celebration Hue writes under the shared lighting boundary."""
         boundary = self._transition_boundary
         if boundary is None or getattr(boundary, "held_by_current_task", False):
             return await self._run_light_steps(
                 steps, sequence_key, play=play, transition=transition,
+                viewer_delayed=viewer_delayed,
             )
         async with boundary.serialized():
             return await self._run_light_steps(
                 steps, sequence_key, play=play, transition=transition,
+                viewer_delayed=viewer_delayed,
             )
 
     async def _reconcile_steady_state(
@@ -945,6 +1149,7 @@ class CelebrationOrchestrator:
         *,
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
+        viewer_delayed: bool = False,
     ) -> set[str]:
         """Walk an ordered list of LightSteps, sleeping cumulatively from
         the sequence start. Each step's `delay_ms` is anchored to t=0.
@@ -978,7 +1183,7 @@ class CelebrationOrchestrator:
                     raise
 
             allowed, reason = self._authority_allows(
-                play=play, transition=transition,
+                play=play, transition=transition, viewer_delayed=viewer_delayed,
             )
             if not allowed:
                 logger.info(
@@ -1056,6 +1261,7 @@ class CelebrationOrchestrator:
         *,
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
+        viewer_delayed: bool = False,
     ) -> None:
         """Pick a random line from the sequence pool, substitute context
         variables, hand off to TTSService.speak (duck-and-resume on Sonos).
@@ -1095,7 +1301,7 @@ class CelebrationOrchestrator:
             text = template
 
         allowed, reason = self._authority_allows(
-            play=play, transition=transition,
+            play=play, transition=transition, viewer_delayed=viewer_delayed,
         )
         if not allowed:
             logger.info(
@@ -1353,6 +1559,7 @@ class CelebrationOrchestrator:
         *,
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
+        viewer_delayed: bool = False,
     ) -> tuple[bool, str]:
         """Recheck Game Day authority immediately before side effects."""
         # A final transition also carries a synthetic PlayEvent for TTS
@@ -1382,7 +1589,10 @@ class CelebrationOrchestrator:
         if not callable(checker):
             return False, "Game Day authority checker unavailable"
         try:
-            result = checker(game_id=game_id, allow_final=allow_final)
+            kwargs = {"game_id": game_id, "allow_final": allow_final}
+            if viewer_delayed and not allow_final:
+                kwargs["allow_viewer_delayed_play"] = True
+            result = checker(**kwargs)
         except Exception:
             logger.exception("celebration: authority check failed")
             return False, "Game Day authority check failed"

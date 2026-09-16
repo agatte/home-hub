@@ -1,6 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
-  import { gameday, fetchGamedayInitial } from '$lib/stores/gameday.js'
+  import { gameday } from '$lib/stores/gameday.js'
   import FootballField from '$lib/components/FootballField.svelte'
 
   /** @type {any} */
@@ -9,20 +8,20 @@
   export let params = undefined
   data; params;
 
-  onMount(() => {
-    // Best-effort REST priming. WS messages route in via init.js's central
-    // dispatcher (wired post-merge by main session). Until then, only REST
-    // data appears — fine because there's no live game in May 2026.
-    fetchGamedayInitial()
-  })
 
-  // Reactive view-model. Pull from the store so the no-game vs in-game
-  // branches stay declarative.
-  $: state = $gameday.state
-  $: lastPlay = $gameday.lastPlay
+
+  // Reactive view-model. When adaptive viewer sync is active, this legacy
+  // Game Day surface follows the same no-spoiler timeline as the stadium
+  // prototype instead of reading canonical ESPN truth directly.
+  $: syncKnowledgePending = $gameday.viewerSyncLoaded !== true && $gameday.state !== null
+  $: viewerClockActive = syncKnowledgePending || ($gameday.viewerSync?.enabled === true && $gameday.viewerSync?.presentation_active === true)
+  $: viewerPresentation = viewerClockActive ? $gameday.viewerState : null
+  $: viewerSyncPending = viewerClockActive && !viewerPresentation
+  $: state = viewerClockActive ? viewerPresentation : $gameday.state
+  $: lastPlay = viewerClockActive ? state?.last_play ?? null : $gameday.lastPlay
   $: schedule = $gameday.schedule
   $: scheduleLoaded = $gameday.scheduleLoaded
-  $: hasGame = state !== null
+  $: hasGame = viewerSyncPending || state !== null
 
   // No-game fallback — next scheduled game (or "no schedule yet").
   $: nextGame = schedule.length > 0 ? schedule[0] : null
@@ -34,15 +33,17 @@
 
   // In-game derived values. Guard with `state &&` so the markup template
   // can read them unconditionally without throwing.
-  $: scoreColts = state?.score_colts ?? 0
-  $: scoreOpp = state?.score_opp ?? 0
-  $: opponent = (state?.opponent || 'TBD').toUpperCase()
+  $: scoreColts = viewerSyncPending ? '--' : state?.score_colts ?? 0
+  $: scoreOpp = viewerSyncPending ? '--' : state?.score_opp ?? 0
+  $: opponent = (state?.opponent || $gameday.state?.opponent || 'TBD').toUpperCase()
   $: quarter = state?.quarter ?? 0
-  $: clock = state?.clock || ''
-  $: lastPlayDescription =
-    lastPlay?.description ||
-    state?.last_play?.description ||
-    'Awaiting first play...'
+  $: quarterLabel = viewerSyncPending ? 'SYNC' : `Q${quarter}`
+  $: clock = viewerSyncPending ? '--' : state?.clock || ''
+  $: lastPlayDescription = viewerSyncPending
+    ? 'ALIGNING WITH HULU LIVE ? NO SPOILERS'
+    : lastPlay?.description ||
+      state?.last_play?.description ||
+      'Awaiting first play...'
 
   /**
    * Format an ISO kickoff timestamp into a short human-readable label.
@@ -75,7 +76,7 @@
         <span class="team-score">{scoreColts}</span>
       </div>
       <div class="game-clock">
-        <span class="quarter">Q{quarter}</span>
+        <span class="quarter">{quarterLabel}</span>
         <span class="clock">{clock}</span>
       </div>
       <div class="team team-away">

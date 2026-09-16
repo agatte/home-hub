@@ -1,14 +1,16 @@
 <script>
-  import { onMount } from 'svelte'
-  import { gameday, initGamedayFeed } from '$lib/stores/gameday.js'
-  import { buildPrototypePresentation } from '$lib/gameday/presentation.js'
+  import { gameday } from '$lib/stores/gameday.js'
+  import { buildPrototypePresentation, buildViewerSyncPendingPresentation } from '$lib/gameday/presentation.js'
 
-  onMount(() => initGamedayFeed())
-
-  $: live = $gameday.state
+  $: syncKnowledgePending = $gameday.viewerSyncLoaded !== true && $gameday.state !== null
+  $: viewerClockActive = syncKnowledgePending || ($gameday.viewerSync?.enabled === true && $gameday.viewerSync?.presentation_active === true)
+  $: viewerPresentation = viewerClockActive ? $gameday.viewerState : null
+  $: live = viewerClockActive ? viewerPresentation : $gameday.state
   $: schedule = $gameday.schedule
   $: scheduleLoaded = $gameday.scheduleLoaded
-  $: view = buildPrototypePresentation(live, schedule, scheduleLoaded)
+  $: view = viewerClockActive && !viewerPresentation
+    ? buildViewerSyncPendingPresentation($gameday.state)
+    : buildPrototypePresentation(live, schedule, scheduleLoaded)
   $: opponent = view.opponent
   $: drive = view.drive
 </script>

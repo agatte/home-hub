@@ -15,7 +15,6 @@ import { showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightn
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
 import { pipeline } from './pipeline.js'
-import { dispatchGamedayMessage } from './gameday.js'
 import { startWeatherPolling, stopWeatherPolling } from './weather.js'
 
 /** @type {HubSocket | null} */
@@ -129,11 +128,6 @@ export function initStores() {
             current: data,
             history: [...prev.history.slice(-29), data],
           }))
-          break
-        case 'gameday_state':
-        case 'gameday_play':
-        case 'gameday_celebration':
-          dispatchGamedayMessage(type, data)
           break
         default:
           console.warn('[ws] Unknown message type:', type, data)

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,6 +27,7 @@ from backend.services.celebration_orchestrator import (
     LightStep,
 )
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+from backend.services.gameday_viewer_sync import ViewerReleaseResult, ViewerSyncDecision
 from backend.services.gameday_service import (
     GameDayState,
     GameDayStateTransition,
@@ -69,6 +70,7 @@ def _make_orchestrator(
     dnd_active: bool = False,
     camera_present: bool = True,
     with_apartment_context: bool = True,
+    viewer_sync=None,
 ) -> tuple[CelebrationOrchestrator, MagicMock, MagicMock, MagicMock, MagicMock]:
     """Build an orchestrator with all-mock collaborators; return the tuple
     (orch, hue, tts, ws, gameday) so tests can assert on each.
@@ -119,6 +121,7 @@ def _make_orchestrator(
             gameday_service=gameday,
             automation_engine=automation,
             camera_service=camera,
+            viewer_sync=viewer_sync,
         )
     else:
         # Backwards-compat: original 4-arg signature.
@@ -127,6 +130,7 @@ def _make_orchestrator(
             tts_service=tts,
             ws_manager=ws,
             gameday_service=gameday,
+            viewer_sync=viewer_sync,
         )
     return orch, hue, tts, ws, gameday
 
@@ -1490,3 +1494,172 @@ async def test_conversion_cooldown_bypass_does_not_extend_global_window(monkeypa
 
     ws.broadcast.assert_awaited_once()
     assert orch._last_celebration_at == previous
+
+
+# ---------------------------------------------------------------------------
+# Adaptive viewer synchronization (#253)
+# ---------------------------------------------------------------------------
+
+def _provider_td() -> PlayEvent:
+    evt = _td_event()
+    evt.synthetic = False
+    evt.game_id = "game-1"
+    evt.event_id = "play-1"
+    return evt
+
+
+def _viewer_sync(result: ViewerReleaseResult) -> MagicMock:
+    viewer = MagicMock()
+    viewer.release_decision = MagicMock(
+        return_value=ViewerSyncDecision(True, "await viewer clock", 0),
+    )
+    viewer.wait_until_visible = AsyncMock(return_value=result)
+    return viewer
+
+
+@pytest.mark.asyncio
+async def test_viewer_synced_play_defers_without_blocking_provider_callback():
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+    orch._run_sequence.assert_not_awaited()
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    orch._run_sequence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_forward_seek_drops_deferred_celebration():
+    viewer = _viewer_sync(ViewerReleaseResult.SKIPPED_BY_SEEK)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    orch._run_sequence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_viewer_clock_loss_falls_back_to_normal_authority_path():
+    viewer = _viewer_sync(ViewerReleaseResult.UNAVAILABLE)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    orch._run_sequence.assert_awaited_once()
+    assert gameday.celebration_eligibility.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_still_waiting_viewer_synced_celebration():
+    gate = asyncio.Event()
+
+    async def wait_forever(*args, **kwargs):
+        await gate.wait()
+        return ViewerReleaseResult.VISIBLE
+
+    viewer = MagicMock()
+    viewer.release_decision = MagicMock(
+        return_value=ViewerSyncDecision(True, "await viewer clock", 0),
+    )
+    viewer.wait_until_visible = AsyncMock(side_effect=wait_forever)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0)
+    assert len(orch._viewer_sync_wait_tasks) == 1
+
+    await orch.close()
+    assert not orch._viewer_sync_wait_tasks
+    orch._run_sequence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_event_already_skipped_by_seek_never_schedules_celebration():
+    viewer = MagicMock()
+    viewer.release_decision = MagicMock(
+        return_value=ViewerSyncDecision(
+            False, "skipped by forward seek", 3, drop=True,
+        ),
+    )
+    viewer.wait_until_visible = AsyncMock()
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+
+    orch._run_sequence.assert_not_awaited()
+    viewer.wait_until_visible.assert_not_awaited()
+    assert not orch._viewer_sync_wait_tasks
+
+
+
+@pytest.mark.asyncio
+async def test_viewer_visible_play_uses_delayed_final_authority_recheck():
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert any(
+        call.kwargs.get("allow_viewer_delayed_play") is True
+        for call in gameday.celebration_eligibility.call_args_list
+    )
+    assert orch._run_sequence.await_args.kwargs["viewer_delayed"] is True
+
+
+@pytest.mark.asyncio
+async def test_batch_anchor_wait_still_drops_play_skipped_at_its_provider_timestamp():
+    play = _provider_td()
+    play.viewer_anchor = play.timestamp + timedelta(seconds=12)
+    decisions = [
+        ViewerSyncDecision(True, "await play", 0),
+        ViewerSyncDecision(True, "await batch frame", 0),
+        ViewerSyncDecision(False, "skipped by forward seek", 1, drop=True),
+    ]
+    viewer = MagicMock()
+    viewer.release_decision = MagicMock(side_effect=decisions)
+    viewer.wait_until_visible = AsyncMock(return_value=ViewerReleaseResult.VISIBLE)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(play)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    viewer.wait_until_visible.assert_awaited_once()
+    assert viewer.wait_until_visible.await_args.args[0] == play.viewer_anchor
+    orch._run_sequence.assert_not_awaited()

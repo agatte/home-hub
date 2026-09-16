@@ -10,13 +10,15 @@ endpoint does (auth bypass for localhost / RFC1918 / trusted-LAN).
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, require_localhost
 from backend.services.gameday_service import GameDayService, gameday_state_payload
+from backend.services.gameday_viewer_sync import GameDayViewerSync
 from backend.services.pregame_audio_policy import VALID_TIERS
 
 
@@ -24,6 +26,19 @@ class TestPregameRequest(BaseModel):
     """Body for POST /api/gameday/test/pregame (GAMEDAY_SPEC §10.6)."""
     opponent: str = Field(..., min_length=1, max_length=80)
     stakes_tier: str = Field("standard", description="Stakes tier override for the audio policy")
+
+
+class ViewerClockReport(BaseModel):
+    service: str = Field(..., min_length=1, max_length=40)
+    player: str = Field(..., min_length=1, max_length=40)
+    playback_status: Literal["Playing", "Paused", "Stopped"]
+    media_timestamp: float = Field(..., gt=0)
+    observed_at: datetime
+    method: str = Field("mpris", max_length=40)
+
+
+class ViewerSyncToggleRequest(BaseModel):
+    enabled: bool
 
 logger = logging.getLogger("home_hub.api.gameday")
 
@@ -68,6 +83,13 @@ def _service(request: Request) -> GameDayService:
     return svc
 
 
+def _viewer_sync(request: Request) -> GameDayViewerSync:
+    svc = getattr(request.app.state, "gameday_viewer_sync", None)
+    if svc is None:
+        raise HTTPException(503, "GameDayViewerSync not initialized")
+    return svc
+
+
 @router.get("/state")
 async def get_state(request: Request) -> dict[str, Any]:
     """Return the current Colts game snapshot or `{"status": "no-game"}`."""
@@ -83,6 +105,31 @@ async def get_schedule(request: Request) -> list[dict[str, Any]]:
     """Return the next 5 scheduled / in-progress Colts games."""
     svc = _service(request)
     return await svc.get_upcoming_schedule(limit=5)
+
+
+@router.get("/viewer-sync")
+async def get_viewer_sync(request: Request) -> dict[str, Any]:
+    return _viewer_sync(request).snapshot()
+
+
+@router.post("/viewer-clock", dependencies=[Depends(require_api_key)])
+async def report_viewer_clock(body: ViewerClockReport, request: Request) -> dict[str, Any]:
+    await require_localhost(request)
+    if body.method.lower() != "mpris":
+        raise HTTPException(400, "Only MPRIS viewer clocks are supported")
+    return await _viewer_sync(request).record_sample(
+        service=body.service, player=body.player,
+        playback_status=body.playback_status, media_timestamp=body.media_timestamp,
+        observed_at=body.observed_at,
+    )
+
+
+@router.post("/viewer-sync/enabled", dependencies=[Depends(require_api_key)])
+async def set_viewer_sync_enabled(
+    body: ViewerSyncToggleRequest, request: Request,
+) -> dict[str, Any]:
+    await _viewer_sync(request).set_enabled(body.enabled)
+    return _viewer_sync(request).snapshot()
 
 
 # IMPORTANT — /test/pregame MUST be registered BEFORE /test/{event}. FastAPI
