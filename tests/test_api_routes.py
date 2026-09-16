@@ -169,7 +169,7 @@ class TestMusicAPI:
                 }
 
         class FakeDiscovery:
-            async def preview(self, mode, *, policy, count, tracks_per_artist):
+            async def preview(self, mode, *, policy, count, tracks_per_artist, intent=None):
                 assert mode == "gaming"
                 assert policy == "explore"
                 assert count == 4
@@ -179,7 +179,7 @@ class TestMusicAPI:
         app.state.music_discovery = FakeDiscovery()
         try:
             resp = client.post(
-                "/api/music/discovery/preview?mode=gaming&policy=explore&count=4&tracks_per_artist=2"
+                "/api/music/discovery/preview?mode=gaming&policy=explore&count=4&tracks_per_artist=2&intent=valheim"
             )
         finally:
             app.state.music_discovery = previous

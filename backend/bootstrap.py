@@ -595,12 +595,15 @@ async def lifespan(app: FastAPI):
         MusicCuratorContextBuilder,
     )
     from backend.services.music_discovery import MusicDiscoveryService
+    from backend.services.music_semantics import LastFmSemanticAnalyzer
     from backend.services.music_taste import MusicTasteService
     from backend.services.playlist_catalog import SonosFavoritesCatalog
     music_taste = MusicTasteService(bandit=music_bandit)
     app.state.music_taste = music_taste
     music_discovery = MusicDiscoveryService(
-        source=rec_service, taste_provider=music_taste,
+        source=rec_service,
+        taste_provider=music_taste,
+        semantic_analyzer=LastFmSemanticAnalyzer(rec_service),
     )
     app.state.music_discovery = music_discovery
     music_curator = MusicCurator(

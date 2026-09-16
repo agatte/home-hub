@@ -30,6 +30,8 @@ ITUNES_SEARCH = "https://itunes.apple.com/search"
 
 # Cache TTL for Last.fm similar-artist data
 SIMILAR_CACHE_DAYS = 30
+SEMANTIC_TAG_CACHE_TTL = timedelta(days=7)
+SEMANTIC_TAG_EMPTY_CACHE_TTL = timedelta(hours=1)
 
 
 class RecommendationService:
@@ -49,6 +51,7 @@ class RecommendationService:
         self._http = httpx.AsyncClient(timeout=15.0)
         # Semaphore for rate limiting external API calls
         self._api_sem = asyncio.Semaphore(1)
+        self._semantic_tag_cache: dict[tuple[str, str], tuple[datetime, list[dict], timedelta]] = {}
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -430,6 +433,86 @@ class RecommendationService:
                 logger.error(f"Last.fm query failed for '{artist_name}': {e}")
                 return []
 
+    async def get_semantic_tags(
+        self,
+        artist_name: str,
+        *,
+        track_name: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return bounded Last.fm top tags with an in-memory freshness cache."""
+        if not self._lastfm_key:
+            return []
+        artist = str(artist_name or "").strip()
+        track = str(track_name or "").strip()
+        if not artist:
+            return []
+        cache_key = (artist.casefold(), track.casefold())
+        now = datetime.now(timezone.utc)
+        cached = self._semantic_tag_cache.get(cache_key)
+        if cached is not None:
+            fetched_at, rows, ttl = cached
+            if now - fetched_at <= ttl:
+                return list(rows[: max(1, limit)])
+        rows = await self._query_lastfm_top_tags(
+            artist, track_name=track or None, limit=max(1, min(30, limit))
+        )
+        ttl = SEMANTIC_TAG_CACHE_TTL if rows else SEMANTIC_TAG_EMPTY_CACHE_TTL
+        self._semantic_tag_cache[cache_key] = (now, list(rows), ttl)
+        return list(rows)
+
+    async def _query_lastfm_top_tags(
+        self,
+        artist_name: str,
+        *,
+        track_name: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Query Last.fm artist.getTopTags or track.getTopTags."""
+        params = {
+            "method": "track.gettoptags" if track_name else "artist.gettoptags",
+            "artist": artist_name,
+            "api_key": self._lastfm_key,
+            "format": "json",
+        }
+        if track_name:
+            params["track"] = track_name
+        async with self._api_sem:
+            try:
+                resp = await self._http.get(LASTFM_BASE, params=params)
+                await asyncio.sleep(0.2)
+                if resp.status_code != 200:
+                    logger.warning(
+                        "Last.fm top-tags error for '%s'%s: %s",
+                        artist_name,
+                        f" / '{track_name}'" if track_name else "",
+                        resp.status_code,
+                    )
+                    return []
+                tags = resp.json().get("toptags", {}).get("tag", [])
+                result: list[dict] = []
+                for row in tags:
+                    if not isinstance(row, dict):
+                        continue
+                    name = str(row.get("name") or "").strip()
+                    if not name:
+                        continue
+                    try:
+                        count = int(row.get("count") or 0)
+                    except (TypeError, ValueError):
+                        count = 0
+                    result.append({"name": name, "count": max(0, count)})
+                    if len(result) >= max(1, limit):
+                        break
+                return result
+            except Exception as exc:
+                logger.warning(
+                    "Last.fm top-tags query failed for '%s'%s: %s",
+                    artist_name,
+                    f" / '{track_name}'" if track_name else "",
+                    exc,
+                )
+                return []
     async def _search_itunes_tracks(
         self, artist_name: str, *, limit: int = 3,
     ) -> list[dict]:

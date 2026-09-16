@@ -363,8 +363,10 @@ existing YouTube/Sonos research tracker.
 ### Music Curator
 
 **SHIPPED/CURRENT.** Home Hub can import an Apple Music XML library, map and
-play supported Sonos favorites/playlists, generate Last.fm/iTunes-preview
+play supported Sonos favorites/playlists, generate Last.fm/iTunes-metadata
 recommendations, and choose among playable mappings with a contextual bandit.
+Apple Search API promotional preview URLs may remain catalog metadata, but Home
+Hub does not play them as entertainment or treat them as analyzable audio.
 It cannot arbitrarily browse Apple Music and reliably queue any catalog item.
 
 **DECIDED TARGET - 2026-09-16.** Music intelligence is one shared system, not
@@ -376,6 +378,15 @@ and only then hands an allowed candidate to the existing playback boundary.
 Sonos is a playback surface, not the conceptual music catalog. AI/model vendors
 and music-analysis models remain replaceable behind provider-neutral
 interfaces; no generic language model may fabricate a playable provider item.
+
+**IMPLEMENTED/SHADOW (#260).** Shadow discovery may add source-qualified semantic
+ranking evidence through a provider-neutral `MusicSemanticAnalyzer`. The first
+adapter uses bounded/cached Last.fm artist and representative-track top tags;
+deterministic intent presets cover existing contexts such as Game Day, Social,
+gaming, energetic, relax, and Valheim/Norse-style requests. Semantic fit is
+explainable ranking evidence only: canonical taste rejection remains
+suppressive, novelty policy remains separate, and missing/provider-failed
+semantic evidence preserves the prior discovery ranking unchanged.
 
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
@@ -695,7 +706,7 @@ appropriate—not to maximize automation for its own sake.
 - Mode-to-playlist mapping — each activity mode can auto-play a Sonos favorite
 - Smart auto-play: plays mapped favorite when Sonos is idle on mode change, suggests via toast if busy
 - Apple Music library import with taste profile generation (genre distribution, top artists)
-- Music discovery via Last.fm similar artists + iTunes Search 30s previews
+- Music discovery via Last.fm similar artists + iTunes Search metadata; promotional preview playback is retired
 - Recommendation feedback system (like/dismiss with scoring)
 - TTS via edge-tts with duck-and-resume (pauses music, plays speech, resumes)
 

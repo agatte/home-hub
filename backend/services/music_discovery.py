@@ -5,6 +5,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Protocol
 
+from backend.services.music_semantics import (
+    DeterministicSemanticIntentResolver,
+    MusicSemanticAnalyzer,
+    SemanticIntent,
+    SemanticMusicMatch,
+)
 from backend.services.music_taste import CandidateTasteMatch, MusicTasteProvider
 
 DISCOVERY_POLICIES = ("gentle", "explore")
@@ -55,6 +61,11 @@ class DiscoveryArtistCluster:
     artist_preference: float
     artist_depth: int
     novelty_ratio: float
+    semantic_score: Optional[float]
+    semantic_intent: Optional[str]
+    semantic_source: Optional[str]
+    semantic_tags: tuple[str, ...]
+    matched_semantics: tuple[str, ...]
     tracks: tuple[DiscoveryTrack, ...]
     reasons: tuple[str, ...]
 
@@ -69,6 +80,13 @@ class DiscoveryArtistCluster:
             "artist_preference": round(self.artist_preference, 4),
             "artist_depth": self.artist_depth,
             "novelty_ratio": round(self.novelty_ratio, 4),
+            "semantic_score": (
+                round(self.semantic_score, 4) if self.semantic_score is not None else None
+            ),
+            "semantic_intent": self.semantic_intent,
+            "semantic_source": self.semantic_source,
+            "semantic_tags": list(self.semantic_tags),
+            "matched_semantics": list(self.matched_semantics),
             "tracks": [track.to_dict() for track in self.tracks],
             "reasons": list(self.reasons),
         }
@@ -131,9 +149,13 @@ class MusicDiscoveryService:
         *,
         source: MusicDiscoverySource,
         taste_provider: MusicTasteProvider,
+        semantic_analyzer: Optional[MusicSemanticAnalyzer] = None,
+        intent_resolver: Optional[DeterministicSemanticIntentResolver] = None,
     ) -> None:
         self._source = source
         self._taste_provider = taste_provider
+        self._semantic_analyzer = semantic_analyzer
+        self._intent_resolver = intent_resolver or DeterministicSemanticIntentResolver()
         self._source_cache: dict[
             tuple[str, int, int], tuple[datetime, list[dict]]
         ] = {}
@@ -150,6 +172,14 @@ class MusicDiscoveryService:
             "source": type(self._source).__name__,
             "policies": list(DISCOVERY_POLICIES),
             "source_cache_entries": len(self._source_cache),
+            "semantic_enabled": bool(
+                self._semantic_analyzer is not None
+                and getattr(self._semantic_analyzer, "enabled", False)
+            ),
+            "semantic_analyzer": (
+                type(self._semantic_analyzer).__name__
+                if self._semantic_analyzer is not None else None
+            ),
         }
 
     async def preview(
@@ -159,11 +189,13 @@ class MusicDiscoveryService:
         policy: str = "gentle",
         count: int = 6,
         tracks_per_artist: int = 3,
+        intent: Optional[str] = None,
     ) -> MusicDiscoveryResult:
         if policy not in DISCOVERY_POLICIES:
             raise ValueError(f"unsupported discovery policy: {policy}")
         now = datetime.now(timezone.utc)
         source_name = type(self._source).__name__
+        semantic_intent = self._intent_resolver.resolve(mode=mode, request=intent)
         if not self.enabled:
             return MusicDiscoveryResult(
                 status="source_unavailable",
@@ -212,11 +244,12 @@ class MusicDiscoveryService:
 
         clusters: list[DiscoveryArtistCluster] = []
         for candidate in raw:
-            cluster = self._build_cluster(
+            cluster = await self._build_cluster(
                 candidate,
                 mode=mode,
                 policy=policy,
                 snapshot=snapshot,
+                semantic_intent=semantic_intent,
             )
             if cluster is not None:
                 clusters.append(cluster)
@@ -234,13 +267,14 @@ class MusicDiscoveryService:
             note=taste_note,
         )
 
-    def _build_cluster(
+    async def _build_cluster(
         self,
         candidate: dict[str, Any],
         *,
         mode: str,
         policy: str,
         snapshot: Any,
+        semantic_intent: SemanticIntent,
     ) -> Optional[DiscoveryArtistCluster]:
         artist_name = str(candidate.get("artist_name") or "").strip()
         seed_artist = str(candidate.get("seed_artist") or "").strip()
@@ -315,14 +349,30 @@ class MusicDiscoveryService:
             sum(track_preferences) / len(track_preferences)
             if track_preferences else 0.0
         )
-        score = 0.68 * source_match
-        score += 0.14 * artist_match.preference
-        score += 0.08 * avg_track_preference
-        score += min(0.06, 0.015 * artist_match.artist_depth)
+        base_score = 0.68 * source_match
+        base_score += 0.14 * artist_match.preference
+        base_score += 0.08 * avg_track_preference
+        base_score += min(0.06, 0.015 * artist_match.artist_depth)
         if policy == "gentle":
-            score += 0.06 * (1.0 - novelty_ratio)
+            base_score += 0.06 * (1.0 - novelty_ratio)
         else:
-            score += 0.08 * novelty_ratio
+            base_score += 0.08 * novelty_ratio
+        base_score = max(0.0, min(1.0, base_score))
+
+        semantic_match = SemanticMusicMatch(available=False)
+        analyzer = self._semantic_analyzer
+        if analyzer is not None and getattr(analyzer, "enabled", False):
+            try:
+                semantic_match = await analyzer.analyze(
+                    artist_name=artist_name,
+                    track_name=tracks[0].track_name if tracks else None,
+                    intent=semantic_intent,
+                )
+            except Exception:
+                semantic_match = SemanticMusicMatch(available=False)
+        score = base_score
+        if semantic_match.available:
+            score = 0.85 * base_score + 0.15 * semantic_match.score
         score = max(0.0, min(1.0, score))
 
         reasons = [
@@ -335,6 +385,12 @@ class MusicDiscoveryService:
             )
             if artist_match.artist_depth:
                 reasons.append(f"artist depth {artist_match.artist_depth}")
+        if semantic_match.available:
+            matched = ", ".join(semantic_match.matched_concepts) or "none"
+            reasons.append(
+                f"semantic {semantic_intent.key} match {semantic_match.score:.2f} "
+                f"({matched})"
+            )
         if policy == "explore":
             reasons.append("explicit exploration policy favors novel tracks")
         else:
@@ -350,6 +406,13 @@ class MusicDiscoveryService:
             artist_preference=artist_match.preference,
             artist_depth=artist_match.artist_depth,
             novelty_ratio=novelty_ratio,
+            semantic_score=semantic_match.score if semantic_match.available else None,
+            semantic_intent=semantic_intent.key if semantic_match.available else None,
+            semantic_source=semantic_match.source if semantic_match.available else None,
+            semantic_tags=semantic_match.tags if semantic_match.available else (),
+            matched_semantics=(
+                semantic_match.matched_concepts if semantic_match.available else ()
+            ),
             tracks=tuple(tracks),
             reasons=tuple(reasons),
         )

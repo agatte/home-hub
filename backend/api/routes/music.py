@@ -214,6 +214,7 @@ async def preview_discovery(
     policy: str = "gentle",
     count: int = 6,
     tracks_per_artist: int = 3,
+    intent: str | None = None,
 ) -> dict:
     """Generate explainable suggestions only; never actuates or persists rows."""
     if count < 1 or count > 10:
@@ -226,12 +227,14 @@ async def preview_discovery(
     if discovery is None:
         raise HTTPException(status_code=503, detail="Music discovery not initialized")
     try:
-        result = await discovery.preview(
-            mode,
-            policy=policy,
-            count=count,
-            tracks_per_artist=tracks_per_artist,
-        )
+        kwargs = {
+            "policy": policy,
+            "count": count,
+            "tracks_per_artist": tracks_per_artist,
+        }
+        if intent is not None:
+            kwargs["intent"] = intent
+        result = await discovery.preview(mode, **kwargs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result.to_dict()
