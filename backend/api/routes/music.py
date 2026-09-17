@@ -349,6 +349,27 @@ async def preview_music_request(request: Request) -> dict:
     return result.to_dict()
 
 
+@router.post("/trust/approval", dependencies=[Depends(require_api_key)])
+@limiter.limit("60/hour")
+async def submit_music_trust_approval(request: Request) -> dict:
+    """Persist exact-candidate approve/revoke evidence; never actuates playback."""
+    service = getattr(request.app.state, "music_requests", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Music request service not initialized")
+    body = await request.json()
+    source = request.headers.get("X-HomeHub-Source") or "dashboard:music_trust"
+    try:
+        return await service.record_trust_event(
+            client_event_id=str(body.get("client_event_id") or ""),
+            action=str(body.get("action") or ""),
+            provider=str(body.get("provider") or ""),
+            provider_id=str(body.get("provider_id") or ""),
+            source=source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ------------------------------------------------------------------
 # Recommendations
 # ------------------------------------------------------------------

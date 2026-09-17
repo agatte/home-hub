@@ -599,10 +599,15 @@ async def lifespan(app: FastAPI):
     from backend.services.music_requests import MusicRequestService
     from backend.services.music_semantics import LastFmSemanticAnalyzer
     from backend.services.music_taste import MusicTasteService
+    from backend.services.music_trust import MusicApprovalService, MusicTrustPolicy
     from backend.services.playlist_catalog import SonosFavoritesCatalog
     music_catalog = SonosFavoritesCatalog(sonos)
     music_feedback = MusicFeedbackService()
     app.state.music_feedback = music_feedback
+    music_approval = MusicApprovalService()
+    app.state.music_approval = music_approval
+    music_trust_policy = MusicTrustPolicy()
+    app.state.music_trust_policy = music_trust_policy
     music_taste = MusicTasteService()
     app.state.music_taste = music_taste
     music_discovery = MusicDiscoveryService(
@@ -626,6 +631,8 @@ async def lifespan(app: FastAPI):
         catalog=music_catalog,
         taste_provider=music_taste,
         discovery=music_discovery,
+        approval_service=music_approval,
+        trust_policy=music_trust_policy,
     )
     app.state.music_requests = music_requests
     music_curator = MusicCurator(

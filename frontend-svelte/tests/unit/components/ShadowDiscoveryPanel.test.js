@@ -112,6 +112,8 @@ describe('ShadowDiscoveryPanel', () => {
     expect(screen.getByText(/matched norse, folk, epic/)).toBeInTheDocument()
     expect(screen.getByText('Helvegen')).toBeInTheDocument()
     expect(screen.getByText('Catalog verified · metadata only')).toBeInTheDocument()
+    expect(screen.getByText('Suggestion only')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve for future playback' })).not.toBeInTheDocument()
   })
 
   it('persists deliberate evaluation feedback through the explicit feedback endpoint', async () => {
@@ -238,6 +240,10 @@ describe('ShadowDiscoveryPanel', () => {
           },
           score: 0.94, taste_classification: 'proven', taste_preference: 0.8,
           reasons: ['catalog-verified, Sonos-playback-capable favorite', 'taste proven (+0.80)'],
+          trust: {
+            state: 'proven', playback_eligible: true, explicit_approval: false,
+            reasons: ['canonical taste independently classifies this exact identity as proven'],
+          },
         }],
         discovery: null,
       })
@@ -254,6 +260,72 @@ describe('ShadowDiscoveryPanel', () => {
       request: 'play something familiar', mode: 'gaming', count: 6, tracks_per_artist: 3,
     })
     expect(screen.queryByRole('button', { name: 'Fits me' })).not.toBeInTheDocument()
+  })
+
+  it('approves and revokes an exact Sonos candidate without actuating playback', async () => {
+    const familiarPayload = {
+      status: 'shadow_ready', shadow: true, actuation_allowed: false,
+      resolved_request: {
+        kind: 'familiar', mode: 'gaming', policy: 'gentle',
+        familiarity_target: 1, novelty_target: 0, semantic_request: null,
+        semantic_key: null, rationale: 'Strict familiarity request.',
+      },
+      familiar_suggestions: [{
+        candidate: {
+          provider: 'sonos_favorite', provider_id: 'fav-2', title: 'Night Drive',
+          catalog_verified: true, playback_capability: 'supported', playback_capable: true,
+          playback_adapter: 'sonos_favorite_title', playback_reference: 'Night Drive',
+        },
+        score: 0.88, taste_classification: 'familiar', taste_preference: 0.5,
+        reasons: ['catalog-verified, Sonos-playback-capable favorite'],
+        trust: {
+          state: 'suggestion_only', playback_eligible: false, explicit_approval: false,
+          reasons: ['taste is familiar; explicit approval or proven evidence is required'],
+        },
+      }],
+      discovery: null,
+    }
+    vi.mocked(apiPost).mockImplementation((url, body) => {
+      if (url === '/api/music/request/preview') return Promise.resolve(familiarPayload)
+      if (url === '/api/music/trust/approval') {
+        const action = /** @type {any} */ (body).action
+        return Promise.resolve({
+          status: 'ok', shadow: true, actuation_allowed: false,
+          trust: action === 'approve'
+            ? {
+                state: 'approved', playback_eligible: true, explicit_approval: true,
+                reasons: ['explicit approval for this exact provider identity'],
+              }
+            : {
+                state: 'suggestion_only', playback_eligible: false, explicit_approval: false,
+                reasons: ['explicit approval was revoked'],
+              },
+        })
+      }
+      return Promise.resolve(previewPayload)
+    })
+
+    const { component } = render(ShadowDiscoveryPanel)
+    await component.refreshStatus()
+    await fireEvent.click(screen.getByRole('button', { name: 'Familiar' }))
+    const approve = await screen.findByRole('button', { name: 'Approve for future playback' })
+    await fireEvent.click(approve)
+    expect(await screen.findByText('Future playback eligible')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Revoke approval' })).toBeInTheDocument()
+    const approveCall = vi.mocked(apiPost).mock.calls.find(([url, body]) => (
+      url === '/api/music/trust/approval' && /** @type {any} */ (body).action === 'approve'
+    ))
+    expect(approveCall?.[1]).toMatchObject({
+      action: 'approve', provider: 'sonos_favorite', provider_id: 'fav-2',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Revoke approval' }))
+    expect(await screen.findByText('Suggestion only')).toBeInTheDocument()
+    const revokeCall = vi.mocked(apiPost).mock.calls.find(([url, body]) => (
+      url === '/api/music/trust/approval' && /** @type {any} */ (body).action === 'revoke'
+    ))
+    expect(revokeCall).toBeTruthy()
+    expect(vi.mocked(apiPost).mock.calls.some(([url]) => String(url).startsWith('/api/sonos'))).toBe(false)
   })
 
   it('preserves resolved New music policy when saving discovery feedback', async () => {

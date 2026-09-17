@@ -173,6 +173,32 @@ class MusicFeedbackEvent(Base):
     )
 
 
+class MusicApprovalEvent(Base):
+    """Append-only exact-candidate approval/revocation for Music Intelligence."""
+
+    __tablename__ = "music_approval_events"
+    __table_args__ = (
+        UniqueConstraint("client_event_id", name="uq_music_approval_client_event_id"),
+        Index("ix_music_approval_candidate_created", "provider", "provider_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_event_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    playback_adapter: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    playback_reference: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Event logging — raw behavioral data for the future learning engine
 # ---------------------------------------------------------------------------

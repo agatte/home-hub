@@ -45,6 +45,8 @@
   let feedbackIntent = null
   /** @type {Record<string, { action: string, state: string, clientEventId: string }>} */
   let evaluations = {}
+  /** @type {Record<string, { action: string, state: string, clientEventId: string }>} */
+  let trustUpdates = {}
 
   export async function refreshStatus() {
     const [discoveryStatus, currentContext] = await Promise.all([
@@ -71,6 +73,7 @@
     requestStatus = null
     familiarSuggestions = []
     evaluations = {}
+    trustUpdates = {}
     feedbackMode = activeMode
     feedbackPolicy = policy
     feedbackIntent = intent.trim() || null
@@ -106,6 +109,7 @@
     requestStatus = null
     familiarSuggestions = []
     evaluations = {}
+    trustUpdates = {}
     try {
       const query = new URLSearchParams({ policy, count: '6', tracks_per_artist: '3' })
       const payload = await apiPost(`/api/music/live-context/preview?${query}`, undefined, { timeout: 30000 })
@@ -135,6 +139,7 @@
     requestStatus = null
     familiarSuggestions = []
     evaluations = {}
+    trustUpdates = {}
     try {
       const payload = await apiPost('/api/music/request/preview', {
         request: requestText,
@@ -189,6 +194,47 @@
       evaluations = { ...evaluations, [artist]: { action, state: 'saved', clientEventId } }
     } catch {
       evaluations = { ...evaluations, [artist]: { action, state: 'error', clientEventId } }
+    }
+  }
+
+  function trustEventId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+    return `music-trust-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  /** @param {any} suggestion */
+  function trustKey(suggestion) {
+    const candidate = suggestion?.candidate
+    return candidate?.provider && candidate?.provider_id
+      ? `${candidate.provider}:${candidate.provider_id}`
+      : ''
+  }
+
+  /** @param {any} suggestion @param {'approve' | 'revoke'} action */
+  async function updateTrust(suggestion, action) {
+    const candidate = suggestion?.candidate
+    const key = trustKey(suggestion)
+    if (!key || !candidate?.playback_capable) return
+    const current = trustUpdates[key]
+    if (current?.action === action && current?.state === 'saved') return
+    const clientEventId = current?.action === action && current?.clientEventId
+      ? current.clientEventId
+      : trustEventId()
+
+    trustUpdates = { ...trustUpdates, [key]: { action, state: 'saving', clientEventId } }
+    try {
+      const payload = await apiPost('/api/music/trust/approval', {
+        client_event_id: clientEventId,
+        action,
+        provider: candidate.provider,
+        provider_id: candidate.provider_id,
+      })
+      familiarSuggestions = familiarSuggestions.map((item) => (
+        trustKey(item) === key ? { ...item, trust: payload?.trust || item.trust } : item
+      ))
+      trustUpdates = { ...trustUpdates, [key]: { action, state: 'saved', clientEventId } }
+    } catch {
+      trustUpdates = { ...trustUpdates, [key]: { action, state: 'error', clientEventId } }
     }
   }
 
@@ -306,8 +352,49 @@
             <div class="chips">
               <span>{suggestion.taste_classification}</span>
               <span>{percent(suggestion.score)}% request fit</span>
+              {#if suggestion.trust?.state}<span>{suggestion.trust.state.replace('_', ' ')}</span>{/if}
             </div>
           </div>
+          {#if suggestion.trust}
+            <div class="trust-row">
+              <div>
+                <strong>{suggestion.trust.playback_eligible ? 'Future playback eligible' : 'Suggestion only'}</strong>
+                <span>
+                  {suggestion.trust.playback_eligible
+                    ? 'Trust gate passed · this preview still never starts audio'
+                    : 'No playback authority has been granted'}
+                </span>
+              </div>
+              {#if suggestion.trust.explicit_approval}
+                <button
+                  type="button"
+                  disabled={trustUpdates[trustKey(suggestion)]?.state === 'saving'}
+                  on:click={() => updateTrust(suggestion, 'revoke')}
+                >Revoke approval</button>
+              {:else if suggestion.trust.state === 'suggestion_only' && suggestion.candidate?.playback_capable}
+                <button
+                  type="button"
+                  disabled={trustUpdates[trustKey(suggestion)]?.state === 'saving'}
+                  on:click={() => updateTrust(suggestion, 'approve')}
+                >Approve for future playback</button>
+              {/if}
+            </div>
+            {#if trustUpdates[trustKey(suggestion)]?.state === 'saving'}
+              <small class="trust-status">Saving approval…</small>
+            {:else if trustUpdates[trustKey(suggestion)]?.state === 'saved'}
+              <small class="trust-status">Saved · trust policy updated</small>
+            {:else if trustUpdates[trustKey(suggestion)]?.state === 'error'}
+              <small class="trust-status trust-error">Couldn’t save approval</small>
+            {/if}
+            <details>
+              <summary>Why this trust state</summary>
+              <ul>
+                {#each suggestion.trust.reasons || [] as reason}
+                  <li>{reason}</li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
           <details>
             <summary>Why this is familiar</summary>
             <ul>
@@ -391,6 +478,9 @@
                 <span class="track-capability">
                   {track.playback_capability === 'supported' ? 'Playback ready' : 'Catalog verified · metadata only'}
                 </span>
+                {#if track.playback_capability !== 'supported'}
+                  <span class="track-trust">Suggestion only</span>
+                {/if}
                 {#if track.external_url}
                   <a href={track.external_url} target="_blank" rel="noreferrer">Open</a>
                 {/if}
@@ -692,6 +782,31 @@
   .familiar-card h4 { margin: 2px 0 6px; color: var(--text-primary); font-size: 13px; }
   .familiar-kicker { color: var(--accent); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
 
+  .trust-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--bg-card);
+  }
+  .trust-row > div { display: flex; flex-direction: column; gap: 2px; }
+  .trust-row strong { color: var(--text-primary); font-size: 11px; }
+  .trust-row span, .trust-status { color: var(--text-muted); font-size: 9px; }
+  .trust-row button {
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .trust-row button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .trust-error { color: var(--danger); }
+
   .cluster-list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -792,7 +907,7 @@
 
   .track-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
     gap: 8px;
     align-items: center;
     padding: 7px 8px;
@@ -822,10 +937,15 @@
     text-overflow: ellipsis;
   }
 
-  .track-capability {
+  .track-capability,
+  .track-trust {
     color: var(--text-muted);
     font-size: 9px;
     white-space: nowrap;
+  }
+
+  .track-trust {
+    color: var(--accent);
   }
 
   .track-row a {

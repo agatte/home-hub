@@ -451,6 +451,23 @@ and the Music page may recommend/explain those tracks, but future assisted playb
 must require the stronger playback-capable predicate. No new playback path, queue
 mutation, provider credentials, or autonomy is introduced by this boundary.
 
+**IMPLEMENTED/SHADOW (#268).** Recommendation trust is now an explicit,
+provider-qualified policy over canonical taste evidence, durable human approval,
+and #267 playback capability. Familiar/request results expose `suggestion_only`,
+`approved`, or `proven` with reasons and a separate future-playback-eligibility
+flag. Approval is append-only evidence for one exact provider identity and can be
+revoked without deleting history; a single approval never fabricates familiarity
+or upgrades a candidate to `proven`. Independent canonical taste evidence is
+required for `proven`, while rejection or explicit revocation demotes safely.
+Approval is accepted only for currently verified candidates with a supported
+playback adapter/reference. If an approved candidate later disappears from the
+live catalog, its stored provider-qualified identity remains revocable. Last.fm
+and iTunes metadata-only discovery remains `suggestion_only` even after positive
+taste feedback because it has no supported HomeHub playback path. The Music page
+can record approval/revocation and explain trust state, but this slice remains
+non-actuating: no Sonos play/queue calls, MusicMapper mutation, bandit reward,
+provider credential change, or autonomous playback is introduced.
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit

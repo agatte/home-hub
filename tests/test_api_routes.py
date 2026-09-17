@@ -333,6 +333,54 @@ class TestMusicAPI:
         assert tracks_per_artist == 2
         assert resp.json()["actuation_allowed"] is False
 
+    def test_music_trust_approval_is_shadow_only_and_provider_qualified(self, client):
+        previous = app.state.music_requests
+        calls = []
+
+        class FakeRequests:
+            async def record_trust_event(self, **kwargs):
+                calls.append(kwargs)
+                return {
+                    "status": "ok",
+                    "shadow": True,
+                    "actuation_allowed": False,
+                    "current_approval_action": kwargs["action"],
+                    "trust": {
+                        "state": "approved",
+                        "playback_eligible": True,
+                        "explicit_approval": True,
+                        "reasons": ["explicit approval for this exact provider identity"],
+                    },
+                }
+
+        app.state.music_requests = FakeRequests()
+        try:
+            resp = client.post(
+                "/api/music/trust/approval",
+                headers={"X-HomeHub-Source": "test:music_trust"},
+                json={
+                    "client_event_id": "trust-api-1",
+                    "action": "approve",
+                    "provider": "sonos_favorite",
+                    "provider_id": "fav-1",
+                },
+            )
+        finally:
+            app.state.music_requests = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["shadow"] is True
+        assert data["actuation_allowed"] is False
+        assert data["trust"]["state"] == "approved"
+        assert calls == [{
+            "client_event_id": "trust-api-1",
+            "action": "approve",
+            "provider": "sonos_favorite",
+            "provider_id": "fav-1",
+            "source": "test:music_trust",
+        }]
+
     def test_curator_status_is_shadow_only(self, client):
         resp = client.get("/api/music/curator/status")
         assert resp.status_code == 200

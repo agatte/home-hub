@@ -8,6 +8,7 @@ from backend.services.music_curator import MusicIntent
 from backend.services.music_discovery import MusicDiscoveryResult, MusicDiscoveryService
 from backend.services.music_semantics import DeterministicSemanticIntentResolver
 from backend.services.music_taste import MusicTasteProvider
+from backend.services.music_trust import MusicApprovalService, MusicTrustDecision, MusicTrustPolicy
 from backend.services.playlist_catalog import MusicCatalog, VerifiedMusicCandidate
 
 REQUEST_KINDS = ("familiar", "discovery", "mood", "recommendation")
@@ -66,6 +67,7 @@ class FamiliarMusicSuggestion:
     taste_classification: str
     taste_preference: float
     reasons: tuple[str, ...]
+    trust: MusicTrustDecision | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +76,7 @@ class FamiliarMusicSuggestion:
             "taste_classification": self.taste_classification,
             "taste_preference": round(self.taste_preference, 4),
             "reasons": list(self.reasons),
+            "trust": self.trust.to_dict() if self.trust is not None else None,
         }
 
 
@@ -216,12 +219,16 @@ class MusicRequestService:
         taste_provider: MusicTasteProvider,
         discovery: MusicDiscoveryService,
         resolver: Optional[MusicRequestResolver] = None,
+        approval_service: MusicApprovalService | None = None,
+        trust_policy: MusicTrustPolicy | None = None,
     ) -> None:
         self._app_state = app_state
         self._catalog = catalog
         self._taste_provider = taste_provider
         self._discovery = discovery
         self._resolver = resolver or MusicRequestResolver()
+        self._approval_service = approval_service
+        self._trust_policy = trust_policy or MusicTrustPolicy()
 
     def status(self) -> dict[str, Any]:
         return {
@@ -280,6 +287,85 @@ class MusicRequestService:
             note=familiar_note,
         )
 
+    async def record_trust_event(
+        self,
+        *,
+        client_event_id: str,
+        action: str,
+        provider: str,
+        provider_id: str,
+        source: str,
+    ) -> dict[str, Any]:
+        if self._approval_service is None:
+            raise ValueError("music approval service is unavailable")
+        action = action.strip().casefold()
+        provider = provider.strip()
+        provider_id = provider_id.strip()
+        if not provider or not provider_id:
+            raise ValueError("provider and provider_id are required")
+
+        identity_intent = MusicIntent(
+            energy=0.5, familiarity=1.0, novelty=0.0, nostalgia=0.5,
+            singalong=0.5, aggressiveness=0.3, background_focus=0.5,
+            genres=(), themes=(), search_concepts=(),
+            rationale="resolve exact candidate for trust event", source="music_trust",
+        )
+        candidates = await self._catalog.search(identity_intent, limit=100)
+        candidate = next((
+            item for item in candidates
+            if item.provider == provider and item.provider_id == provider_id
+        ), None)
+        if candidate is None:
+            if action != "revoke":
+                raise ValueError("candidate is not currently available from the trusted catalog")
+            prior = await self._approval_service.latest_record(
+                provider=provider, provider_id=provider_id,
+            )
+            if prior is None:
+                raise ValueError("candidate has no prior approval to revoke")
+            candidate = VerifiedMusicCandidate(
+                provider=prior["provider"],
+                provider_id=prior["provider_id"],
+                media_type=prior["media_type"],
+                title=prior["title"],
+                uri="",
+                source="approval_ledger",
+                verified=False,
+                catalog_verified=False,
+                playback_capability="unknown",
+                playback_adapter=prior.get("playback_adapter"),
+                playback_reference=prior.get("playback_reference"),
+            )
+
+        match = None
+        if action != "revoke":
+            snapshot = await self._taste_provider.snapshot()
+            taste_mode = self._current_mode()
+            match = snapshot.classify_candidate(
+                candidate, mode=None if taste_mode in (None, "general") else taste_mode,
+            )
+        approval, duplicate = await self._approval_service.record(
+            client_event_id=client_event_id,
+            action=action,
+            candidate=candidate,
+            source=source,
+        )
+        latest_actions = await self._approval_service.latest_actions([candidate])
+        current_action = latest_actions.get((candidate.provider, candidate.provider_id))
+        decision = self._trust_policy.decide(
+            candidate, match, approval_action=current_action,
+        )
+        return {
+            "status": "ok",
+            "shadow": True,
+            "actuation_allowed": False,
+            "duplicate": duplicate,
+            "approval": approval,
+            "current_approval_action": current_action,
+            "candidate": candidate.to_dict(),
+            "trust": decision.to_dict(),
+        }
+
     def _current_mode(self) -> Optional[str]:
         automation = getattr(self._app_state, "automation", None)
         return getattr(automation, "current_mode", None) if automation is not None else None
@@ -306,6 +392,10 @@ class MusicRequestService:
 
         intent = self._catalog_intent(resolved)
         candidates = await self._catalog.search(intent, limit=max(30, limit * 6))
+        approval_actions = (
+            await self._approval_service.latest_actions(candidates)
+            if self._approval_service is not None else {}
+        )
         ranked: list[FamiliarMusicSuggestion] = []
         taste_mode = None if resolved.mode == "general" else resolved.mode
         for candidate in candidates:
@@ -335,12 +425,17 @@ class MusicRequestService:
             matched = candidate.metadata.get("matched_concepts") or []
             if matched:
                 reasons.append("matched request: " + ", ".join(str(x) for x in matched[:4]))
+            trust = self._trust_policy.decide(
+                candidate, match,
+                approval_action=approval_actions.get((candidate.provider, candidate.provider_id)),
+            )
             ranked.append(FamiliarMusicSuggestion(
                 candidate=candidate,
                 score=score,
                 taste_classification=match.classification,
                 taste_preference=match.preference,
                 reasons=tuple(reasons),
+                trust=trust,
             ))
         ranked.sort(key=lambda item: (-item.score, item.candidate.title.casefold()))
         note = None if ranked else "no favorite currently has enough evidence to call it familiar"
