@@ -1,7 +1,6 @@
 <script>
   import TasteProfileCard from '$lib/components/TasteProfileCard.svelte'
   import ModePlaylistMapper from '$lib/components/ModePlaylistMapper.svelte'
-  import RecommendationPanel from '$lib/components/RecommendationPanel.svelte'
   import ShadowDiscoveryPanel from '$lib/components/ShadowDiscoveryPanel.svelte'
 
   /** @type {any} */
@@ -12,51 +11,77 @@
 </script>
 
 <main class="music-page">
-  <div class="page-grid">
-    <section class="widget">
-      <h2 class="widget-title">Taste Profile</h2>
-      <TasteProfileCard />
-    </section>
+  <section class="music-primary">
+    <ShadowDiscoveryPanel />
+  </section>
 
-    <section class="widget">
-      <h2 class="widget-title">Mode → Playlist</h2>
-      <ModePlaylistMapper />
-    </section>
-
-    <section class="widget widget-full discovery-lab-wrap">
-      <ShadowDiscoveryPanel />
-    </section>
-
-    <section class="widget widget-full">
-      <h2 class="widget-title">Discover</h2>
-      <RecommendationPanel />
-    </section>
-  </div>
+  <details class="music-manage">
+    <summary>
+      <span>
+        <strong>Manage music</strong>
+        <small>Library profile, imports, and manual mode-to-playlist mappings</small>
+      </span>
+      <span class="manage-action">Open</span>
+    </summary>
+    <div class="management-grid">
+      <section class="widget">
+        <h2 class="widget-title">Taste Profile</h2>
+        <TasteProfileCard />
+      </section>
+      <section class="widget">
+        <h2 class="widget-title">Manual Playlist Mapping</h2>
+        <ModePlaylistMapper />
+      </section>
+    </div>
+  </details>
 </main>
 
 <style>
   .music-page {
-    padding-top: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 4px 0 28px;
   }
 
-  .page-grid {
+  .music-primary {
+    min-width: 0;
+  }
+
+  .music-manage {
+    max-width: 1240px;
+    width: calc(100% - 8px);
+    margin: 0 auto;
+    border-top: 1px solid var(--border);
+  }
+
+  .music-manage > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 18px 4px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .music-manage > summary::-webkit-details-marker { display: none; }
+  .music-manage > summary > span:first-child { display: flex; flex-direction: column; gap: 4px; }
+  .music-manage strong { color: var(--text-primary); font-size: 13px; }
+  .music-manage small { color: var(--text-muted); font-size: 10px; }
+  .manage-action { color: var(--accent); font-size: 11px; }
+  .music-manage[open] .manage-action { font-size: 0; }
+  .music-manage[open] .manage-action::after { content: 'Close'; font-size: 11px; }
+
+  .management-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px;
-  }
-
-  .widget-full {
-    grid-column: 1 / -1;
-  }
-
-  .discovery-lab-wrap {
-    padding: 0;
-    overflow: hidden;
+    gap: 16px;
+    padding: 0 0 8px;
   }
 
   @media (max-width: 900px) {
-    .page-grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
+    .management-grid { grid-template-columns: minmax(0, 1fr); }
+    .music-manage > summary { align-items: flex-start; }
   }
 </style>

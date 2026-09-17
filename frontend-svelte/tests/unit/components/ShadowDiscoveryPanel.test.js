@@ -81,7 +81,7 @@ describe('ShadowDiscoveryPanel', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/music/discovery/status')
     expect(apiGet).toHaveBeenCalledWith('/api/music/live-context/status')
     expect(apiPost).not.toHaveBeenCalled()
-    expect(screen.getByText('Nothing runs until you ask.')).toBeInTheDocument()
+    expect(screen.getByText('Start with a request above.')).toBeInTheDocument()
   })
 
   it('sends context, policy, and optional intent only after explicit preview', async () => {
@@ -89,14 +89,15 @@ describe('ShadowDiscoveryPanel', () => {
     expect(apiPost).not.toHaveBeenCalled()
     await component.refreshStatus()
     await screen.findByText(/Last.fm source ready/)
+    await fireEvent.click(screen.getByText('Adjust context'))
     await fireEvent.change(screen.getByLabelText('Discovery context'), {
       target: { value: 'gaming' },
     })
-    await fireEvent.input(screen.getByPlaceholderText(/energetic, Valheim/), {
+    await fireEvent.input(screen.getByPlaceholderText(/Something familiar/), {
       target: { value: 'Valheim' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Explore' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview manual' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Find recommendations' }))
     expect(apiPost).toHaveBeenCalledTimes(1)
     const [url, body, options] = vi.mocked(apiPost).mock.calls[0]
     const parsed = new URL(String(url), 'http://homehub.local')
@@ -121,12 +122,12 @@ describe('ShadowDiscoveryPanel', () => {
     expect(apiPost).not.toHaveBeenCalled()
     await component.refreshStatus()
     await screen.findByText(/Last.fm source ready/)
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview manual' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Find recommendations' }))
     const fits = await screen.findByRole('button', { name: 'Fits me' })
     await fireEvent.click(fits)
 
     expect(fits.classList.contains('active')).toBe(true)
-    expect(await screen.findByText(/Saved .* next preview will use this/)).toBeInTheDocument()
+    expect(await screen.findByText('Saved')).toBeInTheDocument()
     expect(apiPost).toHaveBeenCalledTimes(2)
     const [url, body] = vi.mocked(apiPost).mock.calls[1]
     const feedbackBody = /** @type {any} */ (body)
@@ -164,7 +165,8 @@ describe('ShadowDiscoveryPanel', () => {
     const { component } = render(ShadowDiscoveryPanel)
     await component.refreshStatus()
     await screen.findByText(/Live: gaming/)
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview live context' }))
+    await fireEvent.click(screen.getByText('Adjust context'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Use current HomeHub context' }))
     expect(await screen.findByText('Live gaming')).toBeInTheDocument()
     const liveCall = vi.mocked(apiPost).mock.calls.find(([url]) => String(url).startsWith('/api/music/live-context/preview'))
     expect(liveCall).toBeTruthy()
@@ -194,7 +196,8 @@ describe('ShadowDiscoveryPanel', () => {
     const { component } = render(ShadowDiscoveryPanel)
     await component.refreshStatus()
     expect(await screen.findByText('No live music context active')).toBeInTheDocument()
-    const liveButton = screen.getByRole('button', { name: 'Preview live context' })
+    await fireEvent.click(screen.getByText('Adjust context'))
+    const liveButton = screen.getByRole('button', { name: 'Use current HomeHub context' })
     expect(liveButton).not.toBeDisabled()
     await fireEvent.click(liveButton)
     expect(await screen.findByText('Live gaming')).toBeInTheDocument()
@@ -211,14 +214,14 @@ describe('ShadowDiscoveryPanel', () => {
 
     const { component } = render(ShadowDiscoveryPanel)
     await component.refreshStatus()
-    await fireEvent.click(screen.getByRole('button', { name: 'Preview manual' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Find recommendations' }))
     const fits = await screen.findByRole('button', { name: 'Fits me' })
     await fireEvent.click(fits)
     expect(await screen.findByText(/Couldn’t save feedback/)).toBeInTheDocument()
     const firstBody = /** @type {any} */ (vi.mocked(apiPost).mock.calls[1][1])
 
     await fireEvent.click(fits)
-    expect(await screen.findByText(/Saved .* next preview will use this/)).toBeInTheDocument()
+    expect(await screen.findByText('Saved')).toBeInTheDocument()
     const secondBody = /** @type {any} */ (vi.mocked(apiPost).mock.calls[2][1])
     expect(secondBody.client_event_id).toBe(firstBody.client_event_id)
   })
@@ -253,7 +256,7 @@ describe('ShadowDiscoveryPanel', () => {
     await component.refreshStatus()
     await fireEvent.click(screen.getByRole('button', { name: 'Familiar' }))
     expect(await screen.findByText('Road Trip Favorites')).toBeInTheDocument()
-    expect(screen.getByText('Verified familiar favorite · Sonos-ready')).toBeInTheDocument()
+    expect(screen.getByText('Known favorite')).toBeInTheDocument()
     const [url, body] = vi.mocked(apiPost).mock.calls[0]
     expect(url).toBe('/api/music/request/preview')
     expect(body).toMatchObject({
@@ -310,7 +313,7 @@ describe('ShadowDiscoveryPanel', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Familiar' }))
     const approve = await screen.findByRole('button', { name: 'Approve for future playback' })
     await fireEvent.click(approve)
-    expect(await screen.findByText('Future playback eligible')).toBeInTheDocument()
+    expect(await screen.findByText('Approved for future playback')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Revoke approval' })).toBeInTheDocument()
     const approveCall = vi.mocked(apiPost).mock.calls.find(([url, body]) => (
       url === '/api/music/trust/approval' && /** @type {any} */ (body).action === 'approve'

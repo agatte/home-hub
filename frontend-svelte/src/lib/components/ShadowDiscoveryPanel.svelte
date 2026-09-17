@@ -252,71 +252,27 @@
 <div class="discovery-lab">
   <div class="lab-header">
     <div>
-      <div class="lab-kicker">Shadow only · never queues audio</div>
-      <h3>Music Intelligence Preview</h3>
-      <p>Try a context or mood, then inspect why HomeHub thinks each artist fits.</p>
-    </div>
-    <div class="capability" class:capability-off={!capability?.source_enabled}>
-      {#if statusLoading}
-        Checking sources…
-      {:else if capability?.source_enabled}
-        Last.fm source ready{capability?.semantic_enabled ? ' · semantics ready' : ''}
-      {:else}
-        Discovery source unavailable
-      {/if}
-      {#if !statusLoading && liveCapability?.status === 'active'}
-        <span class="live-capability">Live: {liveCapability.consumer}{liveCapability.semantic_request ? ` · ${liveCapability.semantic_request}` : ''}</span>
-      {:else if !statusLoading}
-        <span class="live-capability live-capability-off">No live music context active</span>
-      {/if}
+      <div class="lab-kicker">Music Intelligence</div>
+      <h3>Find something that fits.</h3>
+      <p>Tell HomeHub what you want to hear, or start with a quick pick.</p>
     </div>
   </div>
 
-  <div class="lab-controls">
-    <label>
-      <span>Context</span>
-      <select bind:value={activeMode} aria-label="Discovery context">
-        {#each MODES as mode (mode.key)}
-          <option value={mode.key}>{mode.label}</option>
-        {/each}
-      </select>
-    </label>
-
+  <div class="lab-controls primary-controls">
     <label class="intent-field">
-      <span>Mood or intent <small>optional</small></span>
-      <input bind:value={intent} placeholder="energetic, Valheim, dark ritual drums" />
+      <span>What are you in the mood for?</span>
+      <input bind:value={intent} placeholder="Something familiar, new music, energetic rock…" />
     </label>
-    <div class="policy-group" aria-label="Discovery policy">
-      <span>Policy</span>
-      <div class="policy-buttons">
-        {#each POLICIES as item (item.key)}
-          <button
-            type="button"
-            class:active={policy === item.key}
-            on:click={() => (policy = item.key)}
-            title={item.detail}
-          >
-            {item.label}
-          </button>
-        {/each}
-      </div>
-    </div>
-
     <button class="run-btn" type="button" on:click={preview}
       disabled={loading || statusLoading || capability?.source_enabled === false}>
-      {loading && runKind === 'manual' ? 'Thinking…' : 'Preview manual'}
-    </button>
-    <button class="live-run-btn" type="button" on:click={previewLive}
-      disabled={loading || statusLoading || capability?.source_enabled === false}
-      title={liveCapability?.semantic_reason || 'Uses current trusted HomeHub context'}>
-      {loading && runKind === 'live' ? 'Reading HomeHub…' : 'Preview live context'}
+      {loading && runKind === 'manual' ? 'Thinking…' : 'Find recommendations'}
     </button>
   </div>
 
   <div class="request-presets" aria-label="Quick music requests">
     <div class="request-presets-copy">
-      <span>Quick requests</span>
-      <small>Same Music Intelligence contract future voice/text adapters can call.</small>
+      <span>Quick picks</span>
+      <small>Start with a familiar direction, deliberate discovery, or a mood.</small>
     </div>
     <button type="button" on:click={() => previewRequest('play something familiar')} disabled={loading || statusLoading}>
       {loading && runKind === 'request' ? 'Thinking…' : 'Familiar'}
@@ -324,6 +280,41 @@
     <button type="button" on:click={() => previewRequest('play new music')} disabled={loading || statusLoading}>New music</button>
     <button type="button" on:click={() => previewRequest("I'm feeling energetic")} disabled={loading || statusLoading}>Energetic</button>
   </div>
+
+  <details class="advanced-controls">
+    <summary>Adjust context</summary>
+    <div class="advanced-grid">
+      <label>
+        <span>Context</span>
+        <select bind:value={activeMode} aria-label="Discovery context">
+          {#each MODES as mode (mode.key)}
+            <option value={mode.key}>{mode.label}</option>
+          {/each}
+        </select>
+      </label>
+      <div class="policy-group" aria-label="Discovery policy">
+        <span>Discovery style</span>
+        <div class="policy-buttons">
+          {#each POLICIES as item (item.key)}
+            <button type="button" class:active={policy === item.key} on:click={() => (policy = item.key)} title={item.detail}>
+              {item.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+      <button class="live-run-btn" type="button" on:click={previewLive} disabled={loading || statusLoading || capability?.source_enabled === false}
+        title={liveCapability?.semantic_reason || 'Checks HomeHub for a trusted current music context'}>
+        {loading && runKind === 'live' ? 'Reading HomeHub…' : 'Use current HomeHub context'}
+      </button>
+    </div>
+    <details class="source-details">
+      <summary>Source details</summary>
+      <div class="source-status" class:capability-off={!capability?.source_enabled}>
+        {#if statusLoading}Checking sources…{:else if capability?.source_enabled}Last.fm source ready{capability?.semantic_enabled ? ' · semantics ready' : ''}{:else}Discovery source unavailable{/if}
+        {#if !statusLoading && liveCapability?.status === 'active'}<span>Live: {liveCapability.consumer}{liveCapability.semantic_request ? ` · ${liveCapability.semantic_request}` : ''}</span>{:else if !statusLoading}<span>No live music context active</span>{/if}
+      </div>
+    </details>
+  </details>
 
   {#if liveContext}
     <div class="live-context-banner">
@@ -342,12 +333,16 @@
     </div>
   {/if}
 
+  {#if familiarSuggestions.length || result?.clusters?.length}
+    <div class="recommendations-heading">Recommendations</div>
+  {/if}
+
   {#if familiarSuggestions.length}
     <div class="familiar-list">
       {#each familiarSuggestions as suggestion (suggestion.candidate.provider_id)}
         <article class="familiar-card">
           <div>
-            <span class="familiar-kicker">Verified familiar favorite · Sonos-ready</span>
+            <span class="familiar-kicker">Known favorite</span>
             <h4>{suggestion.candidate.title}</h4>
             <div class="chips">
               <span>{suggestion.taste_classification}</span>
@@ -358,11 +353,11 @@
           {#if suggestion.trust}
             <div class="trust-row">
               <div>
-                <strong>{suggestion.trust.playback_eligible ? 'Future playback eligible' : 'Suggestion only'}</strong>
+                <strong>{suggestion.trust.playback_eligible ? 'Approved for future playback' : 'Suggestion only'}</strong>
                 <span>
                   {suggestion.trust.playback_eligible
-                    ? 'Trust gate passed · this preview still never starts audio'
-                    : 'No playback authority has been granted'}
+                    ? 'This page still does not start audio'
+                    : 'Approve this favorite if you want it eligible later'}
                 </span>
               </div>
               {#if suggestion.trust.explicit_approval}
@@ -387,7 +382,7 @@
               <small class="trust-status trust-error">Couldn’t save approval</small>
             {/if}
             <details>
-              <summary>Why this trust state</summary>
+              <summary>Why HomeHub chose this</summary>
               <ul>
                 {#each suggestion.trust.reasons || [] as reason}
                   <li>{reason}</li>
@@ -396,7 +391,7 @@
             </details>
           {/if}
           <details>
-            <summary>Why this is familiar</summary>
+            <summary>Familiarity details</summary>
             <ul>
               {#each suggestion.reasons || [] as reason}
                 <li>{reason}</li>
@@ -489,7 +484,7 @@
           </div>
 
           <details>
-            <summary>Why this ranked here</summary>
+            <summary>Why HomeHub chose this</summary>
             <ul>
               {#each cluster.reasons || [] as reason}
                 <li>{reason}</li>
@@ -515,11 +510,11 @@
             {#if evaluations[cluster.artist_name]?.state === 'saving'}
               <small>Saving explicit feedback…</small>
             {:else if evaluations[cluster.artist_name]?.state === 'saved'}
-              <small>Saved · next preview will use this</small>
+              <small>Saved</small>
             {:else if evaluations[cluster.artist_name]?.state === 'error'}
               <small class="evaluation-error">Couldn’t save feedback</small>
             {:else}
-              <small>Explicit feedback only · no playback</small>
+              <small>Helps future recommendations</small>
             {/if}
           </div>
         </article>
@@ -527,8 +522,8 @@
     </div>
   {:else if !loading && !result && !familiarSuggestions.length && !requestStatus}
     <div class="lab-idle">
-      <strong>Nothing runs until you ask.</strong>
-      <span>Use a quick request, manual context/mood, or preview HomeHub’s current trusted Game Day, Social, or Gaming context.</span>
+      <strong>Start with a request above.</strong>
+      <span>HomeHub will suggest music and explain why. Nothing here starts audio yet.</span>
     </div>
   {/if}
 </div>
@@ -554,14 +549,6 @@
     gap: 20px;
   }
 
-  .live-capability {
-    display: block;
-    margin-top: 4px;
-    color: var(--accent);
-    font-size: 10px;
-  }
-
-  .live-capability-off { color: var(--text-muted); }
   .live-context-banner {
     display: flex;
     align-items: center;
@@ -631,7 +618,6 @@
     text-transform: uppercase;
   }
 
-  .capability,
   .chips span,
   .result-summary span,
   .track-taste {
@@ -640,11 +626,6 @@
     background: var(--bg-secondary);
     color: var(--text-secondary);
     font-size: 10px;
-  }
-
-  .capability {
-    padding: 6px 9px;
-    white-space: nowrap;
   }
 
   .capability-off {
@@ -671,11 +652,6 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-  }
-
-  label small {
-    text-transform: none;
-    letter-spacing: 0;
   }
 
   select,
@@ -1015,10 +991,6 @@
       flex-direction: column;
     }
 
-    .capability {
-      white-space: normal;
-    }
-
     .lab-controls,
     .cluster-list,
     .familiar-list {
@@ -1042,4 +1014,87 @@
       margin-left: 0;
     }
   }
+
+
+  /* #269 consumer-facing composition: diagnostics recede until requested. */
+  .discovery-lab {
+    max-width: 1240px;
+    margin: 0 auto;
+    gap: 18px;
+    padding: 18px 4px 6px;
+  }
+
+  .lab-header { align-items: flex-start; padding: 0 4px; }
+  .lab-header h3 { font-size: clamp(26px, 3vw, 38px); letter-spacing: -0.035em; }
+  .lab-header p { max-width: 700px; font-size: 13px; line-height: 1.55; }
+
+  .primary-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  }
+
+  .primary-controls .intent-field { min-width: 0; }
+  .primary-controls .intent-field > span { color: var(--text-muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+  .primary-controls input { min-height: 46px; font-size: 13px; }
+  .primary-controls .run-btn { align-self: end; min-height: 46px; min-width: 128px; }
+
+  .request-presets {
+    border: 0;
+    background: transparent;
+    padding: 0 4px;
+  }
+  .request-presets-copy small { display: none; }
+  .request-presets-copy span { color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; font-size: 9px; }
+
+  .advanced-controls {
+    margin: -6px 4px 0;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .advanced-controls > summary { color: var(--text-muted); cursor: pointer; font-size: 10px; list-style: none; }
+  .advanced-controls > summary::-webkit-details-marker { display: none; }
+  .advanced-controls > summary::after { content: '  +'; }
+  .advanced-controls[open] > summary::after { content: '  −'; }
+  .advanced-grid { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(240px, 1fr) auto; gap: 12px; align-items: end; margin-top: 10px; }
+  .advanced-grid label, .advanced-grid .policy-group { display: flex; flex-direction: column; gap: 5px; }
+  .advanced-grid label > span, .advanced-grid .policy-group > span { color: var(--text-muted); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+  .advanced-grid select { min-height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); padding: 0 9px; }
+  .source-details { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); }
+  .source-details > summary { width: fit-content; color: var(--text-muted); cursor: pointer; }
+  .source-status { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; color: var(--text-muted); font-size: 9px; }
+  .recommendations-heading { margin: 18px 4px 8px; color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+
+  .result-summary, .semantic-row, .score-block, .track-taste, .track-capability, .track-trust { display: none; }
+  .request-resolution-banner { display: none; }
+  .live-context-banner { display: none; }
+
+  .cluster-list, .familiar-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .cluster-card, .familiar-card { min-width: 0; padding: 15px; border-radius: 14px; }
+  .cluster-topline { align-items: flex-start; }
+  .artist-heading h4, .familiar-card h4 { font-size: 17px; }
+  .artist-heading .chips, .familiar-card .chips { display: none; }
+  .track-grid { margin-top: 12px; border-top: 1px solid var(--border); }
+  .track-row { min-height: 42px; padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+  .track-row a { margin-left: auto; }
+  .evaluation-row { margin-top: 10px; padding-top: 10px; border-top: 0; flex-wrap: wrap; }
+  .evaluation-row > span { color: var(--text-muted); font-size: 9px; }
+  .evaluation-row small { width: 100%; margin-top: 3px; }
+  .cluster-card details, .familiar-card details { margin-top: 8px; }
+
+  .lab-idle { min-height: 100px; border-radius: 14px; }
+
+  @media (max-width: 900px) {
+    .primary-controls, .advanced-grid, .cluster-list, .familiar-list { grid-template-columns: minmax(0, 1fr); }
+    .primary-controls .run-btn { width: 100%; }
+  }
+
 </style>
