@@ -12,6 +12,7 @@ from backend.services.music_semantics import (
     SemanticMusicMatch,
 )
 from backend.services.music_taste import CandidateTasteMatch, MusicTasteProvider
+from backend.services.playlist_catalog import MusicCatalog
 
 DISCOVERY_POLICIES = ("gentle", "explore")
 DISCOVERY_SOURCE_CACHE_TTL = timedelta(hours=1)
@@ -38,6 +39,7 @@ class DiscoveryTrack:
     playback_capability: str
     playback_adapter: Optional[str]
     playback_reference: Optional[str]
+    playback_reason: Optional[str]
     artist_name: str
     track_name: str
     album_name: Optional[str]
@@ -155,11 +157,13 @@ class MusicDiscoveryService:
         taste_provider: MusicTasteProvider,
         semantic_analyzer: Optional[MusicSemanticAnalyzer] = None,
         intent_resolver: Optional[DeterministicSemanticIntentResolver] = None,
+        playable_catalog: Optional[MusicCatalog] = None,
     ) -> None:
         self._source = source
         self._taste_provider = taste_provider
         self._semantic_analyzer = semantic_analyzer
         self._intent_resolver = intent_resolver or DeterministicSemanticIntentResolver()
+        self._playable_catalog = playable_catalog
         self._source_cache: dict[
             tuple[str, int, int], tuple[datetime, list[dict]]
         ] = {}
@@ -184,6 +188,7 @@ class MusicDiscoveryService:
                 type(self._semantic_analyzer).__name__
                 if self._semantic_analyzer is not None else None
             ),
+            "playable_catalog_enabled": self._playable_catalog is not None,
         }
 
     async def preview(
@@ -306,20 +311,43 @@ class MusicDiscoveryService:
         tracks: list[DiscoveryTrack] = []
         exploratory_count = 0
         track_preferences: list[float] = []
-        for raw_track in candidate.get("tracks") or []:
-            if not isinstance(raw_track, dict):
-                continue
+        raw_tracks = [
+            item for item in (candidate.get("tracks") or []) if isinstance(item, dict)
+        ]
+        playable_tracks = {}
+        if self._playable_catalog is not None and raw_tracks:
+            try:
+                playable_tracks = await self._playable_catalog.resolve_tracks(
+                    artist_name, raw_tracks,
+                )
+            except Exception:
+                playable_tracks = {}
+
+        for raw_track in raw_tracks:
             track_name = str(raw_track.get("track_name") or "").strip()
             provider_id = str(raw_track.get("provider_id") or "").strip()
             provider = str(raw_track.get("provider") or "").strip()
             catalog_verified = bool(raw_track.get("catalog_verified", True))
             if not track_name or not provider_id or not provider or not catalog_verified:
                 continue
-            playback_capability = str(
-                raw_track.get("playback_capability") or "metadata_only"
-            ).strip()
-            playback_adapter = raw_track.get("playback_adapter")
-            playback_reference = raw_track.get("playback_reference")
+            resolved_playable = playable_tracks.get((provider, provider_id))
+            if resolved_playable is not None and resolved_playable.playback_capable:
+                provider = resolved_playable.provider
+                provider_id = resolved_playable.provider_id
+                catalog_verified = resolved_playable.catalog_verified
+                playback_capability = resolved_playable.playback_capability
+                playback_adapter = resolved_playable.playback_adapter
+                playback_reference = resolved_playable.playback_reference
+                playback_reason = "provider_exact_match"
+            else:
+                playback_capability = str(
+                    raw_track.get("playback_capability") or "metadata_only"
+                ).strip()
+                playback_adapter = raw_track.get("playback_adapter")
+                playback_reference = raw_track.get("playback_reference")
+                playback_reason = str(
+                    raw_track.get("playback_reason") or "no_exact_playable_provider_match"
+                )
             track_match = _empty_match()
             if snapshot is not None:
                 track_match = snapshot.classify_candidate(
@@ -345,6 +373,7 @@ class MusicDiscoveryService:
                 playback_capability=playback_capability,
                 playback_adapter=(str(playback_adapter) if playback_adapter else None),
                 playback_reference=(str(playback_reference) if playback_reference else None),
+                playback_reason=playback_reason,
                 artist_name=artist_name,
                 track_name=track_name,
                 album_name=raw_track.get("album_name"),

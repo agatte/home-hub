@@ -782,6 +782,66 @@ class SonosService:
         )
         return False
 
+    async def play_apple_music_share_link(
+        self,
+        provider_id: str,
+        share_url: str,
+    ) -> bool:
+        """Play one exact Apple Music share link through Sonos.
+
+        This is a low-level execution primitive only. Callers remain responsible
+        for HomeHub lifecycle/ownership/trust policy before invoking it. The
+        public Apple track ID must exactly match the share link identity; there
+        is no title matching, provider credential, or URI fallback. The existing
+        queue and play mode are preserved; #272 owns any later replace/ownership
+        semantics.
+        """
+        provider_id = str(provider_id or "").strip()
+        share_url = str(share_url or "").strip()
+        if not provider_id.isdigit() or not share_url:
+            return False
+        if not self._connected or not self._device:
+            return False
+
+        try:
+            canonical = self._canonical_apple_music_share_link(share_url)
+        except Exception:
+            return False
+        if canonical != f"song:{provider_id}":
+            return False
+
+        try:
+            queue_number = await self._safe_call(
+                self._add_apple_music_share_link_sync, share_url,
+            )
+            if not isinstance(queue_number, int) or queue_number < 1:
+                return False
+            await self._safe_call(self._device.play_from_queue, queue_number - 1)
+            logger.info(
+                "Playing exact Apple Music share-link item id=%s at queue=%s",
+                provider_id, queue_number,
+            )
+            return True
+        except CircuitBreakerOpen:
+            return False
+        except Exception as exc:
+            logger.error(
+                "Exact Apple Music share-link playback failed: %s", exc,
+                exc_info=True,
+            )
+            return False
+
+    @staticmethod
+    def _canonical_apple_music_share_link(share_url: str) -> str | None:
+        from soco.plugins.sharelink import AppleMusicShare
+
+        return AppleMusicShare().canonical_uri(share_url)
+
+    def _add_apple_music_share_link_sync(self, share_url: str) -> int:
+        from soco.plugins.sharelink import ShareLinkPlugin
+
+        return ShareLinkPlugin(self._device).add_share_link_to_queue(share_url)
+
     async def poll_state_loop(self, ws_manager) -> None:
         """
         Continuously poll Sonos state and broadcast changes via WebSocket.

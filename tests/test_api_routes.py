@@ -593,3 +593,39 @@ class TestBedroomLuxAPI:
         resp = client.get("/api/camera/desktop/lux/calibration")
         assert resp.status_code == 200
         assert isinstance(resp.json(), dict)
+
+
+def test_music_catalog_status_is_read_only_and_requires_no_second_credential(client):
+    previous_apple = app.state.music_apple_catalog
+    previous_sonos = app.state.sonos
+
+    class FakeAppleCatalog:
+        def status(self):
+            return {
+                "provider": "itunes_search",
+                "service": "Apple Music",
+                "sonos_available": True,
+                "credentials_required": False,
+                "playback_adapter": "sonos_apple_music_share_link",
+                "playback_verified": False,
+                "verification_state": "queue_test_required",
+                "actuation_allowed": False,
+            }
+
+    app.state.music_apple_catalog = FakeAppleCatalog()
+    app.state.sonos = type("Sonos", (), {"connected": True})()
+    try:
+        response = client.get("/api/music/catalog/status")
+    finally:
+        app.state.music_apple_catalog = previous_apple
+        app.state.sonos = previous_sonos
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["shadow"] is True
+    assert data["actuation_allowed"] is False
+    apple = next(item for item in data["providers"] if item["provider"] == "itunes_search")
+    assert apple["credentials_required"] is False
+    assert apple["playback_adapter"] == "sonos_apple_music_share_link"
+    assert apple["playback_verified"] is False
+    assert apple["verification_state"] == "queue_test_required"

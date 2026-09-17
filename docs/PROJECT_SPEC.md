@@ -468,6 +468,40 @@ can record approval/revocation and explain trust state, but this slice remains
 non-actuating: no Sonos play/queue calls, MusicMapper mutation, bandit reward,
 provider credential change, or autonomous playback is introduced.
 
+**IMPLEMENTED/SHADOW (#271).** Provider-backed playback capability now uses
+a provider-neutral composite catalog plus SoCo's built-in Apple Music ShareLink
+adapter, not a second Apple credential. The existing iTunes discovery source
+already returns Apple's numeric track ID and `music.apple.com` track URL. Exact
+URL canonicalization to `song:<provider_id>` proves provider identity, but does
+**not** by itself prove this Sonos household can queue/play the item. Exact
+matches remain `pending_verification`, expose no playback adapter/reference, and
+cannot become playback-eligible until a durable live proof exists for the same
+Sonos household. The durable capability marker is
+`app_settings["music_apple_sharelink_capability"]`; it must contain
+`verified=true` plus the exact Sonos `household_id`, so proof from another
+household cannot silently carry over. The bounded live proof passed on
+2026-09-17 for household `Sonos_p0ke6wBJuuyNazhLDovfrhTRSM`: Apple track
+`1713833576` (AJR ? ?Bang!?) was appended at queue position 101, played and
+reported the expected title/artist, then stopped and removed. Queue size returned
+101 -> 100 and the prior stopped transport URI, volume 15, NORMAL play mode,
+mute state, and empty loaded-track state were restored exactly. The
+household-scoped capability marker was then persisted with `verified=true`.
+Current production remains on pre-#271 build `95a1c79`, so the marker is inert
+until #271 is integrated/deployed. Missing, malformed, mismatched, or non-Sonos
+cases remain metadata-only. Trust events re-verify the exact `(provider,
+provider_id)` through Apple's public lookup endpoint rather than rediscovering by
+title. `SonosService.play_apple_music_share_link` requires the same exact numeric
+ID/URL match, enqueues first, preserves the existing queue/play mode, and only
+then jumps to the returned queue position. It has no REST route, automatic
+caller, or title/URI fallback. `/api/music/catalog/status` reports
+`credentials_required=false` and `queue_test_required` until household proof,
+then `live_verified`; the endpoint itself remains non-actuating. Production
+research confirmed SoCo 0.31's direct Apple Music SMAPI `getAppLink` call is
+rejected server-side before any token or link state is created; that credential
+path is abandoned rather than worked around. No provider credential is required
+or stored by #271.
+
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit
@@ -496,11 +530,17 @@ approved/proven candidates, controlled exploration when explicitly requested,
 and a trusted contextual/session DJ only after real evidence. DND, Sleeping,
 Away, lifecycle, ownership, and playback-safety gates remain authoritative.
 
-**RESEARCH NEEDED.** Rich arbitrary provider catalog search, representative
-audio access for semantic analysis/embeddings, and reliable provider-to-Sonos
-queue playback. Track these under shared Music Intelligence issue #254 and its
-bounded taste/familiarity foundation #255 rather than creating parallel
-curators.
+**LIVE VERIFIED (#271).** The accepted Apple Music ShareLink proof used exact
+Apple track `1713833576` (AJR ? ?Bang!?) on the Living Room Sonos. The first
+~3-second transport-only probe was explicitly rejected as insufficient because
+Anthony heard nothing. The accepted rerun temporarily raised volume 15 -> 25,
+played for ~15 seconds, and Anthony audibly confirmed the track. Cleanup removed
+only the appended queue item and restored queue 101 -> 100, volume 25 -> 15,
+`NORMAL` play mode, STOPPED transport, and the prior fireplace URI. The non-secret
+capability marker is household-scoped and records audible user confirmation; it
+does not itself start playback. #272 now owns the first narrow assisted-playback
+authority path; controlled discovery/session-DJ behavior stays later under #254.
+Representative audio access for semantic analysis/embeddings remains separate research.
 
 ### Desk, kitchen, Winding Down, and mornings
 
@@ -1590,6 +1630,7 @@ contributes degradation.
 | DELETE | `/api/music/mode-playlists/{mode}` | Remove mapping |
 | POST | `/api/music/import` | Upload Apple Music XML (multipart) |
 | GET | `/api/music/profile` | Taste profile |
+| GET | `/api/music/catalog/status` | Read-only provider/playback capability; Apple Music ShareLink reports no second credential required plus `queue_test_required` vs household-scoped `live_verified`, and remains non-actuating |
 | GET | `/api/music/recommendations?mode=` | Get pending recommendations |
 | POST | `/api/music/recommendations/generate?mode=` | Generate new recs |
 | POST | `/api/music/recommendations/{id}/feedback` | Like/dismiss (`{action}`) |
@@ -1788,6 +1829,7 @@ UPnP control via SoCo. Polls every 2s, broadcasts changes.
 | `set_volume` | `(volume: int) → bool` | 0-100 |
 | `play_uri` | `(uri: str, volume?: int) → bool` | Play HTTP URL |
 | `play_favorite` | `(title: str) → bool` | Play by name |
+| `play_apple_music_share_link` | `(provider_id: str, share_url: str) -> bool` | Low-level exact Apple Music ShareLink queue/play primitive. Requires `song:<provider_id>` canonical match, preserves the existing queue/play mode, enqueues before jumping to the returned position, and has no title/URI fallback or second Apple credential. No direct API/autonomous caller; #272 owns policy authority before use. |
 | `get_favorites` | `() → list[dict]` | List favorites |
 | `get_current_playback_snapshot` | `() → Optional[soco.snapshot.Snapshot]` | For duck-and-resume; captures even when idle; None = capture failed |
 | `restore_playback` | `(snapshot: Optional[Snapshot]) → None` | Resume from snapshot (queue pos + seek + play_mode, or stream URI + metadata; parks idle transport) |
@@ -2325,13 +2367,23 @@ The dashboard has been redesigned as a living, data-reactive interface:
 
 ### Music Curator Direction
 
-- **SHIPPED/CURRENT (committed code):** vibe-tagged mode mappings, guarded
-  auto-play, supported Sonos favorite/playlist queueing, a contextual music
-  bandit, Apple Music XML taste import, and Last.fm/iTunes-preview discovery.
-- **DECIDED TARGET:** the Music Curator and gentle-discovery policy are defined
-  in the Product Experience Contract. Work first with already-playable sources.
-- **RESEARCH NEEDED:** arbitrary Apple Music catalog search, reliable Sonos
-  queue playback for those results, and guest request queueing.
+- **SHIPPED/CURRENT:** shared taste/familiarity, explainable semantic discovery,
+  explicit feedback, request/context adapters, trust approval/revocation, guarded
+  Sonos favorite/playlist playback, and the MusicBandit evidence path. The current
+  `/music` page is a temporary functional shell; #270 owns the later application-
+  wide premium UX redesign.
+- **IMPLEMENTED/SHADOW (#271):** a composite catalog can verify exact Apple/iTunes
+  discovery identities through Sonos' built-in Apple Music ShareLink format while
+  preserving the numeric provider ID and re-verifying trust by exact lookup. Exact
+  matches stay `pending_verification` until a durable live proof exists for the same
+  Sonos household; only then are they playback-capable. The low-level exact
+  ShareLink queue/play adapter preserves the existing queue/play mode, has no
+  route/autonomous caller, and requires no second Apple credential. The 2026-09-17
+  live proof passed cleanly and the household-scoped marker is persisted; production
+  remains favorites/playlists-only only because #271 itself is not yet integrated/deployed.
+- **NEXT (#272):** with provider proof complete, one narrow approved/proven
+  assisted-playback lane through existing lifecycle/DND/Away/Sleeping/ownership
+  authority. Controlled exploration and contextual/session DJ remain later.
 
 ### Intelligence and earned autonomy
 

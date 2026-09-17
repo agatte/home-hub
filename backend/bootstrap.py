@@ -600,8 +600,36 @@ async def lifespan(app: FastAPI):
     from backend.services.music_semantics import LastFmSemanticAnalyzer
     from backend.services.music_taste import MusicTasteService
     from backend.services.music_trust import MusicApprovalService, MusicTrustPolicy
-    from backend.services.playlist_catalog import SonosFavoritesCatalog
-    music_catalog = SonosFavoritesCatalog(sonos)
+    from backend.services.playlist_catalog import (
+        APPLE_MUSIC_SHARELINK_CAPABILITY_KEY,
+        AppleMusicShareCatalog,
+        CompositeMusicCatalog,
+        SonosFavoritesCatalog,
+    )
+    sonos_favorites_catalog = SonosFavoritesCatalog(sonos)
+    apple_sharelink_capability = (
+        await load_setting(APPLE_MUSIC_SHARELINK_CAPABILITY_KEY) or {}
+    )
+    verified_household_id = (
+        str(apple_sharelink_capability.get("household_id") or "").strip() or None
+        if apple_sharelink_capability.get("verified") is True
+        else None
+    )
+    music_apple_catalog = AppleMusicShareCatalog(
+        sonos,
+        lookup_source=rec_service,
+        verified_household_id=verified_household_id,
+    )
+    app.state.music_apple_catalog = music_apple_catalog
+    app_logger.info(
+        "Apple Music ShareLink catalog initialized "
+        "(no second provider credential required, playback_verified=%s)",
+        music_apple_catalog.playback_verified,
+    )
+    music_catalog = CompositeMusicCatalog(
+        sonos_favorites_catalog, music_apple_catalog,
+    )
+    app.state.music_catalog = music_catalog
     music_feedback = MusicFeedbackService()
     app.state.music_feedback = music_feedback
     music_approval = MusicApprovalService()
@@ -614,6 +642,7 @@ async def lifespan(app: FastAPI):
         source=rec_service,
         taste_provider=music_taste,
         semantic_analyzer=LastFmSemanticAnalyzer(rec_service),
+        playable_catalog=music_catalog,
     )
     app.state.music_discovery = music_discovery
     music_context_builder = MusicCuratorContextBuilder(

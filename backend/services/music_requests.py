@@ -238,6 +238,7 @@ class MusicRequestService:
             "supported_modes": list(REQUEST_MODES),
             "familiar_catalog_available": bool(getattr(self._catalog, "available", True)),
             "discovery_enabled": self._discovery.enabled,
+            "provider_catalog": self._provider_catalog_status(),
         }
 
     async def preview(
@@ -310,11 +311,17 @@ class MusicRequestService:
             genres=(), themes=(), search_concepts=(),
             rationale="resolve exact candidate for trust event", source="music_trust",
         )
-        candidates = await self._catalog.search(identity_intent, limit=100)
-        candidate = next((
-            item for item in candidates
-            if item.provider == provider and item.provider_id == provider_id
-        ), None)
+        candidate = None
+        exact_lookup = getattr(self._catalog, "get_by_identity", None)
+        if exact_lookup is not None:
+            candidate = await exact_lookup(provider, provider_id)
+        else:
+            # Compatibility fallback for older/simple catalog implementations.
+            candidates = await self._catalog.search(identity_intent, limit=100)
+            candidate = next((
+                item for item in candidates
+                if item.provider == provider and item.provider_id == provider_id
+            ), None)
         if candidate is None:
             if action != "revoke":
                 raise ValueError("candidate is not currently available from the trusted catalog")
@@ -364,6 +371,20 @@ class MusicRequestService:
             "current_approval_action": current_action,
             "candidate": candidate.to_dict(),
             "trust": decision.to_dict(),
+        }
+
+    def _provider_catalog_status(self) -> dict[str, Any] | None:
+        catalog = getattr(self._app_state, "music_apple_catalog", None)
+        if catalog is None:
+            return None
+        status = getattr(catalog, "status", None)
+        if callable(status):
+            return status()
+        return {
+            "provider": getattr(catalog, "provider_name", "unknown"),
+            "service": getattr(catalog, "service_name", None),
+            "sonos_available": bool(getattr(catalog, "available", False)),
+            "actuation_allowed": False,
         }
 
     def _current_mode(self) -> Optional[str]:

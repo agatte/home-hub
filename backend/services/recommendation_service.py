@@ -27,6 +27,7 @@ logger = logging.getLogger("home_hub.music.recs")
 
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 ITUNES_SEARCH = "https://itunes.apple.com/search"
+ITUNES_LOOKUP = "https://itunes.apple.com/lookup"
 
 # Cache TTL for Last.fm similar-artist data
 SIMILAR_CACHE_DAYS = 30
@@ -513,6 +514,49 @@ class RecommendationService:
                     exc,
                 )
                 return []
+    async def lookup_itunes_track(self, provider_id: str) -> dict:
+        """Re-verify one exact Apple/iTunes song identity by numeric track ID."""
+        provider_id = str(provider_id or "").strip()
+        if not provider_id.isdigit():
+            return {}
+        async with self._api_sem:
+            try:
+                resp = await self._http.get(
+                    ITUNES_LOOKUP,
+                    params={"id": provider_id, "entity": "song"},
+                )
+                await asyncio.sleep(0.2)
+                if resp.status_code != 200:
+                    return {}
+                for result in resp.json().get("results", []):
+                    if not isinstance(result, dict):
+                        continue
+                    result_id = str(result.get("trackId") or "").strip()
+                    artist = str(result.get("artistName") or "").strip()
+                    track = str(result.get("trackName") or "").strip()
+                    external_url = str(result.get("trackViewUrl") or "").strip()
+                    if result_id != provider_id or not artist or not track or not external_url:
+                        continue
+                    return {
+                        "provider": "itunes_search",
+                        "provider_id": provider_id,
+                        "catalog_verified": True,
+                        "playback_capability": "metadata_only",
+                        "playback_adapter": None,
+                        "playback_reference": None,
+                        "playback_reason": "provider_resolution_required",
+                        "artist_name": artist,
+                        "track_name": track,
+                        "album_name": result.get("collectionName"),
+                        "preview_url": result.get("previewUrl"),
+                        "artwork_url": result.get("artworkUrl100"),
+                        "external_url": external_url,
+                    }
+                return {}
+            except Exception as exc:
+                logger.warning("iTunes exact lookup failed for '%s': %s", provider_id, exc)
+                return {}
+
     async def _search_itunes_tracks(
         self, artist_name: str, *, limit: int = 3,
     ) -> list[dict]:
@@ -554,6 +598,7 @@ class RecommendationService:
                         "playback_capability": "metadata_only",
                         "playback_adapter": None,
                         "playback_reference": None,
+                        "playback_reason": "provider_resolution_required",
                         "artist_name": result_artist,
                         "track_name": track_name,
                         "album_name": result.get("collectionName"),

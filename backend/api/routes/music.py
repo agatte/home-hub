@@ -207,6 +207,31 @@ async def get_discovery_status(request: Request) -> dict:
     return discovery.status()
 
 
+@router.get("/catalog/status")
+async def get_music_catalog_status(request: Request) -> dict:
+    """Return read-only provider/playback capability; never actuates Sonos."""
+    apple = getattr(request.app.state, "music_apple_catalog", None)
+    sonos = getattr(request.app.state, "sonos", None)
+    if apple is None:
+        raise HTTPException(status_code=503, detail="Provider music catalog not initialized")
+    apple_status = apple.status()
+    return {
+        "shadow": True,
+        "actuation_allowed": False,
+        "providers": [
+            {
+                "provider": "sonos_favorite",
+                "service": "Sonos favorites/playlists",
+                "sonos_available": bool(getattr(sonos, "connected", False)),
+                "credentials_required": False,
+                "verification_state": "existing_sonos_catalog",
+                "actuation_allowed": False,
+            },
+            apple_status,
+        ],
+    }
+
+
 @router.post("/discovery/preview", dependencies=[Depends(require_api_key)])
 @limiter.limit("4/hour")
 async def preview_discovery(

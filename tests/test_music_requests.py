@@ -251,3 +251,60 @@ def test_resolver_rejects_structured_kind_that_conflicts_with_request_language()
         resolver.resolve(MusicRequest(request_text="play new music", kind="familiar"))
     with pytest.raises(ValueError, match="conflicts"):
         resolver.resolve(MusicRequest(request_text="play something familiar", kind="discovery"))
+
+@pytest.mark.asyncio
+async def test_trust_event_reverifies_exact_identity_without_broad_catalog_search():
+    candidate = _favorite("Exact Favorite")
+
+    class ExactCatalog:
+        available = True
+
+        def __init__(self):
+            self.lookup_calls = []
+
+        async def get_by_identity(self, provider, provider_id):
+            self.lookup_calls.append((provider, provider_id))
+            if (provider, provider_id) == (candidate.provider, candidate.provider_id):
+                return candidate
+            return None
+
+        async def search(self, intent, *, limit=12):
+            raise AssertionError("trust identity must not use broad catalog search")
+
+    class Approval:
+        async def record(self, *, client_event_id, action, candidate, source):
+            return ({
+                "client_event_id": client_event_id,
+                "action": action,
+                "provider": candidate.provider,
+                "provider_id": candidate.provider_id,
+                "source": source,
+            }, False)
+
+        async def latest_actions(self, candidates):
+            return {(item.provider, item.provider_id): "approve" for item in candidates}
+
+        async def latest_record(self, *, provider, provider_id):
+            return None
+
+    catalog = ExactCatalog()
+    taste = FakeTaste(FakeSnapshot({"Exact Favorite": _match("proven", 1.0)}))
+    service = MusicRequestService(
+        app_state=SimpleNamespace(automation=SimpleNamespace(current_mode="working")),
+        catalog=catalog,
+        taste_provider=taste,
+        discovery=FakeDiscovery(),
+        approval_service=Approval(),
+    )
+
+    result = await service.record_trust_event(
+        client_event_id="approve-exact-1",
+        action="approve",
+        provider=candidate.provider,
+        provider_id=candidate.provider_id,
+        source="test",
+    )
+
+    assert catalog.lookup_calls == [(candidate.provider, candidate.provider_id)]
+    assert result["candidate"]["provider_id"] == candidate.provider_id
+    assert result["trust"]["playback_eligible"] is True

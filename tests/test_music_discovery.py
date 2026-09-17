@@ -11,6 +11,7 @@ from backend.services.music_taste import (
     build_music_taste_snapshot,
 )
 from backend.services.recommendation_service import RecommendationService
+from backend.services.playlist_catalog import VerifiedMusicCandidate
 
 NOW = datetime(2026, 9, 16, 13, 0, tzinfo=timezone.utc)
 
@@ -332,6 +333,46 @@ async def test_itunes_discovery_verifies_exact_artist_and_dedupes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_itunes_exact_lookup_reverifies_numeric_track_identity(monkeypatch):
+    service = RecommendationService(lastfm_api_key="test-key")
+
+    class Response:
+        status_code = 200
+        def json(self):
+            return {"results": [
+                {"artistName": "Other", "trackName": "Wrong", "trackId": 9,
+                 "trackViewUrl": "https://music.apple.com/us/album/wrong/9?i=9"},
+                {"artistName": "AJR", "trackName": "Bang!", "trackId": 1713833576,
+                 "collectionName": "The Click",
+                 "trackViewUrl": "https://music.apple.com/us/album/bang/1713833569?i=1713833576&uo=4"},
+            ]}
+
+    class Http:
+        async def get(self, *args, **kwargs):
+            assert kwargs["params"]["id"] == "1713833576"
+            return Response()
+        async def aclose(self):
+            return None
+
+    async def no_sleep(_):
+        return None
+
+    service._http = Http()
+    monkeypatch.setattr("backend.services.recommendation_service.asyncio.sleep", no_sleep)
+    try:
+        track = await service.lookup_itunes_track("1713833576")
+    finally:
+        await service.close()
+
+    assert track["provider"] == "itunes_search"
+    assert track["provider_id"] == "1713833576"
+    assert track["artist_name"] == "AJR"
+    assert track["track_name"] == "Bang!"
+    assert track["external_url"].startswith("https://music.apple.com/")
+    assert await service.lookup_itunes_track("not-numeric") == {}
+
+
+@pytest.mark.asyncio
 async def test_explicit_feedback_suppresses_rejected_artist_and_boosts_fit_artist():
     snapshot = _snapshot(feedback=[
         _feedback("Best Fit", "fits_me"),
@@ -356,3 +397,55 @@ async def test_explicit_feedback_suppresses_rejected_artist_and_boosts_fit_artis
     assert result.clusters[0].tracks[0].taste_classification == "exploratory"
     assert result.clusters[0].artist_preference > 0.7
     assert "explicit feedback: Fits me" in result.clusters[0].reasons
+
+@pytest.mark.asyncio
+async def test_discovery_upgrades_only_exact_provider_resolved_tracks_in_one_batch():
+    class PlayableCatalog:
+        def __init__(self):
+            self.calls = []
+
+        async def resolve_tracks(self, artist_name, raw_tracks):
+            self.calls.append((artist_name, [row["provider_id"] for row in raw_tracks]))
+            return {
+                ("itunes_search", "itunes-1"): VerifiedMusicCandidate(
+                    provider="itunes_search",
+                    provider_id="itunes-1",
+                    media_type="track",
+                    title="New Song",
+                    uri="https://music.apple.com/us/album/new-song/1?i=1",
+                    source="itunes_search+sonos_share_link",
+                    catalog_verified=True,
+                    playback_capability="supported",
+                    playback_adapter="sonos_apple_music_share_link",
+                    playback_reference="https://music.apple.com/us/album/new-song/1?i=1",
+                    metadata={"artist_name": "New Artist", "track_name": "New Song"},
+                )
+            }
+
+    source = FakeSource([_artist_candidate(
+        "New Artist",
+        tracks=[
+            _track("New Artist", "New Song", "itunes-1"),
+            _track("New Artist", "Unresolved Song", "itunes-2"),
+        ],
+    )])
+    playable = PlayableCatalog()
+    service = MusicDiscoveryService(
+        source=source,
+        taste_provider=FakeTasteProvider(_snapshot()),
+        playable_catalog=playable,
+    )
+
+    result = await service.preview("gaming")
+
+    tracks = {track.track_name: track for track in result.clusters[0].tracks}
+    assert playable.calls == [("New Artist", ["itunes-1", "itunes-2"])]
+    assert tracks["New Song"].provider == "itunes_search"
+    assert tracks["New Song"].provider_id == "itunes-1"
+    assert tracks["New Song"].playback_capability == "supported"
+    assert tracks["New Song"].playback_adapter == "sonos_apple_music_share_link"
+    assert tracks["New Song"].playback_reason == "provider_exact_match"
+    assert tracks["Unresolved Song"].provider == "itunes_search"
+    assert tracks["Unresolved Song"].provider_id == "itunes-2"
+    assert tracks["Unresolved Song"].playback_capability == "metadata_only"
+    assert tracks["Unresolved Song"].playback_reason == "no_exact_playable_provider_match"
