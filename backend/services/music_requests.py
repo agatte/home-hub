@@ -309,7 +309,13 @@ class MusicRequestService:
         ranked: list[FamiliarMusicSuggestion] = []
         taste_mode = None if resolved.mode == "general" else resolved.mode
         for candidate in candidates:
-            if not candidate.verified or not candidate.title.strip() or not candidate.uri.strip():
+            if (
+                not candidate.verified
+                or not candidate.catalog_verified
+                or not candidate.playback_capable
+                or not candidate.title.strip()
+                or not candidate.uri.strip()
+            ):
                 continue
             match = snapshot.classify_candidate(candidate, mode=taste_mode)
             if match.classification not in {"familiar", "proven"}:
@@ -323,7 +329,7 @@ class MusicRequestService:
             )
             score = min(1.0, 0.72 * class_score + 0.18 * preference_score + 0.10 * catalog_score)
             reasons = [
-                "provider-verified Sonos favorite",
+                "catalog-verified, Sonos-playback-capable favorite",
                 f"taste {match.classification} ({match.preference:+.2f})",
             ]
             matched = candidate.metadata.get("matched_concepts") or []

@@ -421,7 +421,14 @@ async def test_sonos_catalog_returns_only_real_queueable_unique_favorites():
                 {"title": "It's Lit!", "uri": "sonos://lit", "source": "favorite"},
                 {"title": "It's Lit!", "uri": "sonos://lit", "source": "favorite"},
                 {"title": "Empty", "uri": "", "source": "favorite"},
-                {"title": "Stadium Rock", "uri": "sonos://rock", "source": "favorite"},
+                {
+                    "title": "Unsupported Shortcut", "uri": "sonos://looks-real",
+                    "source": "favorite", "playback_supported": False,
+                },
+                {
+                    "title": "Stadium Rock", "uri": "sonos://rock",
+                    "source": "favorite", "playback_supported": True,
+                },
             ]
 
     intent = MusicIntent.from_mapping({
@@ -433,7 +440,10 @@ async def test_sonos_catalog_returns_only_real_queueable_unique_favorites():
     results = await catalog.search(intent)
 
     assert [r.title for r in results] == ["Stadium Rock", "It's Lit!"]
-    assert all(r.verified and r.uri for r in results)
+    assert all(r.verified and r.catalog_verified and r.uri for r in results)
+    assert all(r.playback_capable for r in results)
+    assert all(r.playback_adapter == "sonos_favorite_title" for r in results)
+    assert results[0].playback_reference == "Stadium Rock"
     assert results[0].metadata["catalog_match_score"] > results[1].metadata["catalog_match_score"]
 
 

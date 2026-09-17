@@ -12,6 +12,7 @@ when the queue has more than one track.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -182,6 +183,41 @@ async def test_play_favorite_cloud_favorite_branch_uses_shuffle_helper():
     assert result is True
     spy.assert_called_once_with(service._device)
     service._device.add_to_queue.assert_called_with(fav_ref)
+
+
+# ---------------------------------------------------------------------------
+# Catalog capability source truth
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cloud_favorites_mark_only_resource_backed_items_playback_supported():
+    service = SonosService.__new__(SonosService)
+    service._favorites_cache = None
+    service._favorites_objects_cache = None
+    service._favorites_cache_time = 0.0
+    service._CACHE_TTL = 300.0
+    service._safe_call = _make_passthrough_safe_call()
+
+    supported_ref = SimpleNamespace(resources=[SimpleNamespace(uri="sonos://queueable")])
+    supported = SimpleNamespace(
+        title="Queueable Mix", reference=supported_ref, uri="sonos://display",
+    )
+    unsupported_ref = SimpleNamespace(resources=[])
+    unsupported = SimpleNamespace(
+        title="Artist Shortcut", reference=unsupported_ref, uri="sonos://looks-real",
+    )
+    service._device = SimpleNamespace(
+        music_library=SimpleNamespace(
+            get_sonos_favorites=lambda: [supported, unsupported],
+        )
+    )
+
+    favorites = await service._get_cloud_favorites_cached()
+
+    assert favorites[0]["playback_supported"] is True
+    assert favorites[0]["uri"] == "sonos://queueable"
+    assert favorites[1]["playback_supported"] is False
+    assert favorites[1]["uri"] == "sonos://looks-real"
 
 
 # ---------------------------------------------------------------------------

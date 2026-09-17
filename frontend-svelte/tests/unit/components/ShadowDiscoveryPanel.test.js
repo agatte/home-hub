@@ -45,6 +45,10 @@ const previewPayload = {
     tracks: [{
       provider: 'itunes_search',
       provider_id: '1',
+      catalog_verified: true,
+      playback_capability: 'metadata_only',
+      playback_adapter: null,
+      playback_reference: null,
       artist_name: 'Wardruna',
       track_name: 'Helvegen',
       album_name: 'Runaljod – Yggdrasil',
@@ -107,6 +111,7 @@ describe('ShadowDiscoveryPanel', () => {
     expect(screen.getByText('76% semantic fit')).toBeInTheDocument()
     expect(screen.getByText(/matched norse, folk, epic/)).toBeInTheDocument()
     expect(screen.getByText('Helvegen')).toBeInTheDocument()
+    expect(screen.getByText('Catalog verified · metadata only')).toBeInTheDocument()
   })
 
   it('persists deliberate evaluation feedback through the explicit feedback endpoint', async () => {
@@ -226,9 +231,13 @@ describe('ShadowDiscoveryPanel', () => {
           semantic_key: null, rationale: 'Strict familiarity request.',
         },
         familiar_suggestions: [{
-          candidate: { provider: 'sonos_favorite', provider_id: 'fav-1', title: 'Road Trip Favorites' },
+          candidate: {
+            provider: 'sonos_favorite', provider_id: 'fav-1', title: 'Road Trip Favorites',
+            catalog_verified: true, playback_capability: 'supported', playback_capable: true,
+            playback_adapter: 'sonos_favorite_title', playback_reference: 'Road Trip Favorites',
+          },
           score: 0.94, taste_classification: 'proven', taste_preference: 0.8,
-          reasons: ['provider-verified Sonos favorite', 'taste proven (+0.80)'],
+          reasons: ['catalog-verified, Sonos-playback-capable favorite', 'taste proven (+0.80)'],
         }],
         discovery: null,
       })
@@ -238,7 +247,7 @@ describe('ShadowDiscoveryPanel', () => {
     await component.refreshStatus()
     await fireEvent.click(screen.getByRole('button', { name: 'Familiar' }))
     expect(await screen.findByText('Road Trip Favorites')).toBeInTheDocument()
-    expect(screen.getByText('Verified familiar favorite')).toBeInTheDocument()
+    expect(screen.getByText('Verified familiar favorite · Sonos-ready')).toBeInTheDocument()
     const [url, body] = vi.mocked(apiPost).mock.calls[0]
     expect(url).toBe('/api/music/request/preview')
     expect(body).toMatchObject({

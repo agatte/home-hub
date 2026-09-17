@@ -438,6 +438,19 @@ playlist selection, and the curator may consult posterior means only as a
 read-only fallback when canonical taste is unavailable. Explicit #263 feedback
 remains separate evidence and never becomes a bandit reward.
 
+**IMPLEMENTED/SHADOW (#267).** Provider/catalog verification and HomeHub playback
+capability are now separate facts. `VerifiedMusicCandidate` retains provider
+identity verification for compatibility but exposes explicit catalog verification,
+playback capability, adapter, and playback reference. Sonos favorites/playlists are
+playback-capable only when the Sonos service exposes the same supported resolution
+path used by `play_favorite()`; Apple Music shortcut containers with no resolved
+resource are explicitly unsupported even if they expose a display URI. Last.fm +
+iTunes discovery tracks are catalog-verified metadata identities only and are
+reported as `metadata_only`, with no Sonos playback adapter/reference. Discovery
+and the Music page may recommend/explain those tracks, but future assisted playback
+must require the stronger playback-capable predicate. No new playback path, queue
+mutation, provider credentials, or autonomy is introduced by this boundary.
+
 **DECIDED TARGET.** Anthony is familiarity-heavy. Ordinary discovery should
 default to roughly one unfamiliar selection per four or five familiar ones and
 expand outward from demonstrated taste rather than maximize novelty. Explicit

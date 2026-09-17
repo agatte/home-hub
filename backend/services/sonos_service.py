@@ -552,7 +552,7 @@ class SonosService:
         except Exception as e:
             logger.error(f"Error restoring playback: {e}")
 
-    async def _get_cloud_favorites_cached(self) -> list[dict[str, str]]:
+    async def _get_cloud_favorites_cached(self) -> list[dict[str, Any]]:
         """Fetch cloud favorites with TTL cache."""
         now = time.monotonic()
         if self._favorites_cache is not None and now - self._favorites_cache_time < self._CACHE_TTL:
@@ -565,15 +565,22 @@ class SonosService:
                 self._device.music_library.get_sonos_favorites
             )
             for fav in favorites:
+                # Use the exact same capability rule as play_favorite(): only
+                # a resolved reference with concrete resources is queueable.
+                # Apple Music artist/station shortcut favorites may expose a
+                # display URI but still cannot be resolved by SoCo.
+                ref = getattr(fav, "reference", fav)
+                ref_resources = getattr(ref, "resources", None) or []
                 uri = (
-                    getattr(fav, "resources", [{}])[0].uri
-                    if hasattr(fav, "resources") and fav.resources
+                    getattr(ref_resources[0], "uri", "")
+                    if ref_resources
                     else getattr(fav, "uri", "")
                 )
                 results.append({
                     "title": fav.title,
                     "uri": uri,
                     "source": "favorite",
+                    "playback_supported": bool(ref_resources),
                 })
                 raw_objects.append(fav)
         except CircuitBreakerOpen:
@@ -614,7 +621,7 @@ class SonosService:
         self._playlists_cache = None
         self._playlists_cache_time = 0
 
-    async def get_favorites(self) -> list[dict[str, str]]:
+    async def get_favorites(self) -> list[dict[str, Any]]:
         """
         List Sonos favorites and Sonos playlists.
 
@@ -622,7 +629,7 @@ class SonosService:
         (Era 100 / S2 firmware stores Apple Music items as playlists).
 
         Returns:
-            List of dicts with title, uri, and source.
+            List of dicts with title, uri, source, and playback_supported.
         """
         if not self._connected or not self._device:
             return []
@@ -636,6 +643,7 @@ class SonosService:
                 "title": pl.title,
                 "uri": pl.get_uri() if hasattr(pl, "get_uri") else getattr(pl, "uri", ""),
                 "source": "playlist",
+                "playback_supported": True,
             })
 
         return results

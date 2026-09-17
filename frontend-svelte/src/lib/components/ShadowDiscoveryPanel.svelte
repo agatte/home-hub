@@ -301,7 +301,7 @@
       {#each familiarSuggestions as suggestion (suggestion.candidate.provider_id)}
         <article class="familiar-card">
           <div>
-            <span class="familiar-kicker">Verified familiar favorite</span>
+            <span class="familiar-kicker">Verified familiar favorite · Sonos-ready</span>
             <h4>{suggestion.candidate.title}</h4>
             <div class="chips">
               <span>{suggestion.taste_classification}</span>
@@ -388,6 +388,9 @@
                   {#if track.album_name}<span class="track-album">{track.album_name}</span>{/if}
                 </div>
                 <span class="track-taste">{track.taste_classification}</span>
+                <span class="track-capability">
+                  {track.playback_capability === 'supported' ? 'Playback ready' : 'Catalog verified · metadata only'}
+                </span>
                 {#if track.external_url}
                   <a href={track.external_url} target="_blank" rel="noreferrer">Open</a>
                 {/if}
@@ -789,7 +792,7 @@
 
   .track-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
     gap: 8px;
     align-items: center;
     padding: 7px 8px;
@@ -817,6 +820,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .track-capability {
+    color: var(--text-muted);
+    font-size: 9px;
+    white-space: nowrap;
   }
 
   .track-row a {

@@ -550,6 +550,10 @@ class RecommendationService:
                     verified.append({
                         "provider": "itunes_search",
                         "provider_id": provider_id,
+                        "catalog_verified": True,
+                        "playback_capability": "metadata_only",
+                        "playback_adapter": None,
+                        "playback_reference": None,
                         "artist_name": result_artist,
                         "track_name": track_name,
                         "album_name": result.get("collectionName"),

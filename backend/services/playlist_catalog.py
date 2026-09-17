@@ -20,7 +20,11 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 @dataclass(frozen=True)
 class VerifiedMusicCandidate:
-    """A provider-returned playable item that has been verified to exist."""
+    """A provider-returned identity with explicit verification/capability facts.
+
+    ``verified`` is retained for compatibility with existing callers. New code
+    must distinguish catalog existence from HomeHub playback capability.
+    """
 
     provider: str
     provider_id: str
@@ -30,16 +34,31 @@ class VerifiedMusicCandidate:
     source: str
     verified: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
+    catalog_verified: bool = True
+    playback_capability: str = "unknown"
+    playback_adapter: str | None = None
+    playback_reference: str | None = None
+
+    @property
+    def playback_capable(self) -> bool:
+        return (
+            self.catalog_verified
+            and self.playback_capability == "supported"
+            and bool(self.playback_adapter)
+            and bool(self.playback_reference)
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["playback_capable"] = self.playback_capable
+        return data
 
 
 class MusicCatalog(Protocol):
-    """Provider-neutral discovery contract used by ``MusicCurator``."""
+    """Provider-neutral catalog contract used by Music Intelligence."""
 
     async def search(self, intent: Any, *, limit: int = 12) -> list[VerifiedMusicCandidate]:
-        """Return only provider-verified candidates for the supplied intent."""
+        """Return provider-verified candidates with explicit playback capability."""
 
 
 class SonosFavoritesCatalog:
@@ -74,6 +93,9 @@ class SonosFavoritesCatalog:
             title = str(favorite.get("title") or "").strip()
             uri = str(favorite.get("uri") or "").strip()
             source = str(favorite.get("source") or "favorite").strip() or "favorite"
+            playback_supported = favorite.get("playback_supported")
+            if playback_supported is False:
+                continue
             if not title or not uri:
                 # Empty-URI favorites are visible in Sonos but are not queueable.
                 continue
@@ -94,6 +116,10 @@ class SonosFavoritesCatalog:
                 uri=uri,
                 source=source,
                 verified=True,
+                catalog_verified=True,
+                playback_capability="supported",
+                playback_adapter="sonos_favorite_title",
+                playback_reference=title,
                 metadata={
                     "catalog_match_score": round(match_score, 4),
                     "matched_concepts": matched,

@@ -19,6 +19,10 @@ def _track(artist: str, title: str, provider_id: str) -> dict:
     return {
         "provider": "itunes_search",
         "provider_id": provider_id,
+        "catalog_verified": True,
+        "playback_capability": "metadata_only",
+        "playback_adapter": None,
+        "playback_reference": None,
         "artist_name": artist,
         "track_name": title,
         "album_name": "Album",
@@ -129,6 +133,9 @@ async def test_familiar_artist_does_not_make_unseen_tracks_familiar():
     assert cluster.artist_classification == "familiar"
     assert cluster.novelty_ratio == 1.0
     assert {track.taste_classification for track in cluster.tracks} == {"exploratory"}
+    assert all(track.catalog_verified for track in cluster.tracks)
+    assert {track.playback_capability for track in cluster.tracks} == {"metadata_only"}
+    assert all(track.playback_adapter is None for track in cluster.tracks)
 
 
 @pytest.mark.asyncio
@@ -318,6 +325,10 @@ async def test_itunes_discovery_verifies_exact_artist_and_dedupes(monkeypatch):
 
     assert [track["provider_id"] for track in tracks] == ["1", "3"]
     assert all(track["artist_name"] == "Wanted Artist" for track in tracks)
+    assert all(track["catalog_verified"] is True for track in tracks)
+    assert {track["playback_capability"] for track in tracks} == {"metadata_only"}
+    assert all(track["playback_adapter"] is None for track in tracks)
+    assert all(track["playback_reference"] is None for track in tracks)
 
 
 @pytest.mark.asyncio

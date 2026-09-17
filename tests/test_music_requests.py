@@ -27,6 +27,8 @@ def _favorite(title):
     return VerifiedMusicCandidate(
         provider="sonos_favorite", provider_id=title.lower(), media_type="favorite",
         title=title, uri=f"x-rincon-cpcontainer:{title}", source="favorite",
+        catalog_verified=True, playback_capability="supported",
+        playback_adapter="sonos_favorite_title", playback_reference=title,
         metadata={},
     )
 

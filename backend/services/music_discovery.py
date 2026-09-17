@@ -34,6 +34,10 @@ class MusicDiscoverySource(Protocol):
 class DiscoveryTrack:
     provider: str
     provider_id: str
+    catalog_verified: bool
+    playback_capability: str
+    playback_adapter: Optional[str]
+    playback_reference: Optional[str]
     artist_name: str
     track_name: str
     album_name: Optional[str]
@@ -308,8 +312,14 @@ class MusicDiscoveryService:
             track_name = str(raw_track.get("track_name") or "").strip()
             provider_id = str(raw_track.get("provider_id") or "").strip()
             provider = str(raw_track.get("provider") or "").strip()
-            if not track_name or not provider_id or not provider:
+            catalog_verified = bool(raw_track.get("catalog_verified", True))
+            if not track_name or not provider_id or not provider or not catalog_verified:
                 continue
+            playback_capability = str(
+                raw_track.get("playback_capability") or "metadata_only"
+            ).strip()
+            playback_adapter = raw_track.get("playback_adapter")
+            playback_reference = raw_track.get("playback_reference")
             track_match = _empty_match()
             if snapshot is not None:
                 track_match = snapshot.classify_candidate(
@@ -331,6 +341,10 @@ class MusicDiscoveryService:
             tracks.append(DiscoveryTrack(
                 provider=provider,
                 provider_id=provider_id,
+                catalog_verified=catalog_verified,
+                playback_capability=playback_capability,
+                playback_adapter=(str(playback_adapter) if playback_adapter else None),
+                playback_reference=(str(playback_reference) if playback_reference else None),
                 artist_name=artist_name,
                 track_name=track_name,
                 album_name=raw_track.get("album_name"),
