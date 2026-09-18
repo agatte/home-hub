@@ -540,7 +540,7 @@ does not itself start playback. #272 now owns the first narrow assisted-playback
 authority path; controlled discovery/session-DJ behavior stays later under #254.
 Representative audio access for semantic analysis/embeddings remains separate research.
 
-**IMPLEMENTED/UNRELEASED (#272).** The first assisted-playback slice is an
+**DEPLOYED / PHYSICAL ACCEPTANCE IN PROGRESS (#272).** The first assisted-playback slice is an
 explicit-action authority, not an autonomous DJ. The caller supplies only a
 durable `client_event_id` plus exact `(provider, provider_id)`; HomeHub re-resolves
 the candidate, current approval/proven trust, provider capability, house/lifecycle
@@ -561,7 +561,12 @@ before device I/O, so retries and restarts cannot double-play the same request.
 After the claim, live lifecycle/ownership and exact trust/capability are re-read
 immediately before actuation; a new revoke or changed authority suppresses. After
 ShareLink enqueue, the low-level executor fingerprints the exact appended queue
-object and Sonos queue generation. After the final async lifecycle/DND/TTS/ambient guard returns, the explicit HomeHub
+object and Sonos queue generation. Sonos exposes that newly appended item as the
+current STOPPED track before Play; the post-enqueue authority guard therefore permits
+a loaded track only when a dedicated internal media-URI read resolves to the same
+exact Apple `song:<provider_id>` already authorized for this request. A different,
+missing, or paused loaded item remains `sonos_busy`. After the final async
+lifecycle/DND/TTS/ambient guard returns, the explicit HomeHub
 request owns one bounded transport transaction and there is deliberately no further
 `await`. The synchronous Sonos UPnP transaction has a shared 3-second network
 budget. It first proves the expected queue/idle ownership, performs non-audible
@@ -2428,8 +2433,8 @@ The dashboard has been redesigned as a living, data-reactive interface:
   ShareLink queue/play adapter preserves the existing queue/play mode, has no
   route/autonomous caller, and requires no second Apple credential. The 2026-09-17
   live proof passed cleanly and the household-scoped marker is persisted; production
-  is on the accepted #271 build `896df94`; #272 remains unreleased.
-- **IMPLEMENTED/UNRELEASED (#272):** explicit exact-track assisted playback now
+  has progressed through deployed #272 build `329b326`; physical acceptance is still in progress pending the exact ShareLink ownership hotfix.
+- **DEPLOYED / PHYSICAL ACCEPTANCE IN PROGRESS (#272):** explicit exact-track assisted playback now
   has durable idempotency plus trust, lifecycle, ownership, queue-mode, ambient/TTS,
   and read-only volume-cap gates (never a #272 volume write). It routes through MusicMapper to the exact Apple
   ShareLink executor; no autonomous context playback is enabled. Controlled

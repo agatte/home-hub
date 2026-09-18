@@ -419,7 +419,12 @@ async def submit_music_trust_approval(request: Request) -> dict:
     service = getattr(request.app.state, "music_requests", None)
     if service is None:
         raise HTTPException(status_code=503, detail="Music request service not initialized")
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     source = request.headers.get("X-HomeHub-Source") or "dashboard:music_trust"
     try:
         return await service.record_trust_event(

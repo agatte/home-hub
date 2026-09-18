@@ -76,6 +76,12 @@ class FakeSonos:
         self.breaker_open = False
         self.state = "STOPPED"
         self.track = ""
+        self.uri = ""
+        self.loaded_track_after_enqueue = "Bang!"
+        self.loaded_uri_after_enqueue = (
+            "x-sonosapi-hls-static:song%3a1713833576?sid=204&flags=8232&sn=2"
+        )
+        self.loaded_state_after_enqueue = "STOPPED"
         self.volume = 20
         self.mute = False
         self.play_mode = "NORMAL"
@@ -91,6 +97,9 @@ class FakeSonos:
             "volume": self.volume,
             "mute": self.mute,
         }
+
+    async def get_current_media_uri(self):
+        return self.uri
 
     async def get_queue_context(self):
         return {
@@ -111,6 +120,9 @@ class FakeSonos:
         if not self.play_result:
             return False
         self.queue_size += 1
+        self.state = self.loaded_state_after_enqueue
+        self.track = self.loaded_track_after_enqueue
+        self.uri = self.loaded_uri_after_enqueue
         if before_play is not None:
             guard = await before_play()
             if isinstance(guard, dict):
@@ -665,3 +677,47 @@ async def test_success_uses_post_enqueue_guard_volume_for_learning_evidence(db_e
     assert len(learning) == 1
     assert learning[0].mode_at_time == "gaming"
     assert learning[0].volume == 8
+
+@pytest.mark.asyncio
+async def test_post_enqueue_wrong_loaded_provider_is_busy(db_engine):
+    service, app, logger, _approval, _factory = await build_service(db_engine)
+    app.sonos.loaded_uri_after_enqueue = (
+        "x-sonosapi-hls-static:song%3a999?sid=204&flags=8232&sn=2"
+    )
+    result = await service.play_exact(
+        client_event_id="play-wrong-loaded-provider",
+        provider="itunes_search", provider_id="1713833576", source="test",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "preplay_sonos_busy"
+    assert app.sonos.state == "STOPPED"
+    assert app.sonos.queue_size == 101
+    assert logger.calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_enqueue_missing_loaded_uri_is_busy(db_engine):
+    service, app, logger, _approval, _factory = await build_service(db_engine)
+    app.sonos.loaded_uri_after_enqueue = ""
+    result = await service.play_exact(
+        client_event_id="play-missing-loaded-uri",
+        provider="itunes_search", provider_id="1713833576", source="test",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "preplay_sonos_busy"
+    assert app.sonos.queue_size == 101
+    assert logger.calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_enqueue_paused_exact_track_is_busy(db_engine):
+    service, app, logger, _approval, _factory = await build_service(db_engine)
+    app.sonos.loaded_state_after_enqueue = "PAUSED_PLAYBACK"
+    result = await service.play_exact(
+        client_event_id="play-paused-exact",
+        provider="itunes_search", provider_id="1713833576", source="test",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "preplay_sonos_busy"
+    assert app.sonos.queue_size == 101
+    assert logger.calls == []

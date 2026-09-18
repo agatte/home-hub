@@ -475,6 +475,32 @@ class TestMusicAPI:
             "source": "test:music_trust",
         }]
 
+    def test_music_trust_approval_rejects_malformed_json(self, client):
+        previous = app.state.music_requests
+        app.state.music_requests = object()
+        try:
+            resp = client.post(
+                "/api/music/trust/approval",
+                content=b"{",
+                headers={"Content-Type": "application/json"},
+            )
+        finally:
+            app.state.music_requests = previous
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Request body must be valid JSON"
+
+    def test_music_trust_approval_rejects_non_object_json(self, client):
+        previous = app.state.music_requests
+        app.state.music_requests = object()
+        try:
+            resp = client.post(
+                "/api/music/trust/approval", json=["not", "an", "object"]
+            )
+        finally:
+            app.state.music_requests = previous
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Request body must be a JSON object"
+
     def test_curator_status_is_shadow_only(self, client):
         resp = client.get("/api/music/curator/status")
         assert resp.status_code == 200

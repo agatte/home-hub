@@ -328,6 +328,24 @@ class SonosService:
             logger.error(f"Error getting Sonos status: {e}")
             return {"state": "error", "error": str(e)}
 
+    async def get_current_media_uri(self) -> str | None:
+        """Return the loaded Sonos media URI for internal ownership checks.
+
+        Kept separate from ``get_status`` so provider/service URIs do not become
+        part of the public Sonos/WebSocket status contract. ``None`` means the
+        identity could not be read safely; callers must fail closed.
+        """
+        if not self._connected or not self._device:
+            return None
+        try:
+            track = await self._safe_call(self._device.get_current_track_info)
+            return str(track.get("uri") or "")
+        except CircuitBreakerOpen:
+            return None
+        except Exception as exc:
+            logger.warning("Sonos current media URI read failed: %s", exc)
+            return None
+
     async def play(self) -> bool:
         """Resume playback."""
         if not self._connected or not self._device:

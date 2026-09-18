@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import unquote
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -281,6 +282,7 @@ class MusicAssistedPlaybackService:
                 nonlocal post_enqueue_guard
                 post_enqueue_guard = await self._runtime_preflight(
                     expected_queue_size=int(live["queue_size"]) + 1,
+                    allowed_loaded_provider_id=candidate.provider_id,
                 )
                 if (
                     post_enqueue_guard.get("reason") is None
@@ -350,6 +352,7 @@ class MusicAssistedPlaybackService:
 
     async def _runtime_preflight(
         self, *, expected_queue_size: int | None = None,
+        allowed_loaded_provider_id: str | None = None,
     ) -> dict[str, Any]:
         automation = getattr(self._app_state, "automation", None)
         away_manager = getattr(self._app_state, "away_manager", None)
@@ -401,8 +404,19 @@ class MusicAssistedPlaybackService:
             return {"reason": "sonos_status_unavailable", "mode": mode}
         state = str(status.get("state") or "").upper()
         track = str(status.get("track") or "").strip()
-        if state not in _IDLE_STATES or track:
+        if state not in _IDLE_STATES:
             return {"reason": "sonos_busy", "mode": mode}
+        if track:
+            if not allowed_loaded_provider_id:
+                return {"reason": "sonos_busy", "mode": mode}
+            try:
+                loaded_uri = await sonos.get_current_media_uri()
+            except Exception:
+                loaded_uri = None
+            if not self._loaded_track_matches_provider(
+                loaded_uri, allowed_loaded_provider_id,
+            ):
+                return {"reason": "sonos_busy", "mode": mode}
         if bool(status.get("mute")):
             return {"reason": "sonos_muted", "mode": mode}
 
@@ -455,6 +469,25 @@ class MusicAssistedPlaybackService:
             "volume_used": current_volume,
             "queue_size": queue_size,
         }
+
+    @staticmethod
+    def _loaded_track_matches_provider(
+        uri: str | None, provider_id: str | None,
+    ) -> bool:
+        """Allow only the exact ShareLink item prepared by this request.
+
+        Sonos exposes the newly appended Apple item as the current stopped track
+        before playback begins. That is expected ownership, not unrelated manual
+        playback. The URI must still carry the exact Apple ``song:<provider_id>``
+        identity; missing or different URIs fail closed.
+        """
+        provider_id = str(provider_id or "").strip()
+        uri = str(uri or "").strip()
+        if not provider_id.isdigit() or not uri:
+            return False
+        decoded = unquote(uri)
+        media_part = decoded.split("?", 1)[0]
+        return media_part.endswith(f"song:{provider_id}")
 
     async def _load(self, client_event_id: str) -> MusicAssistedPlaybackEvent | None:
         async with self._session_factory() as session:
