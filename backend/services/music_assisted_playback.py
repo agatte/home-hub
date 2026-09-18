@@ -73,7 +73,7 @@ class MusicAssistedPlaybackService:
             "supported_adapters": [_SUPPORTED_ADAPTER],
             "ownership_policy": "idle_sonos_only",
             "idempotency": "durable_client_event_id",
-            "volume_policy": "require_at_or_below_current_mode_cap_never_write",
+            "volume_policy": "require_exact_current_mode_target_never_write",
         }
 
     async def play_exact(
@@ -309,12 +309,13 @@ class MusicAssistedPlaybackService:
                 else:
                     try:
                         failed_queue = await sonos.get_queue_context()
-                        if (
-                            failed_queue.get("available")
-                            and int(failed_queue.get("queue_size") or 0)
-                            != int(live["queue_size"])
-                        ):
-                            failure_reason = "playback_failed_queue_changed"
+                        if failed_queue.get("available"):
+                            failed_size = int(failed_queue.get("queue_size") or 0)
+                            initial_size = int(live["queue_size"])
+                            if failed_size == initial_size + 1:
+                                failure_reason = "playback_start_unverified"
+                            elif failed_size != initial_size:
+                                failure_reason = "playback_failed_queue_changed"
                     except Exception:
                         failure_reason = "playback_failed_queue_unknown"
                 row = await self._complete(
@@ -458,6 +459,13 @@ class MusicAssistedPlaybackService:
         if current_volume > volume_limit:
             return {
                 "reason": "sonos_volume_above_policy",
+                "mode": mode,
+                "volume_before": current_volume,
+                "volume_used": None,
+            }
+        if current_volume < volume_limit:
+            return {
+                "reason": "sonos_volume_below_playback_floor",
                 "mode": mode,
                 "volume_before": current_volume,
                 "volume_used": None,

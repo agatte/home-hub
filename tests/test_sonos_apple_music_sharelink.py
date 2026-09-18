@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from types import SimpleNamespace
 
@@ -56,11 +58,25 @@ class FakeAVTransport:
         return {"CurrentURI": self.current_uri}
 
     def GetPositionInfo(self, args, **kwargs):
-        return {"Track": str(self.target or 0)}
+        current = self.device.position_seconds
+        if self.device.transport_state == "PLAYING" and self.device.advance_position:
+            self.device.position_seconds += 1
+        seconds = max(0, int(current))
+        return {
+            "Track": str(self.target or 0),
+            "RelTime": f"0:00:{seconds:02d}",
+        }
 
     def Play(self, args, **kwargs):
         self.device.calls.append(("play_from_queue", self.target - 1))
         self.device.upnp_calls.append(("Play", dict(args), kwargs))
+        self.device.transport_state = self.device.transport_state_on_play
+        if self.device.volume_on_play is not None:
+            self.device.volume = self.device.volume_on_play
+        if self.device.source_on_play is not None:
+            self.current_uri = self.device.source_on_play
+        if self.device.mutate_queue_on_play:
+            self.device.queue_update_id += 1
         return True
 
 
@@ -83,6 +99,12 @@ class FakeDevice:
         self.queue_size = 0
         self.transport_state = "STOPPED"
         self.queue_update_id = 1
+        self.position_seconds = 0
+        self.advance_position = True
+        self.transport_state_on_play = "PLAYING"
+        self.volume_on_play = None
+        self.source_on_play = None
+        self.mutate_queue_on_play = False
         self.volume = 20
         self.mute = False
         self.uid = "RINCON_TEST"
@@ -360,6 +382,12 @@ def test_final_checked_play_refuses_external_volume_raise_or_mute():
     ) is False
     assert device.calls == []
 
+    device.volume = 19
+    assert sonos._play_queue_item_if_unchanged_sync(
+        100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+    ) is False
+    assert device.calls == []
+
     device.volume = 20
     device.mute = True
     assert sonos._play_queue_item_if_unchanged_sync(
@@ -424,3 +452,110 @@ def test_final_checked_play_aborts_if_external_source_wins_during_setup():
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
     ) is False
     assert device.calls == []
+
+@pytest.mark.asyncio
+async def test_sharelink_requires_position_advancement_before_success(monkeypatch):
+    sonos = SonosService()
+    sonos._connected = True
+    device = FakeDevice()
+    device.play_mode = "NORMAL"
+    device.queue_size = 101
+    device.advance_position = False
+    sonos._device = device
+    url = "https://music.apple.com/us/album/bang/1713833569?i=1713833576&uo=4"
+    monkeypatch.setattr(sonos, "_canonical_apple_music_share_link", lambda value: "song:1713833576")
+    monkeypatch.setattr(sonos, "_add_apple_music_share_link_sync", lambda value: 101)
+    monkeypatch.setattr("backend.services.sonos_service.ASSISTED_START_VERIFY_SECONDS", 0.05)
+    monkeypatch.setattr("backend.services.sonos_service.ASSISTED_START_POLL_SECONDS", 0.01)
+
+    result = await sonos.play_apple_music_share_link(
+        "1713833576", url, expected_queue_size=100,
+    )
+
+    assert result is False
+    assert device.calls == [("play_from_queue", 100)]
+    assert device.transport_state == "PLAYING"
+
+
+@pytest.mark.asyncio
+async def test_sharelink_start_verification_rejects_queue_takeover_after_play(monkeypatch):
+    sonos = SonosService()
+    sonos._connected = True
+    device = FakeDevice()
+    device.play_mode = "NORMAL"
+    device.queue_size = 101
+    device.mutate_queue_on_play = True
+    sonos._device = device
+    url = "https://music.apple.com/us/album/bang/1713833569?i=1713833576&uo=4"
+    monkeypatch.setattr(sonos, "_canonical_apple_music_share_link", lambda value: "song:1713833576")
+    monkeypatch.setattr(sonos, "_add_apple_music_share_link_sync", lambda value: 101)
+
+    result = await sonos.play_apple_music_share_link(
+        "1713833576", url, expected_queue_size=100,
+    )
+
+    assert result is False
+    assert device.calls == [("play_from_queue", 100)]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("volume_on_play", 19),
+        ("transport_state_on_play", "PAUSED_PLAYBACK"),
+        ("source_on_play", "x-rincon-stream:OTHER"),
+    ],
+)
+async def test_sharelink_start_verification_yields_to_post_play_manual_takeover(
+    monkeypatch, mutation, value,
+):
+    sonos = SonosService()
+    sonos._connected = True
+    device = FakeDevice()
+    device.play_mode = "NORMAL"
+    device.queue_size = 101
+    setattr(device, mutation, value)
+    sonos._device = device
+    url = "https://music.apple.com/us/album/bang/1713833569?i=1713833576&uo=4"
+    monkeypatch.setattr(sonos, "_canonical_apple_music_share_link", lambda candidate: "song:1713833576")
+    monkeypatch.setattr(sonos, "_add_apple_music_share_link_sync", lambda candidate: 101)
+
+    result = await sonos.play_apple_music_share_link(
+        "1713833576", url, expected_queue_size=100,
+        before_play=lambda: _async_guard(20),
+    )
+
+    assert result is False
+    assert device.calls == [("play_from_queue", 100)]
+
+
+async def _async_guard(volume):
+    return {"reason": None, "volume_used": volume}
+
+@pytest.mark.asyncio
+async def test_start_verification_enforces_outer_breaker_budget_on_blocking_sample(monkeypatch):
+    sonos = SonosService()
+    sonos._connected = True
+    device = FakeDevice()
+    device.play_mode = "NORMAL"
+    device.queue_size = 101
+    sonos._device = device
+    snapshot = sonos._queue_item_snapshot_sync(100)
+
+    def blocking_sample(*_args, **_kwargs):
+        time.sleep(0.30)
+        return {"state": "PLAYING", "position": 1.0}
+
+    monkeypatch.setattr(sonos, "_playback_start_sample_sync", blocking_sample)
+    monkeypatch.setattr("backend.services.sonos_service.ASSISTED_START_VERIFY_SECONDS", 0.08)
+    monkeypatch.setattr("backend.services.sonos_service.ASSISTED_START_SAMPLE_BUDGET_SECONDS", 0.03)
+    monkeypatch.setattr("backend.services.sonos_service.ASSISTED_START_POLL_SECONDS", 0.01)
+
+    started = time.monotonic()
+    result = await sonos._verify_queue_playback_started(
+        100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result is False
+    assert elapsed < 0.20

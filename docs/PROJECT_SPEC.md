@@ -552,9 +552,16 @@ and shuffles the queue. Assisted playback requires Home/Awake, DND off, no
 Travel/Return hold, no active TTS or ambient Sonos owner, connected Sonos with a
 closed breaker, STOPPED/NO_MEDIA transport with no loaded track, and NORMAL play
 mode. Any existing/paused/manual playback is treated as user ownership and is not
-replaced. The current mode must also have a music-volume curve. This first slice
-never writes Sonos volume: if the existing volume is above that mode/time cap, the
-request is suppressed; if it is at or below the cap, the user's volume is untouched.
+replaced. The current mode must also have a music-volume curve. The deployed #272 slice
+never writes Sonos volume. Physical acceptance on 2026-09-17/18 proved that treating
+any nonzero volume below the mode target as acceptable is not sufficient: two runs
+at volume 15 reached Sonos PLAYING but were inaudible to Anthony, while the earlier
+#271 capability proof was audible at 25. **IMPLEMENTED/UNRELEASED (#278):** until
+#274 supplies a shared volume-ownership lease, explicit assisted playback remains
+non-volume-writing and requires the stopped speaker to already equal the current
+mode/time volume target. Above-target requests remain suppressed; below-target
+requests fail closed as `sonos_volume_below_playback_floor` rather than claiming
+that a stale stopped-speaker volume is usable.
 
 A durable `music_assisted_playback_events` ledger claims each `client_event_id`
 before device I/O, so retries and restarts cannot double-play the same request.
@@ -571,22 +578,32 @@ request owns one bounded transport transaction and there is deliberately no furt
 `await`. The synchronous Sonos UPnP transaction has a shared 3-second network
 budget. It first proves the expected queue/idle ownership, performs non-audible
 queue-source/track selection, then re-proves prepared source/track, queue
-generation/object identity, NORMAL mode, STOPPED transport, mute, and volume no
-higher than the guard-observed safe value immediately before `Play`. This catches
+generation/object identity, NORMAL mode, STOPPED transport, mute, and under #278 volume still exactly equal to the guard-observed mode target
+immediately before `Play`. This catches
 external Sonos actions that win during setup without exposing the backend to SoCo's
 20-second default timeout. Sonos does not expose a conditional/CAS Play action, so
 a truly simultaneous controller command after that final proof is serialized
 against the already-authorized explicit HomeHub request rather than guessed around. The
 execution handoff remains `MusicAssistedPlaybackService -> MusicMapper ->
 SonosService`; Music Intelligence does not become a parallel Sonos writer. A
-successful explicit play commits the assisted `played` result and exactly one
+**IMPLEMENTED/UNRELEASED (#278):** the low-level executor does not treat the
+UPnP `Play` response as physical success. After `Play`, it polls for at most six
+seconds and requires the same queue generation/object, queue source and track
+number, NORMAL play mode, unchanged guarded volume/mute, PLAYING transport, and
+at least one second of reported playback-position advancement. Only then does a
+successful explicit play commit the assisted `played` result and exactly one
 canonical `sonos_playback_events` manual-play row in the same SQLite transaction
-for the established taste/bandit evidence path; request/source/result provenance
-stays in the assisted ledger. Failed
-ShareLink playback never writes volume. If enqueue succeeds but playback cannot
-start, the append is retained and reported rather than automatically deleted: a
-concurrent Sonos-app queue edit makes positional cleanup unsafe. Any ambiguity is left
-untouched and recorded as a queue-changed/unknown failure rather than guessing.
+for the established taste/bandit evidence path. If one expected append exists but
+startup cannot be verified, the request is `failed` with
+`playback_start_unverified` and emits no learning row. A Play command may already
+have been accepted in that case; #278 deliberately does **not** issue Stop or delete
+the append afterward because Sonos exposes no conditional Stop/CAS primitive and a
+concurrent manual takeover could otherwise be interrupted. General conditional
+transport/queue cleanup belongs to #274. Request/source/result provenance stays in
+the assisted ledger. Failed ShareLink playback never writes volume. If enqueue
+succeeds but playback cannot be verified, the append is retained and reported rather
+than automatically deleted: a concurrent Sonos-app queue edit makes positional
+cleanup unsafe. Any ambiguity is left untouched and recorded rather than guessed.
 If the process dies after device actuation but before that completion transaction,
 the durable claim remains pending; the next retry terminalizes it as `indeterminate`
 and never replays or fabricates learning evidence. No contextual auto-play, new-music
@@ -1881,7 +1898,7 @@ UPnP control via SoCo. Polls every 2s, broadcasts changes.
 | `set_volume` | `(volume: int) → bool` | 0-100 |
 | `play_uri` | `(uri: str, volume?: int) → bool` | Play HTTP URL |
 | `play_favorite` | `(title: str) → bool` | Play by name |
-| `play_apple_music_share_link` | `(provider_id: str, share_url: str, expected_queue_size?: int, before_play?: async guard) -> bool` | Low-level exact Apple Music ShareLink queue/play primitive. Requires `song:<provider_id>` canonical match, appends without changing play mode, supports a final caller-supplied pre-play authority guard, and uses a shared 3-second final UPnP budget to recheck the appended queue-object fingerprint/generation, idle transport, mute, and safe volume immediately before positional playback. Failed/aborted appends are retained rather than risking deletion from a concurrently edited user queue. No title/URI fallback or second Apple credential. |
+| `play_apple_music_share_link` | `(provider_id: str, share_url: str, expected_queue_size?: int, before_play?: async guard) -> bool` | Low-level exact Apple Music ShareLink queue/play primitive. Requires `song:<provider_id>` canonical match, appends without changing play mode, supports a final caller-supplied pre-play authority guard, and uses a shared 3-second final UPnP budget to recheck the appended queue-object fingerprint/generation, idle transport, mute, and guarded volume immediately before positional playback. **#278 implemented/unreleased:** expected-queue callers return success only after a bounded post-Play proof keeps the exact queue/source/track/volume ownership and observes PLAYING position advance by at least one second. Failed/aborted appends remain retained rather than risking deletion from a concurrently edited user queue. No title/URI fallback or second Apple credential. |
 | `get_queue_context` | `() -> dict` | Fresh read-only play-mode/queue-size facts used by #272 ownership policy; failures return unavailable rather than guessing. |
 | `get_favorites` | `() → list[dict]` | List favorites |
 | `get_current_playback_snapshot` | `() → Optional[soco.snapshot.Snapshot]` | For duck-and-resume; captures even when idle; None = capture failed |
@@ -2433,7 +2450,9 @@ The dashboard has been redesigned as a living, data-reactive interface:
   ShareLink queue/play adapter preserves the existing queue/play mode, has no
   route/autonomous caller, and requires no second Apple credential. The 2026-09-17
   live proof passed cleanly and the household-scoped marker is persisted; production
-  has progressed through deployed #272 build `329b326`; physical acceptance is still in progress pending the exact ShareLink ownership hotfix.
+  contains the #272 exact-ownership hotfix `21f5ecf` (current production build
+  `f209705`). Physical #272 acceptance remains open because the real endpoint reached
+  PLAYING at volume 15 but Anthony heard no audio. #278 owns that direct close gate.
 - **DEPLOYED / PHYSICAL ACCEPTANCE IN PROGRESS (#272):** explicit exact-track assisted playback now
   has durable idempotency plus trust, lifecycle, ownership, queue-mode, ambient/TTS,
   and read-only volume-cap gates (never a #272 volume write). It routes through MusicMapper to the exact Apple

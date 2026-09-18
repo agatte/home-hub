@@ -82,11 +82,12 @@ class FakeSonos:
             "x-sonosapi-hls-static:song%3a1713833576?sid=204&flags=8232&sn=2"
         )
         self.loaded_state_after_enqueue = "STOPPED"
-        self.volume = 20
+        self.volume = 22
         self.mute = False
         self.play_mode = "NORMAL"
         self.queue_size = 100
         self.play_result = True
+        self.fail_after_enqueue = False
         self.play_calls = []
         self.volume_calls = []
 
@@ -130,6 +131,8 @@ class FakeSonos:
                     return False
             elif not guard:
                 return False
+        if self.fail_after_enqueue:
+            return False
         self.state = "PLAYING"
         self.track = "Bang!"
         return True
@@ -230,6 +233,15 @@ async def build_service(
 
 
 @pytest.mark.asyncio
+async def test_status_reports_exact_mode_target_read_only_volume_contract(db_engine):
+    service, *_ = await build_service(db_engine)
+
+    status = service.status()
+
+    assert status["volume_policy"] == "require_exact_current_mode_target_never_write"
+
+
+@pytest.mark.asyncio
 async def test_explicit_approved_track_plays_once_and_logs_canonical_manual_evidence(db_engine):
     service, app, logger, _approval, factory = await build_service(db_engine)
     result = await service.play_exact(
@@ -246,7 +258,7 @@ async def test_explicit_approved_track_plays_once_and_logs_canonical_manual_evid
     assert rows[0].event_type == "play"
     assert rows[0].favorite_title == "Bang!"
     assert rows[0].mode_at_time == "gaming"
-    assert rows[0].volume == 20
+    assert rows[0].volume == 22
     assert rows[0].triggered_by == "manual"
 
 
@@ -449,15 +461,71 @@ async def test_volume_above_policy_suppresses_without_writing_volume(db_engine):
         client_event_id="play-volume-low", provider="itunes_search",
         provider_id="1713833576", source="test",
     )
-    assert result2["status"] == "played"
-    assert result2["volume_used"] == 8
+    assert result2["status"] == "suppressed"
+    assert result2["reason"] == "sonos_volume_below_playback_floor"
+    assert result2["volume_before"] == 8
     assert app2.sonos.volume_calls == []
+    assert app2.sonos.play_calls == []
+
+
+@pytest.mark.asyncio
+async def test_gaming_night_stale_volume_15_suppresses_without_volume_write(db_engine):
+    service, app, _logger, _approval, _factory = await build_service(db_engine)
+    app.automation.period = "night"
+    app.sonos.volume = 15
+
+    result = await service.play_exact(
+        client_event_id="play-gaming-night-low", provider="itunes_search",
+        provider_id="1713833576", source="test",
+    )
+
+    assert result["status"] == "suppressed"
+    assert result["reason"] == "sonos_volume_below_playback_floor"
+    assert result["volume_before"] == 15
+    assert app.sonos.volume_calls == []
+    assert app.sonos.play_calls == []
+
+
+@pytest.mark.asyncio
+async def test_gaming_night_target_18_can_play_without_volume_write(db_engine):
+    service, app, _logger, _approval, _factory = await build_service(db_engine)
+    app.automation.period = "night"
+    app.sonos.volume = 18
+
+    result = await service.play_exact(
+        client_event_id="play-gaming-night-target", provider="itunes_search",
+        provider_id="1713833576", source="test",
+    )
+
+    assert result["status"] == "played"
+    assert result["volume_used"] == 18
+    assert app.sonos.volume_calls == []
+    assert len(app.sonos.play_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unverified_start_is_failed_without_learning_evidence(db_engine):
+    service, app, logger, _approval, factory = await build_service(db_engine)
+    app.sonos.fail_after_enqueue = True
+
+    result = await service.play_exact(
+        client_event_id="play-start-unverified", provider="itunes_search",
+        provider_id="1713833576", source="test",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "playback_start_unverified"
+    assert app.sonos.queue_size == 101
+    assert logger.calls == []
+    async with factory() as session:
+        rows = list((await session.execute(select(SonosPlaybackEvent))).scalars())
+    assert rows == []
 
 
 @pytest.mark.asyncio
 async def test_failed_playback_never_writes_volume_or_learning_evidence(db_engine):
     service, app, logger, _approval, factory = await build_service(db_engine)
-    app.sonos.volume = 20
+    app.sonos.volume = 22
     app.sonos.play_result = False
     result = await service.play_exact(
         client_event_id="play-fails", provider="itunes_search",
@@ -466,7 +534,7 @@ async def test_failed_playback_never_writes_volume_or_learning_evidence(db_engin
     assert result["status"] == "failed"
     assert result["reason"] == "playback_failed"
     assert app.sonos.volume_calls == []
-    assert app.sonos.volume == 20
+    assert app.sonos.volume == 22
     assert logger.calls == []
     async with factory() as session:
         rows = list((await session.execute(select(SonosPlaybackEvent))).scalars())
@@ -628,7 +696,7 @@ async def test_mode_change_after_trust_recheck_suppresses_before_enqueue(db_engi
         nonlocal calls
         calls += 1
         if calls == 2:
-            app.automation.current_mode = "social"
+            app.automation.current_mode = "watching"
         return await real_lookup(provider, provider_id)
 
     service._catalog.get_by_identity = changing_lookup
@@ -638,13 +706,13 @@ async def test_mode_change_after_trust_recheck_suppresses_before_enqueue(db_engi
     )
     assert result["status"] == "suppressed"
     assert result["reason"] == "activity_changed_before_play"
-    assert result["mode"] == "social"
+    assert result["mode"] == "watching"
     assert app.sonos.play_calls == []
     assert logger.calls == []
 
 
 @pytest.mark.asyncio
-async def test_success_uses_post_enqueue_guard_volume_for_learning_evidence(db_engine):
+async def test_post_enqueue_volume_drop_below_target_suppresses_without_learning(db_engine):
     service, app, logger, _approval, factory = await build_service(db_engine)
     real_status = app.sonos.get_status
     calls = 0
@@ -661,8 +729,8 @@ async def test_success_uses_post_enqueue_guard_volume_for_learning_evidence(db_e
         client_event_id="play-final-volume", provider="itunes_search",
         provider_id="1713833576", source="test",
     )
-    assert result["status"] == "played"
-    assert result["volume_used"] == 8
+    assert result["status"] == "failed"
+    assert result["reason"] == "preplay_sonos_volume_below_playback_floor"
     assert logger.calls == []
     async with factory() as session:
         assisted = (await session.execute(
@@ -671,12 +739,8 @@ async def test_success_uses_post_enqueue_guard_volume_for_learning_evidence(db_e
             )
         )).scalar_one()
         learning = list((await session.execute(select(SonosPlaybackEvent))).scalars())
-    assert assisted.mode_at_time == "gaming"
-    assert assisted.volume_before == 8
-    assert assisted.volume_used == 8
-    assert len(learning) == 1
-    assert learning[0].mode_at_time == "gaming"
-    assert learning[0].volume == 8
+    assert assisted.status == "failed"
+    assert learning == []
 
 @pytest.mark.asyncio
 async def test_post_enqueue_wrong_loaded_provider_is_busy(db_engine):

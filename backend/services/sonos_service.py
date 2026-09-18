@@ -27,6 +27,10 @@ logger = logging.getLogger("home_hub.sonos")
 
 STATUS_FRESHNESS_SECONDS = 10.0
 ASSISTED_FINAL_BUDGET_SECONDS = 3.0
+ASSISTED_START_VERIFY_SECONDS = 6.0
+ASSISTED_START_POLL_SECONDS = 0.25
+ASSISTED_START_SAMPLE_BUDGET_SECONDS = 1.0
+ASSISTED_START_MIN_ADVANCE_SECONDS = 1.0
 
 
 # play_uri() makes the speaker fetch arbitrary URLs. Keep generic URL
@@ -914,10 +918,22 @@ class SonosService:
                         "Apple Music ShareLink queue/transport changed at final play boundary; refusing play"
                     )
                     return False
+                verified = await self._verify_queue_playback_started(
+                    queue_number - 1,
+                    int(expected_queue_size) + 1,
+                    expected_snapshot,
+                    queue_uid=str(queue_uid),
+                    max_volume=final_max_volume,
+                )
+                if not verified:
+                    logger.warning(
+                        "Apple Music ShareLink Play command did not produce a verified advancing stream"
+                    )
+                    return False
             else:
                 await self._safe_call(self._device.play_from_queue, queue_number - 1)
             logger.info(
-                "Playing exact Apple Music share-link item id=%s at queue=%s",
+                "Playing verified Apple Music share-link item id=%s at queue=%s",
                 provider_id, queue_number,
             )
             return True
@@ -997,7 +1013,7 @@ class SonosService:
         )
         if bool(int(mute.get("CurrentMute") or 0)):
             return False
-        if current_volume <= 0 or (max_volume is not None and current_volume > max_volume):
+        if current_volume <= 0 or (max_volume is not None and current_volume != max_volume):
             return False
         snapshot = self._queue_item_snapshot_sync(index, timeout=timeout())
         if snapshot != expected_snapshot or snapshot[1] != int(expected_queue_size):
@@ -1050,12 +1066,122 @@ class SonosService:
         current_volume = int(volume.get("CurrentVolume") or 0)
         if bool(int(mute.get("CurrentMute") or 0)) or current_volume <= 0:
             return False
-        if max_volume is not None and current_volume > max_volume:
+        if max_volume is not None and current_volume != max_volume:
             return False
         self._device.avTransport.Play(
             [("InstanceID", 0), ("Speed", 1)], timeout=timeout(),
         )
         return True
+
+    async def _verify_queue_playback_started(
+        self, index: int, expected_queue_size: int, expected_snapshot: tuple,
+        *, queue_uid: str, max_volume: int | None,
+    ) -> bool:
+        """Prove that the exact queued track actually entered advancing playback.
+
+        A successful UPnP ``Play`` response is only command acceptance. For the
+        assisted-playback contract we additionally require the same queue object
+        and queue source to remain selected, transport to reach PLAYING, and the
+        reported relative position to advance by at least one second inside a
+        bounded window. Any ownership/source/queue/volume mismatch fails closed.
+        """
+        deadline = time.monotonic() + ASSISTED_START_VERIFY_SECONDS
+        first_playing_position: float | None = None
+        saw_playing = False
+
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            sample_budget = min(ASSISTED_START_SAMPLE_BUDGET_SECONDS, remaining)
+            if sample_budget <= 0:
+                break
+            try:
+                sample = await self._breaker.call(
+                    asyncio.to_thread,
+                    self._playback_start_sample_sync,
+                    index, expected_queue_size, expected_snapshot,
+                    queue_uid, max_volume, sample_budget,
+                    call_timeout=sample_budget,
+                )
+            except Exception as exc:
+                logger.warning("Assisted playback start verification failed: %s", exc)
+                return False
+            if sample is None:
+                return False
+
+            state = str(sample.get("state") or "").upper()
+            position = sample.get("position")
+            if state == "PLAYING":
+                saw_playing = True
+                if position is not None:
+                    position = float(position)
+                    if first_playing_position is None:
+                        first_playing_position = position
+                    elif position - first_playing_position >= ASSISTED_START_MIN_ADVANCE_SECONDS:
+                        return True
+            elif state == "PAUSED_PLAYBACK":
+                return False
+            elif saw_playing and state not in {"TRANSITIONING"}:
+                return False
+            elif state not in {"STOPPED", "NO_MEDIA_PRESENT", "TRANSITIONING"}:
+                return False
+
+            sleep_for = min(ASSISTED_START_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+        return False
+
+    def _playback_start_sample_sync(
+        self, index: int, expected_queue_size: int, expected_snapshot: tuple,
+        queue_uid: str, max_volume: int | None, budget_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Return one bounded exact-owner playback-start sample or fail closed."""
+        deadline = time.monotonic() + max(0.05, float(budget_seconds))
+
+        def timeout() -> float:
+            return self._final_timeout(deadline)
+
+        settings_result = self._device.avTransport.GetTransportSettings(
+            [("InstanceID", 0)], timeout=timeout(),
+        )
+        if str(settings_result.get("PlayMode") or "").upper() != "NORMAL":
+            return None
+
+        media = self._device.avTransport.GetMediaInfo(
+            [("InstanceID", 0)], timeout=timeout(),
+        )
+        expected_uri = f"x-rincon-queue:{queue_uid}#0"
+        if str(media.get("CurrentURI") or "") != expected_uri:
+            return None
+
+        position = self._device.avTransport.GetPositionInfo(
+            [("InstanceID", 0)], timeout=timeout(),
+        )
+        if int(position.get("Track") or 0) != index + 1:
+            return None
+
+        snapshot = self._queue_item_snapshot_sync(index, timeout=timeout())
+        if snapshot != expected_snapshot or snapshot[1] != int(expected_queue_size):
+            return None
+
+        volume = self._device.renderingControl.GetVolume(
+            [("InstanceID", 0), ("Channel", "Master")], timeout=timeout(),
+        )
+        mute = self._device.renderingControl.GetMute(
+            [("InstanceID", 0), ("Channel", "Master")], timeout=timeout(),
+        )
+        current_volume = int(volume.get("CurrentVolume") or 0)
+        if bool(int(mute.get("CurrentMute") or 0)) or current_volume <= 0:
+            return None
+        if max_volume is not None and current_volume != max_volume:
+            return None
+
+        transport = self._device.avTransport.GetTransportInfo(
+            [("InstanceID", 0)], timeout=timeout(),
+        )
+        return {
+            "state": str(transport.get("CurrentTransportState") or "").upper(),
+            "position": self._parse_hms(position.get("RelTime")),
+        }
 
     @staticmethod
     def _canonical_apple_music_share_link(share_url: str) -> str | None:
