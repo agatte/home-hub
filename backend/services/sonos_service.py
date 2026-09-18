@@ -157,6 +157,10 @@ class SonosService:
         self._breaker = CircuitBreaker(
             name="sonos", failure_threshold=3, cooldown_seconds=30.0, call_timeout=5.0
         )
+        # Ownership evidence reads are composite sync UPnP calls. A caller-level
+        # timeout must not start another thread while the first read is still
+        # physically running, so all callers share one settled in-flight task.
+        self._playback_evidence_read_task: Optional[asyncio.Task] = None
 
     def set_heartbeat_registry(self, registry: "HeartbeatRegistry") -> None:
         """Inject the heartbeat registry (called from lifespan)."""
@@ -199,9 +203,21 @@ class SonosService:
         """
         return self._breaker.state == CircuitBreaker.OPEN
 
-    async def _safe_call(self, fn, *args, **kwargs):
+    async def _safe_call(
+        self,
+        fn,
+        *args,
+        call_timeout: float | None = None,
+        **kwargs,
+    ):
         """Run a sync SoCo read/call in a thread under the circuit breaker."""
-        return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
+        return await self._breaker.call(
+            asyncio.to_thread,
+            fn,
+            *args,
+            call_timeout=call_timeout,
+            **kwargs,
+        )
 
     @staticmethod
     async def _settled_thread_call(fn, *args, **kwargs):
@@ -285,15 +301,74 @@ class SonosService:
             logger.warning("Sonos queue ownership evidence read failed: %s", exc)
             return None
 
-    async def get_playback_ownership_evidence(self) -> dict[str, Any] | None:
-        """Return source/transport plus rendering evidence for direct playback."""
-        if not self._connected or not self._device:
-            return None
+    async def _settled_playback_ownership_evidence_read(
+        self,
+    ) -> dict[str, Any] | None:
+        """Run one evidence read without abandoning its sync worker on timeout."""
         try:
-            return await self._safe_call(self._playback_ownership_evidence_sync)
+            return await self._breaker.call(
+                self._settled_thread_call,
+                self._playback_ownership_evidence_sync,
+            )
+        except CircuitBreakerOpen:
+            return None
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("Sonos playback ownership evidence read failed: %s", exc)
             return None
+
+    async def get_playback_ownership_evidence(
+        self,
+        *,
+        call_timeout: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Return one fresh direct-playback fingerprint with deduped settling.
+
+        A short caller budget may expire before SoCo's sync read returns. The
+        underlying read is shielded and retained so later callers join that same
+        worker instead of piling up additional blocked threads.
+        """
+        if not self._connected or not self._device:
+            return None
+
+        task = getattr(self, "_playback_evidence_read_task", None)
+        if task is None or task.done():
+            task = asyncio.create_task(
+                self._settled_playback_ownership_evidence_read(),
+                name="sonos_playback_ownership_evidence",
+            )
+            self._playback_evidence_read_task = task
+
+            def _clear_evidence_task(done: asyncio.Task) -> None:
+                if getattr(self, "_playback_evidence_read_task", None) is done:
+                    self._playback_evidence_read_task = None
+
+            task.add_done_callback(_clear_evidence_task)
+
+        timeout = (
+            self._breaker.call_timeout
+            if call_timeout is None
+            else max(0.05, float(call_timeout))
+        )
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Sonos playback ownership evidence read exceeded %.2fs; "
+                "retaining the in-flight read",
+                timeout,
+            )
+            return None
+        except asyncio.CancelledError:
+            # Caller cancellation must remain cancellation. An internally
+            # cancelled shared task is instead an unavailable evidence sample.
+            if task.cancelled():
+                return None
+            raise
 
     def _playback_ownership_evidence_sync(self) -> dict[str, Any]:
         evidence = self._queue_ownership_evidence_sync()
@@ -536,7 +611,17 @@ class SonosService:
                 return False
             if still_allowed is not None and not still_allowed():
                 return False
-            self._device.pause()
+            try:
+                self._device.pause()
+            except Exception as exc:
+                # UPnP 701 means the exact still-owned transport is already
+                # non-playing. For conditional cleanup that is an idempotent
+                # success and, importantly, still acts as a settled command
+                # boundary after the earlier accepted Play.
+                err = str(exc)
+                if "701" in err and "Transition not available" in err:
+                    return True
+                raise
             return True
 
     async def pause_if_playback_unchanged(

@@ -614,16 +614,33 @@ report failure, but it cannot release the authority boundary while a stale write
 continues in the background. TTS, mode-volume ramps, Game Day, and
 assisted-cleanup remain separate #274 consumers until they adopt the same contract.
 
-**IMPLEMENTED/UNRELEASED (#279 Ambient adoption).** Ambient now consumes the
-central #274 authority for queue/source, transport, and volume. A new Ambient
+**IMPLEMENTED/DEPLOYED BASELINE; STARTUP-SETTLE HOTFIX UNRELEASED
+(#279 Ambient adoption).** Ambient consumes the central #274 authority for
+queue/source, transport, and volume. The original adoption baseline is deployed
+at `fa72619`; the production startup-settle correction described below remains
+release-candidate work until separately integrated/deployed. A new Ambient
 start is allowed only from fresh neutral Sonos evidence: STOPPED/NO_MEDIA,
 NORMAL play mode, empty queue, unmuted, and no unrelated loaded source. Arbitrary
 PAUSED playback and stale source/play-mode residue (including the production
 `fireplace.mp3` + SHUFFLE reproduction) are not treated as idle permission.
 The exact preflight is re-read inside the same settled Sonos mutation before
-`play_uri`, and successful playback persists the resulting source/transport/
-volume fingerprint in the Ambient lease. Ambient-owned Sonos mutations also use
-a process-local physical-mutation fence: the final evidence read, lifecycle/
+`play_uri`. Sonos accepting that command is **not** proof that transport has
+already reached PLAYING: production showed the target URI can appear with stale
+STOPPED evidence, or the complete preflight can remain visible briefly, before
+the accepted command later becomes audible. The initiating verification wait is
+therefore bounded, but ambiguous startup never releases queue/source or transport
+ownership. Ambient retains the lease and a tracked pending-start reconciler until
+fresh evidence proves PLAYING, proves foreign/manual source takeover, proves a
+terminal state after target progress was actually observed, or shutdown/manual
+invalidation retires the claim. Cumulative TRANSITIONING/PLAYING progress is
+carried across verifier samples into the reconciler; a later stale STOPPED sample
+cannot erase that progress. Ownership-evidence reads also share one settled
+in-flight SoCo read so a short caller timeout cannot accumulate abandoned sync
+workers.
+
+Successful playback persists the resulting source/transport/volume fingerprint
+in the Ambient lease. Ambient-owned Sonos mutations also use a process-local
+physical-mutation fence: the final evidence read, lifecycle/
 shutdown guard, and synchronous Sonos write occur under that fence. Graceful
 shutdown acquires the same fence before latching terminal shutdown state, so a
 guarded Ambient mutation either completes before shutdown begins or observes the
@@ -639,7 +656,15 @@ autonomous source or volume mutation, so a newer manual or stronger policy
 decision prevents later steps. Away, Sleeping, DND, and the existing
 suppressed-mode policy remain stronger than Ambient ownership. Public Ambient
 play/pause/resume/stop intents are serialized so overlapping controls cannot
-leave persisted "playing" state without a matching lease/task.
+leave persisted "playing" state without a matching lease/task. If Pause/Stop
+arrives while startup is still settling, Ambient first uses an exact conditional
+pause as the post-Play cleanup barrier and keeps ownership until that result is
+reconciled. A newer Play or same-sound Resume that arrives while this cleanup is
+already in flight is recorded as replay intent and is conditionally
+replaced/replayed under the retained lease once fresh evidence is available;
+temporary post-pause evidence timeout/staleness or a reconciler exception cannot
+silently drop that newer intent. Unexpected reconciler failures re-arm the
+pending monitor rather than stranding a live lease without an observer.
 
 Ambient pause may retain a **process-local exact paused fingerprint** only after
 HomeHub itself conditionally paused the still-owned Ambient source. Post-pause

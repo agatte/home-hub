@@ -54,7 +54,10 @@ class FakeSonos:
         self.pause_calls: list[dict] = []
         self.volume_calls: list[int] = []
 
-    async def get_playback_ownership_evidence(self) -> dict:
+    async def get_playback_ownership_evidence(
+        self, *, call_timeout: float | None = None,
+    ) -> dict:
+        del call_timeout
         return deepcopy(self.evidence)
 
     @staticmethod
@@ -1068,3 +1071,1054 @@ async def test_queue_change_during_pause_destroys_resumable_claim(
     assert service._sonos_ambient_active is False
     assert service._playing is False
     assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_ambient_start_waits_through_transitioning_until_playing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+
+    original_play = sonos.play_uri_if_unchanged
+    original_get = sonos.get_playback_ownership_evidence
+    post_reads = 0
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    async def staged_get(**_kwargs) -> dict:
+        nonlocal post_reads
+        if sonos.play_calls:
+            post_reads += 1
+            if post_reads >= 2:
+                sonos.evidence["transport_state"] = "PLAYING"
+        return await original_get()
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    sonos.play_uri_if_unchanged = delayed_play
+    sonos.get_playback_ownership_evidence = staged_get
+    monkeypatch.setattr(ambient_module.asyncio, "sleep", no_wait)
+
+    await service._start_sonos_ambient()
+
+    assert post_reads >= 2
+    assert service._sonos_ambient_active is True
+    assert service._playing is True
+    assert sonos.evidence["transport_state"] == "PLAYING"
+    lease = (await authority.snapshot())["leases"][0]
+    assert set(lease["dimensions"]) == set(AMBIENT_AUDIO_DIMENSIONS)
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambient_start_timeout_retains_lease_until_terminal_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+
+    original_play = sonos.play_uri_if_unchanged
+
+    async def stuck_transition(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = stuck_transition
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_POLL_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_PENDING_START_POLL_SECONDS",
+        0.001,
+    )
+
+    await service._start_sonos_ambient()
+
+    assert service._sonos_ambient_active is False
+    assert service._playing is True
+    assert service._sonos_ambient_pending is True
+    assert service._sonos_pending_start_context is not None
+    assert sonos.pause_calls == []
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert set(leases[0]["dimensions"]) == set(AMBIENT_AUDIO_DIMENSIONS)
+
+    sonos.evidence["transport_state"] = "STOPPED"
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is False
+    assert service._playing is False
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_pending_start_context is None
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_rendering_takeover_during_start_yields_only_volume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+
+    original_play = sonos.play_uri_if_unchanged
+    original_get = sonos.get_playback_ownership_evidence
+    post_reads = 0
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    async def staged_get(**_kwargs) -> dict:
+        nonlocal post_reads
+        if sonos.play_calls:
+            post_reads += 1
+            if post_reads == 1:
+                sonos.evidence["volume"] = 11
+            elif post_reads >= 2:
+                sonos.evidence["transport_state"] = "PLAYING"
+        return await original_get()
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    sonos.play_uri_if_unchanged = delayed_play
+    sonos.get_playback_ownership_evidence = staged_get
+    monkeypatch.setattr(ambient_module.asyncio, "sleep", no_wait)
+
+    await service._start_sonos_ambient()
+
+    assert service._sonos_ambient_active is True
+    assert sonos.evidence["transport_state"] == "PLAYING"
+    assert sonos.evidence["volume"] == 11
+    lease = (await authority.snapshot())["leases"][0]
+    assert set(lease["dimensions"]) == {QUEUE_SOURCE, TRANSPORT}
+    assert service._sonos_owned_evidence["volume"] == 11
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambient_start_yields_if_queue_fingerprint_changes_during_settle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+
+    original_play = sonos.play_uri_if_unchanged
+    original_get = sonos.get_playback_ownership_evidence
+    post_reads = 0
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    async def takeover_get(**_kwargs) -> dict:
+        nonlocal post_reads
+        if sonos.play_calls:
+            post_reads += 1
+            if post_reads == 1:
+                sonos.evidence["queue_update_id"] = "manual-change"
+                sonos.evidence["queue_size"] = 1
+        return await original_get()
+
+    sonos.play_uri_if_unchanged = delayed_play
+    sonos.get_playback_ownership_evidence = takeover_get
+
+    await service._start_sonos_ambient()
+
+    assert service._sonos_ambient_active is False
+    assert service._playing is False
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_ambient_pending_start_adopts_late_playing_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+
+    original_play = sonos.play_uri_if_unchanged
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = delayed_play
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_POLL_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_PENDING_START_POLL_SECONDS",
+        0.001,
+    )
+
+    await service._start_sonos_ambient()
+
+    assert service._sonos_ambient_active is False
+    assert service._sonos_ambient_pending is True
+    assert service._playing is True
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    lease_id = leases[0]["lease_id"]
+
+    sonos.evidence["transport_state"] = "PLAYING"
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._playing is True
+    assert sonos.evidence["transport_state"] == "PLAYING"
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == lease_id
+    assert set(leases[0]["dimensions"]) == set(AMBIENT_AUDIO_DIMENSIONS)
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+def _configure_fast_pending_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_POLL_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_PENDING_START_POLL_SECONDS",
+        0.001,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_start_evidence_outage_keeps_lease_until_playing_observed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+    original_get = sonos.get_playback_ownership_evidence
+    observable = False
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    async def outage_after_play(**_kwargs):
+        if sonos.play_calls and not observable:
+            return None
+        return await original_get()
+
+    sonos.play_uri_if_unchanged = delayed_play
+    sonos.get_playback_ownership_evidence = outage_after_play
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+
+    leases = (await authority.snapshot())["leases"]
+    assert service._sonos_ambient_pending is True
+    assert len(leases) == 1
+    lease_id = leases[0]["lease_id"]
+
+    observable = True
+    sonos.evidence["transport_state"] = "PLAYING"
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == lease_id
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pause_during_pending_start_preserves_exact_resume_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+    play_count = 0
+
+    async def first_start_delayed(*args, **kwargs) -> bool:
+        nonlocal play_count
+        played = await original_play(*args, **kwargs)
+        if played:
+            play_count += 1
+            if play_count == 1:
+                sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = first_start_delayed
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+
+    await service.pause()
+    await drain_sonos_tasks(service)
+
+    assert service._playing is False
+    assert service._sonos_ambient_pending is False
+    assert sonos.evidence["transport_state"] == "PAUSED_PLAYBACK"
+    assert service._sonos_paused_evidence is not None
+    assert service._sonos_paused_uri is not None
+    assert (await authority.snapshot())["leases"] == []
+
+    await service.resume()
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is True
+    assert service._playing is True
+    assert sonos.evidence["transport_state"] == "PLAYING"
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stop_during_pending_start_pauses_before_releasing_without_resume_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = delayed_play
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+
+    await service.stop()
+    await drain_sonos_tasks(service)
+
+    assert service._current_sound is None
+    assert service._playing is False
+    assert service._sonos_ambient_pending is False
+    assert sonos.evidence["transport_state"] == "PAUSED_PLAYBACK"
+    assert sonos.pause_calls
+    assert service._sonos_paused_evidence is None
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_new_play_replaces_pending_source_under_same_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    (Path(ambient_module.SHORT_AMBIENT_DIR) / "wind.mp3").write_bytes(b"")
+    service.scan_sounds()
+
+    original_play = sonos.play_uri_if_unchanged
+    play_count = 0
+
+    async def first_start_delayed(*args, **kwargs) -> bool:
+        nonlocal play_count
+        played = await original_play(*args, **kwargs)
+        if played:
+            play_count += 1
+            if play_count == 1:
+                sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = first_start_delayed
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    leases = (await authority.snapshot())["leases"]
+    assert service._sonos_ambient_pending is True
+    assert len(leases) == 1
+    lease_id = leases[0]["lease_id"]
+
+    result = await service.play("wind.mp3", source="manual")
+    assert result["status"] == "ok"
+    await drain_sonos_tasks(service)
+
+    assert service._current_sound == "wind.mp3"
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert len(sonos.play_calls) == 2
+    assert sonos.play_calls[-1][0].endswith("/wind.mp3")
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == lease_id
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_during_pending_start_releases_without_sonos_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = delayed_play
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+
+    assert service._sonos_ambient_pending is True
+    assert sonos.pause_calls == []
+    await service.shutdown()
+
+    assert service._shutting_down is True
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_pending_start_context is None
+    assert sonos.pause_calls == []
+    assert sonos.evidence["transport_state"] == "TRANSITIONING"
+    assert (await authority.snapshot())["leases"] == []
+
+
+
+@pytest.mark.asyncio
+async def test_pending_start_stale_stopped_target_keeps_lease_until_playing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Accepted Play may expose the target URI before transport leaves STOPPED."""
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def target_uri_but_stale_stopped(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "STOPPED"
+        return played
+
+    sonos.play_uri_if_unchanged = target_uri_but_stale_stopped
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+
+    assert service._sonos_ambient_active is False
+    assert service._sonos_ambient_pending is True
+    assert service._playing is True
+    assert sonos.evidence["transport_state"] == "STOPPED"
+    assert sonos.evidence["current_uri"].endswith("/rain.mp3")
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    lease_id = leases[0]["lease_id"]
+    assert set(leases[0]["dimensions"]) == set(AMBIENT_AUDIO_DIMENSIONS)
+
+    sonos.evidence["transport_state"] = "PLAYING"
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._playing is True
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == lease_id
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_start_stale_preflight_reads_keep_lease_until_target_visible(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Evidence may lag the accepted Play and still report the full preflight."""
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_get = sonos.get_playback_ownership_evidence
+    preflight = deepcopy(sonos.evidence)
+    expose_target = False
+
+    async def lagged_get(**_kwargs) -> dict:
+        if sonos.play_calls and not expose_target:
+            return deepcopy(preflight)
+        return await original_get()
+
+    sonos.get_playback_ownership_evidence = lagged_get
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+
+    assert sonos.evidence["transport_state"] == "PLAYING"
+    assert service._sonos_ambient_active is False
+    assert service._sonos_ambient_pending is True
+    assert service._playing is True
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    lease_id = leases[0]["lease_id"]
+
+    expose_target = True
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._playing is True
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == lease_id
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_pending_monitor_exception_rearms_reconciler(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def delayed_play(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = delayed_play
+    _configure_fast_pending_start(monkeypatch)
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_PENDING_START_POLL_SECONDS",
+        0.02,
+    )
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+    assert service._sonos_lease_id is not None
+
+    original_read = service._read_start_evidence
+    failures = 0
+
+    async def fail_once(timeout_seconds: float):
+        nonlocal failures
+        if failures == 0:
+            failures += 1
+            raise RuntimeError("synthetic pending observer failure")
+        return await original_read(timeout_seconds)
+
+    service._read_start_evidence = fail_once
+    sonos.evidence["transport_state"] = "PLAYING"
+
+    for _ in range(100):
+        if service._sonos_ambient_active:
+            break
+        await asyncio.sleep(0.01)
+
+    assert failures == 1
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_pending_start_context is None
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == service._sonos_lease_id
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_stop_during_stale_preflight_pending_start_retires_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+    preflight = deepcopy(sonos.evidence)
+
+    async def accepted_but_preflight_still_visible(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence = deepcopy(preflight)
+        return played
+
+    sonos.play_uri_if_unchanged = accepted_but_preflight_still_visible
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+    assert service._sonos_lease_id is not None
+
+    await service.stop()
+    await drain_sonos_tasks(service)
+
+    assert service._current_sound is None
+    assert service._playing is False
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_pending_start_context is None
+    assert sonos.pause_calls
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_stop_during_stale_target_stopped_pending_start_retires_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def accepted_target_still_stopped(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence["transport_state"] = "STOPPED"
+        return played
+
+    sonos.play_uri_if_unchanged = accepted_target_still_stopped
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+    assert service._sonos_lease_id is not None
+
+    await service.stop()
+    await drain_sonos_tasks(service)
+
+    assert service._current_sound is None
+    assert service._playing is False
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_pending_start_context is None
+    assert sonos.pause_calls
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_pause_during_stale_preflight_pending_start_retires_without_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+    preflight = deepcopy(sonos.evidence)
+
+    async def accepted_but_preflight_still_visible(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence = deepcopy(preflight)
+        return played
+
+    sonos.play_uri_if_unchanged = accepted_but_preflight_still_visible
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+
+    await service.pause()
+    await drain_sonos_tasks(service)
+
+    assert service._playing is False
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_pending_start_context is None
+    assert service._sonos_paused_evidence is None
+    assert sonos.pause_calls
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_resume_stale_exact_paused_preflight_keeps_lease_until_playing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    await service._start_sonos_ambient()
+    await service.pause()
+
+    paused_preflight = deepcopy(sonos.evidence)
+    assert paused_preflight["transport_state"] == "PAUSED_PLAYBACK"
+    assert service._sonos_paused_evidence is not None
+
+    original_play = sonos.play_uri_if_unchanged
+
+    async def accepted_resume_but_paused_still_visible(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played:
+            sonos.evidence = deepcopy(paused_preflight)
+        return played
+
+    sonos.play_uri_if_unchanged = accepted_resume_but_paused_still_visible
+    _configure_fast_pending_start(monkeypatch)
+
+    result = await service.resume()
+    assert result["status"] == "ok"
+
+    for _ in range(100):
+        if service._sonos_pending_start_context is not None:
+            break
+        await asyncio.sleep(0.005)
+
+    assert service._sonos_ambient_active is False
+    assert service._sonos_ambient_pending is True
+    assert service._sonos_lease_id is not None
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    lease_id = leases[0]["lease_id"]
+
+    sonos.evidence["transport_state"] = "PLAYING"
+    await drain_sonos_tasks(service)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == lease_id
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_new_play_during_pending_stop_cleanup_restarts_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    (Path(ambient_module.SHORT_AMBIENT_DIR) / "wind.mp3").write_bytes(b"")
+    service.scan_sounds()
+
+    original_play = sonos.play_uri_if_unchanged
+
+    async def first_start_delayed(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played and len(sonos.play_calls) == 1:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = first_start_delayed
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+
+    original_pause = service._pause_pending_start_exact
+    pause_completed = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def pause_then_hold(*, lease_id: str, evidence: dict) -> bool:
+        paused = await original_pause(lease_id=lease_id, evidence=evidence)
+        pause_completed.set()
+        await release_cleanup.wait()
+        return paused
+
+    service._pause_pending_start_exact = pause_then_hold
+
+    await service.stop()
+    await asyncio.wait_for(pause_completed.wait(), timeout=1.0)
+
+    result = await service.play("wind.mp3", source="manual")
+    assert result["status"] == "ok"
+    assert service._current_sound == "wind.mp3"
+    assert service._playing is True
+
+    release_cleanup.set()
+    for _ in range(200):
+        if (
+            service._sonos_ambient_active
+            and service._sonos_ambient_uri
+            and service._sonos_ambient_uri.endswith("/wind.mp3")
+        ):
+            break
+        await asyncio.sleep(0.01)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._current_sound == "wind.mp3"
+    assert service._sonos_ambient_uri.endswith("/wind.mp3")
+    assert len(sonos.play_calls) == 2
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert set(leases[0]["dimensions"]) == set(AMBIENT_AUDIO_DIMENSIONS)
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_resume_during_pending_pause_cleanup_replays_same_source_under_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def first_start_delayed(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played and len(sonos.play_calls) == 1:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = first_start_delayed
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+    original_lease = service._sonos_lease_id
+    assert original_lease is not None
+
+    original_pause = service._pause_pending_start_exact
+    pause_completed = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def pause_then_hold(*, lease_id: str, evidence: dict) -> bool:
+        paused = await original_pause(lease_id=lease_id, evidence=evidence)
+        pause_completed.set()
+        await release_cleanup.wait()
+        return paused
+
+    service._pause_pending_start_exact = pause_then_hold
+
+    await service.pause()
+    await asyncio.wait_for(pause_completed.wait(), timeout=1.0)
+
+    result = await service.resume()
+    assert result["status"] == "ok"
+    assert service._current_sound == "rain.mp3"
+    assert service._playing is True
+
+    release_cleanup.set()
+    for _ in range(200):
+        if service._sonos_ambient_active:
+            break
+        await asyncio.sleep(0.01)
+
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_lease_id == original_lease
+    assert service._sonos_ambient_uri.endswith("/rain.mp3")
+    assert len(sonos.play_calls) == 2
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == original_lease
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_verifier_carries_transient_progress_into_pending_terminal_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_get = sonos.get_playback_ownership_evidence
+    reads_after_play = 0
+
+    async def staged_get(**_kwargs) -> dict:
+        nonlocal reads_after_play
+        current = await original_get()
+        if not sonos.play_calls:
+            return current
+        reads_after_play += 1
+        current["transport_state"] = (
+            "TRANSITIONING" if reads_after_play == 1 else "STOPPED"
+        )
+        sonos.evidence["transport_state"] = current["transport_state"]
+        return current
+
+    sonos.get_playback_ownership_evidence = staged_get
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_TIMEOUT_SECONDS",
+        0.02,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_START_VERIFY_POLL_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        ambient_module,
+        "AMBIENT_PENDING_START_POLL_SECONDS",
+        0.001,
+    )
+
+    await service._start_sonos_ambient()
+
+    for _ in range(100):
+        if service._sonos_lease_id is None:
+            break
+        await asyncio.sleep(0.005)
+
+    assert reads_after_play >= 2
+    assert service._sonos_lease_id is None
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_ambient_active is False
+    assert service._playing is False
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_resume_during_pending_cleanup_survives_post_pause_evidence_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    original_play = sonos.play_uri_if_unchanged
+
+    async def first_start_delayed(*args, **kwargs) -> bool:
+        played = await original_play(*args, **kwargs)
+        if played and len(sonos.play_calls) == 1:
+            sonos.evidence["transport_state"] = "TRANSITIONING"
+        return played
+
+    sonos.play_uri_if_unchanged = first_start_delayed
+    _configure_fast_pending_start(monkeypatch)
+
+    await service._start_sonos_ambient()
+    assert service._sonos_ambient_pending is True
+    original_lease = service._sonos_lease_id
+    assert original_lease is not None
+
+    original_pause = service._pause_pending_start_exact
+    original_read = service._read_start_evidence
+    pause_completed = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    reads_after_patch = 0
+
+    async def staged_read(timeout_seconds: float):
+        nonlocal reads_after_patch
+        reads_after_patch += 1
+        if reads_after_patch == 2:
+            return None
+        return await original_read(timeout_seconds)
+
+    async def pause_then_hold(*, lease_id: str, evidence: dict) -> bool:
+        paused = await original_pause(lease_id=lease_id, evidence=evidence)
+        pause_completed.set()
+        await release_cleanup.wait()
+        return paused
+
+    service._read_start_evidence = staged_read
+    service._pause_pending_start_exact = pause_then_hold
+
+    await service.pause()
+    await asyncio.wait_for(pause_completed.wait(), timeout=1.0)
+
+    result = await service.resume()
+    assert result["status"] == "ok"
+    release_cleanup.set()
+
+    for _ in range(200):
+        if service._sonos_ambient_active:
+            break
+        await asyncio.sleep(0.01)
+
+    assert reads_after_patch >= 3
+    assert service._sonos_ambient_active is True
+    assert service._sonos_ambient_pending is False
+    assert service._sonos_lease_id == original_lease
+    assert len(sonos.play_calls) == 2
+    leases = (await authority.snapshot())["leases"]
+    assert len(leases) == 1
+    assert leases[0]["lease_id"] == original_lease
+
+    await service._stop_sonos_ambient(
+        reason="test_cleanup",
+        pause_owned=False,
+    )

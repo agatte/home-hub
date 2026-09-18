@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from unittest.mock import MagicMock
 
@@ -179,3 +180,61 @@ def test_conditional_pause_checks_guard_after_waiting_for_mutation_fence() -> No
     assert thread.is_alive() is False
     assert result["paused"] is False
     service._device.pause.assert_not_called()
+
+
+
+@pytest.mark.asyncio
+async def test_timed_playback_evidence_reads_reuse_one_settled_worker() -> None:
+    service = SonosService()
+    service._connected = True
+    service._device = MagicMock()
+    service._breaker.call_timeout = 1.0
+
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def blocking_read() -> dict:
+        nonlocal calls
+        calls += 1
+        started.set()
+        release.wait(timeout=2.0)
+        return evidence()
+
+    service._playback_ownership_evidence_sync = blocking_read
+
+    first = await service.get_playback_ownership_evidence(call_timeout=0.05)
+    assert first is None
+    assert started.is_set()
+    assert calls == 1
+
+    second = await service.get_playback_ownership_evidence(call_timeout=0.05)
+    assert second is None
+    assert calls == 1
+
+    in_flight = service._playback_evidence_read_task
+    assert in_flight is not None
+    assert in_flight.done() is False
+
+    release.set()
+    settled = await asyncio.wait_for(asyncio.shield(in_flight), timeout=1.0)
+    assert settled == evidence()
+    await asyncio.sleep(0)
+
+    fresh = await service.get_playback_ownership_evidence(call_timeout=0.2)
+    assert fresh == evidence()
+    assert calls == 2
+
+
+
+def test_conditional_pause_treats_already_stopped_701_as_success() -> None:
+    expected = evidence()
+    service = service_with(expected)
+    service._device.pause.side_effect = Exception(
+        "UPnP Error 701 received: Transition not available"
+    )
+
+    paused = service._pause_if_playback_unchanged_sync(expected)
+
+    assert paused is True
+    service._device.pause.assert_called_once_with()

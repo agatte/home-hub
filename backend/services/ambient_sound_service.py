@@ -64,6 +64,24 @@ SCAN_DIRS: tuple[tuple[Path, str], ...] = (
 AUDIO_EXTENSIONS = frozenset((".mp3", ".ogg", ".wav", ".webm"))
 AMBIENT_CONFIG_KEY = "ambient_config"
 STREAM_CONFIG_KEY = "ambient_streams"
+AMBIENT_START_VERIFY_TIMEOUT_SECONDS = 5.0
+AMBIENT_START_VERIFY_POLL_SECONDS = 0.25
+AMBIENT_START_SAMPLE_TIMEOUT_SECONDS = 0.75
+AMBIENT_PENDING_START_POLL_SECONDS = 1.0
+AMBIENT_START_TERMINAL_STATES = frozenset({"STOPPED", "NO_MEDIA_PRESENT"})
+AMBIENT_START_STABLE_SOURCE_KEYS = (
+    "queue_uid",
+    "queue_update_id",
+    "queue_size",
+    "queue_first_item_hash",
+    "play_mode",
+)
+AMBIENT_START_PREFLIGHT_SOURCE_KEYS = (
+    *AMBIENT_START_STABLE_SOURCE_KEYS,
+    "current_uri",
+    "queue_track",
+    "queue_track_uri",
+)
 
 # Weather description keywords → sound filename stem.
 # If the user has e.g. "rain.mp3" in static/ambient/ and the weather
@@ -188,6 +206,8 @@ class AmbientSoundService:
         self._command_lock = asyncio.Lock()
         self._sonos_operation_lock = asyncio.Lock()
         self._sonos_loop_task: Optional[asyncio.Task] = None
+        self._sonos_start_monitor_task: Optional[asyncio.Task] = None
+        self._sonos_pending_start_context: Optional[dict[str, Any]] = None
         self._sonos_absent_since: Optional[float] = None   # monotonic time
         self._sonos_present_since: Optional[float] = None  # monotonic time
         # Strong references for fire-and-forget Sonos start/pause tasks.
@@ -571,7 +591,11 @@ class AmbientSoundService:
         logger.info("Ambient play: %s (source=%s)", filename, source)
         if self._sonos:
             if not self._sonos_ambient_active:
-                self._spawn_sonos_task(self._start_sonos_ambient())
+                if not (
+                    self._sonos_lease_id
+                    and self._sonos_pending_start_context is not None
+                ):
+                    self._spawn_sonos_task(self._start_sonos_ambient())
             else:
                 # Already mirroring — swap the URI in place so weather
                 # transitions (rain → thunderstorm) don't leave Sonos
@@ -581,16 +605,20 @@ class AmbientSoundService:
                     self._spawn_sonos_task(self._swap_sonos_ambient(filename))
         return {"status": "ok"}
 
-    def _spawn_sonos_task(self, coro: Awaitable[Any]) -> None:
+    def _spawn_sonos_task(
+        self,
+        coro: Awaitable[Any],
+    ) -> Optional[asyncio.Task]:
         """Track Sonos work unless shutdown has become terminal."""
         if self._shutting_down:
             close = getattr(coro, "close", None)
             if callable(close):
                 close()
-            return
+            return None
         task = asyncio.create_task(coro)
         self._pending_sonos_tasks.add(task)
         task.add_done_callback(self._pending_sonos_tasks.discard)
+        return task
 
     async def pause(self, *, learn: bool = False) -> dict[str, Any]:
         """Serialize one Ambient pause intent."""
@@ -603,7 +631,6 @@ class AmbientSoundService:
             await self._learn_manual_suppression("pause")
         self._playing = False
         self._reset_stream_failure_streak()
-        self._sonos_ambient_pending = False
         await self._broadcast_state()
         await self._save_config()
         await self._stop_sonos_ambient(reason="ambient_pause")
@@ -632,7 +659,10 @@ class AmbientSoundService:
             self._sonos_ambient_pending = True
         await self._broadcast_state()
         await self._save_config()
-        if not self._sonos_ambient_active:
+        if not self._sonos_ambient_active and not (
+            self._sonos_lease_id
+            and self._sonos_pending_start_context is not None
+        ):
             self._spawn_sonos_task(self._start_sonos_ambient())
         logger.info("Ambient resumed: %s", self._current_sound)
         return {"status": "ok"}
@@ -688,6 +718,8 @@ class AmbientSoundService:
                 self._sonos_ambient_pending = False
                 self._sonos_ambient_uri = None
                 self._sonos_ambient_is_stream = False
+                self._sonos_pending_start_context = None
+                self._sonos_start_monitor_task = None
                 self._sonos_paused_evidence = None
                 self._sonos_paused_uri = None
                 self._sonos_paused_is_stream = False
@@ -1526,6 +1558,805 @@ class AmbientSoundService:
                 current, target, self._current_mode(),
             )
 
+    async def _read_start_evidence(
+        self,
+        timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Read one startup fingerprint inside an explicit breaker budget."""
+        if timeout_seconds <= 0:
+            return None
+        return await self._sonos.get_playback_ownership_evidence(
+            call_timeout=max(0.05, timeout_seconds),
+        )
+
+    def _start_source_matches(
+        self,
+        fresh: dict[str, Any],
+        preflight: dict[str, Any],
+        uri: str,
+        *,
+        is_stream: bool,
+    ) -> bool:
+        return (
+            self._evidence_matches(
+                fresh,
+                preflight,
+                AMBIENT_START_STABLE_SOURCE_KEYS,
+            )
+            and self._ambient_uri_matches(
+                fresh,
+                uri,
+                is_stream=is_stream,
+            )
+        )
+
+    def _start_still_shows_preflight(
+        self,
+        fresh: dict[str, Any],
+        preflight: dict[str, Any],
+    ) -> bool:
+        """True when Sonos has not yet surfaced the accepted source change."""
+        return self._evidence_matches(
+            fresh,
+            preflight,
+            AMBIENT_START_PREFLIGHT_SOURCE_KEYS,
+        )
+
+    async def _yield_start_volume_if_needed(
+        self,
+        *,
+        lease_id: str,
+        fresh: dict[str, Any],
+        paused_resume: bool,
+        preflight: dict[str, Any],
+        start_volume: int,
+    ) -> None:
+        if not await self._audio_ownership.is_valid(lease_id, (VOLUME,)):
+            return
+        render_changed = (
+            (
+                not paused_resume
+                and (
+                    bool(fresh.get("mute"))
+                    or int(fresh.get("volume", -1)) != start_volume
+                )
+            )
+            or (
+                paused_resume
+                and (
+                    fresh.get("volume") != preflight.get("volume")
+                    or fresh.get("mute") != preflight.get("mute")
+                )
+            )
+        )
+        if not render_changed:
+            return
+        await self._audio_ownership.release(
+            lease_id,
+            dimensions=(VOLUME,),
+            reason="ambient_external_rendering_during_start",
+        )
+        logger.info(
+            "Sonos ambient start yielded volume ownership volume=%s mute=%s",
+            fresh.get("volume"),
+            fresh.get("mute"),
+        )
+
+    async def _verify_owned_start(
+        self,
+        *,
+        sound_id: str,
+        uri: str,
+        is_stream: bool,
+        paused_resume: bool,
+        preflight: dict[str, Any],
+        start_volume: int,
+        acquire_dimensions: frozenset[str],
+    ) -> tuple[str, dict[str, Any] | None, bool]:
+        """Bound the initiating wait without ever releasing ambiguous ownership."""
+        del acquire_dimensions  # Current lease dimensions are re-read as they change.
+        lease_id = self._sonos_lease_id
+        if not lease_id or self._audio_ownership is None:
+            return "failed", None, False
+
+        deadline = time.monotonic() + AMBIENT_START_VERIFY_TIMEOUT_SECONDS
+        last: dict[str, Any] | None = None
+        saw_target_progress = False
+
+        while True:
+            if not await self._audio_ownership.is_valid(
+                lease_id,
+                AMBIENT_SOURCE_TRANSPORT_DIMENSIONS,
+            ):
+                logger.info(
+                    "Sonos ambient start verification stopped: lease invalidated"
+                )
+                return "failed", None, saw_target_progress
+
+            if (
+                self._shutting_down
+                or not self._playing
+                or self._current_sound != sound_id
+                or not self._sonos_eligible()
+            ):
+                return "pending", last, saw_target_progress
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "pending", last, saw_target_progress
+
+            fresh = await self._read_start_evidence(
+                min(AMBIENT_START_SAMPLE_TIMEOUT_SECONDS, remaining)
+            )
+            if fresh is not None:
+                last = fresh
+                target_visible = self._start_source_matches(
+                    fresh,
+                    preflight,
+                    uri,
+                    is_stream=is_stream,
+                )
+                preflight_visible = self._start_still_shows_preflight(
+                    fresh,
+                    preflight,
+                )
+                if not target_visible and not preflight_visible:
+                    logger.info(
+                        "Sonos ambient start verification yielded: source/queue changed "
+                        "state=%s uri=%s",
+                        fresh.get("transport_state"),
+                        fresh.get("current_uri"),
+                    )
+                    return "failed", fresh, saw_target_progress
+
+                await self._yield_start_volume_if_needed(
+                    lease_id=lease_id,
+                    fresh=fresh,
+                    paused_resume=paused_resume,
+                    preflight=preflight,
+                    start_volume=start_volume,
+                )
+
+                if target_visible:
+                    state = str(fresh.get("transport_state") or "").upper()
+                    if state in {"TRANSITIONING", "PLAYING"}:
+                        saw_target_progress = True
+                    if state == "PLAYING":
+                        return "started", fresh, saw_target_progress
+                    if state == "PAUSED_PLAYBACK":
+                        if (
+                            paused_resume
+                            and self._evidence_matches(
+                                fresh,
+                                preflight,
+                                AMBIENT_FULL_EVIDENCE_KEYS,
+                            )
+                        ):
+                            # Resume can acknowledge Play before the old exact
+                            # PAUSED fingerprint stops being observable.
+                            pass
+                        else:
+                            logger.info(
+                                "Sonos ambient start verification yielded: "
+                                "transport paused"
+                            )
+                            return "failed", fresh, saw_target_progress
+                    # STOPPED/NO_MEDIA immediately after an accepted Play is
+                    # ambiguous: production has shown that Sonos can report the
+                    # old transport state briefly before it surfaces PLAYING.
+                    # Keep ownership and let the bounded wait/pending monitor
+                    # reconcile later instead of treating stale STOPPED as proof
+                    # that the accepted command cannot still become audible.
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "pending", last, saw_target_progress
+            await asyncio.sleep(
+                min(AMBIENT_START_VERIFY_POLL_SECONDS, remaining)
+            )
+
+    def _schedule_pending_start_monitor(
+        self,
+        context: dict[str, Any],
+    ) -> None:
+        task = self._sonos_start_monitor_task
+        if task is not None and not task.done():
+            return
+        self._sonos_pending_start_context = dict(context)
+        task = self._spawn_sonos_task(
+            self._monitor_pending_start(dict(context))
+        )
+        self._sonos_start_monitor_task = task
+        if task is None:
+            self._sonos_pending_start_context = None
+            return
+
+        def _clear_monitor(done: asyncio.Task) -> None:
+            if self._sonos_start_monitor_task is done:
+                self._sonos_start_monitor_task = None
+
+        task.add_done_callback(_clear_monitor)
+
+    async def _finish_pending_start_locked(
+        self,
+        *,
+        sound_id: str,
+        reason: str,
+    ) -> bool:
+        """Release a now-resolved pending lease and report whether to retry."""
+        restart = bool(
+            self._playing
+            and self._current_sound
+            and self._current_sound != sound_id
+            and self._sonos_eligible()
+        )
+        if not restart:
+            self._playing = False
+            self._weather_override_active = False
+        self._sonos_ambient_pending = False
+        self._sonos_pending_start_context = None
+        await self._release_sonos_lease(reason)
+        await self._save_config()
+        await self._broadcast_state()
+        return restart
+
+    async def _activate_pending_start_locked(
+        self,
+        *,
+        sound_id: str,
+        uri: str,
+        is_stream: bool,
+        mode: str | None,
+        fresh: dict[str, Any],
+    ) -> bool:
+        """Promote one proven pending source into normal active Ambient state."""
+        lease_id = self._sonos_lease_id
+        if (
+            not lease_id
+            or self._shutting_down
+            or not self._playing
+            or self._current_sound != sound_id
+            or not self._sonos_eligible()
+            or not await self._audio_ownership.is_valid(
+                lease_id,
+                AMBIENT_SOURCE_TRANSPORT_DIMENSIONS,
+            )
+        ):
+            return False
+
+        self._sonos_ambient_uri = uri
+        self._sonos_ambient_is_stream = is_stream
+        if not await self._record_owned_evidence(fresh):
+            await self._release_sonos_lease(
+                "ambient_pending_start_evidence_not_persisted"
+            )
+            self._sonos_ambient_pending = False
+            self._playing = False
+            self._sonos_pending_start_context = None
+            await self._save_config()
+            await self._broadcast_state()
+            return False
+
+        self._sonos_ambient_active = True
+        self._sonos_ambient_pending = False
+        self._sonos_pending_start_context = None
+        self._sonos_paused_evidence = None
+        self._sonos_paused_uri = None
+        self._sonos_paused_is_stream = False
+        self._sonos_paused_dimensions = frozenset()
+        self._sonos_absent_since = None
+        self._sonos_present_since = None
+        self._sonos_loop_task = asyncio.create_task(
+            self._sonos_ambient_loop(), name="sonos_ambient_loop"
+        )
+        logger.info(
+            "Sonos ambient pending start resolved: %s volume=%s mode=%s lease=%s",
+            sound_id,
+            fresh.get("volume"),
+            mode,
+            lease_id,
+        )
+        await self._broadcast_state()
+        return True
+
+    async def _replace_pending_start_locked(
+        self,
+        *,
+        lease_id: str,
+        fresh: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Move a settling Ambient source to a newer requested sound in-place."""
+        replacement_sound = self._current_sound
+        if (
+            self._shutting_down
+            or not self._playing
+            or not replacement_sound
+            or not self._sonos_eligible()
+        ):
+            return None
+
+        replacement_uri = self._url_for(replacement_sound, absolute=True)
+        if not replacement_uri:
+            return None
+        replacement_mode = self._current_mode()
+        replacement_volume = self._resolve_sonos_volume(replacement_mode)
+        replacement_is_stream = self._is_stream(replacement_sound)
+        owns_volume = await self._audio_ownership.is_valid(
+            lease_id,
+            (VOLUME,),
+        )
+        required = (
+            AMBIENT_AUDIO_DIMENSIONS
+            if owns_volume
+            else AMBIENT_SOURCE_TRANSPORT_DIMENSIONS
+        )
+        expected = dict(fresh)
+
+        def _still_requested() -> bool:
+            return bool(
+                not self._shutting_down
+                and self._playing
+                and self._current_sound == replacement_sound
+                and self._sonos_eligible()
+            )
+
+        async def _replace() -> bool:
+            if owns_volume:
+                return await self._sonos.play_uri_if_unchanged(
+                    expected,
+                    replacement_uri,
+                    volume=replacement_volume,
+                    force_radio=replacement_is_stream,
+                    still_allowed=_still_requested,
+                    mutation_lock=self._sonos_mutation_fence,
+                )
+            return await self._sonos.play_uri_if_source_unchanged(
+                expected,
+                replacement_uri,
+                force_radio=replacement_is_stream,
+                still_allowed=_still_requested,
+                mutation_lock=self._sonos_mutation_fence,
+            )
+
+        executed, success = await self._audio_ownership.run_if_valid(
+            lease_id,
+            required,
+            _replace,
+        )
+        if not executed or not success:
+            return None
+
+        context = {
+            "sound_id": replacement_sound,
+            "uri": replacement_uri,
+            "is_stream": replacement_is_stream,
+            "paused_resume": False,
+            "preflight": expected,
+            "start_volume": replacement_volume,
+            "mode": replacement_mode,
+        }
+        self._sonos_pending_start_context = dict(context)
+        self._sonos_ambient_pending = True
+        logger.info(
+            "Sonos pending Ambient start replaced in-place: %s lease=%s",
+            replacement_sound,
+            lease_id,
+        )
+        return context
+
+    async def _pause_pending_start_exact(
+        self,
+        *,
+        lease_id: str,
+        evidence: dict[str, Any],
+    ) -> bool:
+        """Pause one exact pending source without releasing ownership early."""
+        async def _pause() -> bool:
+            return await self._sonos.pause_if_playback_unchanged(
+                evidence,
+                still_allowed=lambda: not self._shutting_down,
+                mutation_lock=self._sonos_mutation_fence,
+            )
+
+        executed, paused = await self._audio_ownership.run_if_valid(
+            lease_id,
+            AMBIENT_SOURCE_TRANSPORT_DIMENSIONS,
+            _pause,
+        )
+        return bool(executed and paused)
+
+    async def _finish_pending_pause_locked(
+        self,
+        *,
+        sound_id: str,
+        uri: str,
+        is_stream: bool,
+        fresh: dict[str, Any],
+        pre_pause: dict[str, Any] | None = None,
+        reason: str,
+    ) -> None:
+        """Release a proven HomeHub pause while preserving exact resume evidence."""
+        paused_dimensions = frozenset()
+        lease_id = self._sonos_lease_id
+        if lease_id and self._audio_ownership is not None:
+            current_lease = await self._audio_ownership.find_lease(
+                owner=AMBIENT_AUDIO_OWNER,
+                purpose=AMBIENT_AUDIO_PURPOSE,
+            )
+            if (
+                current_lease is not None
+                and current_lease.get("lease_id") == lease_id
+            ):
+                paused_dimensions = frozenset(
+                    current_lease.get("dimensions") or ()
+                )
+        if (
+            pre_pause is not None
+            and VOLUME in paused_dimensions
+            and (
+                fresh.get("volume") != pre_pause.get("volume")
+                or fresh.get("mute") != pre_pause.get("mute")
+            )
+        ):
+            paused_dimensions = paused_dimensions - {VOLUME}
+
+        self._sonos_paused_evidence = dict(fresh)
+        self._sonos_paused_uri = uri
+        self._sonos_paused_is_stream = is_stream
+        self._sonos_paused_dimensions = paused_dimensions
+        self._sonos_ambient_pending = False
+        self._sonos_pending_start_context = None
+        await self._release_sonos_lease(reason)
+        await self._save_config()
+        await self._broadcast_state()
+
+    async def _monitor_pending_start(
+        self,
+        context: dict[str, Any],
+    ) -> None:
+        """Retain ownership until pending playback becomes observable and resolved."""
+        sound_id = str(context["sound_id"])
+        uri = str(context["uri"])
+        is_stream = bool(context["is_stream"])
+        paused_resume = bool(context["paused_resume"])
+        preflight = dict(context["preflight"])
+        start_volume = int(context["start_volume"])
+        mode = context.get("mode")
+        saw_target_progress = bool(context.get("saw_target_progress"))
+        replay_requested = bool(context.get("replay_requested"))
+
+        try:
+            while not self._shutting_down:
+                lease_id = self._sonos_lease_id
+                if not lease_id:
+                    return
+                if not await self._audio_ownership.is_valid(
+                    lease_id,
+                    AMBIENT_SOURCE_TRANSPORT_DIMENSIONS,
+                ):
+                    async with self._sonos_operation_lock:
+                        restart = await self._finish_pending_start_locked(
+                            sound_id=sound_id,
+                            reason="ambient_pending_start_invalidated",
+                        )
+                    if restart:
+                        self._sonos_ambient_pending = True
+                        await self._save_config()
+                        await self._broadcast_state()
+                        self._spawn_sonos_task(self._start_sonos_ambient())
+                    return
+
+                fresh = await self._read_start_evidence(
+                    AMBIENT_START_SAMPLE_TIMEOUT_SECONDS
+                )
+                if fresh is None:
+                    await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                    continue
+
+                target_visible = self._start_source_matches(
+                    fresh,
+                    preflight,
+                    uri,
+                    is_stream=is_stream,
+                )
+                preflight_visible = self._start_still_shows_preflight(
+                    fresh,
+                    preflight,
+                )
+                if not target_visible and not preflight_visible:
+                    async with self._sonos_operation_lock:
+                        restart = await self._finish_pending_start_locked(
+                            sound_id=sound_id,
+                            reason="ambient_pending_start_foreign_source",
+                        )
+                    if restart:
+                        self._sonos_ambient_pending = True
+                        await self._save_config()
+                        await self._broadcast_state()
+                        self._spawn_sonos_task(self._start_sonos_ambient())
+                    return
+
+                await self._yield_start_volume_if_needed(
+                    lease_id=lease_id,
+                    fresh=fresh,
+                    paused_resume=paused_resume,
+                    preflight=preflight,
+                    start_volume=start_volume,
+                )
+
+                state = str(fresh.get("transport_state") or "").upper()
+                desired = bool(
+                    self._playing
+                    and self._current_sound == sound_id
+                    and self._sonos_eligible()
+                )
+                replacement_requested = bool(
+                    self._playing
+                    and self._current_sound
+                    and self._sonos_eligible()
+                    and (
+                        self._current_sound != sound_id
+                        or replay_requested
+                    )
+                )
+                if replacement_requested:
+                    async with self._sonos_operation_lock:
+                        replacement = await self._replace_pending_start_locked(
+                            lease_id=lease_id,
+                            fresh=fresh,
+                        )
+                    if replacement is not None:
+                        sound_id = str(replacement["sound_id"])
+                        uri = str(replacement["uri"])
+                        is_stream = bool(replacement["is_stream"])
+                        paused_resume = bool(replacement["paused_resume"])
+                        preflight = dict(replacement["preflight"])
+                        start_volume = int(replacement["start_volume"])
+                        mode = replacement.get("mode")
+                        saw_target_progress = False
+                        replay_requested = False
+                    await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                    continue
+
+                if not desired:
+                    paused = await self._pause_pending_start_exact(
+                        lease_id=lease_id,
+                        evidence=fresh,
+                    )
+                    if paused:
+                        post = await self._read_start_evidence(
+                            AMBIENT_START_SAMPLE_TIMEOUT_SECONDS
+                        )
+                        replacement = None
+                        restart = False
+                        async with self._command_lock:
+                            async with self._sonos_operation_lock:
+                                newer_intent = bool(
+                                    self._playing
+                                    and self._current_sound
+                                    and self._sonos_eligible()
+                                )
+                                if newer_intent:
+                                    if post is not None:
+                                        replacement = (
+                                            await self._replace_pending_start_locked(
+                                                lease_id=lease_id,
+                                                fresh=post,
+                                            )
+                                        )
+                                else:
+                                    exact_target_pause = bool(
+                                        post is not None
+                                        and not self._playing
+                                        and self._current_sound == sound_id
+                                        and self._start_source_matches(
+                                            post,
+                                            preflight,
+                                            uri,
+                                            is_stream=is_stream,
+                                        )
+                                        and str(
+                                            post.get("transport_state") or ""
+                                        ).upper()
+                                        == "PAUSED_PLAYBACK"
+                                        and self._evidence_matches(
+                                            post,
+                                            {
+                                                **fresh,
+                                                "transport_state": "PAUSED_PLAYBACK",
+                                            },
+                                            AMBIENT_SOURCE_EVIDENCE_KEYS,
+                                        )
+                                    )
+                                    if exact_target_pause:
+                                        await self._finish_pending_pause_locked(
+                                            sound_id=sound_id,
+                                            uri=uri,
+                                            is_stream=is_stream,
+                                            fresh=post,
+                                            pre_pause=fresh,
+                                            reason="ambient_pending_start_paused",
+                                        )
+                                    else:
+                                        restart = (
+                                            await self._finish_pending_start_locked(
+                                                sound_id=sound_id,
+                                                reason=(
+                                                    "ambient_pending_start_"
+                                                    "intent_retired"
+                                                ),
+                                            )
+                                        )
+                            if replacement is not None:
+                                sound_id = str(replacement["sound_id"])
+                                uri = str(replacement["uri"])
+                                is_stream = bool(replacement["is_stream"])
+                                paused_resume = bool(
+                                    replacement["paused_resume"]
+                                )
+                                preflight = dict(replacement["preflight"])
+                                start_volume = int(replacement["start_volume"])
+                                mode = replacement.get("mode")
+                                saw_target_progress = False
+                                replay_requested = False
+                            elif newer_intent:
+                                # The new Play/Resume intent arrived after the
+                                # old pending source had already been paused.
+                                # Keep the proven lease and remember that a
+                                # replay is still owed even if the post-pause
+                                # evidence read timed out or was too stale for
+                                # a conditional replacement.
+                                replay_requested = True
+                                self._sonos_pending_start_context = {
+                                    "sound_id": sound_id,
+                                    "uri": uri,
+                                    "is_stream": is_stream,
+                                    "paused_resume": paused_resume,
+                                    "preflight": dict(preflight),
+                                    "start_volume": start_volume,
+                                    "mode": mode,
+                                    "saw_target_progress": saw_target_progress,
+                                    "replay_requested": True,
+                                }
+                            elif restart:
+                                self._sonos_ambient_pending = True
+                                await self._save_config()
+                                await self._broadcast_state()
+                                self._spawn_sonos_task(
+                                    self._start_sonos_ambient()
+                                )
+                        if replacement is not None or newer_intent:
+                            await asyncio.sleep(
+                                AMBIENT_PENDING_START_POLL_SECONDS
+                            )
+                            continue
+                        return
+                    await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                    continue
+
+                if not target_visible:
+                    await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                    continue
+
+                if state in {"TRANSITIONING", "PLAYING"}:
+                    saw_target_progress = True
+
+                if state == "PLAYING" and desired:
+                    async with self._sonos_operation_lock:
+                        confirmed = await self._read_start_evidence(
+                            AMBIENT_START_SAMPLE_TIMEOUT_SECONDS
+                        )
+                        if (
+                            confirmed is not None
+                            and self._start_source_matches(
+                                confirmed,
+                                preflight,
+                                uri,
+                                is_stream=is_stream,
+                            )
+                            and str(
+                                confirmed.get("transport_state") or ""
+                            ).upper()
+                            == "PLAYING"
+                        ):
+                            await self._yield_start_volume_if_needed(
+                                lease_id=lease_id,
+                                fresh=confirmed,
+                                paused_resume=paused_resume,
+                                preflight=preflight,
+                                start_volume=start_volume,
+                            )
+                            if await self._activate_pending_start_locked(
+                                sound_id=sound_id,
+                                uri=uri,
+                                is_stream=is_stream,
+                                mode=mode,
+                                fresh=confirmed,
+                            ):
+                                return
+                    await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                    continue
+
+                if state == "PAUSED_PLAYBACK":
+                    if (
+                        paused_resume
+                        and not saw_target_progress
+                        and self._evidence_matches(
+                            fresh,
+                            preflight,
+                            AMBIENT_FULL_EVIDENCE_KEYS,
+                        )
+                    ):
+                        # Exact paused-resume preflight can remain observable
+                        # briefly after the accepted Play. Do not surrender
+                        # source/transport ownership on that stale sample.
+                        await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                        continue
+                    async with self._sonos_operation_lock:
+                        restart = await self._finish_pending_start_locked(
+                            sound_id=sound_id,
+                            reason="ambient_pending_start_paused",
+                        )
+                    if restart:
+                        self._sonos_ambient_pending = True
+                        await self._save_config()
+                        await self._broadcast_state()
+                        self._spawn_sonos_task(self._start_sonos_ambient())
+                    return
+
+                if state in AMBIENT_START_TERMINAL_STATES:
+                    if not saw_target_progress:
+                        # The live #279 failure demonstrated that Sonos may
+                        # expose the target URI while transport still reports
+                        # the pre-Play STOPPED state. That is not proof that an
+                        # accepted Play cannot become audible a moment later.
+                        await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                        continue
+                    async with self._sonos_operation_lock:
+                        restart = await self._finish_pending_start_locked(
+                            sound_id=sound_id,
+                            reason="ambient_pending_start_terminal",
+                        )
+                    if restart:
+                        self._sonos_ambient_pending = True
+                        await self._save_config()
+                        await self._broadcast_state()
+                        self._spawn_sonos_task(self._start_sonos_ambient())
+                    return
+
+                await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Preserve ownership on observer failure, but never strand a lease
+            # without a reconciler. Re-arm a fresh monitor after a bounded
+            # backoff; manual Sonos ingress may still invalidate the lease, and
+            # shutdown retires it without device mutation.
+            logger.exception(
+                "Sonos pending Ambient start monitor failed; retaining ownership"
+            )
+            retry_context = (
+                dict(self._sonos_pending_start_context)
+                if (
+                    not self._shutting_down
+                    and self._sonos_lease_id
+                    and self._sonos_pending_start_context is not None
+                )
+                else None
+            )
+            if retry_context is not None:
+                if self._sonos_start_monitor_task is asyncio.current_task():
+                    self._sonos_start_monitor_task = None
+                await asyncio.sleep(AMBIENT_PENDING_START_POLL_SECONDS)
+                if (
+                    not self._shutting_down
+                    and self._sonos_lease_id
+                    and self._sonos_pending_start_context is not None
+                ):
+                    self._schedule_pending_start_monitor(
+                        dict(self._sonos_pending_start_context)
+                    )
+
     async def _start_sonos_ambient(self) -> None:
         """Acquire #274 ownership and start only from genuinely neutral Sonos."""
         async with self._sonos_operation_lock:
@@ -1540,17 +2371,23 @@ class AmbientSoundService:
                     return
                 if not self._playing or not self._current_sound:
                     return
+                if (
+                    self._sonos_lease_id
+                    and self._sonos_pending_start_context is not None
+                ):
+                    return
 
-                uri = self._url_for(self._current_sound, absolute=True)
+                sound_id = self._current_sound
+                uri = self._url_for(sound_id, absolute=True)
                 if not uri:
                     logger.warning(
                         "Sonos ambient: %s no longer indexed, aborting",
-                        self._current_sound,
+                        sound_id,
                     )
                     return
                 mode = self._current_mode()
                 start_volume = self._resolve_sonos_volume(mode)
-                is_stream = self._is_stream(self._current_sound)
+                is_stream = self._is_stream(sound_id)
 
                 if self._audio_ownership is None:
                     status = await self._sonos.get_status()
@@ -1572,7 +2409,9 @@ class AmbientSoundService:
                     self._sonos_ambient_uri = uri
                     self._sonos_ambient_is_stream = is_stream
                 else:
-                    preflight = await self._sonos.get_playback_ownership_evidence()
+                    preflight = await self._read_start_evidence(
+                        AMBIENT_START_SAMPLE_TIMEOUT_SECONDS
+                    )
                     paused_resume = bool(
                         preflight
                         and self._sonos_paused_evidence is not None
@@ -1634,7 +2473,7 @@ class AmbientSoundService:
                             "preflight": dict(preflight),
                         },
                         metadata={
-                            "sound": self._current_sound,
+                            "sound": sound_id,
                             "source": self._source,
                             "mode": mode,
                             "uri": uri,
@@ -1672,35 +2511,45 @@ class AmbientSoundService:
                         )
                         return
 
-                    fresh = await self._sonos.get_playback_ownership_evidence()
-                    if (
-                        fresh is None
-                        or fresh.get("transport_state") != "PLAYING"
-                        or (
-                            not paused_resume
-                            and (
-                                bool(fresh.get("mute"))
-                                or int(fresh.get("volume", -1)) != start_volume
-                            )
+                    (
+                        start_result,
+                        fresh,
+                        saw_target_progress,
+                    ) = await self._verify_owned_start(
+                        sound_id=sound_id,
+                        uri=uri,
+                        is_stream=is_stream,
+                        paused_resume=paused_resume,
+                        preflight=preflight,
+                        start_volume=start_volume,
+                        acquire_dimensions=acquire_dimensions,
+                    )
+                    if start_result == "pending":
+                        self._sonos_ambient_pending = True
+                        self._schedule_pending_start_monitor(
+                            {
+                                "sound_id": sound_id,
+                                "uri": uri,
+                                "is_stream": is_stream,
+                                "paused_resume": paused_resume,
+                                "preflight": dict(preflight),
+                                "start_volume": start_volume,
+                                "mode": mode,
+                                "saw_target_progress": saw_target_progress,
+                                "replay_requested": False,
+                            }
                         )
-                        or (
-                            paused_resume
-                            and preflight is not None
-                            and (
-                                fresh.get("volume") != preflight.get("volume")
-                                or fresh.get("mute") != preflight.get("mute")
-                            )
+                        await self._save_config()
+                        await self._broadcast_state()
+                        logger.info(
+                            "Sonos ambient start pending observation: %s lease=%s",
+                            sound_id,
+                            self._sonos_lease_id,
                         )
-                        or not self._ambient_uri_matches(
-                            fresh,
-                            uri,
-                            is_stream=is_stream,
-                        )
-                    ):
-                        # Never roll back after ambiguous post-play evidence:
-                        # a physical/manual owner may already have won.
+                        return
+                    if start_result != "started" or fresh is None:
                         await self._release_sonos_lease(
-                            "ambient_start_postplay_unverified"
+                            "ambient_start_verification_failed"
                         )
                         return
 
@@ -1732,7 +2581,11 @@ class AmbientSoundService:
                 )
                 await self._broadcast_state()
             finally:
-                if not self._sonos_ambient_active and self._sonos_ambient_pending:
+                if (
+                    not self._sonos_ambient_active
+                    and self._sonos_ambient_pending
+                    and self._sonos_pending_start_context is None
+                ):
                     self._sonos_ambient_pending = False
                     self._playing = False
                     self._weather_override_active = False
@@ -1757,6 +2610,30 @@ class AmbientSoundService:
         async with self._sonos_operation_lock:
             if self._shutting_down:
                 pause_owned = False
+
+            if (
+                self._audio_ownership is not None
+                and self._sonos_lease_id
+                and not self._sonos_ambient_active
+                and self._sonos_pending_start_context is not None
+            ):
+                if not pause_owned:
+                    self._sonos_ambient_pending = False
+                    self._sonos_pending_start_context = None
+                    await self._release_sonos_lease(reason)
+                    return
+                self._sonos_ambient_pending = True
+                self._schedule_pending_start_monitor(
+                    dict(self._sonos_pending_start_context)
+                )
+                logger.info(
+                    "Sonos ambient stop deferred while startup is pending "
+                    "reason=%s lease=%s",
+                    reason,
+                    self._sonos_lease_id,
+                )
+                return
+
             if (
                 pause_owned
                 and self._sonos_ambient_active
