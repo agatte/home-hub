@@ -3,7 +3,7 @@ Music discovery and mode-playlist mapping endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, require_api_key_strict
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
@@ -372,6 +372,44 @@ async def preview_music_request(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result.to_dict()
+
+
+# ------------------------------------------------------------------
+# Narrow explicit assisted playback (#272)
+# ------------------------------------------------------------------
+
+@router.get("/assisted-playback/status")
+async def get_assisted_playback_status(request: Request) -> dict:
+    """Return the explicit-only assisted playback authority contract."""
+    service = getattr(request.app.state, "music_assisted_playback", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Assisted playback not initialized")
+    return service.status()
+
+
+@router.post("/assisted-playback", dependencies=[Depends(require_api_key_strict)])
+@limiter.limit("20/hour")
+async def play_assisted_music(request: Request) -> dict:
+    """Play one exact approved/proven candidate through existing authority."""
+    service = getattr(request.app.state, "music_assisted_playback", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Assisted playback not initialized")
+    try:
+        body = await request.json()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    source = request.headers.get("X-HomeHub-Source") or "dashboard:music_assisted"
+    try:
+        return await service.play_exact(
+            client_event_id=str(body.get("client_event_id") or ""),
+            provider=str(body.get("provider") or ""),
+            provider_id=str(body.get("provider_id") or ""),
+            source=source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/trust/approval", dependencies=[Depends(require_api_key)])

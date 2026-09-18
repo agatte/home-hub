@@ -595,6 +595,7 @@ async def lifespan(app: FastAPI):
         MusicCuratorContextBuilder,
     )
     from backend.services.music_discovery import MusicDiscoveryService
+    from backend.services.music_assisted_playback import MusicAssistedPlaybackService
     from backend.services.music_feedback import MusicFeedbackService
     from backend.services.music_requests import MusicRequestService
     from backend.services.music_semantics import LastFmSemanticAnalyzer
@@ -664,6 +665,15 @@ async def lifespan(app: FastAPI):
         trust_policy=music_trust_policy,
     )
     app.state.music_requests = music_requests
+    music_assisted_playback = MusicAssistedPlaybackService(
+        app_state=app.state,
+        catalog=music_catalog,
+        taste_provider=music_taste,
+        approval_service=music_approval,
+        trust_policy=music_trust_policy,
+        setting_loader=load_setting,
+    )
+    app.state.music_assisted_playback = music_assisted_playback
     music_curator = MusicCurator(
         context_builder=music_context_builder,
         intent_provider=UnavailableMusicIntentProvider(),

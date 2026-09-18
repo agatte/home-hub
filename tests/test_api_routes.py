@@ -333,6 +333,100 @@ class TestMusicAPI:
         assert tracks_per_artist == 2
         assert resp.json()["actuation_allowed"] is False
 
+    def test_music_assisted_playback_status_is_explicit_only(self, client):
+        previous = app.state.music_assisted_playback
+
+        class FakeAssisted:
+            def status(self):
+                return {
+                    "enabled": True,
+                    "explicit_only": True,
+                    "actuation_allowed": True,
+                    "autonomous_context_playback": False,
+                    "supported_adapters": ["sonos_apple_music_share_link"],
+                }
+
+        app.state.music_assisted_playback = FakeAssisted()
+        try:
+            resp = client.get("/api/music/assisted-playback/status")
+        finally:
+            app.state.music_assisted_playback = previous
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["explicit_only"] is True
+        assert data["actuation_allowed"] is True
+        assert data["autonomous_context_playback"] is False
+
+    def test_music_assisted_playback_preserves_exact_identity_and_source(self, client):
+        previous = app.state.music_assisted_playback
+        calls = []
+
+        class FakeAssisted:
+            async def play_exact(self, **kwargs):
+                calls.append(kwargs)
+                return {
+                    "status": "played",
+                    "reason": "explicit_approved_candidate",
+                    "duplicate": False,
+                    "explicit_only": True,
+                    "provider": kwargs["provider"],
+                    "provider_id": kwargs["provider_id"],
+                }
+
+        app.state.music_assisted_playback = FakeAssisted()
+        try:
+            resp = client.post(
+                "/api/music/assisted-playback",
+                headers={"X-HomeHub-Source": "test:music_play"},
+                json={
+                    "client_event_id": "play-api-1",
+                    "provider": "itunes_search",
+                    "provider_id": "1713833576",
+                },
+            )
+        finally:
+            app.state.music_assisted_playback = previous
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "played"
+        assert calls == [{
+            "client_event_id": "play-api-1",
+            "provider": "itunes_search",
+            "provider_id": "1713833576",
+            "source": "test:music_play",
+        }]
+
+    def test_music_assisted_playback_rejects_non_object_json(self, client):
+        previous = app.state.music_assisted_playback
+        calls = []
+
+        class FakeAssisted:
+            async def play_exact(self, **kwargs):
+                calls.append(kwargs)
+                return {"status": "played"}
+
+        app.state.music_assisted_playback = FakeAssisted()
+        try:
+            resp = client.post("/api/music/assisted-playback", json=["not", "an", "object"])
+        finally:
+            app.state.music_assisted_playback = previous
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Request body must be a JSON object"
+        assert calls == []
+
+    def test_music_assisted_playback_rejects_malformed_json(self, client):
+        previous = app.state.music_assisted_playback
+        app.state.music_assisted_playback = object()
+        try:
+            resp = client.post(
+                "/api/music/assisted-playback",
+                content=b"{",
+                headers={"Content-Type": "application/json"},
+            )
+        finally:
+            app.state.music_assisted_playback = previous
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Request body must be valid JSON"
+
     def test_music_trust_approval_is_shadow_only_and_provider_qualified(self, client):
         previous = app.state.music_requests
         calls = []

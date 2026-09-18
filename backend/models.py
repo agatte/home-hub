@@ -204,6 +204,43 @@ class MusicApprovalEvent(Base):
 # ---------------------------------------------------------------------------
 
 
+class MusicAssistedPlaybackEvent(Base):
+    """Durable idempotency/result ledger for explicit assisted playback."""
+
+    __tablename__ = "music_assisted_playback_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_event_id", name="uq_music_assisted_playback_client_event_id"
+        ),
+        Index(
+            "ix_music_assisted_playback_candidate_created",
+            "provider", "provider_id", "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_event_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    playback_adapter: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), nullable=False)
+    trust_state: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    volume_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    volume_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class ActivityEvent(Base):
     """Records every mode transition for behavioral analysis."""
 

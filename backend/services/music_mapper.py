@@ -466,6 +466,31 @@ class MusicMapper:
         """Thin callback wrapper for AutomationEngine.register_on_mode_change."""
         await self.on_mode_change(mode)
 
+    async def play_verified_candidate(
+        self, candidate, *, expected_queue_size: int | None = None, before_play=None,
+    ) -> bool:
+        """Execute one already-authorized exact Music Intelligence candidate.
+
+        This is an execution dispatch only; lifecycle, DND, ownership, trust,
+        idempotency, and volume policy remain the caller's responsibility. The
+        first #272 slice intentionally supports only exact Apple Music tracks.
+        Sonos favorite containers retain their existing queue-clearing/shuffle
+        semantics and therefore are not admitted to this narrow path.
+        """
+        if not getattr(candidate, "playback_capable", False):
+            return False
+        adapter = str(getattr(candidate, "playback_adapter", "") or "")
+        if adapter != "sonos_apple_music_share_link":
+            return False
+        provider_id = str(getattr(candidate, "provider_id", "") or "")
+        reference = str(getattr(candidate, "playback_reference", "") or "")
+        if not provider_id or not reference:
+            return False
+        return await self._sonos.play_apple_music_share_link(
+            provider_id, reference, expected_queue_size=expected_queue_size,
+            before_play=before_play,
+        )
+
     async def dispatch_pregame_audio(self, decision) -> dict:
         """Fire the pregameday→gameday audio (GAMEDAY_SPEC §10.3).
 
