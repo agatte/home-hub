@@ -614,11 +614,12 @@ report failure, but it cannot release the authority boundary while a stale write
 continues in the background. TTS, mode-volume ramps, Game Day, and
 assisted-cleanup remain separate #274 consumers until they adopt the same contract.
 
-**IMPLEMENTED/DEPLOYED BASELINE; STARTUP-SETTLE HOTFIX UNRELEASED
+**IMPLEMENTED, DEPLOYED, AND PHYSICALLY ACCEPTED
 (#279 Ambient adoption).** Ambient consumes the central #274 authority for
-queue/source, transport, and volume. The original adoption baseline is deployed
-at `fa72619`; the production startup-settle correction described below remains
-release-candidate work until separately integrated/deployed. A new Ambient
+queue/source, transport, and volume. The original adoption baseline shipped at
+`fa72619`; the production startup-settle correction described below shipped at
+`eb96147` on 2026-09-18 and passed instrumented plus user-audible physical
+acceptance. A new Ambient
 start is allowed only from fresh neutral Sonos evidence: STOPPED/NO_MEDIA,
 NORMAL play mode, empty queue, unmuted, and no unrelated loaded source. Arbitrary
 PAUSED playback and stale source/play-mode residue (including the production
