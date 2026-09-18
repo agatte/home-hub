@@ -2,8 +2,8 @@
 Tests for lifespan-shutdown resilience.
 
 The audit flagged that one teardown raising could block all subsequent ones.
-We verify _safe_shutdown isolates failures and that ambient_sound.stop() is
-now called as part of shutdown.
+We verify _safe_shutdown isolates failures and that Ambient uses its
+no-device-mutation shutdown path.
 """
 from unittest.mock import AsyncMock, patch
 
@@ -33,15 +33,15 @@ def test_one_close_failing_does_not_block_others(caplog):
     rec_close.assert_called()
 
 
-def test_ambient_sound_stop_is_called_on_shutdown():
+def test_ambient_sound_shutdown_is_called_on_shutdown():
     from backend.services.ambient_sound_service import AmbientSoundService
 
-    stop_mock = AsyncMock(return_value={})
-    with patch.object(AmbientSoundService, "stop", stop_mock):
+    shutdown_mock = AsyncMock(return_value=None)
+    with patch.object(AmbientSoundService, "shutdown", shutdown_mock):
         with TestClient(app) as _client:
             pass
 
-    stop_mock.assert_called()
+    shutdown_mock.assert_called()
 
 
 def test_event_logger_retry_task_started_and_torn_down():

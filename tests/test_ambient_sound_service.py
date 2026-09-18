@@ -392,33 +392,23 @@ async def test_weather_stream_failure_reaches_local_file_fallback(monkeypatch, t
     service.play.assert_awaited_once_with("rain.mp3", source="weather")
 
 
-async def test_finite_file_stopped_replay_is_preserved(monkeypatch, tmp_path):
+async def test_finite_file_stopped_does_not_auto_restart(monkeypatch, tmp_path):
     service = _make_service(monkeypatch, tmp_path)
     _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
     service.scan_sounds()
     service._sonos.connected = True
-    service._sonos.get_status = AsyncMock(return_value={"state": "STOPPED", "volume": 20})
-    service._sonos.play_uri = AsyncMock(return_value=True)
-    service._sonos.pause = AsyncMock()
     service._current_sound = "rain.mp3"
     service._playing = True
     service._sonos_ambient_active = True
     service._sonos_ambient_uri = service._url_for("rain.mp3", absolute=True)
 
-    ticks = 0
+    async def one_tick(_):
+        service._sonos_ambient_active = False
 
-    async def one_iteration_then_stop(_):
-        nonlocal ticks
-        ticks += 1
-        if ticks == 2:
-            service._sonos_ambient_active = False
-
-    monkeypatch.setattr(svc.asyncio, "sleep", one_iteration_then_stop)
+    monkeypatch.setattr(svc.asyncio, "sleep", one_tick)
     await service._sonos_ambient_loop()
 
-    service._sonos.play_uri.assert_awaited_once_with(
-        service._url_for("rain.mp3", absolute=True), volume=20, force_radio=False
-    )
+    service._sonos.play_uri.assert_not_called()
 
 
 async def test_paused_playback_does_not_poison_stream_health(monkeypatch, tmp_path):

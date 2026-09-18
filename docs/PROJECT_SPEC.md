@@ -611,8 +611,60 @@ so automation cannot reacquire ownership in the gap between human intent and the
 device mutation. Ownership-sensitive synchronous SoCo writes also defer task
 cancellation until their worker thread has actually settled; a timeout may still
 report failure, but it cannot release the authority boundary while a stale write
-continues in the background. Ambient, TTS, mode-volume ramps, Game Day, and
+continues in the background. TTS, mode-volume ramps, Game Day, and
 assisted-cleanup remain separate #274 consumers until they adopt the same contract.
+
+**IMPLEMENTED/UNRELEASED (#279 Ambient adoption).** Ambient now consumes the
+central #274 authority for queue/source, transport, and volume. A new Ambient
+start is allowed only from fresh neutral Sonos evidence: STOPPED/NO_MEDIA,
+NORMAL play mode, empty queue, unmuted, and no unrelated loaded source. Arbitrary
+PAUSED playback and stale source/play-mode residue (including the production
+`fireplace.mp3` + SHUFFLE reproduction) are not treated as idle permission.
+The exact preflight is re-read inside the same settled Sonos mutation before
+`play_uri`, and successful playback persists the resulting source/transport/
+volume fingerprint in the Ambient lease. Ambient-owned Sonos mutations also use
+a process-local physical-mutation fence: the final evidence read, lifecycle/
+shutdown guard, and synchronous Sonos write occur under that fence. Graceful
+shutdown acquires the same fence before latching terminal shutdown state, so a
+guarded Ambient mutation either completes before shutdown begins or observes the
+latched shutdown state and performs no device write. Manual/external Sonos
+controls do not use this Ambient fence and therefore remain able to take over.
+
+While Ambient is active, source or transport mismatch retires the Ambient lease
+and leaves the physical speaker untouched. A manual volume/mute change yields
+only Ambient's volume dimension; source/transport may remain Ambient-owned, but
+follow-me/config volume writes stop. Ambient volume ramps are stepwise guarded,
+and lifecycle/DND/mode eligibility is re-checked immediately before each
+autonomous source or volume mutation, so a newer manual or stronger policy
+decision prevents later steps. Away, Sleeping, DND, and the existing
+suppressed-mode policy remain stronger than Ambient ownership. Public Ambient
+play/pause/resume/stop intents are serialized so overlapping controls cannot
+leave persisted "playing" state without a matching lease/task.
+
+Ambient pause may retain a **process-local exact paused fingerprint** only after
+HomeHub itself conditionally paused the still-owned Ambient source. Post-pause
+proof must match the complete pre-pause queue/source/play-mode fingerprint with
+only the expected `PLAYING -> PAUSED_PLAYBACK` transport transition allowed;
+even a same-URI queue generation/source replacement destroys the resumable
+claim. The paused claim also records exactly which ownership dimensions
+survived: if a prior or in-flight manual volume/mute action surrendered Ambient
+volume ownership, Resume re-acquires only source/transport and never writes or
+later ramps volume. Resume may re-acquire only if every relevant source,
+transport, volume, mute, queue, and play-mode field still matches; any
+intervening change destroys the claim.
+That paused claim is never reconstructed after backend restart. Graceful
+shutdown uses a dedicated no-device-mutation abandonment path: it cancels local
+Ambient work, retires the lease, persists Ambient as not playing, and does not
+pause/replace/adjust Sonos. Startup likewise never infers ownership from the
+retained physical source.
+
+STOPPED/PAUSED is no longer an automatic loop/restart signal. Internet-radio and
+long-form files remain the preferred continuous Ambient sources; a finite local
+fallback is one-shot if it reaches STOPPED. This intentionally trades automatic
+short-file looping for manual-takeover safety. Ambient also does not attempt to
+clear a retained direct-media URI on release because Sonos exposes no proven
+conditional/CAS source-clear primitive; stale physical residue is left visible
+for later safe arbitration rather than guessed away.
 
 A durable `music_assisted_playback_events` ledger claims each `client_event_id`
 before device I/O, so retries and restarts cannot double-play the same request.

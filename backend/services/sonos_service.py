@@ -7,9 +7,10 @@ import logging
 import random
 import re
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from backend.config import settings
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
@@ -44,6 +45,14 @@ _AUDIO_OWNERSHIP_PROOF_KEYS = (
     "queue_track",
     "queue_track_uri",
 )
+
+_PLAYBACK_OWNERSHIP_PROOF_KEYS = (
+    *_AUDIO_OWNERSHIP_PROOF_KEYS,
+    "volume",
+    "mute",
+)
+
+_SOURCE_TRANSPORT_PROOF_KEYS = _AUDIO_OWNERSHIP_PROOF_KEYS
 
 
 # play_uri() makes the speaker fetch arbitrary URLs. Keep generic URL
@@ -276,6 +285,30 @@ class SonosService:
             logger.warning("Sonos queue ownership evidence read failed: %s", exc)
             return None
 
+    async def get_playback_ownership_evidence(self) -> dict[str, Any] | None:
+        """Return source/transport plus rendering evidence for direct playback."""
+        if not self._connected or not self._device:
+            return None
+        try:
+            return await self._safe_call(self._playback_ownership_evidence_sync)
+        except Exception as exc:
+            logger.warning("Sonos playback ownership evidence read failed: %s", exc)
+            return None
+
+    def _playback_ownership_evidence_sync(self) -> dict[str, Any]:
+        evidence = self._queue_ownership_evidence_sync()
+        evidence["volume"] = int(self._device.volume)
+        evidence["mute"] = bool(self._device.mute)
+        return evidence
+
+    @staticmethod
+    def _evidence_matches(
+        current: dict[str, Any],
+        expected: dict[str, Any],
+        keys: tuple[str, ...],
+    ) -> bool:
+        return all(current.get(key) == expected.get(key) for key in keys)
+
     def _queue_ownership_evidence_sync(self) -> dict[str, Any]:
         device = self._device
         queue_uid = str(device.uid)
@@ -489,6 +522,46 @@ class SonosService:
             logger.error("Sonos pause error: %s", e)
             return False
 
+    def _pause_if_playback_unchanged_sync(
+        self,
+        expected: dict[str, Any],
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        with mutation_lock if mutation_lock is not None else nullcontext():
+            current = self._playback_ownership_evidence_sync()
+            if not self._evidence_matches(
+                current, expected, _SOURCE_TRANSPORT_PROOF_KEYS
+            ):
+                return False
+            if still_allowed is not None and not still_allowed():
+                return False
+            self._device.pause()
+            return True
+
+    async def pause_if_playback_unchanged(
+        self,
+        expected: dict[str, Any],
+        *,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        """Pause only while the same source/transport fingerprint is current."""
+        if not self._connected or not self._device:
+            return False
+        try:
+            return bool(await self._safe_mutation_call(
+                self._pause_if_playback_unchanged_sync,
+                dict(expected or {}),
+                still_allowed,
+                mutation_lock,
+            ))
+        except CircuitBreakerOpen:
+            return False
+        except Exception as exc:
+            logger.warning("Conditional Sonos pause failed: %s", exc)
+            return False
+
     async def set_volume(self, volume: int) -> bool:
         """
         Set speaker volume.
@@ -506,6 +579,49 @@ class SonosService:
             return False
         except Exception as e:
             logger.error(f"Sonos volume error: {e}")
+            return False
+
+    def _set_volume_if_playback_unchanged_sync(
+        self,
+        expected: dict[str, Any],
+        target: int,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        with mutation_lock if mutation_lock is not None else nullcontext():
+            current = self._playback_ownership_evidence_sync()
+            if not self._evidence_matches(
+                current, expected, _PLAYBACK_OWNERSHIP_PROOF_KEYS
+            ):
+                return False
+            if still_allowed is not None and not still_allowed():
+                return False
+            self._device.volume = max(0, min(100, int(target)))
+            return True
+
+    async def set_volume_if_playback_unchanged(
+        self,
+        expected: dict[str, Any],
+        target: int,
+        *,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        """Set volume only while the exact playback fingerprint still matches."""
+        if not self._connected or not self._device:
+            return False
+        try:
+            return bool(await self._safe_mutation_call(
+                self._set_volume_if_playback_unchanged_sync,
+                dict(expected or {}),
+                int(target),
+                still_allowed,
+                mutation_lock,
+            ))
+        except CircuitBreakerOpen:
+            return False
+        except Exception as exc:
+            logger.warning("Conditional Sonos volume write failed: %s", exc)
             return False
 
     async def ramp_volume(
@@ -574,6 +690,147 @@ class SonosService:
             logger.error(f"Sonos previous error: {e}")
             return False
 
+    def _play_uri_sync(
+        self,
+        uri: str,
+        volume: Optional[int],
+        meta: Optional[str],
+        force_radio: bool,
+    ) -> None:
+        device = self._device
+        if volume is not None:
+            device.volume = max(0, min(100, int(volume)))
+            logger.info("Sonos volume set to %s before play_uri", volume)
+        logger.info("Sonos actual volume now: %s", device.volume)
+        if not force_radio:
+            # play_mode is persistent. Finite direct files must not inherit
+            # SHUFFLE/repeat from an older queue owner.
+            try:
+                if device.play_mode != "NORMAL":
+                    device.play_mode = "NORMAL"
+            except Exception as exc:
+                logger.warning("play_mode reset failed: %s", exc)
+        if meta:
+            device.play_uri(uri, meta=meta, force_radio=force_radio)
+        else:
+            device.play_uri(uri, force_radio=force_radio)
+
+    def _play_uri_if_unchanged_sync(
+        self,
+        expected: dict[str, Any],
+        uri: str,
+        volume: Optional[int],
+        meta: Optional[str],
+        force_radio: bool,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        with mutation_lock if mutation_lock is not None else nullcontext():
+            current = self._playback_ownership_evidence_sync()
+            if not self._evidence_matches(
+                current, expected, _PLAYBACK_OWNERSHIP_PROOF_KEYS
+            ):
+                return False
+            if still_allowed is not None and not still_allowed():
+                return False
+            self._play_uri_sync(uri, volume, meta, force_radio)
+            return True
+
+    async def play_uri_if_unchanged(
+        self,
+        expected: dict[str, Any],
+        uri: str,
+        *,
+        volume: Optional[int] = None,
+        meta: Optional[str] = None,
+        force_radio: bool = False,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        """Play a direct URI only if the exact preflight fingerprint survives."""
+        if not is_allowed_play_uri(uri):
+            logger.warning(
+                "Refusing conditional play_uri for non-allowlisted URI: %s",
+                uri[:200],
+            )
+            return False
+        if not self._connected or not self._device:
+            return False
+        try:
+            return bool(await self._safe_mutation_call(
+                self._play_uri_if_unchanged_sync,
+                dict(expected or {}),
+                uri,
+                volume,
+                meta,
+                force_radio,
+                still_allowed,
+                mutation_lock,
+            ))
+        except CircuitBreakerOpen:
+            return False
+        except Exception as exc:
+            logger.warning("Conditional Sonos play_uri failed: %s", exc)
+            return False
+
+    def _play_uri_if_source_unchanged_sync(
+        self,
+        expected: dict[str, Any],
+        uri: str,
+        meta: Optional[str],
+        force_radio: bool,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        with mutation_lock if mutation_lock is not None else nullcontext():
+            current = self._playback_ownership_evidence_sync()
+            if not self._evidence_matches(
+                current, expected, _SOURCE_TRANSPORT_PROOF_KEYS
+            ):
+                return False
+            if still_allowed is not None and not still_allowed():
+                return False
+            self._play_uri_sync(uri, None, meta, force_radio)
+            return True
+
+    async def play_uri_if_source_unchanged(
+        self,
+        expected: dict[str, Any],
+        uri: str,
+        *,
+        meta: Optional[str] = None,
+        force_radio: bool = False,
+        still_allowed: Callable[[], bool] | None = None,
+        mutation_lock: Any = None,
+    ) -> bool:
+        """Play without rendering writes while source/transport proof survives."""
+        if not is_allowed_play_uri(uri):
+            logger.warning(
+                "Refusing source-conditional play_uri for non-allowlisted URI: %s",
+                uri[:200],
+            )
+            return False
+        if not self._connected or not self._device:
+            return False
+        try:
+            return bool(await self._safe_mutation_call(
+                self._play_uri_if_source_unchanged_sync,
+                dict(expected or {}),
+                uri,
+                meta,
+                force_radio,
+                still_allowed,
+                mutation_lock,
+            ))
+        except CircuitBreakerOpen:
+            return False
+        except Exception as exc:
+            logger.warning(
+                "Source-conditional Sonos play_uri failed: %s",
+                exc,
+            )
+            return False
+
     async def play_uri(
         self,
         uri: str,
@@ -609,27 +866,13 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            def _play(device, uri, vol, meta_xml, radio):
-                if vol is not None:
-                    device.volume = max(0, min(100, vol))
-                    logger.info(f"Sonos volume set to {vol} before play_uri")
-                logger.info(f"Sonos actual volume now: {device.volume}")
-                if not radio:
-                    # play_mode is a persistent player setting; SHUFFLE
-                    # (= shuffle + repeat-all, set by _shuffle_and_play)
-                    # makes a single finite file loop forever — TTS clips
-                    # repeated until manually paused. Force NORMAL for
-                    # finite files; favorites re-apply SHUFFLE per play.
-                    try:
-                        if device.play_mode != "NORMAL":
-                            device.play_mode = "NORMAL"
-                    except Exception as exc:
-                        logger.warning(f"play_mode reset failed: {exc}")
-                if meta_xml:
-                    device.play_uri(uri, meta=meta_xml, force_radio=radio)
-                else:
-                    device.play_uri(uri, force_radio=radio)
-            await self._safe_mutation_call(_play, self._device, uri, volume, meta, force_radio)
+            await self._safe_mutation_call(
+                self._play_uri_sync,
+                uri,
+                volume,
+                meta,
+                force_radio,
+            )
             return True
         except CircuitBreakerOpen:
             return False

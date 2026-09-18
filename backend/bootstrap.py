@@ -384,6 +384,7 @@ async def lifespan(app: FastAPI):
         ws_manager=ws_manager,
         weather_service=weather_service,
         sonos=sonos,
+        audio_ownership=audio_ownership,
     )
     await ambient_sound.load_from_db()
     ambient_sound.scan_sounds()
@@ -1534,7 +1535,7 @@ async def lifespan(app: FastAPI):
     await _safe_shutdown("laptop_loopback", laptop_loopback.stop)
     ambient_sound = getattr(app.state, "ambient_sound", None)
     if ambient_sound is not None:
-        await _safe_shutdown("ambient_sound", ambient_sound.stop)
+        await _safe_shutdown("ambient_sound", ambient_sound.shutdown)
 
     # 2. Cancel background tasks, then bounded-wait for them to finish. A hung
     #    task can't block shutdown forever.
