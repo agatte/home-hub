@@ -160,16 +160,19 @@ class TestOnModeChange:
         result = await mapper.on_mode_change("gaming")
         assert result is None
 
-    async def test_sonos_paused_auto_plays(self, mapper, mock_ws):
+    async def test_sonos_paused_is_treated_as_existing_ownership(
+        self, mapper, mock_ws,
+    ):
         mapper._cache["gaming"] = [_entry("Hype", "energetic", auto_play=True)]
         mapper._sonos._state["state"] = "PAUSED_PLAYBACK"
+
         result = await mapper.on_mode_change("gaming")
+
         assert result is not None
-        assert result["action"] == "auto_played"
-        assert result["title"] == "Hype"
-        # Should broadcast music_auto_played
-        auto_plays = [b for b in mock_ws.broadcasts if b[0] == "music_auto_played"]
-        assert len(auto_plays) == 1
+        assert result["action"] == "suggested"
+        assert mapper._sonos._state["track"] == ""
+        suggestions = [b for b in mock_ws.broadcasts if b[0] == "music_suggestion"]
+        assert len(suggestions) == 1
 
     async def test_sonos_playing_sends_suggestion(self, mapper, mock_ws):
         mapper._cache["gaming"] = [_entry("Hype", "energetic", auto_play=True)]

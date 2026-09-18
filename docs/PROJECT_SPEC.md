@@ -552,16 +552,67 @@ and shuffles the queue. Assisted playback requires Home/Awake, DND off, no
 Travel/Return hold, no active TTS or ambient Sonos owner, connected Sonos with a
 closed breaker, STOPPED/NO_MEDIA transport with no loaded track, and NORMAL play
 mode. Any existing/paused/manual playback is treated as user ownership and is not
-replaced. The current mode must also have a music-volume curve. The deployed #272 slice
-never writes Sonos volume. Physical acceptance on 2026-09-17/18 proved that treating
-any nonzero volume below the mode target as acceptable is not sufficient: two runs
-at volume 15 reached Sonos PLAYING but were inaudible to Anthony, while the earlier
-#271 capability proof was audible at 25. **IMPLEMENTED/UNRELEASED (#278):** until
-#274 supplies a shared volume-ownership lease, explicit assisted playback remains
-non-volume-writing and requires the stopped speaker to already equal the current
-mode/time volume target. Above-target requests remain suppressed; below-target
-requests fail closed as `sonos_volume_below_playback_floor` rather than claiming
-that a stale stopped-speaker volume is usable.
+replaced. The current mode must also have a music-volume curve. The deployed #272/#278
+path never writes Sonos volume. Physical acceptance on 2026-09-17/18 proved that
+treating any nonzero volume below the mode target as acceptable is not sufficient:
+two runs at volume 15 reached Sonos PLAYING but were inaudible to Anthony, while the
+earlier #271 capability proof was audible at 25. **LIVE VERIFIED/DEPLOYED (#278):**
+explicit assisted playback therefore remains non-volume-writing and requires the
+stopped speaker to already equal the current mode/time volume target. Above-target
+requests remain suppressed; below-target requests fail closed as
+`sonos_volume_below_playback_floor`. On 2026-09-18 the accepted Working/late-night
+run used the exact target volume 10, verified AJR `Bang!` was PLAYING with advancing
+position before returning `played`, and Anthony audibly confirmed the result.
+
+**IMPLEMENTED/UNRELEASED (#274 foundation; partial #273 adoption).** HomeHub now has one durable
+audio-ownership authority with separate queue/source, transport, volume, and
+temporary-interruption dimensions. A lease is evidence-backed and persisted in
+`app_settings`; restart recovery restores provenance but never infers ownership
+from a title, elapsed time, or silence. Authenticated/manual REST, guest, and
+WebSocket Sonos actions?including TTS interruption/restore transactions?run lease
+invalidation and their complete Sonos transaction under the shared authority lock;
+confirmed off-dashboard skips invalidate queue/transport ownership as well.
+Manual volume changes invalidate volume/interruption ownership without
+unnecessarily surrendering an otherwise valid queue/source lease.
+
+MusicMapper is the first consumer. Mode auto-play may acquire queue/source +
+transport ownership only when fresh Sonos evidence is physically neutral:
+STOPPED/NO_MEDIA, NORMAL play mode, an empty queue, and no unrelated loaded
+source. STOPPED alone is explicitly not permission; stale SHUFFLE, a retained
+ambient/source URI, a nonempty queue, paused playback, or unavailable proof
+fails safe to suggestion/no actuation. The initial queue replacement is guarded
+by both the central lease and a final exact Sonos preflight fingerprint so a
+manual change between inspection and mutation wins.
+
+After a successful mode auto-play, HomeHub persists the exact owning mode/favorite
+plus Sonos queue UID, UpdateID, queue size, first-item fingerprint, play mode,
+transport state, source URI, active queue track, and active track URI. Sonos'
+whole-second polling cannot reliably distinguish a natural queue advance from a
+physical/Sonos-app Next or Previous at a track boundary. HomeHub therefore never
+renews destructive cleanup authority across an off-dashboard PLAYING-to-PLAYING
+title change: any such boundary invalidates queue/transport ownership before the
+older 10-second/80% heuristic is used for preference logging. This is deliberately
+fail-closed; it can surrender ownership on a genuine natural advance, but it cannot
+misclassify a human navigation as still HomeHub-owned.
+
+The exact fingerprint is durable provenance, not permission for destructive
+mode-exit cleanup. Sonos exposes no conditional/CAS Stop or Clear, so a physical
+Next/Previous can still win in the gap after any final proof but before a Stop or
+Clear command. **This slice therefore never stops or clears Sonos on MusicMapper
+mode exit or restart recovery.** It retires the mode lease and leaves the physical
+speaker untouched. #273 remains open both for safe stale-queue release and for a
+stronger provider/device signal that can preserve long-running mode ownership
+across natural track changes without guessing. Volume is never changed as part of
+mode-lease retirement.
+
+Manual REST, guest, and WebSocket actions perform lease invalidation and the
+corresponding Sonos read/write transaction under the same shared authority lock,
+so automation cannot reacquire ownership in the gap between human intent and the
+device mutation. Ownership-sensitive synchronous SoCo writes also defer task
+cancellation until their worker thread has actually settled; a timeout may still
+report failure, but it cannot release the authority boundary while a stale write
+continues in the background. Ambient, TTS, mode-volume ramps, Game Day, and
+assisted-cleanup remain separate #274 consumers until they adopt the same contract.
 
 A durable `music_assisted_playback_events` ledger claims each `client_event_id`
 before device I/O, so retries and restarts cannot double-play the same request.
@@ -1264,6 +1315,7 @@ External APIs (cloud):
 Keys in use: `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`, `dnd_state`, `override_state`, `guest_vibe_playlists`, `champion_color_map` (League champion → RGB palette consumed by `LoLChampionService`; seeded via `scripts/seed_champion_colors.py`). The middle pair carries runtime state across restarts: `dnd_state` is `{enabled, expiry_utc, duration_minutes}`, and `override_state` is `{manual_override, override_mode, override_time_utc, zone_posture_last_fired_utc}` — restored at boot by `automation.load_dnd_state()` / `load_override_state()`, with override drops past the 4h timeout (sleeping exempt). `mode_volume_curves` is `{mode: {day, evening, night, fade_duration_s}}` driving `ModeVolumeService`'s per-mode Sonos fade on transition. `guest_vibe_playlists` is `{hype, singalong, throwback}` → Sonos favorite title; missing keys fall back to `GUEST_VIBE_DEFAULTS` in `routes/guest.py`.
 
 Additional keys:
+- `audio_ownership_leases` - versioned durable Sonos ownership authority state (generation, active multidimensional leases, evidence/provenance, last manual invalidation). Rehydrated on backend restart but never treated as sufficient permission without fresh Sonos evidence.
 - `scheduler_task_state` — `{task_name: {last_run, last_status, last_error}}`; mirrors `AsyncScheduler.get_tasks()` so `/health.scheduler_tasks` survives deploys. Written from `_run_callback`'s finally block.
 - `ambient_config` — Sonos-only ambient-sound config (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`, mode auto-play and weather-reactive preferences); written via `/api/ambient/*`.
 - `ambient_streams` — curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play with a health check (file fallback when down); other keys manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)`.

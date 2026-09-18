@@ -16,6 +16,7 @@ from sqlalchemy import delete, select
 
 from backend.database import async_session
 from backend.models import ModePlaylist
+from backend.services.audio_ownership import QUEUE_SOURCE, TRANSPORT
 
 logger = logging.getLogger("home_hub.music")
 
@@ -25,6 +26,9 @@ PREGAME_TTS_VOLUME = 24
 PREGAME_TTS_LATE_NIGHT_CAP = 18
 # Bounded Game Day fallback only. Any explicit pregameday mapping wins.
 DEFAULT_PREGAME_HYPE_FAVORITE = "It's Lit!"
+
+MODE_AUTOPLAY_OWNER = "music_mapper"
+MODE_AUTOPLAY_PURPOSE = "mode_auto_play"
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -93,11 +97,13 @@ class MusicMapper:
         music_bandit=None,
         weather_service=None,
         tts_service=None,
+        audio_ownership=None,
     ) -> None:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
         self._event_logger = event_logger
         self._music_bandit = music_bandit
+        self._audio_ownership = audio_ownership
         # Phase B (2026-05-12): weather context for the bandit's 4-tuple
         # arm key. Optional — when None the bandit falls back to its
         # WEATHER_ANY sentinel and behaves like Phase A's 3-tuple shape.
@@ -118,6 +124,68 @@ class MusicMapper:
     def set_automation(self, automation) -> None:
         """Inject the automation engine reference (called from bootstrap)."""
         self._automation = automation
+
+    async def _release_mode_audio_lease(self, new_mode: str) -> None:
+        """Retire a mode lease without destructive off-dashboard cleanup.
+
+        Sonos exposes no conditional/CAS Stop or Clear. Even an exact queue
+        fingerprint can become stale in the gap between proof and mutation if
+        a physical/app Next wins. Until #273 has a stronger device/provider
+        primitive, mode exit must surrender HomeHub ownership and leave Sonos
+        untouched.
+        """
+        if self._audio_ownership is None:
+            return
+        lease = await self._audio_ownership.find_lease(
+            owner=MODE_AUTOPLAY_OWNER,
+            purpose=MODE_AUTOPLAY_PURPOSE,
+        )
+        if lease is None:
+            return
+        metadata = lease.get("metadata") or {}
+        if str(metadata.get("mode") or "") == new_mode:
+            return
+
+        await self._audio_ownership.release(
+            lease["lease_id"],
+            reason=f"mode_exit_no_cas_cleanup:{metadata.get('mode')}->{new_mode}",
+        )
+        logger.info(
+            "Retired mode audio lease without Sonos mutation mode=%s "
+            "favorite=%s next_mode=%s reason=no_conditional_sonos_cleanup",
+            metadata.get("mode"),
+            metadata.get("favorite_title"),
+            new_mode,
+        )
+
+    async def _reserve_mode_audio_lease(
+        self, *, mode: str, title: str,
+    ) -> dict | None:
+        if self._audio_ownership is None:
+            return None
+        return await self._audio_ownership.acquire(
+            owner=MODE_AUTOPLAY_OWNER,
+            purpose=MODE_AUTOPLAY_PURPOSE,
+            dimensions=(QUEUE_SOURCE, TRANSPORT),
+            evidence={"phase": "reserved"},
+            metadata={"mode": mode, "favorite_title": title},
+        )
+
+    @staticmethod
+    def _queue_is_neutral_for_autoplay(evidence: dict | None) -> bool:
+        if not evidence:
+            return False
+        if evidence.get("transport_state") not in {"STOPPED", "NO_MEDIA_PRESENT"}:
+            return False
+        if evidence.get("play_mode") != "NORMAL":
+            return False
+        if int(evidence.get("queue_size") or 0) != 0:
+            return False
+        uri = str(evidence.get("current_uri") or "")
+        if not uri:
+            return True
+        queue_uid = str(evidence.get("queue_uid") or "")
+        return bool(queue_uid) and uri == f"x-rincon-queue:{queue_uid}#0"
 
     def _current_weather_class(self) -> str:
         """Return the bandit-shape weather class for the current observation.
@@ -341,6 +409,8 @@ class MusicMapper:
         Returns:
             Dict describing the action taken, or None.
         """
+        await self._release_mode_audio_lease(mode)
+
         if self._automation is not None and self._automation.is_dnd_active():
             logger.debug("DND active — skipping music mode-change handling for %s", mode)
             return None
@@ -397,23 +467,121 @@ class MusicMapper:
                 return None
             sonos_state = status.get("state", "STOPPED")
 
-            if sonos_state in ("STOPPED", "PAUSED_PLAYBACK"):
+            if sonos_state in ("STOPPED", "NO_MEDIA_PRESENT"):
                 if self._last_requested_mode != mode:
                     logger.info(
                         "Mode changed during auto-play setup ('%s' → '%s'), skipping.",
                         mode, self._last_requested_mode,
                     )
                     return None
-                try:
-                    success = await asyncio.wait_for(
-                        self._sonos.play_favorite(title), timeout=6.0
+                preflight_evidence = None
+                if self._audio_ownership is not None:
+                    preflight_evidence = (
+                        await self._sonos.get_queue_ownership_evidence()
                     )
+                    if not self._queue_is_neutral_for_autoplay(preflight_evidence):
+                        logger.info(
+                            "Sonos carries existing queue/source ownership — "
+                            "suggesting '%s' instead of auto-play",
+                            title,
+                        )
+                        await self._ws_manager.broadcast("music_suggestion", {
+                            "mode": mode,
+                            "title": title,
+                            "vibe": vibe,
+                            "message": f"Play '{title}' for {mode} mode?",
+                        })
+                        return {
+                            "action": "suggested",
+                            "title": title,
+                            "vibe": vibe,
+                        }
+
+                lease = await self._reserve_mode_audio_lease(mode=mode, title=title)
+                if self._audio_ownership is not None and lease is None:
+                    logger.info(
+                        "Audio ownership busy — suggesting '%s' instead of auto-play",
+                        title,
+                    )
+                    await self._ws_manager.broadcast("music_suggestion", {
+                        "mode": mode,
+                        "title": title,
+                        "vibe": vibe,
+                        "message": f"Play '{title}' for {mode} mode?",
+                    })
+                    return {"action": "suggested", "title": title, "vibe": vibe}
+                try:
+                    if lease is not None:
+                        async def _owned_play():
+                            return await self._sonos.play_favorite(
+                                title,
+                                expected_queue_evidence=preflight_evidence,
+                            )
+
+                        executed, success = await asyncio.wait_for(
+                            self._audio_ownership.run_if_valid(
+                                lease["lease_id"],
+                                (QUEUE_SOURCE, TRANSPORT),
+                                _owned_play,
+                            ),
+                            timeout=6.0,
+                        )
+                        if not executed:
+                            return None
+                    else:
+                        success = await asyncio.wait_for(
+                            self._sonos.play_favorite(title), timeout=6.0
+                        )
                 except asyncio.TimeoutError:
                     logger.warning(
                         "Sonos play_favorite timed out (6s) for '%s'", title
                     )
+                    if lease is not None:
+                        await self._audio_ownership.release(
+                            lease["lease_id"], reason="auto_play_timeout",
+                        )
                     return None
                 if success:
+                    if lease is not None:
+                        sonos_evidence = None
+                        for _ in range(4):
+                            if not await self._audio_ownership.is_valid(
+                                lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+                            ):
+                                break
+                            candidate = await self._sonos.get_queue_ownership_evidence()
+                            if (
+                                candidate
+                                and candidate.get("transport_state") == "PLAYING"
+                                and candidate.get("play_mode") == "SHUFFLE"
+                                and int(candidate.get("queue_size") or 0) > 0
+                                and str(candidate.get("current_uri") or "").startswith(
+                                    "x-rincon-queue:"
+                                )
+                            ):
+                                sonos_evidence = candidate
+                                break
+                            await asyncio.sleep(0.15)
+
+                        if (
+                            sonos_evidence is not None
+                            and await self._audio_ownership.is_valid(
+                                lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+                            )
+                        ):
+                            await self._audio_ownership.update_evidence(
+                                lease["lease_id"],
+                                {"phase": "owned", "sonos": sonos_evidence},
+                            )
+                        elif await self._audio_ownership.is_valid(lease["lease_id"]):
+                            await self._audio_ownership.release(
+                                lease["lease_id"],
+                                reason="auto_play_evidence_unavailable",
+                            )
+                            logger.warning(
+                                "Auto-play succeeded without durable queue ownership "
+                                "evidence; leaving Sonos untouched on later mode exit"
+                            )
                     logger.info(
                         f"Auto-playing '{title}' (vibe={vibe}) for mode '{mode}'"
                     )
@@ -431,6 +599,10 @@ class MusicMapper:
                             weather_class=self._current_weather_class(),
                         )
                     return {"action": "auto_played", "title": title, "vibe": vibe}
+                if lease is not None:
+                    await self._audio_ownership.release(
+                        lease["lease_id"], reason="auto_play_failed",
+                    )
                 logger.warning(f"Failed to auto-play '{title}' for mode '{mode}'")
                 await self._ws_manager.broadcast("music_auto_play_failed", {
                     "mode": mode,

@@ -10,6 +10,12 @@ from backend.api._guards import _check_sonos_available
 from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 from backend.rate_limit import limiter
+from backend.services.audio_ownership import (
+    AUDIO_DIMENSIONS,
+    MANUAL_QUEUE_DIMENSIONS,
+    MANUAL_TRANSPORT_DIMENSIONS,
+    MANUAL_VOLUME_DIMENSIONS,
+)
 
 router = APIRouter(prefix="/api/sonos", tags=["sonos"])
 
@@ -34,6 +40,25 @@ async def _log_manual_sonos(
         )
 
 
+async def _run_manual_sonos(
+    request: Request,
+    dimensions,
+    *,
+    reason: str,
+    operation,
+):
+    """Serialize manual intent and its Sonos operation against automation."""
+    ownership = getattr(request.app.state, "audio_ownership", None)
+    if ownership is None:
+        return await operation()
+    return await ownership.run_manual(
+        dimensions,
+        source=source_from_request(request, fallback="manual"),
+        reason=reason,
+        operation=operation,
+    )
+
+
 @router.get("/status", response_model=SonosStatus)
 async def get_sonos_status(request: Request) -> dict:
     """Get current Sonos playback status (track, artist, volume, etc.)."""
@@ -42,12 +67,26 @@ async def get_sonos_status(request: Request) -> dict:
     return await sonos.get_status()
 
 
+@router.get("/ownership")
+async def get_sonos_ownership(request: Request) -> dict:
+    """Expose HomeHub's current audio leases for diagnostics."""
+    ownership = getattr(request.app.state, "audio_ownership", None)
+    if ownership is None:
+        return {"enabled": False, "leases": []}
+    return {"enabled": True, **(await ownership.snapshot())}
+
+
 @router.post("/play", dependencies=[Depends(require_api_key)])
 async def sonos_play(request: Request) -> dict:
     """Resume Sonos playback."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
-    success = await sonos.play()
+    success = await _run_manual_sonos(
+        request,
+        MANUAL_TRANSPORT_DIMENSIONS,
+        reason="manual_play",
+        operation=sonos.play,
+    )
     if success:
         await _log_manual_sonos(request, "play")
     return {"status": "ok" if success else "error"}
@@ -63,25 +102,35 @@ async def sonos_smart_play(request: Request) -> dict:
     """
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
+    async def _manual_smart_play() -> dict:
+        # Keep the read/decision/write transaction under the manual boundary.
+        status = await sonos.get_status()
+        if status.get("track"):
+            if await sonos.play():
+                return {"status": "ok", "action": "resumed"}
 
-    # Try resume first — if there's a track loaded, just hit play
-    status = await sonos.get_status()
-    if status.get("track"):
-        success = await sonos.play()
-        if success:
-            await _log_manual_sonos(request, "play")
-            return {"status": "ok", "action": "resumed"}
+        favorites = await sonos.get_favorites()
+        for fav in favorites:
+            if fav.get("uri") and await sonos.play_favorite(fav["title"]):
+                return {
+                    "status": "ok",
+                    "action": "favorite",
+                    "title": fav["title"],
+                }
+        return {
+            "status": "error",
+            "detail": "No track queued and no playable favorites",
+        }
 
-    # Nothing queued — pick first favorite with a URI
-    favorites = await sonos.get_favorites()
-    for fav in favorites:
-        if fav.get("uri"):
-            success = await sonos.play_favorite(fav["title"])
-            if success:
-                await _log_manual_sonos(request, "play")
-                return {"status": "ok", "action": "favorite", "title": fav["title"]}
-
-    return {"status": "error", "detail": "No track queued and no playable favorites"}
+    result = await _run_manual_sonos(
+        request,
+        MANUAL_QUEUE_DIMENSIONS,
+        reason="manual_smart_play",
+        operation=_manual_smart_play,
+    )
+    if result.get("status") == "ok":
+        await _log_manual_sonos(request, "play")
+    return result
 
 
 @router.post("/pause", dependencies=[Depends(require_api_key)])
@@ -89,7 +138,12 @@ async def sonos_pause(request: Request) -> dict:
     """Pause Sonos playback."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
-    success = await sonos.pause()
+    success = await _run_manual_sonos(
+        request,
+        MANUAL_TRANSPORT_DIMENSIONS,
+        reason="manual_pause",
+        operation=sonos.pause,
+    )
     if success:
         await _log_manual_sonos(request, "pause")
     return {"status": "ok" if success else "error"}
@@ -100,7 +154,12 @@ async def sonos_next(request: Request) -> dict:
     """Skip to next track."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
-    success = await sonos.next_track()
+    success = await _run_manual_sonos(
+        request,
+        MANUAL_TRANSPORT_DIMENSIONS,
+        reason="manual_next",
+        operation=sonos.next_track,
+    )
     if success:
         await _log_manual_sonos(request, "skip")
     return {"status": "ok" if success else "error"}
@@ -111,7 +170,12 @@ async def sonos_previous(request: Request) -> dict:
     """Go to previous track."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
-    success = await sonos.previous_track()
+    success = await _run_manual_sonos(
+        request,
+        MANUAL_TRANSPORT_DIMENSIONS,
+        reason="manual_previous",
+        operation=sonos.previous_track,
+    )
     if success:
         await _log_manual_sonos(request, "skip")
     return {"status": "ok" if success else "error"}
@@ -122,7 +186,12 @@ async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
     """Set Sonos volume (0-100)."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
-    success = await sonos.set_volume(body.volume)
+    success = await _run_manual_sonos(
+        request,
+        MANUAL_VOLUME_DIMENSIONS,
+        reason="manual_volume",
+        operation=lambda: sonos.set_volume(body.volume),
+    )
     if success:
         await _log_manual_sonos(request, "volume", volume=body.volume)
     return {"status": "ok" if success else "error", "volume": body.volume}
@@ -147,15 +216,21 @@ async def adjust_sonos_volume(direction: str, request: Request) -> dict:
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
 
-    status = await sonos.get_status()
-    current = int(status.get("volume", 0))
-    sign = 1 if direction == "up" else -1
-    new_volume = max(0, min(100, current + sign * _VOLUME_STEP))
+    async def _manual_volume_step() -> tuple[bool, int]:
+        status = await sonos.get_status()
+        current = int(status.get("volume", 0))
+        sign = 1 if direction == "up" else -1
+        target = max(0, min(100, current + sign * _VOLUME_STEP))
+        if target == current:
+            return True, current
+        return await sonos.set_volume(target), target
 
-    if new_volume == current:
-        return {"status": "ok", "volume": current, "direction": direction}
-
-    success = await sonos.set_volume(new_volume)
+    success, new_volume = await _run_manual_sonos(
+        request,
+        MANUAL_VOLUME_DIMENSIONS,
+        reason="manual_volume_step",
+        operation=_manual_volume_step,
+    )
     if success:
         await _log_manual_sonos(request, "volume", volume=new_volume)
     return {
@@ -178,7 +253,12 @@ async def speak_text(body: TTSRequest, request: Request) -> dict:
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
 
-    success = await tts.speak(text=body.text, volume=body.volume)
+    success = await _run_manual_sonos(
+        request,
+        AUDIO_DIMENSIONS,
+        reason="manual_tts",
+        operation=lambda: tts.speak(text=body.text, volume=body.volume),
+    )
     return {
         "status": "ok" if success else "error",
         "text": body.text,
@@ -223,8 +303,12 @@ async def play_favorite(title: str, request: Request) -> dict:
     """Play a Sonos favorite by title."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
-
-    success = await sonos.play_favorite(title)
+    success = await _run_manual_sonos(
+        request,
+        MANUAL_QUEUE_DIMENSIONS,
+        reason="manual_favorite_play",
+        operation=lambda: sonos.play_favorite(title),
+    )
     if not success:
         raise HTTPException(
             status_code=404,

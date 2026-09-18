@@ -122,6 +122,7 @@ async def test_play_favorite_playlist_branch_uses_shuffle_helper():
     service._connected = True
     service._device = MagicMock()
     service._safe_call = _make_passthrough_safe_call()
+    service._safe_mutation_call = _make_passthrough_safe_call()
 
     # Mock the playlist cache to return one matching playlist.
     fake_pl = MagicMock()
@@ -154,6 +155,7 @@ async def test_play_favorite_cloud_favorite_branch_uses_shuffle_helper():
     service._connected = True
     service._device = MagicMock()
     service._safe_call = _make_passthrough_safe_call()
+    service._safe_mutation_call = _make_passthrough_safe_call()
 
     # Empty playlists cache → falls through to cloud favorites.
     async def empty_playlists():
@@ -197,6 +199,7 @@ async def test_cloud_favorites_mark_only_resource_backed_items_playback_supporte
     service._favorites_cache_time = 0.0
     service._CACHE_TTL = 300.0
     service._safe_call = _make_passthrough_safe_call()
+    service._safe_mutation_call = _make_passthrough_safe_call()
 
     supported_ref = SimpleNamespace(resources=[SimpleNamespace(uri="sonos://queueable")])
     supported = SimpleNamespace(
@@ -230,3 +233,75 @@ def _make_passthrough_safe_call():
     async def safe_call(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     return safe_call
+
+
+@pytest.mark.asyncio
+async def test_owned_playlist_replace_rechecks_exact_preflight_before_clear():
+    service = SonosService.__new__(SonosService)
+    service._connected = True
+    service._device = MagicMock()
+    service._safe_call = _make_passthrough_safe_call()
+    service._safe_mutation_call = _make_passthrough_safe_call()
+    fake_pl = MagicMock()
+    fake_pl.title = "Social Mix"
+
+    async def cached():
+        return [fake_pl]
+
+    service._get_sonos_playlists_cached = cached
+    expected = {
+        "queue_uid": "RINCON_TEST",
+        "queue_update_id": "8",
+        "queue_size": 0,
+        "queue_first_item_hash": None,
+        "play_mode": "NORMAL",
+        "transport_state": "STOPPED",
+        "current_uri": "x-rincon-queue:RINCON_TEST#0",
+    }
+    service._queue_ownership_evidence_sync = MagicMock(return_value=expected)
+    service._shuffle_and_play = MagicMock()
+
+    result = await service.play_favorite(
+        "social mix", expected_queue_evidence=expected,
+    )
+
+    assert result is True
+    service._device.clear_queue.assert_called_once_with()
+    service._device.add_to_queue.assert_called_once_with(fake_pl)
+
+
+@pytest.mark.asyncio
+async def test_owned_playlist_replace_refuses_changed_sonos_without_clear():
+    service = SonosService.__new__(SonosService)
+    service._connected = True
+    service._device = MagicMock()
+    service._safe_call = _make_passthrough_safe_call()
+    service._safe_mutation_call = _make_passthrough_safe_call()
+    fake_pl = MagicMock()
+    fake_pl.title = "Social Mix"
+
+    async def cached():
+        return [fake_pl]
+
+    service._get_sonos_playlists_cached = cached
+    expected = {
+        "queue_uid": "RINCON_TEST",
+        "queue_update_id": "8",
+        "queue_size": 0,
+        "queue_first_item_hash": None,
+        "play_mode": "NORMAL",
+        "transport_state": "STOPPED",
+        "current_uri": "x-rincon-queue:RINCON_TEST#0",
+    }
+    changed = dict(expected, queue_update_id="9")
+    service._queue_ownership_evidence_sync = MagicMock(return_value=changed)
+    service._shuffle_and_play = MagicMock()
+
+    result = await service.play_favorite(
+        "social mix", expected_queue_evidence=expected,
+    )
+
+    assert result is False
+    service._device.clear_queue.assert_not_called()
+    service._device.add_to_queue.assert_not_called()
+    service._shuffle_and_play.assert_not_called()

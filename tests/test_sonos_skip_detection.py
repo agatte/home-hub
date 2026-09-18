@@ -122,3 +122,86 @@ async def test_helper_no_ops_when_logger_not_attached():
     # AttributeError on self._event_logger.log_sonos_event.
     await s._maybe_emit_skip(prev, new)
     # No assertion target — the test passes iff the call returns without raising.
+
+
+@pytest.mark.asyncio
+async def test_near_end_track_boundary_surrenders_owned_queue() -> None:
+    s, el = _make_service()
+    ownership = SimpleNamespace(
+        invalidate_manual=AsyncMock(return_value={}),
+    )
+    s.attach_audio_ownership(ownership)
+
+    prev = {
+        "state": "PLAYING",
+        "track": "Song A",
+        "position": "0:03:58",
+        "duration": "0:04:00",
+    }
+    new = {
+        "state": "PLAYING",
+        "track": "Song B",
+        "position": "0:00:00",
+        "duration": "0:03:00",
+    }
+
+    await s._maybe_emit_skip(prev, new)
+
+    # Near-end remains excluded from skip-learning, but ownership cannot
+    # survive because Sonos cannot prove this was not a physical/app Next.
+    assert el.calls == []
+    ownership.invalidate_manual.assert_awaited_once_with(
+        frozenset({"queue_source", "transport", "interruption"}),
+        source="sonos_poll",
+        reason="off_dashboard_track_boundary",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unparseable_track_boundary_still_surrenders_owned_queue() -> None:
+    s, el = _make_service()
+    ownership = SimpleNamespace(
+        invalidate_manual=AsyncMock(return_value={}),
+    )
+    s.attach_audio_ownership(ownership)
+    prev = {
+        "state": "PLAYING",
+        "track": "Song A",
+        "position": "NOT_IMPLEMENTED",
+        "duration": "NOT_IMPLEMENTED",
+    }
+    new = {
+        "state": "PLAYING",
+        "track": "Song B",
+        "position": "NOT_IMPLEMENTED",
+        "duration": "NOT_IMPLEMENTED",
+    }
+
+    await s._maybe_emit_skip(prev, new)
+
+    assert el.calls == []
+    ownership.invalidate_manual.assert_awaited_once_with(
+        frozenset({"queue_source", "transport", "interruption"}),
+        source="sonos_poll",
+        reason="off_dashboard_track_boundary",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unchanged_title_does_not_surrender_owned_queue() -> None:
+    s, _ = _make_service()
+    ownership = SimpleNamespace(
+        invalidate_manual=AsyncMock(return_value={}),
+    )
+    s.attach_audio_ownership(ownership)
+    prev = {
+        "state": "PLAYING",
+        "track": "Song A",
+        "position": "0:00:30",
+        "duration": "0:04:00",
+    }
+    new = dict(prev, position="0:00:32")
+
+    await s._maybe_emit_skip(prev, new)
+
+    ownership.invalidate_manual.assert_not_awaited()

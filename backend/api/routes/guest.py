@@ -21,10 +21,29 @@ from backend.api.routes.scenes import (
     _log_scene_activation,
 )
 from backend.config import settings
+from backend.services.audio_ownership import (
+    AUDIO_DIMENSIONS,
+    MANUAL_QUEUE_DIMENSIONS,
+    MANUAL_TRANSPORT_DIMENSIONS,
+    MANUAL_VOLUME_DIMENSIONS,
+)
 
 logger = logging.getLogger("home_hub.guest")
 
 router = APIRouter(prefix="/api/guest", tags=["guest"])
+
+
+async def _run_guest_audio(request: Request, dimensions, *, reason: str, operation):
+    ownership = getattr(request.app.state, "audio_ownership", None)
+    if ownership is None:
+        return await operation()
+    return await ownership.run_manual(
+        dimensions,
+        source="guest",
+        reason=reason,
+        operation=operation,
+    )
+
 
 # Curated scenes safelisted for guest activation. Map short guest-facing
 # names → curated SCENE_PRESETS keys. Anything not in this map is rejected
@@ -614,7 +633,12 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
             ),
         )
 
-    started = await sonos.play_favorite(favorite_title)
+    started = await _run_guest_audio(
+        request,
+        MANUAL_QUEUE_DIMENSIONS,
+        reason="guest_vibe_play",
+        operation=lambda: sonos.play_favorite(favorite_title),
+    )
     if not started:
         raise HTTPException(
             status_code=502,
@@ -662,11 +686,29 @@ async def guest_sonos_volume(direction: str, request: Request) -> dict:
     sonos = getattr(request.app.state, "sonos", None)
     if not sonos or not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
-    status = await sonos.get_status()
-    current = int(status.get("volume") or GUEST_SONOS_VOLUME_FLOOR)
-    delta = GUEST_SONOS_VOLUME_STEP if direction == "up" else -GUEST_SONOS_VOLUME_STEP
-    target = max(GUEST_SONOS_VOLUME_FLOOR, min(GUEST_SONOS_VOLUME_CEILING, current + delta))
-    if target != current and not await sonos.set_volume(target):
+    async def _manual_guest_volume() -> tuple[bool, int]:
+        status = await sonos.get_status()
+        current = int(status.get("volume") or GUEST_SONOS_VOLUME_FLOOR)
+        delta = (
+            GUEST_SONOS_VOLUME_STEP
+            if direction == "up"
+            else -GUEST_SONOS_VOLUME_STEP
+        )
+        target = max(
+            GUEST_SONOS_VOLUME_FLOOR,
+            min(GUEST_SONOS_VOLUME_CEILING, current + delta),
+        )
+        if target == current:
+            return True, current
+        return await sonos.set_volume(target), target
+
+    ok, target = await _run_guest_audio(
+        request,
+        MANUAL_VOLUME_DIMENSIONS,
+        reason="guest_volume",
+        operation=_manual_guest_volume,
+    )
+    if not ok:
         raise HTTPException(status_code=502, detail="Couldn't change Sonos volume")
     return {"status": "ok", "volume": target}
 
@@ -680,12 +722,19 @@ async def guest_sonos_transport(action: str, request: Request) -> dict:
     sonos = getattr(request.app.state, "sonos", None)
     if not sonos or not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
-    if action == "play":
-        ok = await sonos.play()
-    elif action == "pause":
-        ok = await sonos.pause()
-    else:
-        ok = await sonos.next_track()
+    async def _manual_guest_transport() -> bool:
+        if action == "play":
+            return await sonos.play()
+        if action == "pause":
+            return await sonos.pause()
+        return await sonos.next_track()
+
+    ok = await _run_guest_audio(
+        request,
+        MANUAL_TRANSPORT_DIMENSIONS,
+        reason=f"guest_{action}",
+        operation=_manual_guest_transport,
+    )
     if not ok:
         raise HTTPException(status_code=502, detail="Sonos command failed")
     return {"status": "ok", "action": action}
@@ -1020,7 +1069,12 @@ async def speak_guest_toast(body: ToastRequest, request: Request) -> dict:
             logger.warning("Couldn't start sparkle for toast", exc_info=True)
 
     try:
-        spoken = await tts.speak(text, volume=GUEST_TOAST_VOLUME)
+        spoken = await _run_guest_audio(
+            request,
+            AUDIO_DIMENSIONS,
+            reason="guest_toast_tts",
+            operation=lambda: tts.speak(text, volume=GUEST_TOAST_VOLUME),
+        )
     finally:
         if effect_manager is not None and automation is not None:
             try:

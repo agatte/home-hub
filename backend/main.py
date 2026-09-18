@@ -569,24 +569,38 @@ async def _handle_sonos_command(app, data: SonosCommandData) -> None:
         return
 
     action = data.action
-    success = False
-    event_type: Optional[str] = None
-    if action == "play":
-        success = await sonos.play()
-        event_type = "play"
-    elif action == "pause":
-        success = await sonos.pause()
-        event_type = "pause"
-    elif action == "volume":
-        # Validator guarantees data.volume is set when action == "volume".
-        success = await sonos.set_volume(data.volume)
-        event_type = "volume"
-    elif action == "next":
-        success = await sonos.next_track()
-        event_type = "skip"
-    elif action == "previous":
-        success = await sonos.previous_track()
-        event_type = "skip"
+    from backend.services.audio_ownership import (
+        MANUAL_TRANSPORT_DIMENSIONS,
+        MANUAL_VOLUME_DIMENSIONS,
+    )
+    dimensions = (
+        MANUAL_VOLUME_DIMENSIONS
+        if action == "volume"
+        else MANUAL_TRANSPORT_DIMENSIONS
+    )
+
+    async def _manual_ws_operation() -> tuple[bool, Optional[str]]:
+        if action == "play":
+            return await sonos.play(), "play"
+        if action == "pause":
+            return await sonos.pause(), "pause"
+        if action == "volume":
+            # Validator guarantees data.volume is set for volume commands.
+            return await sonos.set_volume(data.volume), "volume"
+        if action == "next":
+            return await sonos.next_track(), "skip"
+        return await sonos.previous_track(), "skip"
+
+    ownership = getattr(app.state, "audio_ownership", None)
+    if ownership is not None:
+        success, event_type = await ownership.run_manual(
+            dimensions,
+            source="websocket",
+            reason=f"manual_ws_{action}",
+            operation=_manual_ws_operation,
+        )
+    else:
+        success, event_type = await _manual_ws_operation()
 
     # Log the manual playback event
     if success and event_type is not None:

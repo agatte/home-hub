@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI):
     app.state.laptop_loopback = laptop_loopback
 
     # Automation engine — load persisted schedule + brightness config
-    from backend.api.routes.routines import load_setting
+    from backend.api.routes.routines import load_setting, save_setting
     from backend.api.routes.automation import (
         SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, SCREEN_SYNC_LAPTOP_KEY,
         WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS, RUST_LIGHTING_KEY,
@@ -211,6 +211,16 @@ async def lifespan(app: FastAPI):
     saved_watching_posture = await load_setting(WATCHING_POSTURE_KEY)
     saved_rust_lighting = await load_setting(RUST_LIGHTING_KEY)
     saved_rust_event = await load_setting(RUST_EVENT_CONFIG_KEY)
+
+    from backend.services.audio_ownership import AudioOwnershipService
+    audio_ownership = AudioOwnershipService(
+        setting_loader=load_setting,
+        setting_saver=save_setting,
+    )
+    await audio_ownership.load()
+    app.state.audio_ownership = audio_ownership
+    sonos.attach_audio_ownership(audio_ownership)
+    app_logger.info("Audio ownership authority initialized")
 
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
@@ -361,6 +371,7 @@ async def lifespan(app: FastAPI):
         # GAMEDAY_SPEC §10.3 — pregameday→gameday transition handler needs
         # TTS access for the stakes-tier announcement at T-30.
         tts_service=tts,
+        audio_ownership=audio_ownership,
     )
     await music_mapper.load_from_db()
     app.state.music_mapper = music_mapper

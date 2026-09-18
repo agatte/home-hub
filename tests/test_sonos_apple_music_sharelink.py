@@ -64,6 +64,11 @@ class FakeAVTransport:
         seconds = max(0, int(current))
         return {
             "Track": str(self.target or 0),
+            "TrackURI": (
+                self.device.queue_item.resources[0].uri
+                if self.target and self.device.queue_size
+                else ""
+            ),
             "RelTime": f"0:00:{seconds:02d}",
         }
 

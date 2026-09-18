@@ -2,6 +2,7 @@
 Sonos speaker service — wraps SoCo for local UPnP control.
 """
 import asyncio
+import hashlib
 import logging
 import random
 import re
@@ -31,6 +32,18 @@ ASSISTED_START_VERIFY_SECONDS = 6.0
 ASSISTED_START_POLL_SECONDS = 0.25
 ASSISTED_START_SAMPLE_BUDGET_SECONDS = 1.0
 ASSISTED_START_MIN_ADVANCE_SECONDS = 1.0
+
+_AUDIO_OWNERSHIP_PROOF_KEYS = (
+    "queue_uid",
+    "queue_update_id",
+    "queue_size",
+    "queue_first_item_hash",
+    "play_mode",
+    "transport_state",
+    "current_uri",
+    "queue_track",
+    "queue_track_uri",
+)
 
 
 # play_uri() makes the speaker fetch arbitrary URLs. Keep generic URL
@@ -115,6 +128,7 @@ class SonosService:
         # the prior track's title when title changes mid-track.
         self._event_logger = None
         self._automation = None
+        self._audio_ownership = None
         # Favorites/playlists cache (5-min TTL)
         self._favorites_cache: Optional[list] = None
         # Raw SoCo favorite objects, parallel to _favorites_cache, needed so
@@ -154,6 +168,10 @@ class SonosService:
         self._event_logger = event_logger
         self._automation = automation
 
+    def attach_audio_ownership(self, audio_ownership) -> None:
+        """Wire the shared ownership authority for off-dashboard takeover."""
+        self._audio_ownership = audio_ownership
+
     @property
     def breaker(self) -> CircuitBreaker:
         """Expose the breaker so /health can snapshot its state."""
@@ -173,8 +191,50 @@ class SonosService:
         return self._breaker.state == CircuitBreaker.OPEN
 
     async def _safe_call(self, fn, *args, **kwargs):
-        """Run a sync SoCo call in a thread under the circuit breaker."""
+        """Run a sync SoCo read/call in a thread under the circuit breaker."""
         return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
+
+    @staticmethod
+    async def _settled_thread_call(fn, *args, **kwargs):
+        """Do not report cancellation until the underlying sync write has settled.
+
+        asyncio.to_thread cannot cancel an already-running SoCo call. For
+        ownership-sensitive mutations, returning on timeout/cancellation would
+        let the authority lock go while that stale thread could still finish.
+        Shield the worker and defer cancellation until the sync operation exits.
+        """
+        worker = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+        cancelled = False
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                cancelled = True
+                task = asyncio.current_task()
+                if task is not None and hasattr(task, "uncancel"):
+                    task.uncancel()
+                continue
+        try:
+            result = worker.result()
+        except BaseException:
+            if cancelled:
+                raise asyncio.CancelledError
+            raise
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
+
+    async def _safe_mutation_call(
+        self, fn, *args, call_timeout: float | None = None, **kwargs,
+    ):
+        """Run a sync Sonos mutation without releasing ownership early."""
+        return await self._breaker.call(
+            self._settled_thread_call,
+            fn,
+            *args,
+            call_timeout=call_timeout,
+            **kwargs,
+        )
 
     @property
     def connected(self) -> bool:
@@ -204,6 +264,50 @@ class SonosService:
             "available": True,
             "play_mode": str(play_mode or "").upper(),
             "queue_size": max(0, int(queue_size)),
+        }
+
+    async def get_queue_ownership_evidence(self) -> dict[str, Any] | None:
+        """Return one fresh fingerprint for queue/source ownership."""
+        if not self._connected or not self._device:
+            return None
+        try:
+            return await self._safe_call(self._queue_ownership_evidence_sync)
+        except Exception as exc:
+            logger.warning("Sonos queue ownership evidence read failed: %s", exc)
+            return None
+
+    def _queue_ownership_evidence_sync(self) -> dict[str, Any]:
+        device = self._device
+        queue_uid = str(device.uid)
+        settings_result = device.avTransport.GetTransportSettings([("InstanceID", 0)])
+        transport = device.avTransport.GetTransportInfo([("InstanceID", 0)])
+        media = device.avTransport.GetMediaInfo([("InstanceID", 0)])
+        position = device.avTransport.GetPositionInfo([("InstanceID", 0)])
+        browse = device.contentDirectory.Browse([
+            ("ObjectID", "Q:0"),
+            ("BrowseFlag", "BrowseDirectChildren"),
+            ("Filter", "*"),
+            ("StartingIndex", 0),
+            ("RequestedCount", 1),
+            ("SortCriteria", ""),
+        ])
+        queue_size = max(0, int(browse.get("TotalMatches") or 0))
+        raw_first = str(browse.get("Result") or "") if queue_size else ""
+        return {
+            "queue_uid": queue_uid,
+            "queue_update_id": str(browse.get("UpdateID") or ""),
+            "queue_size": queue_size,
+            "queue_first_item_hash": (
+                hashlib.sha256(raw_first.encode("utf-8")).hexdigest()
+                if raw_first else None
+            ),
+            "play_mode": str(settings_result.get("PlayMode") or "").upper(),
+            "transport_state": str(
+                transport.get("CurrentTransportState") or ""
+            ).upper(),
+            "current_uri": str(media.get("CurrentURI") or ""),
+            "queue_track": max(0, int(position.get("Track") or 0)),
+            "queue_track_uri": str(position.get("TrackURI") or ""),
         }
 
     def get_cached_status_snapshot(self) -> dict[str, Any]:
@@ -355,7 +459,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await self._safe_call(self._device.play)
+            await self._safe_mutation_call(self._device.play)
             return True
         except CircuitBreakerOpen:
             return False
@@ -368,7 +472,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await self._safe_call(self._device.pause)
+            await self._safe_mutation_call(self._device.pause)
             return True
         except CircuitBreakerOpen:
             return False
@@ -396,7 +500,7 @@ class SonosService:
             return False
         try:
             vol = max(0, min(100, volume))
-            await self._safe_call(setattr, self._device, "volume", vol)
+            await self._safe_mutation_call(setattr, self._device, "volume", vol)
             return True
         except CircuitBreakerOpen:
             return False
@@ -449,7 +553,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await self._safe_call(self._device.next)
+            await self._safe_mutation_call(self._device.next)
             return True
         except CircuitBreakerOpen:
             return False
@@ -462,7 +566,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await self._safe_call(self._device.previous)
+            await self._safe_mutation_call(self._device.previous)
             return True
         except CircuitBreakerOpen:
             return False
@@ -525,7 +629,7 @@ class SonosService:
                     device.play_uri(uri, meta=meta_xml, force_radio=radio)
                 else:
                     device.play_uri(uri, force_radio=radio)
-            await self._safe_call(_play, self._device, uri, volume, meta, force_radio)
+            await self._safe_mutation_call(_play, self._device, uri, volume, meta, force_radio)
             return True
         except CircuitBreakerOpen:
             return False
@@ -586,8 +690,8 @@ class SonosService:
         if snapshot is None or not self._connected or not self._device:
             return
         try:
-            await self._breaker.call(
-                asyncio.to_thread, snapshot.restore,
+            await self._safe_mutation_call(
+                snapshot.restore,
                 call_timeout=self._SNAPSHOT_CALL_TIMEOUT,
             )
         except CircuitBreakerOpen:
@@ -717,7 +821,27 @@ class SonosService:
         start = random.randint(0, queue_size - 1) if queue_size > 1 else 0
         device.play_from_queue(start)
 
-    async def play_favorite(self, title: str) -> bool:
+    def _replace_queue_if_unchanged_sync(
+        self, item, expected: dict[str, Any],
+    ) -> bool:
+        """Replace the queue only if the fresh Sonos fingerprint still matches."""
+        current = self._queue_ownership_evidence_sync()
+        if any(
+            current.get(key) != expected.get(key)
+            for key in _AUDIO_OWNERSHIP_PROOF_KEYS
+        ):
+            return False
+        self._device.clear_queue()
+        self._device.add_to_queue(item)
+        self._shuffle_and_play(self._device)
+        return True
+
+    async def play_favorite(
+        self,
+        title: str,
+        *,
+        expected_queue_evidence: dict[str, Any] | None = None,
+    ) -> bool:
         """
         Play a Sonos favorite or playlist by title.
 
@@ -747,24 +871,45 @@ class SonosService:
             playlists = await self._get_sonos_playlists_cached()
             for pl in playlists:
                 if pl.title.lower() == target:
-                    try:
-                        await self._safe_call(self._device.clear_queue)
-                        await self._safe_call(self._device.add_to_queue, pl)
-                        await self._safe_call(self._shuffle_and_play, self._device)
-                    except Exception as e:
-                        logger.warning(
-                            "Queue play failed mid-sequence for '%s': %s — retrying",
-                            pl.title, e,
-                        )
+                    if expected_queue_evidence is not None:
                         try:
-                            await self._safe_call(self._device.add_to_queue, pl)
-                            await self._safe_call(self._shuffle_and_play, self._device)
-                        except Exception as e2:
-                            logger.error(
-                                "Queue recovery also failed for '%s': %s",
-                                pl.title, e2,
+                            replaced = await self._safe_mutation_call(
+                                self._replace_queue_if_unchanged_sync,
+                                pl,
+                                dict(expected_queue_evidence),
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Owned queue replacement failed for '%s': %s",
+                                pl.title, exc,
                             )
                             return False
+                        if not replaced:
+                            logger.info(
+                                "Owned queue replacement refused for '%s': "
+                                "Sonos changed before mutation",
+                                pl.title,
+                            )
+                            return False
+                    else:
+                        try:
+                            await self._safe_mutation_call(self._device.clear_queue)
+                            await self._safe_mutation_call(self._device.add_to_queue, pl)
+                            await self._safe_mutation_call(self._shuffle_and_play, self._device)
+                        except Exception as e:
+                            logger.warning(
+                                "Queue play failed mid-sequence for '%s': %s — retrying",
+                                pl.title, e,
+                            )
+                            try:
+                                await self._safe_mutation_call(self._device.add_to_queue, pl)
+                                await self._safe_mutation_call(self._shuffle_and_play, self._device)
+                            except Exception as e2:
+                                logger.error(
+                                    "Queue recovery also failed for '%s': %s",
+                                    pl.title, e2,
+                                )
+                                return False
                     logger.info(f"Playing Sonos playlist: {pl.title} (shuffled)")
                     return True
         except Exception as e:
@@ -792,12 +937,28 @@ class SonosService:
             ref_resources = getattr(ref, "resources", None) or []
 
             if ref_resources:
-                # Path A: queue the SoCo object directly
+                # Path A: queue the SoCo object directly.
                 try:
-                    await self._safe_call(self._device.clear_queue)
-                    await self._safe_call(self._device.add_to_queue, ref)
-                    await self._safe_call(self._shuffle_and_play, self._device)
-                    logger.info(f"Playing Sonos favorite via queue: {fav_obj.title} (shuffled)")
+                    if expected_queue_evidence is not None:
+                        replaced = await self._safe_mutation_call(
+                            self._replace_queue_if_unchanged_sync,
+                            ref,
+                            dict(expected_queue_evidence),
+                        )
+                        if not replaced:
+                            logger.info(
+                                "Owned queue replacement refused for favorite '%s': "
+                                "Sonos changed before mutation",
+                                fav_obj.title,
+                            )
+                            return False
+                    else:
+                        await self._safe_mutation_call(self._device.clear_queue)
+                        await self._safe_mutation_call(self._device.add_to_queue, ref)
+                        await self._safe_mutation_call(self._shuffle_and_play, self._device)
+                    logger.info(
+                        f"Playing Sonos favorite via queue: {fav_obj.title} (shuffled)"
+                    )
                     return True
                 except Exception as e:
                     logger.error(
@@ -858,7 +1019,7 @@ class SonosService:
 
         queue_number: int | None = None
         try:
-            queue_number = await self._safe_call(
+            queue_number = await self._safe_mutation_call(
                 self._add_apple_music_share_link_sync, share_url,
             )
             if not isinstance(queue_number, int) or queue_number < 1:
@@ -931,7 +1092,7 @@ class SonosService:
                     )
                     return False
             else:
-                await self._safe_call(self._device.play_from_queue, queue_number - 1)
+                await self._safe_mutation_call(self._device.play_from_queue, queue_number - 1)
             logger.info(
                 "Playing verified Apple Music share-link item id=%s at queue=%s",
                 provider_id, queue_number,
@@ -1215,12 +1376,9 @@ class SonosService:
 
                 # Only broadcast if something changed
                 if status != self._last_status:
-                    # Off-dashboard skip detection before stamping _last_status:
-                    # compare new vs prior track. Best-effort — never raises.
-                    if (
-                        self._event_logger is not None
-                        and self._last_status is not None
-                    ):
+                    # Off-dashboard track-boundary detection before stamping
+                    # _last_status. Best-effort - never raises.
+                    if self._last_status is not None:
                         try:
                             await self._maybe_emit_skip(self._last_status, status)
                         except Exception:
@@ -1258,6 +1416,23 @@ class SonosService:
             return m * 60 + sec
         return None
 
+    async def _surrender_owned_queue_for_track_change(self, *, reason: str) -> None:
+        """Surrender cleanup authority on any external track boundary."""
+        if self._audio_ownership is None:
+            return
+        from backend.services.audio_ownership import MANUAL_TRANSPORT_DIMENSIONS
+        try:
+            await self._audio_ownership.invalidate_manual(
+                MANUAL_TRANSPORT_DIMENSIONS,
+                source="sonos_poll",
+                reason=reason,
+            )
+        except Exception:
+            logger.debug(
+                "track-change audio ownership invalidation failed",
+                exc_info=True,
+            )
+
     async def _maybe_emit_skip(self, prev: dict, new: dict) -> None:
         """Emit ``event_type='skip'`` when a track change looks like a user skip.
 
@@ -1273,13 +1448,11 @@ class SonosService:
         within 30s (music_bandit.py:355–363). Skips outside that window
         land in the table but don't penalize the arm — same intent.
 
-        Self-safe when ``attach_event_logger`` hasn't run — early-returns
-        without touching ``self._event_logger`` (the poll loop's outer
-        guard prevents this in production, but direct callers in tests /
-        future refactors get the same protection without surprise).
+        Event logging is optional. When the shared audio ownership authority
+        is attached, a confirmed off-dashboard skip also invalidates conflicting
+        autonomous queue/transport leases before a later mode-exit cleanup can
+        mistake the user-controlled session for HomeHub-owned state.
         """
-        if self._event_logger is None:
-            return
         prev_title = (prev.get("track") or "").strip()
         new_title = (new.get("track") or "").strip()
         # No emission if title didn't actually change. Empty-string
@@ -1291,30 +1464,38 @@ class SonosService:
         if prev.get("state") != "PLAYING" or new.get("state") != "PLAYING":
             return
 
+        # Sonos exposes only coarse position evidence here, so HomeHub cannot
+        # prove whether an off-dashboard boundary was a natural queue advance
+        # or a physical/app Next/Previous. Manual intent must win: surrender
+        # destructive queue/transport cleanup authority for every such boundary.
+        await self._surrender_owned_queue_for_track_change(
+            reason="off_dashboard_track_boundary",
+        )
+
         position_s = self._parse_hms(prev.get("position"))
         duration_s = self._parse_hms(prev.get("duration"))
         if position_s is None or duration_s is None or duration_s <= 0:
-            return  # unparseable — treat as natural end (conservative)
+            return  # ownership already surrendered; skip learning is ambiguous
 
-        # Natural-end cutoff: within 10s of duration OR >=80% played.
+        # Keep the historical broad heuristic only for preference logging.
         natural_end_threshold = max(duration_s - 10.0, 0.8 * duration_s)
         if position_s >= natural_end_threshold:
-            return  # track ran to its natural end, queue advanced
-
-        # Real skip — emit. mode_at_time mirrors the dashboard-skip
-        # path in main.py:514. weather_class is best-effort; bandit's
-        # retrain backfills NULL → WEATHER_ANY.
-        mode = self._automation.current_mode if self._automation else None
-        try:
-            await self._event_logger.log_sonos_event(
-                event_type="skip",
-                favorite_title=prev_title,
-                mode_at_time=mode,
-                triggered_by="off_dashboard",
-            )
-        except Exception:
-            logger.debug("event_logger.log_sonos_event raised", exc_info=True)
             return
+
+        # Preference logging remains optional. mode_at_time mirrors the
+        # dashboard-skip path; weather_class is best-effort downstream.
+        if self._event_logger is not None:
+            mode = self._automation.current_mode if self._automation else None
+            try:
+                await self._event_logger.log_sonos_event(
+                    event_type="skip",
+                    favorite_title=prev_title,
+                    mode_at_time=mode,
+                    triggered_by="off_dashboard",
+                )
+            except Exception:
+                logger.debug("event_logger.log_sonos_event raised", exc_info=True)
+
         logger.info(
             "Sonos skip detected (off-dashboard): '%s' at %.0fs / %.0fs",
             prev_title, position_s, duration_s,
