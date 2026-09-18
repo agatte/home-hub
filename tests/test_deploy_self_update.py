@@ -65,13 +65,13 @@ def test_deploy_reexecs_new_body_after_pull(tmp_path: Path):
     _git(author, "add", "scripts/deploy.sh")
     _git(author, "update-index", "--chmod=+x", "scripts/deploy.sh")
     _git(author, "commit", "-m", "initial deploy script")
-    _git(author, "branch", "-M", "main")
+    _git(author, "branch", "-M", "master")
     _git(author, "remote", "add", "origin", str(origin))
-    _git(author, "push", "-u", "origin", "main")
+    _git(author, "push", "-u", "origin", "master")
     first_sha = _git(author, "rev-parse", "HEAD")
 
     subprocess.run(
-        ["git", "clone", "--branch", "main", str(origin), str(prod)],
+        ["git", "clone", "--branch", "master", str(origin), str(prod)],
         check=True,
         capture_output=True,
         text=True,
@@ -110,7 +110,7 @@ def test_deploy_reexecs_new_body_after_pull(tmp_path: Path):
     reexec_log = home / "reexec.log"
     assert reexec_log.exists(), completed.stdout
     assert reexec_log.read_text(encoding="utf-8").splitlines() == ["new-body"]
-    assert completed.stdout.count("deploy.sh changed during pull") == 1
+    assert completed.stdout.count("deploy.sh changed during remote synchronization") == 1
     assert completed.stdout.count("Deploying ") == 1
     assert completed.stdout.count("Changed files:") == 1
     assert (prod / ".last-deployed-sha").read_text(encoding="utf-8").strip() == second_sha

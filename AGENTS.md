@@ -81,6 +81,10 @@ code alone.
 
 Authorized production deployment must use `scripts/deploy.sh`; the `deploy-home`
 skill owns the detailed release procedure. Never invent a parallel deploy path.
+The Latitude checkout is intentionally pinned to the last deployed SHA between
+releases. Keep its permanent `origin` and `master -> origin/master` tracking intact;
+do not background-pull production merely to remove a behind count. Fetch-only is
+safe for drift inspection; checkout advancement belongs to `deploy.sh`.
 
 `.claude/` artifacts and dated agent/runbook material are historical only. Do not
 load retired memories/loops unless the task specifically needs that evidence.

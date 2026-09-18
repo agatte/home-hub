@@ -540,7 +540,7 @@ does not itself start playback. #272 now owns the first narrow assisted-playback
 authority path; controlled discovery/session-DJ behavior stays later under #254.
 Representative audio access for semantic analysis/embeddings remains separate research.
 
-**DEPLOYED / PHYSICAL ACCEPTANCE IN PROGRESS (#272).** The first assisted-playback slice is an
+**DEPLOYED / PHYSICALLY ACCEPTED (#272, closed 2026-09-18).** The first assisted-playback slice is an
 explicit-action authority, not an autonomous DJ. The caller supplies only a
 durable `client_event_id` plus exact `(provider, provider_id)`; HomeHub re-resolves
 the candidate, current approval/proven trust, provider capability, house/lifecycle
@@ -564,12 +564,12 @@ requests remain suppressed; below-target requests fail closed as
 run used the exact target volume 10, verified AJR `Bang!` was PLAYING with advancing
 position before returning `played`, and Anthony audibly confirmed the result.
 
-**IMPLEMENTED/UNRELEASED (#274 foundation; partial #273 adoption).** HomeHub now has one durable
+**DEPLOYED (#274 foundation; partial #273 adoption, build `7f309a3`).** HomeHub now has one durable
 audio-ownership authority with separate queue/source, transport, volume, and
 temporary-interruption dimensions. A lease is evidence-backed and persisted in
 `app_settings`; restart recovery restores provenance but never infers ownership
 from a title, elapsed time, or silence. Authenticated/manual REST, guest, and
-WebSocket Sonos actions?including TTS interruption/restore transactions?run lease
+WebSocket Sonos actions—including TTS interruption/restore transactions—run lease
 invalidation and their complete Sonos transaction under the shared authority lock;
 confirmed off-dashboard skips invalidate queue/transport ownership as well.
 Manual volume changes invalidate volume/interruption ownership without
@@ -637,7 +637,7 @@ a truly simultaneous controller command after that final proof is serialized
 against the already-authorized explicit HomeHub request rather than guessed around. The
 execution handoff remains `MusicAssistedPlaybackService -> MusicMapper ->
 SonosService`; Music Intelligence does not become a parallel Sonos writer. A
-**IMPLEMENTED/UNRELEASED (#278):** the low-level executor does not treat the
+**DEPLOYED / PHYSICALLY ACCEPTED (#278, closed 2026-09-18):** the low-level executor does not treat the
 UPnP `Play` response as physical success. After `Play`, it polls for at most six
 seconds and requires the same queue generation/object, queue source and track
 number, NORMAL play mode, unchanged guarded volume/mute, PLAYING transport, and
@@ -1728,6 +1728,7 @@ contributes degradation.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/sonos/status` | Current playback state |
+| GET | `/api/sonos/ownership` | Read-only #274 ownership registry diagnostics: version/generation, active leases, last manual invalidation |
 | POST | `/api/sonos/play` | Resume playback |
 | POST | `/api/sonos/smart-play` | Resume if track loaded, else play first favorite (used by Alexa `PlayMusicIntent`) |
 | POST | `/api/sonos/pause` | Pause playback |
@@ -1949,8 +1950,9 @@ UPnP control via SoCo. Polls every 2s, broadcasts changes.
 | `play/pause/next_track/previous_track` | `() → bool` | Transport controls |
 | `set_volume` | `(volume: int) → bool` | 0-100 |
 | `play_uri` | `(uri: str, volume?: int) → bool` | Play HTTP URL |
-| `play_favorite` | `(title: str) → bool` | Play by name |
-| `play_apple_music_share_link` | `(provider_id: str, share_url: str, expected_queue_size?: int, before_play?: async guard) -> bool` | Low-level exact Apple Music ShareLink queue/play primitive. Requires `song:<provider_id>` canonical match, appends without changing play mode, supports a final caller-supplied pre-play authority guard, and uses a shared 3-second final UPnP budget to recheck the appended queue-object fingerprint/generation, idle transport, mute, and guarded volume immediately before positional playback. **#278 implemented/unreleased:** expected-queue callers return success only after a bounded post-Play proof keeps the exact queue/source/track/volume ownership and observes PLAYING position advance by at least one second. Failed/aborted appends remain retained rather than risking deletion from a concurrently edited user queue. No title/URI fallback or second Apple credential. |
+| `play_favorite` | `(title: str, expected_queue_evidence?: dict) → bool` | Play by name; when #274 evidence is supplied, re-check the exact neutral queue/source fingerprint immediately before destructive queue replacement |
+| `get_queue_ownership_evidence` | `() → Optional[dict]` | Fresh queue/source/transport fingerprint for #274 provenance and final preflight; unavailable evidence fails closed |
+| `play_apple_music_share_link` | `(provider_id: str, share_url: str, expected_queue_size?: int, before_play?: async guard) -> bool` | Low-level exact Apple Music ShareLink queue/play primitive. Requires `song:<provider_id>` canonical match, appends without changing play mode, supports a final caller-supplied pre-play authority guard, and uses a shared 3-second final UPnP budget to recheck the appended queue-object fingerprint/generation, idle transport, mute, and guarded volume immediately before positional playback. **#278 deployed/physically accepted:** expected-queue callers return success only after a bounded post-Play proof keeps the exact queue/source/track/volume ownership and observes PLAYING position advance by at least one second. Failed/aborted appends remain retained rather than risking deletion from a concurrently edited user queue. No title/URI fallback or second Apple credential. |
 | `get_queue_context` | `() -> dict` | Fresh read-only play-mode/queue-size facts used by #272 ownership policy; failures return unavailable rather than guessing. |
 | `get_favorites` | `() → list[dict]` | List favorites |
 | `get_current_playback_snapshot` | `() → Optional[soco.snapshot.Snapshot]` | For duck-and-resume; captures even when idle; None = capture failed |
@@ -2502,14 +2504,16 @@ The dashboard has been redesigned as a living, data-reactive interface:
   ShareLink queue/play adapter preserves the existing queue/play mode, has no
   route/autonomous caller, and requires no second Apple credential. The 2026-09-17
   live proof passed cleanly and the household-scoped marker is persisted; production
-  contains the #272 exact-ownership hotfix `21f5ecf` (current production build
-  `f209705`). Physical #272 acceptance remains open because the real endpoint reached
-  PLAYING at volume 15 but Anthony heard no audio. #278 owns that direct close gate.
-- **DEPLOYED / PHYSICAL ACCEPTANCE IN PROGRESS (#272):** explicit exact-track assisted playback now
-  has durable idempotency plus trust, lifecycle, ownership, queue-mode, ambient/TTS,
-  and read-only volume-cap gates (never a #272 volume write). It routes through MusicMapper to the exact Apple
-  ShareLink executor; no autonomous context playback is enabled. Controlled
-  exploration and contextual/session DJ remain later.
+  contains the accepted #272/#278 exact-ownership + verified-start path. The
+  accepted 2026-09-18 deployment `7f309a3` also includes the #274 central ownership
+  foundation and first partial #273 MusicMapper adoption. #272/#278 are closed
+  after Anthony audibly confirmed AJR `Bang!` at the exact allowed mode target
+  with verified PLAYING position advancement.
+- **DEPLOYED / PHYSICALLY ACCEPTED (#272):** explicit exact-track assisted playback has
+  durable idempotency plus trust, lifecycle, ownership, queue-mode, ambient/TTS,
+  exact-current-mode-volume, and verified-start gates. It routes through MusicMapper
+  to the exact Apple ShareLink executor; no autonomous context playback is enabled.
+  Controlled exploration and contextual/session DJ remain later.
 
 ### Intelligence and earned autonomy
 
@@ -2554,11 +2558,11 @@ See `docs/GAMEDAY_SPEC.md` for the full spec; this section is the architecture s
 - ✓ **ESPN API integration** — `GameDayService` polls `site.api.espn.com/apis/site/v2/sports/football/nfl/...` (no auth, no key) for the Colts schedule (15-min cache) and live play-by-play (10s during in-progress, 60s during pregame/final).
 - ✓ **Play detection** — Diffs `summary.scoringPlays[]` per tick; emits `PlayEvent` for new TDs/FGs/kickoffs through `register_on_play_event` subscribers. Best-effort regex parse of player/kicker/yards from ESPN play text (validated against real 2025 Colts game data — handles both canonical and abbreviated formats).
 - ✓ **Celebration orchestration** — `CelebrationOrchestrator` subscribes; runs custom light sequences (Colts blue/white pulse rotation for TD, single-pulse-flash for FG, baseline activation for kickoff, win/loss split for end-of-game) with 8s cooldown. Lighting-curator-reviewed palette.
-- ✓ **GameDay page** — Accepted 2026-09-14 presentation authority is `/gameday/prototype`: a reference-derived stadium/field hero with live score, clock, possession, and current-drive typography rendered transparently onto the physical front fascia. It subscribes to the existing `gameday_state`/`gameday_play`/`gameday_celebration` feed through the `gameday` Svelte store.
+- ✓ **GameDay page** — #277 promoted the accepted reference-derived stadium/fascia presentation to canonical `/gameday`; `/gameday/prototype` is now a noindex alias to the same shared `GameDayStadiumView`, so the two routes cannot visually drift. Live score, clock, possession, and current-drive typography render transparently onto the physical front fascia through the existing `gameday` Svelte store.
 - ✓ **Legacy 3D renderer** — The earlier Threlte `FootballField` remains historical implementation context; it is not the current visual-design authority. See `docs/GAMEDAY_SPEC.md` for the accepted presentation baseline and renderer history.
 - ✓ **Mode auto-flip** — T-30 pre-kickoff sets gameday override (`source="gameday:auto"`); T+30 post-game conditionally clears only if user didn't override mid-game (verified via `automation.override_source`, a property added in Slice A).
 - ✓ **Dynamic celebration TTS volume** — `celebration_volume_policy.py` reads game state (WPA primary, margin+time fallback) × apartment context (sleeping/DND/late-night/camera-absent) to scale Sonos volume `5-50` or suppress entirely. See GAMEDAY_SPEC.md §9.
-- **Pre-game ambient mode** — deferred to v2 (continuous Colts-tinted lighting before kickoff).
+- ✓ **Pre-game ambient mode** — shipped: T-60 `pregameday` lighting build, T-30 handoff to `gameday`, and stakes-aware TTS/hype policy. Reopened #9 owns the later #274/#276 safety hardening that must re-check lifecycle + Sonos ownership after TTS/gap and immediately before destructive hype playback.
 - **Commercial-break detection** — deferred to v2 (would require a separate ESPN signal not currently exposed).
 
 #### Game Day Architecture
@@ -2702,14 +2706,36 @@ lifecycle end-to-end:
    post-restart event window. The historical Claude `deploy-verifier` subagent
    is now a checklist reference, not an automatically running component.
 
-`scripts/deploy.sh` handles the remote side: `git pull --ff-only`,
-diffs `HEAD` to detect what changed, reinstalls Python deps if
-`requirements.txt` changed, runs `npm install` if
-`frontend-svelte/package*.json` changed, rebuilds the frontend if
-source files changed, restarts `home-hub.service` if backend code
-changed, health-checks the backend via `/health` after restart, and
-restarts `home-hub-ambient.service` if the ambient monitor changed.
-Exits non-zero if the health check fails.
+### Production Git checkout contract (#282)
+
+The Latitude checkout is a **deployment checkout**, not an automatically pulled
+development clone. Its checked-out `master` intentionally remains at the last
+deployed SHA until an authorized deployment runs. It may therefore report
+`master` as behind `origin/master` between releases; that is expected and is not
+runtime drift.
+
+The checkout must still be a normal Git clone with a permanent `origin` remote
+and `master` tracking `origin/master`. Do not run a background `git pull` merely
+to make the working tree match GitHub: that can put newer files on disk while
+the running service and `.last-deployed-sha` still describe the previous
+release. A fetch-only maintenance check is safe because it updates remote refs
+without changing production files. For a read-only freshness check, use:
+
+`ssh homehub "cd ~/home-hub && git fetch --prune origin && git status -sb && git rev-list --left-right --count HEAD...origin/master"`
+
+The final count is `<local-only> <remote-only>`; on a healthy production checkout
+the first number should be `0`, while the second may be nonzero until the next
+authorized deployment.
+
+`scripts/deploy.sh` owns synchronization at the release boundary. Before changing
+the checkout it requires clean tracked files, `master`, `origin`, and the
+`origin/master` upstream; fetches/prunes `origin`; rejects local-only/divergent
+production commits; then fast-forwards explicitly to `origin/master`. It diffs
+the last successfully deployed SHA to the new HEAD, reinstalls dependencies and
+rebuilds only when relevant files changed, restarts the required services,
+health-checks the backend, and records `.last-deployed-sha`. The script restarts
+`home-hub-ambient.service` only when its owned deployment/runtime files require
+it. Exits non-zero if synchronization or health validation fails.
 
 **`.env` updates** (new secrets, API keys, etc.) are not git-tracked
 and must be nano-edited directly on the Latitude via SSH, followed by

@@ -2,12 +2,12 @@
 
 > **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). **Phase C shipped 2026-05-07** — `gameday` exposed in FloatingNav, MODE_CONFIG theme entry, Alexa `HOMEHUB_MODE` slot + lambda `VALID_MODES`. Voice-end-to-end verified.
 >
-> **Current checkpoint — 2026-09-14:** #5 and #10 are completed. The accepted Latitude Game Day visual baseline is `0d39d6c`: a reference-derived stadium/field hero with a cleaned physical fascia and transparent live Svelte score/clock/drive typography. #252 owns the remaining truthful current-drive backend contract; #7 remains evidence-driven volume/TTS calibration at the next suitable live game. ESPN provider-health/backoff work in #153 is completed; #45 remains a separate stakes-enrichment concern.
+> **Current checkpoint — 2026-09-18:** #252 current-drive truth and #277 route promotion are completed. The accepted stadium/fascia view is shared by canonical `/gameday` and the temporary noindex `/gameday/prototype` alias; there is no longer a separate legacy public renderer. #253 remains open only for real-game/real-room acceptance plus dependencies such as #7, while reopened #9 owns the new post-TTS/gap audio-ownership hardening gate. ESPN provider-health/backoff work in #153 is completed; #45 remains a separate stakes-enrichment concern.
 >
-> **Presentation authority:** `/gameday/prototype` is the accepted current presentation surface. The older renderer history in §11 remains useful engineering context, but it is not the current visual-design authority.
+> **Presentation authority:** canonical `/gameday` is the accepted current presentation surface. `/gameday/prototype` is a noindex alias to the same shared `GameDayStadiumView`, retained only for old links. The older renderer history in §11 remains useful engineering context, but it is not the current visual-design authority.
 > **Presentation truthfulness:** when there is no active game, the accepted surface must show only schedule-derived next-game context (or an explicit no-game/loading state) with score dashes and no synthetic opponent/score/drive. Live period labels use `OVERTIME` for quarter 5 and `2OT`, `3OT`, etc. thereafter.
 
-Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; the accepted Latitude presentation uses the premium `/gameday/prototype` field hero with live score/clock/drive data integrated into its physical fascia. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
+Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; canonical `/gameday` uses the accepted premium stadium/field hero with live score/clock/drive data integrated into its physical fascia. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 
 ---
 
@@ -15,14 +15,14 @@ Game Day is a season-bounded mode that turns the apartment into a Colts viewing 
 
 | # | Decision | Choice |
 |---|---|---|
-| 1.1 | Celebration scope (v1) | TD + FG + kickoff + end-of-game (4 events). Pre-game ambient + commercial-break deferred to v2. |
+| 1.1 | Celebration scope (v1) | TD + FG + kickoff + end-of-game (4 events). Pre-game ambient was deferred from v1 and later shipped in §10; commercial-break detection remains deferred. |
 | 1.2 | Mode trigger | Auto-flip 30 min pre-kickoff via ESPN schedule; auto-exit 30 min post-game; manual override (Alexa + dashboard) always available. |
 | 1.3a | Choreography building blocks | Fully custom CelebrationOrchestrator sequences. No stock effect calls (`sparkle`/`prism`/etc.). |
 | 1.3b | Color palette | Free choice per event — each event has its own per-light HSB sequence. |
 | 1.4a | TTS line authoring | 3–5 hand-written variations per event, randomized; ESPN play data (player, kicker, yards) threaded in where available. |
 | 1.4b | TTS volume behavior | Duck-and-resume (existing pattern from `winddown_routine.py`). |
 | 1.4c | Win/loss split | Win-only TTS at end-of-game. Loss is silent — lights handle the wind-down. |
-| 1.5 | GameDay page visual | Accepted 2026-09-14: reference-derived premium stadium/field hero on `/gameday/prototype`, with the physical front fascia cleaned of baked data and live Svelte score/clock/possession/current-drive typography rendered transparently onto it. |
+| 1.5 | GameDay page visual | Accepted 2026-09-14 and promoted by #277: canonical `/gameday` renders the shared reference-derived premium stadium/field hero, with the physical front fascia cleaned of baked data and live Svelte score/clock/possession/current-drive typography rendered transparently onto it. `/gameday/prototype` is only a noindex alias to the same view. |
 | 1.6 | Mode integration | First-class automation mode, priority `6` (top auto-detected slot). Sleeping override still wins (persistent). |
 | 1.7 | Phase B fleet commitment | Commit to 4-worktree parallel fleet now. Phase A spec is written for parallelism. |
 | 1.8 | TTS volume model | Dynamic, "reads the room." WPA-driven (ESPN winprobability) primary signal with margin+time fallback; apartment-context modifiers (sleeping/DND/late-night/camera-absent); silent on losing blowouts. See §9. |
@@ -465,7 +465,7 @@ Final clamp `[5, 50]`.
 
 ## 10. Pre-game ambient mode (v2 design)
 
-**Status:** Shipped 2026-05-15 (5 commits; see `project_pregameday_shipped_2026_05_15.md`). Pre-preseason owed: palette verify (GH #8), TTS authoring (GH #6), playoff backfill, hype playlist tuning. §10.1+ below preserves the design spec for those remaining tuning passes.
+**Status:** Core pregameday behavior shipped 2026-05-15 (5 commits; see `project_pregameday_shipped_2026_05_15.md`). Issue #9 was reopened on 2026-09-18 for one later #276/#274 safety requirement: after TTS and the ~2s gap, Game Day must re-read lifecycle/DND plus central Sonos ownership immediately before destructive `play_favorite()`. A manual song/queue/source/transport takeover during that window must suppress hype playback. The original T-60/T-30 lifecycle and accepted pregame policy remain shipped; this is ownership hardening, not a redesign.
 
 The pre-game window is the hour leading up to kickoff. The current architecture has the apartment doing whatever it was doing (working, idle, etc) right up until the T-30 auto-flip lands the gameday baseline. v2 fills that hour with anticipation: lighting starts shifting earlier, and audio reads the season's stakes the same way `compute_celebration_volume` reads each play's stakes.
 
@@ -539,7 +539,7 @@ def compute_pregame_audio(
 **Fire timing:**
 - T-60: pre-game lighting palette activates (pregameday mode).
 - T-60 → T-30: silent (lights-only build).
-- T-30: gameday flip lands. Audio fires AFTER the flip via a new `on_mode_change` callback in MusicMapper-equivalent that handles `pregameday → gameday` specifically. TTS first (uses existing TTSService.speak), then Sonos auto-play begins ~2s later.
+- T-30: gameday flip lands. Audio fires AFTER the flip via the existing mode-change callback that handles `pregameday → gameday`. TTS runs first, followed by the ~2s settle gap. **Open #9 hardening gate:** immediately after that gap and before `play_favorite()`, re-read lifecycle/DND and #274 Sonos ownership; any newer manual source/queue/transport ownership suppresses the destructive hype play.
 
 ### 10.4 Architecture impact
 

@@ -2,15 +2,14 @@
 #
 # Home Hub deployment script.
 #
-# Pulls latest from origin, rebuilds/reinstalls based on what actually
-# changed since the last successful deploy, and restarts systemd user
-# services as needed. Run on the Latitude (production machine), typically
-# after `git push` from the dev machine.
+# Synchronizes production explicitly from origin/master, rebuilds/reinstalls
+# based on what actually changed since the last successful deploy, and restarts
+# systemd user services as needed. Run on the Latitude (production machine),
+# typically after `git push` from the dev machine.
 #
 # State: tracks the last-deployed SHA in .last-deployed-sha (gitignored,
-# repo root). This makes the script idempotent against pre-pulled trees
-# (e.g. `git pull && ./scripts/deploy.sh` no longer self-cancels) and
-# against re-runs after a partial failure.
+# repo root). This makes the script idempotent against an already fast-forwarded
+# checkout and against re-runs after a partial failure.
 #
 # Usage:
 #   ./scripts/deploy.sh
@@ -27,6 +26,8 @@
 #   1 — deploy failed; system was rolled back to last known good SHA
 #       (or first-time deploy failed and there was nothing to roll back to)
 #   2 — deploy AND rollback failed; system is broken, manual recovery needed
+#   3 — lifecycle hold blocks deployment (Travel / RETURNING_HOME)
+#   4 — production Git contract invalid (branch/remote/upstream/divergence/local edits)
 
 set -euo pipefail
 
@@ -51,17 +52,46 @@ if [[ -f "$RETURNING_HOME_MARKER" ]]; then
     exit 3
 fi
 
-# Pull before reading deployment state so any updated deploy implementation can
-# take over before installs, rebuilds, or service restarts begin. Comparing the
-# checkout we started from to the post-pull HEAD makes this a one-shot handoff:
-# the re-executed script starts at NEW_HEAD, pulls no further script change, and
-# then proceeds normally from the original .last-deployed-sha baseline.
+# Synchronize explicitly from the permanent production remote before reading
+# deployment state. The Latitude checkout is intentionally pinned to the last
+# deployed SHA between releases; only this script may advance the working tree.
+# Reject local tracked edits, wrong-branch checkouts, missing/upstream drift, and
+# local-only commits instead of silently deploying an ambiguous production tree.
 START_HEAD=$(git rev-parse HEAD)
-git pull --ff-only
+CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD || true)
+if [[ "$CURRENT_BRANCH" != "master" ]]; then
+    echo "Production checkout must be on master (found: ${CURRENT_BRANCH:-detached})." >&2
+    exit 4
+fi
+if ! git remote get-url origin >/dev/null 2>&1; then
+    echo "Production checkout is missing the permanent origin remote." >&2
+    exit 4
+fi
+UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+if [[ "$UPSTREAM" != "origin/master" ]]; then
+    echo "Production master must track origin/master (found: ${UPSTREAM:-none})." >&2
+    exit 4
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "Production checkout has tracked local changes; refusing deployment." >&2
+    git status --short >&2
+    exit 4
+fi
+
+git fetch --prune origin
+if ! git rev-parse --verify --quiet refs/remotes/origin/master >/dev/null; then
+    echo "origin/master is unavailable after fetch; refusing deployment." >&2
+    exit 4
+fi
+if ! git merge-base --is-ancestor "$START_HEAD" origin/master; then
+    echo "Production HEAD is not an ancestor of origin/master; local/divergent commits require manual review." >&2
+    exit 4
+fi
+git merge --ff-only origin/master
 NEW_HEAD=$(git rev-parse HEAD)
 if [[ "$START_HEAD" != "$NEW_HEAD" ]] \
         && ! git diff --quiet "$START_HEAD" "$NEW_HEAD" -- scripts/deploy.sh; then
-    echo "deploy.sh changed during pull; re-executing updated script..."
+    echo "deploy.sh changed during remote synchronization; re-executing updated script..."
     exec bash ./scripts/deploy.sh "$@"
 fi
 

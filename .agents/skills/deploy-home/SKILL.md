@@ -12,10 +12,16 @@ Inspect canonical Git state, intended diff/ancestry, and relevant validation.
 Preserve unrelated work and the canonical untracked `=` file. Commit or push only
 when authorized, stage only intended files, and do not hide unrelated failures.
 
-For production deployment, capture current Latitude build/state and lifecycle
-holds, then deploy only through `scripts/deploy.sh`. Verify build rollover,
-`/health`, touched read surfaces, required service state, and the post-restart
-journal window.
+For production deployment, capture current Latitude build/state, lifecycle
+holds, and Git contract: clean tracked tree, `master`, permanent `origin`,
+`master -> origin/master`, current HEAD, remote-tracking HEAD, and
+`.last-deployed-sha`. A behind count is allowed before deployment because the
+Latitude checkout is intentionally pinned to the last deployed SHA. Never
+background-pull production merely to synchronize it.
+
+Deploy only through `scripts/deploy.sh`. Verify build rollover, `/health`,
+touched read surfaces, required service state, and the post-restart journal
+window.
 
 Do not casually restart `home-hub-ambient.service`. If the supported deploy path
 would touch it, surface that before the live action. If deployment fails, follow
