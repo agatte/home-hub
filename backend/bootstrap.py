@@ -220,6 +220,8 @@ async def lifespan(app: FastAPI):
     await audio_ownership.load()
     app.state.audio_ownership = audio_ownership
     sonos.attach_audio_ownership(audio_ownership)
+    tts.attach_audio_ownership(audio_ownership)
+    await tts.recover_stale_interruption()
     app_logger.info("Audio ownership authority initialized")
 
     # Event logger — captures mode transitions, light adjustments, Sonos events
@@ -1536,6 +1538,7 @@ async def lifespan(app: FastAPI):
     ambient_sound = getattr(app.state, "ambient_sound", None)
     if ambient_sound is not None:
         await _safe_shutdown("ambient_sound", ambient_sound.shutdown)
+    await _safe_shutdown("tts", tts.close)
 
     # 2. Cancel background tasks, then bounded-wait for them to finish. A hung
     #    task can't block shutdown forever.

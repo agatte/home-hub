@@ -44,6 +44,17 @@ def test_ambient_sound_shutdown_is_called_on_shutdown():
     shutdown_mock.assert_called()
 
 
+def test_tts_close_is_called_on_shutdown():
+    from backend.services.tts_service import TTSService
+
+    close_mock = AsyncMock(return_value=None)
+    with patch.object(TTSService, "close", close_mock):
+        with TestClient(app) as _client:
+            pass
+
+    close_mock.assert_called()
+
+
 def test_event_logger_retry_task_started_and_torn_down():
     """The retry loop is registered into `tasks` so the cancel-and-wait path
     handles it. Verify it's running while the app is up and gets cancelled

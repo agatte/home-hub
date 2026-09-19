@@ -270,3 +270,210 @@ async def test_manual_write_stays_serialized_after_invalidation() -> None:
     replacement = await acquire
     assert replacement is not None
     assert events == ["manual_started", "manual_finished"]
+
+
+@pytest.mark.asyncio
+async def test_interruption_overlays_owned_lease_without_destroying_provenance() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    base = await authority.acquire(
+        owner="music_mapper",
+        purpose="mode_auto_play",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "owned", "sonos": {"queue_update_id": "42"}},
+    )
+    assert base is not None
+
+    interruption = await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME, INTERRUPTION),
+        evidence={"phase": "reserved"},
+    )
+    assert interruption is not None
+    assert await authority.is_valid(base["lease_id"], (QUEUE_SOURCE, TRANSPORT))
+    assert await authority.is_interrupted(base["lease_id"], (QUEUE_SOURCE, TRANSPORT))
+
+    ran: list[str] = []
+
+    async def base_write() -> bool:
+        ran.append("base")
+        return True
+
+    executed, result = await authority.run_if_valid(
+        base["lease_id"], (QUEUE_SOURCE, TRANSPORT), base_write,
+    )
+    assert (executed, result) == (False, None)
+    assert ran == []
+
+    async def tts_write() -> bool:
+        ran.append("tts")
+        return True
+
+    executed, result = await authority.run_if_valid(
+        interruption["lease_id"], (QUEUE_SOURCE, TRANSPORT, VOLUME), tts_write,
+    )
+    assert (executed, result) == (True, True)
+    assert ran == ["tts"]
+
+    await authority.release(interruption["lease_id"], reason="tts_done")
+    assert not await authority.is_interrupted(
+        base["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+    )
+    executed, result = await authority.run_if_valid(
+        base["lease_id"], (QUEUE_SOURCE, TRANSPORT), base_write,
+    )
+    assert (executed, result) == (True, True)
+    assert ran == ["tts", "base"]
+
+
+@pytest.mark.asyncio
+async def test_manual_volume_partially_invalidates_interruption_restore() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    interruption = await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME, INTERRUPTION),
+    )
+    assert interruption is not None
+
+    await authority.invalidate_manual(
+        MANUAL_VOLUME_DIMENSIONS,
+        source="dashboard",
+        reason="manual_volume",
+    )
+
+    assert await authority.is_valid(
+        interruption["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+    )
+    assert not await authority.is_valid(interruption["lease_id"], (VOLUME,))
+    assert not await authority.is_valid(interruption["lease_id"], (INTERRUPTION,))
+
+
+@pytest.mark.asyncio
+async def test_interruption_refuses_reserved_owner_and_other_interruption() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    reserved = await authority.acquire(
+        owner="ambient",
+        purpose="ambient_playback",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "reserved"},
+    )
+    assert reserved is not None
+    assert await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME, INTERRUPTION),
+    ) is None
+    assert await authority.is_valid(reserved["lease_id"])
+
+    await authority.release(reserved["lease_id"], reason="test")
+    first = await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME, INTERRUPTION),
+    )
+    assert first is not None
+    assert await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement-2",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME, INTERRUPTION),
+        manual_source="dashboard",
+        manual_reason="manual_tts",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_manual_interruption_preempts_reserved_but_preserves_owned_session() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    owned = await authority.acquire(
+        owner="music_mapper",
+        purpose="mode_auto_play",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "owned"},
+    )
+    reserved = await authority.acquire(
+        owner="mode_volume",
+        purpose="mode_ramp",
+        dimensions=(VOLUME,),
+        evidence={"phase": "reserved"},
+    )
+    assert owned is not None and reserved is not None
+
+    interruption = await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME, INTERRUPTION),
+        manual_source="dashboard",
+        manual_reason="manual_tts",
+    )
+
+    assert interruption is not None
+    assert await authority.is_valid(owned["lease_id"], (QUEUE_SOURCE, TRANSPORT))
+    assert not await authority.is_valid(reserved["lease_id"])
+    snapshot = await authority.snapshot()
+    assert snapshot["last_invalidation"]["source"] == "dashboard"
+    assert snapshot["last_invalidation"]["reason"] == "manual_tts"
+    assert snapshot["last_invalidation"]["invalidated"] == [{
+        "lease_id": reserved["lease_id"],
+        "owner": "mode_volume",
+        "purpose": "mode_ramp",
+        "dimensions": [VOLUME],
+    }]
+    assert interruption["overlaid_lease_ids"] == [owned["lease_id"]]
+
+
+@pytest.mark.asyncio
+async def test_abandon_interruption_retires_only_exact_overlaid_owners() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    owned = await authority.acquire(
+        owner="music_mapper",
+        purpose="mode_auto_play",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "owned"},
+    )
+    unrelated = await authority.acquire(
+        owner="mode_volume",
+        purpose="mode_ramp",
+        dimensions=(VOLUME,),
+        evidence={"phase": "owned"},
+    )
+    assert owned is not None and unrelated is not None
+
+    interruption = await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=(QUEUE_SOURCE, TRANSPORT, INTERRUPTION),
+        evidence={"phase": "speaking"},
+    )
+    assert interruption is not None
+    assert interruption["overlaid_lease_ids"] == [owned["lease_id"]]
+
+    retired = await authority.abandon_interruption(
+        interruption["lease_id"],
+        reason="restart_boundary",
+    )
+
+    assert retired == [{
+        "lease_id": owned["lease_id"],
+        "owner": "music_mapper",
+        "purpose": "mode_auto_play",
+        "dimensions": [QUEUE_SOURCE, TRANSPORT],
+    }]
+    assert not await authority.is_valid(interruption["lease_id"])
+    assert not await authority.is_valid(owned["lease_id"])
+    assert await authority.is_valid(unrelated["lease_id"], (VOLUME,))

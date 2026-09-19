@@ -1394,6 +1394,14 @@ class AmbientSoundService:
         ):
             await self._abandon_sonos_ambient("ambient_lease_invalidated")
             return None
+        if await self._audio_ownership.is_interrupted(
+            self._sonos_lease_id,
+            AMBIENT_SOURCE_TRANSPORT_DIMENSIONS,
+        ):
+            # A TTS interruption temporarily owns the physical source/transport
+            # while preserving Ambient provenance. Do not mistake the TTS URI
+            # for a foreign takeover; reconciliation resumes after restore.
+            return dict(self._sonos_owned_evidence)
         fresh = await self._sonos.get_playback_ownership_evidence()
         if fresh is None:
             await self._abandon_sonos_ambient("ambient_evidence_unavailable")

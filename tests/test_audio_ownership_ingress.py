@@ -11,7 +11,6 @@ from backend.api.schemas.sonos import TTSRequest, VolumeRequest
 from backend.main import _handle_sonos_command
 from backend.schemas.ws import SonosCommandData
 from backend.services.audio_ownership import (
-    AUDIO_DIMENSIONS,
     MANUAL_QUEUE_DIMENSIONS,
     MANUAL_TRANSPORT_DIMENSIONS,
     MANUAL_VOLUME_DIMENSIONS,
@@ -35,8 +34,17 @@ class RecorderTTS:
     def __init__(self, events: list) -> None:
         self.events = events
 
-    async def speak(self, text: str, volume: int | None = None) -> bool:
-        self.events.append(("tts", text, volume))
+    async def speak(
+        self,
+        text: str,
+        volume: int | None = None,
+        *,
+        manual_source: str | None = None,
+        manual_reason: str | None = None,
+    ) -> bool:
+        self.events.append(
+            ("tts", text, volume, manual_source, manual_reason)
+        )
         return True
 
 
@@ -183,8 +191,7 @@ async def test_rest_tts_serializes_full_manual_interruption() -> None:
 
     assert result == {"status": "ok", "text": "Hello"}
     assert events == [
-        ("invalidate", AUDIO_DIMENSIONS, "manual", "manual_tts"),
-        ("tts", "Hello", 18),
+        ("tts", "Hello", 18, "manual", "manual_tts"),
     ]
 
 
@@ -201,6 +208,11 @@ async def test_guest_toast_serializes_full_manual_interruption(monkeypatch) -> N
 
     assert result["status"] == "ok"
     assert events == [
-        ("invalidate", AUDIO_DIMENSIONS, "guest", "guest_toast_tts"),
-        ("tts", "Cheers", guest.GUEST_TOAST_VOLUME),
+        (
+            "tts",
+            "Cheers",
+            guest.GUEST_TOAST_VOLUME,
+            "guest",
+            "guest_toast_tts",
+        ),
     ]

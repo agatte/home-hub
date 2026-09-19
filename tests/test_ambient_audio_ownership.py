@@ -10,6 +10,7 @@ import pytest
 from backend.api.routes import routines
 from backend.services import ambient_sound_service as ambient_module
 from backend.services.audio_ownership import (
+    AUDIO_DIMENSIONS,
     QUEUE_SOURCE,
     TRANSPORT,
     VOLUME,
@@ -339,6 +340,44 @@ async def test_manual_pause_yields_and_never_restarts_ambient(
     assert len(sonos.play_calls) == 1
     assert service._sonos_ambient_active is False
     assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_tts_interruption_temporarily_suspends_ambient_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    authority = await make_authority()
+    service, sonos = make_service(monkeypatch, tmp_path, authority)
+    await service._start_sonos_ambient()
+    owned = dict(service._sonos_owned_evidence or {})
+    ambient_lease = service._sonos_lease_id
+    assert ambient_lease is not None
+
+    interruption = await authority.acquire_interruption(
+        owner="tts",
+        purpose="announcement",
+        dimensions=AUDIO_DIMENSIONS,
+        evidence={"phase": "speaking"},
+    )
+    assert interruption is not None
+    sonos.evidence.update(
+        current_uri="http://127.0.0.1:8000/static/tts/test.mp3",
+        transport_state="PLAYING",
+        volume=60,
+    )
+
+    fresh = await service._reconcile_owned_playback()
+
+    assert fresh == owned
+    assert service._sonos_ambient_active is True
+    assert await authority.is_valid(ambient_lease, (QUEUE_SOURCE, TRANSPORT))
+
+    await authority.release(interruption["lease_id"], reason="tts_complete")
+    sonos.evidence = dict(owned)
+
+    assert await service._reconcile_owned_playback() is not None
+    assert service._sonos_ambient_active is True
 
 
 @pytest.mark.asyncio

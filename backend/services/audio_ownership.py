@@ -23,6 +23,9 @@ MANUAL_TRANSPORT_DIMENSIONS = frozenset({QUEUE_SOURCE, TRANSPORT, INTERRUPTION})
 MANUAL_QUEUE_DIMENSIONS = MANUAL_TRANSPORT_DIMENSIONS
 MANUAL_VOLUME_DIMENSIONS = frozenset({VOLUME, INTERRUPTION})
 
+LEASE_TYPE_EXCLUSIVE = "exclusive"
+LEASE_TYPE_INTERRUPTION = "interruption"
+
 SettingLoader = Callable[[str], Awaitable[dict]]
 SettingSaver = Callable[[str, dict], Awaitable[None]]
 
@@ -82,6 +85,11 @@ class AudioOwnershipService:
                     item = deepcopy(lease)
                     item["lease_id"] = str(lease_id)
                     item["dimensions"] = sorted(dims)
+                    item["lease_type"] = (
+                        LEASE_TYPE_INTERRUPTION
+                        if item.get("lease_type") == LEASE_TYPE_INTERRUPTION
+                        else LEASE_TYPE_EXCLUSIVE
+                    )
                     self._leases[str(lease_id)] = item
             last = raw.get("last_invalidation")
             if isinstance(last, dict):
@@ -128,6 +136,7 @@ class AudioOwnershipService:
                 "lease_id": lease_id,
                 "owner": owner,
                 "purpose": purpose,
+                "lease_type": LEASE_TYPE_EXCLUSIVE,
                 "dimensions": sorted(requested),
                 "generation": self._generation,
                 "evidence": deepcopy(evidence or {}),
@@ -142,6 +151,122 @@ class AudioOwnershipService:
             )
             return deepcopy(lease)
 
+    async def acquire_interruption(
+        self,
+        *,
+        owner: str,
+        purpose: str,
+        dimensions: Iterable[str],
+        evidence: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        manual_source: str | None = None,
+        manual_reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Acquire a temporary overlay lease for a serialized interruption.
+
+        Interruption leases may overlap ordinary autonomous leases. Existing
+        owners keep their provenance, but run_if_valid blocks their writes for
+        overlapping dimensions until the interruption retires. A second
+        overlapping interruption is refused. Autonomous interruptions also
+        refuse a conflicting reserved transaction; explicit manual
+        interruptions atomically retire that unfinished reservation first.
+        """
+        requested = _dimensions(dimensions)
+        if INTERRUPTION not in requested:
+            raise ValueError("interruption lease must include interruption dimension")
+        owner = str(owner).strip()
+        purpose = str(purpose).strip()
+        if not owner or not purpose:
+            raise ValueError("owner and purpose are required")
+
+        async with self._lock:
+            await self._load_locked()
+
+            # Never displace an in-flight interruption. Check this before
+            # retiring any reserved autonomous work so a second TTS request
+            # cannot cause side effects merely by failing acquisition.
+            for lease in self._leases.values():
+                held = frozenset(lease.get("dimensions") or ())
+                if (
+                    lease.get("lease_type") == LEASE_TYPE_INTERRUPTION
+                    and requested.intersection(held)
+                ):
+                    return None
+
+            preempted: list[dict[str, Any]] = []
+            for lease_id, lease in list(self._leases.items()):
+                held = frozenset(lease.get("dimensions") or ())
+                overlap = requested.intersection(held)
+                if not overlap:
+                    continue
+                phase = str((lease.get("evidence") or {}).get("phase") or "")
+                if phase != "reserved":
+                    continue
+                if manual_source is None:
+                    return None
+                preempted.append({
+                    "lease_id": lease_id,
+                    "owner": lease.get("owner"),
+                    "purpose": lease.get("purpose"),
+                    "dimensions": sorted(overlap),
+                })
+                # A reservation is one unfinished transaction; partial
+                # dimensional survival would leave an unusable zombie claim.
+                del self._leases[lease_id]
+
+            if preempted:
+                self._generation += 1
+                self._last_invalidation = {
+                    "generation": self._generation,
+                    "source": str(manual_source or "manual")[:80],
+                    "reason": str(
+                        manual_reason or "manual_interruption_preempt_reserved"
+                    )[:120],
+                    "dimensions": sorted(requested),
+                    "invalidated": deepcopy(preempted),
+                    "created_at": _utc_now_iso(),
+                }
+                logger.info(
+                    "manual interruption preempted reserved audio work "
+                    "source=%s reason=%s leases=%s gen=%s",
+                    manual_source,
+                    manual_reason or "manual_interruption_preempt_reserved",
+                    ",".join(item["lease_id"] for item in preempted),
+                    self._generation,
+                )
+
+            # Remaining overlapping exclusive owners are established sessions
+            # and intentionally survive underneath the interruption overlay.
+            # Persist the exact identities so a restart/shutdown abandonment can
+            # retire stale underlying authority without touching Sonos.
+            overlaid_lease_ids = sorted(
+                lease_id
+                for lease_id, lease in self._leases.items()
+                if lease.get("lease_type") != LEASE_TYPE_INTERRUPTION
+                and requested.intersection(lease.get("dimensions") or ())
+            )
+
+            self._generation += 1
+            lease_id = uuid.uuid4().hex
+            lease = {
+                "lease_id": lease_id,
+                "owner": owner,
+                "purpose": purpose,
+                "lease_type": LEASE_TYPE_INTERRUPTION,
+                "dimensions": sorted(requested),
+                "generation": self._generation,
+                "evidence": deepcopy(evidence or {}),
+                "metadata": deepcopy(metadata or {}),
+                "overlaid_lease_ids": overlaid_lease_ids,
+                "created_at": _utc_now_iso(),
+            }
+            self._leases[lease_id] = lease
+            await self._persist_locked()
+            logger.info(
+                "audio interruption acquired owner=%s purpose=%s dims=%s gen=%s",
+                owner, purpose, ",".join(sorted(requested)), self._generation,
+            )
+            return deepcopy(lease)
 
     async def update_evidence(
         self, lease_id: str, evidence: dict[str, Any],
@@ -184,13 +309,40 @@ class AudioOwnershipService:
             requested = _dimensions(dimensions)
             return requested <= frozenset(lease.get("dimensions") or ())
 
+    async def is_interrupted(
+        self,
+        lease_id: str,
+        dimensions: Iterable[str],
+    ) -> bool:
+        """Whether a newer temporary interruption overlays this lease."""
+        requested = _dimensions(dimensions)
+        async with self._lock:
+            await self._load_locked()
+            current = self._leases.get(str(lease_id))
+            if current is None:
+                return False
+            for other_id, lease in self._leases.items():
+                if other_id == str(lease_id):
+                    continue
+                if lease.get("lease_type") != LEASE_TYPE_INTERRUPTION:
+                    continue
+                if requested.intersection(lease.get("dimensions") or ()):
+                    return True
+            return False
+
     async def run_if_valid(
         self,
         lease_id: str,
         dimensions: Iterable[str],
         operation: Callable[[], Awaitable[Any]],
     ) -> tuple[bool, Any]:
-        """Serialize one autonomous write against manual invalidation."""
+        """Serialize one autonomous write against manual invalidation.
+
+        A temporary interruption lease overlays ordinary owners without
+        destroying their provenance. While the overlay is active, writes from
+        an overlapped ordinary lease are refused; the interruption owner itself
+        remains eligible for the dimensions it still holds.
+        """
         requested = _dimensions(dimensions)
         async with self._lock:
             await self._load_locked()
@@ -199,6 +351,14 @@ class AudioOwnershipService:
                 return False, None
             if not requested <= frozenset(lease.get("dimensions") or ()):
                 return False, None
+            if lease.get("lease_type") != LEASE_TYPE_INTERRUPTION:
+                for other_id, other in self._leases.items():
+                    if other_id == str(lease_id):
+                        continue
+                    if other.get("lease_type") != LEASE_TYPE_INTERRUPTION:
+                        continue
+                    if requested.intersection(other.get("dimensions") or ()):
+                        return False, None
             return True, await operation()
 
     async def release(
@@ -231,6 +391,55 @@ class AudioOwnershipService:
                 lease_id, ",".join(sorted(selected)), reason, self._generation,
             )
             return True
+
+    async def abandon_interruption(
+        self,
+        lease_id: str,
+        *,
+        reason: str = "interruption_abandoned",
+    ) -> list[dict[str, Any]]:
+        """Retire an interruption and the established owners it overlaid.
+
+        Use this only when the interruption cannot prove a safe restore
+        (restart/shutdown/fatal restore failure). No device mutation occurs.
+        """
+        async with self._lock:
+            await self._load_locked()
+            interruption = self._leases.get(str(lease_id))
+            if (
+                interruption is None
+                or interruption.get("lease_type") != LEASE_TYPE_INTERRUPTION
+            ):
+                return []
+
+            retired: list[dict[str, Any]] = []
+            for overlaid_id in interruption.get("overlaid_lease_ids") or ():
+                overlaid_id = str(overlaid_id)
+                lease = self._leases.get(overlaid_id)
+                if (
+                    lease is None
+                    or lease.get("lease_type") == LEASE_TYPE_INTERRUPTION
+                ):
+                    continue
+                retired.append({
+                    "lease_id": overlaid_id,
+                    "owner": lease.get("owner"),
+                    "purpose": lease.get("purpose"),
+                    "dimensions": list(lease.get("dimensions") or ()),
+                })
+                del self._leases[overlaid_id]
+
+            del self._leases[str(lease_id)]
+            self._generation += 1
+            await self._persist_locked()
+            logger.info(
+                "audio interruption abandoned lease=%s overlaid=%s reason=%s gen=%s",
+                lease_id,
+                ",".join(item["lease_id"] for item in retired) or "none",
+                reason,
+                self._generation,
+            )
+            return deepcopy(retired)
 
     async def _invalidate_manual_locked(
         self,

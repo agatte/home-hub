@@ -238,3 +238,457 @@ def test_conditional_pause_treats_already_stopped_701_as_success() -> None:
 
     assert paused is True
     service._device.pause.assert_called_once_with()
+
+
+def _tts_snapshot(*, volume: int = 20, state: str = "PLAYING"):
+    snapshot = MagicMock()
+    snapshot.is_coordinator = True
+    snapshot.is_playing_queue = False
+    snapshot.is_playing_cloud_queue = False
+    snapshot.playlist_position = None
+    snapshot.track_position = ""
+    snapshot.play_mode = "NORMAL"
+    snapshot.media_metadata = ""
+    snapshot.volume = volume
+    snapshot.transport_state = state
+    return snapshot
+
+
+def test_tts_restore_exact_clip_restores_source_transport_and_volume() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="PLAYING",
+        volume=60,
+        position="0:00:01",
+        duration="0:00:03",
+    )
+    service = service_with(current)
+    service._device.volume = 60
+    service._playback_ownership_evidence_sync = MagicMock(side_effect=[
+        current,
+        dict(preflight, transport_state="PAUSED_PLAYBACK", volume=60),
+        dict(preflight, transport_state="PLAYING", volume=60),
+    ])
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, True,
+    )
+
+    assert result["source_transport_restored"] is True
+    assert result["source_transport_reason"] == "restored_after_tts_active"
+    assert result["volume_restored"] is True
+    snapshot._restore_coordinator.assert_not_called()
+    assert service._device.volume == 20
+    service._device.play.assert_called_once_with()
+
+
+def test_tts_restore_finite_direct_source_resumes_captured_position() -> None:
+    prior_uri = f"http://{settings.LOCAL_IP}:8000/static/ambient/rain.mp3"
+    preflight = dict(
+        evidence(),
+        transport_state="PLAYING",
+        current_uri=prior_uri,
+        queue_track_uri=prior_uri,
+        position="0:00:17",
+        duration="0:10:00",
+        volume=20,
+    )
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        queue_track_uri=tts_uri,
+        transport_state="PLAYING",
+        position="0:00:01",
+        duration="0:00:03",
+        volume=60,
+    )
+    selected = dict(
+        preflight,
+        transport_state="STOPPED",
+        position="0:00:00",
+        volume=60,
+    )
+    prepared = dict(
+        preflight,
+        transport_state="STOPPED",
+        volume=60,
+    )
+    restored = dict(
+        preflight,
+        transport_state="PLAYING",
+        volume=60,
+    )
+    service = service_with(current)
+    service._playback_ownership_evidence_sync = MagicMock(
+        side_effect=[current, selected, prepared, restored]
+    )
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+
+    assert result["source_transport_restored"] is True
+    service._device.avTransport.Seek.assert_called_once_with([
+        ("InstanceID", 0),
+        ("Unit", "REL_TIME"),
+        ("Target", "0:00:17"),
+    ])
+    service._device.play.assert_called_once_with()
+
+
+def test_tts_restore_indefinite_direct_stream_never_seeks() -> None:
+    prior_uri = "https://example.invalid/live.mp3"
+    preflight = dict(
+        evidence(),
+        transport_state="PLAYING",
+        current_uri=prior_uri,
+        queue_track_uri=prior_uri,
+        position="0:00:17",
+        duration="NOT_IMPLEMENTED",
+        volume=20,
+    )
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        queue_track_uri=tts_uri,
+        transport_state="PLAYING",
+        position="0:00:01",
+        duration="0:00:03",
+        volume=60,
+    )
+    prepared = dict(preflight, transport_state="STOPPED", volume=60)
+    restored = dict(preflight, transport_state="PLAYING", volume=60)
+    service = service_with(current)
+    service._playback_ownership_evidence_sync = MagicMock(
+        side_effect=[current, prepared, restored]
+    )
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+
+    assert result["source_transport_restored"] is True
+    service._device.avTransport.Seek.assert_not_called()
+    service._device.play.assert_called_once_with()
+
+
+def test_tts_restore_source_takeover_preserves_new_source_but_restores_volume() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri="x-sonos-spotify:manual",
+        transport_state="PLAYING",
+        volume=60,
+    )
+    service = service_with(current)
+    service._device.volume = 60
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, True,
+    )
+
+    assert result["source_transport_restored"] is False
+    assert result["source_transport_reason"] == "source_changed"
+    assert result["volume_restored"] is True
+    snapshot._restore_coordinator.assert_not_called()
+    assert service._device.volume == 20
+    service._device.play.assert_not_called()
+
+
+def test_tts_restore_volume_takeover_preserves_new_volume_but_restores_source() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="PLAYING",
+        volume=33,
+    )
+    service = service_with(current)
+    service._device.volume = 33
+    service._playback_ownership_evidence_sync = MagicMock(side_effect=[
+        current,
+        dict(preflight, transport_state="PAUSED_PLAYBACK", volume=33),
+        dict(preflight, transport_state="PLAYING", volume=33),
+    ])
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, True,
+    )
+
+    assert result["source_transport_restored"] is True
+    assert result["volume_restored"] is False
+    assert result["volume_reason"] == "volume_changed"
+    snapshot._restore_coordinator.assert_not_called()
+    assert service._device.volume == 33
+    service._device.play.assert_called_once_with()
+
+
+def test_tts_restore_refuses_paused_clip_as_manual_transport_takeover() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="PAUSED_PLAYBACK",
+        volume=60,
+    )
+    service = service_with(current)
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+
+    assert result["source_transport_restored"] is False
+    assert result["source_transport_reason"] == "transport_paused"
+    snapshot._restore_coordinator.assert_not_called()
+    service._device.play.assert_not_called()
+
+
+def test_tts_restore_accepts_proven_natural_clip_end_but_not_early_stop() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    ended = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="STOPPED",
+        volume=60,
+        position="0:00:03",
+        duration="0:00:03",
+    )
+    service = service_with(ended)
+    service._playback_ownership_evidence_sync = MagicMock(side_effect=[
+        ended,
+        dict(preflight, transport_state="PAUSED_PLAYBACK", volume=60),
+        dict(preflight, transport_state="PLAYING", volume=60),
+    ])
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+    assert result["source_transport_restored"] is True
+    assert result["source_transport_reason"] == "restored_after_tts_natural_end"
+
+    early = dict(
+        ended,
+        position="0:00:01",
+        duration="0:00:10",
+    )
+    service = service_with(early)
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+    assert result["source_transport_restored"] is False
+    assert result["source_transport_reason"] == "transport_stopped_early"
+    snapshot._restore_coordinator.assert_not_called()
+
+
+def test_tts_restore_source_less_idle_to_neutral_empty_queue() -> None:
+    preflight = dict(
+        evidence(),
+        transport_state="STOPPED",
+        current_uri="",
+        queue_size=0,
+        volume=20,
+    )
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    ended = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="STOPPED",
+        volume=60,
+        position="0:00:03",
+        duration="0:00:03",
+    )
+    neutral = dict(
+        preflight,
+        current_uri="x-rincon-queue:RINCON_TEST#0",
+        transport_state="STOPPED",
+        volume=60,
+    )
+    service = service_with(ended)
+    service._playback_ownership_evidence_sync = MagicMock(
+        side_effect=[ended, neutral, neutral]
+    )
+    snapshot = _tts_snapshot(volume=20, state="STOPPED")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+
+    assert result["source_transport_restored"] is True
+    assert result["source_transport_reason"] == "restored_after_tts_natural_end"
+    service._device.avTransport.SetAVTransportURI.assert_called_once_with([
+        ("InstanceID", 0),
+        ("CurrentURI", "x-rincon-queue:RINCON_TEST#0"),
+        ("CurrentURIMetaData", ""),
+    ])
+    service._device.pause.assert_not_called()
+    service._device.play.assert_not_called()
+    service._device.stop.assert_not_called()
+
+
+def test_tts_restore_refuses_unrestorable_cloud_queue() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="PLAYING",
+        volume=60,
+    )
+    service = service_with(current)
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+    snapshot.is_playing_cloud_queue = True
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+
+    assert result["source_transport_restored"] is False
+    assert result["source_transport_reason"] == "unrestorable_cloud_queue"
+    snapshot._restore_coordinator.assert_not_called()
+    service._device.play.assert_not_called()
+
+
+def test_tts_restore_prepare_mismatch_refuses_final_resume() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="PLAYING",
+        volume=60,
+    )
+    takeover = dict(
+        preflight,
+        current_uri="x-sonos-spotify:manual",
+        transport_state="PLAYING",
+        volume=60,
+    )
+    service = service_with(current)
+    service._playback_ownership_evidence_sync = MagicMock(
+        side_effect=[current, takeover]
+    )
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False,
+    )
+
+    assert result["source_transport_restored"] is False
+    assert result["source_transport_reason"] == "restore_prepare_mismatch"
+    snapshot._restore_coordinator.assert_not_called()
+    service._device.pause.assert_not_called()
+    service._device.play.assert_not_called()
+
+
+def test_failed_tts_start_with_stopped_tts_uri_rolls_back_owned_residue() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    residue = dict(
+        preflight,
+        current_uri=tts_uri,
+        transport_state="STOPPED",
+        volume=60,
+        position="0:00:00",
+        duration="0:00:03",
+    )
+    service = service_with(residue)
+    service._device.volume = 60
+    service._playback_ownership_evidence_sync = MagicMock(side_effect=[
+        residue,
+        dict(preflight, transport_state="PAUSED_PLAYBACK", volume=60),
+        dict(preflight, transport_state="PLAYING", volume=60),
+    ])
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, True, play_failed=True,
+    )
+
+    assert result["source_transport_restored"] is True
+    assert result["source_transport_reason"] == (
+        "restored_after_failed_play_tts_residue"
+    )
+    assert result["volume_restored"] is True
+    snapshot._restore_coordinator.assert_not_called()
+    service._device.play.assert_called_once_with()
+    assert service._device.volume == 20
+
+
+def test_failed_tts_start_restores_queue_play_mode_only_drift() -> None:
+    preflight = dict(
+        evidence(),
+        transport_state="PLAYING",
+        play_mode="SHUFFLE_NOREPEAT",
+        volume=20,
+        current_uri="x-rincon-queue:RINCON_TEST#0",
+        queue_track=2,
+        queue_track_uri="x-sonos-http:track",
+    )
+    drift = dict(preflight, play_mode="NORMAL", volume=60)
+    service = service_with(drift)
+    service._device.volume = 60
+    service._playback_ownership_evidence_sync = MagicMock(side_effect=[
+        drift,
+        drift,
+        drift,
+        dict(preflight, transport_state="STOPPED", volume=60),
+        dict(preflight, transport_state="PLAYING", volume=60),
+    ])
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+    snapshot.is_playing_queue = True
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot,
+        preflight,
+        f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3",
+        60,
+        True,
+        True,
+        play_failed=True,
+    )
+
+    assert result["source_transport_restored"] is True
+    assert result["source_transport_reason"] == (
+        "restored_after_failed_play_play_mode_only"
+    )
+    assert result["volume_restored"] is True
+    snapshot._restore_coordinator.assert_not_called()
+
+
+def test_failed_tts_start_does_not_rollback_different_external_source() -> None:
+    preflight = dict(evidence(), transport_state="PLAYING", volume=20)
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    external = dict(
+        preflight,
+        current_uri="x-sonos-spotify:manual",
+        transport_state="PLAYING",
+        volume=60,
+    )
+    service = service_with(external)
+    snapshot = _tts_snapshot(volume=20, state="PLAYING")
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 60, True, False, play_failed=True,
+    )
+
+    assert result["source_transport_restored"] is False
+    assert result["source_transport_reason"] == "source_changed"
+    snapshot._restore_coordinator.assert_not_called()
+    service._device.play.assert_not_called()

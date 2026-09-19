@@ -11,7 +11,6 @@ from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 from backend.rate_limit import limiter
 from backend.services.audio_ownership import (
-    AUDIO_DIMENSIONS,
     MANUAL_QUEUE_DIMENSIONS,
     MANUAL_TRANSPORT_DIMENSIONS,
     MANUAL_VOLUME_DIMENSIONS,
@@ -253,11 +252,11 @@ async def speak_text(body: TTSRequest, request: Request) -> dict:
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
 
-    success = await _run_manual_sonos(
-        request,
-        AUDIO_DIMENSIONS,
-        reason="manual_tts",
-        operation=lambda: tts.speak(text=body.text, volume=body.volume),
+    success = await tts.speak(
+        text=body.text,
+        volume=body.volume,
+        manual_source=source_from_request(request, fallback="manual"),
+        manual_reason="manual_tts",
     )
     return {
         "status": "ok" if success else "error",

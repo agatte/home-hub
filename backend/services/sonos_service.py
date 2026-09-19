@@ -416,6 +416,8 @@ class SonosService:
             "current_uri": str(media.get("CurrentURI") or ""),
             "queue_track": max(0, int(position.get("Track") or 0)),
             "queue_track_uri": str(position.get("TrackURI") or ""),
+            "position": str(position.get("RelTime") or ""),
+            "duration": str(position.get("TrackDuration") or ""),
         }
 
     def get_cached_status_snapshot(self) -> dict[str, Any]:
@@ -1026,6 +1028,484 @@ class SonosService:
             return
         except Exception as e:
             logger.error(f"Error restoring playback: {e}")
+
+    @staticmethod
+    def _tts_queue_unchanged(
+        current: dict[str, Any],
+        preflight: dict[str, Any],
+    ) -> bool:
+        return all(
+            current.get(key) == preflight.get(key)
+            for key in (
+                "queue_uid",
+                "queue_update_id",
+                "queue_size",
+                "queue_first_item_hash",
+            )
+        )
+
+    @staticmethod
+    def _tts_prior_source_matches(
+        current: dict[str, Any],
+        preflight: dict[str, Any],
+        *,
+        playing_queue: bool,
+    ) -> bool:
+        keys = [
+            "queue_uid",
+            "queue_update_id",
+            "queue_size",
+            "queue_first_item_hash",
+            "queue_track",
+            "queue_track_uri",
+        ]
+        if playing_queue:
+            keys.append("play_mode")
+        if not all(current.get(key) == preflight.get(key) for key in keys):
+            return False
+
+        prior_uri = str(preflight.get("current_uri") or "")
+        current_uri = str(current.get("current_uri") or "")
+        if current_uri == prior_uri:
+            return True
+
+        # HomeHub's existing neutral-speaker contract treats a blank URI and
+        # this speaker's own empty queue URI as equivalent only while the queue
+        # is empty. Canonicalizing to the empty queue avoids parking a finished
+        # TTS direct-file URI on an otherwise idle speaker.
+        if not prior_uri and int(preflight.get("queue_size") or 0) == 0:
+            queue_uid = str(preflight.get("queue_uid") or "")
+            return bool(queue_uid) and current_uri == f"x-rincon-queue:{queue_uid}#0"
+        return False
+
+    def _tts_source_restore_safe(
+        self,
+        current: dict[str, Any],
+        preflight: dict[str, Any],
+        tts_uri: str,
+    ) -> tuple[bool, str]:
+        if str(current.get("current_uri") or "") != str(tts_uri):
+            return False, "source_changed"
+        if not self._tts_queue_unchanged(current, preflight):
+            return False, "queue_changed"
+        state = str(current.get("transport_state") or "").upper()
+        if state in {"PLAYING", "TRANSITIONING", "ZPSTR_BUFFERING"}:
+            return True, "tts_active"
+        if state == "PAUSED_PLAYBACK":
+            return False, "transport_paused"
+        if state == "STOPPED":
+            position = self._parse_hms(current.get("position"))
+            duration = self._parse_hms(current.get("duration"))
+            if (
+                position is not None
+                and duration is not None
+                and duration > 0
+                and position >= max(duration - 1.0, duration * 0.8)
+            ):
+                return True, "tts_natural_end"
+            return False, "transport_stopped_early"
+        return False, f"transport_{state.lower() or 'unknown'}"
+
+    def _tts_failed_play_restore_state(
+        self,
+        current: dict[str, Any],
+        preflight: dict[str, Any],
+        tts_uri: str,
+        snapshot: "Snapshot",
+    ) -> tuple[bool, bool, str]:
+        """Classify only residue that a failed TTS start could have produced.
+
+        Returns (safe_to_prepare, prior_source_already_intact, reason). A
+        genuinely different source/transport is never claimed as TTS residue.
+        """
+        if not self._tts_queue_unchanged(current, preflight):
+            return False, False, "queue_changed"
+
+        current_uri = str(current.get("current_uri") or "")
+        prior_uri = str(preflight.get("current_uri") or "")
+        state = str(current.get("transport_state") or "").upper()
+        prior_state = str(preflight.get("transport_state") or "").upper()
+
+        if current_uri == prior_uri:
+            core_keys = (
+                "queue_uid",
+                "queue_update_id",
+                "queue_size",
+                "queue_first_item_hash",
+                "current_uri",
+                "queue_track",
+                "queue_track_uri",
+            )
+            if any(current.get(key) != preflight.get(key) for key in core_keys):
+                return False, False, "prior_source_changed"
+            if state != prior_state:
+                return False, False, f"transport_{state.lower() or 'unknown'}"
+
+            playing_queue = getattr(snapshot, "is_playing_queue", False) is True
+            if self._tts_prior_source_matches(
+                current, preflight, playing_queue=playing_queue,
+            ):
+                return False, True, "failed_play_prior_source_intact"
+
+            # Finite direct TTS deliberately forces NORMAL before SetURI. On a
+            # local queue, NORMAL is therefore the only source-policy drift we
+            # may attribute to a failed start while the old source stayed put.
+            if (
+                playing_queue
+                and str(current.get("play_mode") or "").upper() == "NORMAL"
+                and str(preflight.get("play_mode") or "").upper() != "NORMAL"
+            ):
+                return True, False, "failed_play_play_mode_only"
+            return False, False, "prior_source_policy_changed"
+
+        if current_uri != str(tts_uri):
+            return False, False, "source_changed"
+
+        # A direct TTS URI with unchanged queue identity is ours when the
+        # failed Play left transport in a normal start/failure state. A pause
+        # is intentionally excluded because an off-dashboard user may have
+        # paused the newly-installed URI and manual intent must win.
+        if state in {
+            "PLAYING",
+            "TRANSITIONING",
+            "ZPSTR_BUFFERING",
+            "STOPPED",
+            "NO_MEDIA_PRESENT",
+            "",
+        }:
+            return True, False, "failed_play_tts_residue"
+        if state == "PAUSED_PLAYBACK":
+            return False, False, "transport_paused"
+        return False, False, f"transport_{state.lower() or 'unknown'}"
+
+    def _prepare_tts_snapshot_source_sync(
+        self,
+        snapshot: "Snapshot",
+        preflight: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Rebuild only the prior source state needed after TTS.
+
+        This intentionally does not call SoCo Snapshot._restore_coordinator().
+        That helper begins by pausing whatever is currently playing and then
+        performs several opaque writes. Here each reconstruction path is
+        narrower, and the exact prior source is re-proven before any final
+        transport resume/stop decision.
+        """
+        device = self._device
+        prior_uri = str(preflight.get("current_uri") or "")
+        playing_queue = getattr(snapshot, "is_playing_queue", False) is True
+
+        if playing_queue:
+            track = int(
+                getattr(snapshot, "playlist_position", 0)
+                or preflight.get("queue_track")
+                or 0
+            )
+            if not prior_uri or track <= 0:
+                return False, None
+
+            device.avTransport.SetAVTransportURI([
+                ("InstanceID", 0),
+                ("CurrentURI", prior_uri),
+                ("CurrentURIMetaData", ""),
+            ])
+            source_selected = self._playback_ownership_evidence_sync()
+            if (
+                str(source_selected.get("current_uri") or "") != prior_uri
+                or not self._tts_queue_unchanged(source_selected, preflight)
+            ):
+                return False, source_selected
+
+            device.avTransport.Seek([
+                ("InstanceID", 0),
+                ("Unit", "TRACK_NR"),
+                ("Target", track),
+            ])
+            track_selected = self._playback_ownership_evidence_sync()
+            if (
+                str(track_selected.get("current_uri") or "") != prior_uri
+                or int(track_selected.get("queue_track") or 0) != track
+                or str(track_selected.get("queue_track_uri") or "")
+                != str(preflight.get("queue_track_uri") or "")
+                or not self._tts_queue_unchanged(track_selected, preflight)
+            ):
+                return False, track_selected
+
+            track_position = str(getattr(snapshot, "track_position", "") or "")
+            if track_position:
+                device.avTransport.Seek([
+                    ("InstanceID", 0),
+                    ("Unit", "REL_TIME"),
+                    ("Target", track_position),
+                ])
+
+            target_mode = str(
+                getattr(snapshot, "play_mode", "")
+                or preflight.get("play_mode")
+                or ""
+            ).upper()
+            if target_mode:
+                device.play_mode = target_mode
+
+        elif prior_uri:
+            metadata = str(getattr(snapshot, "media_metadata", "") or "")
+            device.avTransport.SetAVTransportURI([
+                ("InstanceID", 0),
+                ("CurrentURI", prior_uri),
+                ("CurrentURIMetaData", metadata),
+            ])
+
+            # SoCo's stock Snapshot restore restarts direct files at zero.
+            # HomeHub has stronger preflight evidence, so finite direct sources
+            # can resume at the captured position without ever seeking an
+            # indefinite radio/stream URI.
+            prior_position = str(preflight.get("position") or "")
+            position_seconds = self._parse_hms(prior_position)
+            duration_seconds = self._parse_hms(preflight.get("duration"))
+            if (
+                prior_position
+                and position_seconds is not None
+                and position_seconds > 0
+                and duration_seconds is not None
+                and duration_seconds > 0
+                and position_seconds <= duration_seconds
+            ):
+                source_selected = self._playback_ownership_evidence_sync()
+                if not self._tts_prior_source_matches(
+                    source_selected,
+                    preflight,
+                    playing_queue=False,
+                ):
+                    return False, source_selected
+                device.avTransport.Seek([
+                    ("InstanceID", 0),
+                    ("Unit", "REL_TIME"),
+                    ("Target", prior_position),
+                ])
+        elif int(preflight.get("queue_size") or 0) == 0:
+            queue_uid = str(preflight.get("queue_uid") or "")
+            if not queue_uid:
+                return False, None
+            device.avTransport.SetAVTransportURI([
+                ("InstanceID", 0),
+                ("CurrentURI", f"x-rincon-queue:{queue_uid}#0"),
+                ("CurrentURIMetaData", ""),
+            ])
+        else:
+            return False, None
+
+        prepared = self._playback_ownership_evidence_sync()
+        if not self._tts_prior_source_matches(
+            prepared,
+            preflight,
+            playing_queue=playing_queue,
+        ):
+            return False, prepared
+        return True, prepared
+
+    def _restore_tts_snapshot_if_unchanged_sync(
+        self,
+        snapshot: "Snapshot",
+        preflight: dict[str, Any],
+        tts_uri: str,
+        tts_volume: int,
+        restore_source_transport: bool,
+        restore_volume: bool,
+        play_failed: bool = False,
+    ) -> dict[str, Any]:
+        """Restore only TTS-owned dimensions after one final Sonos proof.
+
+        The source/transport branch accepts an actively playing TTS clip or a
+        proven near-end STOPPED clip. PAUSED/early STOPPED/direct source or queue
+        changes are treated as newer external intent. Volume is restored only
+        while the renderer still reports the exact TTS volume and unchanged mute
+        state. TTS never rewrites EQ because it never changes EQ.
+        """
+        current = self._playback_ownership_evidence_sync()
+        source_safe = False
+        source_already_restored = False
+        source_reason = "not_requested"
+        if restore_source_transport:
+            if play_failed:
+                (
+                    source_safe,
+                    source_already_restored,
+                    source_reason,
+                ) = self._tts_failed_play_restore_state(
+                    current, preflight, tts_uri, snapshot,
+                )
+            else:
+                source_safe, source_reason = self._tts_source_restore_safe(
+                    current, preflight, tts_uri,
+                )
+
+        volume_safe = False
+        volume_reason = "not_requested"
+        if restore_volume:
+            if int(current.get("volume") or 0) != int(tts_volume):
+                volume_reason = "volume_changed"
+            elif bool(current.get("mute")) != bool(preflight.get("mute")):
+                volume_reason = "mute_changed"
+            else:
+                volume_safe = True
+                volume_reason = "tts_rendering_unchanged"
+
+        source_restored = source_already_restored
+        volume_restored = False
+        observed_after = None
+
+        if (
+            restore_source_transport
+            and getattr(snapshot, "is_playing_cloud_queue", False) is True
+        ):
+            source_safe = False
+            source_reason = "unrestorable_cloud_queue"
+
+        # Rebuild only the exact prior source state, then prove it before any
+        # final transport action. This avoids SoCo Snapshot._restore_coordinator
+        # pausing a source that may have become manual between proof and restore.
+        if source_safe and getattr(snapshot, "is_coordinator", False):
+            prepared_ok, prepared = self._prepare_tts_snapshot_source_sync(
+                snapshot,
+                preflight,
+            )
+            if not prepared_ok or prepared is None:
+                source_reason = "restore_prepare_mismatch"
+            else:
+                desired = str(snapshot.transport_state or "").upper()
+                prepared_state = str(
+                    prepared.get("transport_state") or ""
+                ).upper()
+                if desired == "PLAYING":
+                    # One final exact-source proof is immediately adjacent to
+                    # Play inside this settled synchronous transaction.
+                    if not self._tts_prior_source_matches(
+                        prepared,
+                        preflight,
+                        playing_queue=(
+                            getattr(snapshot, "is_playing_queue", False) is True
+                        ),
+                    ):
+                        source_reason = "restore_prepare_mismatch"
+                    else:
+                        self._device.play()
+                elif desired == "STOPPED" and prepared_state not in {
+                    "STOPPED",
+                    "NO_MEDIA_PRESENT",
+                }:
+                    if not self._tts_prior_source_matches(
+                        prepared,
+                        preflight,
+                        playing_queue=(
+                            getattr(snapshot, "is_playing_queue", False) is True
+                        ),
+                    ):
+                        source_reason = "restore_prepare_mismatch"
+                    else:
+                        self._device.stop()
+
+                observed_after = self._playback_ownership_evidence_sync()
+                if not self._tts_prior_source_matches(
+                    observed_after,
+                    preflight,
+                    playing_queue=(
+                        getattr(snapshot, "is_playing_queue", False) is True
+                    ),
+                ):
+                    source_reason = "restore_post_source_mismatch"
+                else:
+                    state = str(
+                        observed_after.get("transport_state") or ""
+                    ).upper()
+                    if desired == "PLAYING" and state not in {
+                        "PLAYING",
+                        "TRANSITIONING",
+                        "ZPSTR_BUFFERING",
+                    }:
+                        source_reason = "restore_transport_unverified"
+                    elif desired == "STOPPED" and state not in {
+                        "STOPPED",
+                        "NO_MEDIA_PRESENT",
+                    }:
+                        source_reason = "restore_transport_unverified"
+                    elif desired == "PAUSED_PLAYBACK" and state not in {
+                        "PAUSED_PLAYBACK",
+                        "STOPPED",
+                    }:
+                        source_reason = "restore_transport_unverified"
+                    else:
+                        source_restored = True
+                        source_reason = f"restored_after_{source_reason}"
+
+        if volume_safe and snapshot.volume is not None:
+            self._device.volume = max(0, min(100, int(snapshot.volume)))
+            volume_restored = True
+
+        return {
+            "source_transport_requested": bool(restore_source_transport),
+            "source_transport_restored": source_restored,
+            "source_transport_reason": source_reason,
+            "volume_requested": bool(restore_volume),
+            "volume_restored": volume_restored,
+            "volume_reason": volume_reason,
+            "observed": current,
+        }
+
+    async def restore_tts_snapshot_if_unchanged(
+        self,
+        snapshot: Optional["Snapshot"],
+        *,
+        preflight: dict[str, Any],
+        tts_uri: str,
+        tts_volume: int,
+        restore_source_transport: bool,
+        restore_volume: bool,
+        play_failed: bool = False,
+    ) -> dict[str, Any]:
+        """Conditionally restore the dimensions still owned by one TTS lease."""
+        if snapshot is None or not self._connected or not self._device:
+            return {
+                "source_transport_requested": bool(restore_source_transport),
+                "source_transport_restored": False,
+                "source_transport_reason": "unavailable",
+                "volume_requested": bool(restore_volume),
+                "volume_restored": False,
+                "volume_reason": "unavailable",
+                "observed": None,
+            }
+        try:
+            return await self._safe_mutation_call(
+                self._restore_tts_snapshot_if_unchanged_sync,
+                snapshot,
+                dict(preflight or {}),
+                str(tts_uri),
+                int(tts_volume),
+                bool(restore_source_transport),
+                bool(restore_volume),
+                bool(play_failed),
+                call_timeout=self._SNAPSHOT_CALL_TIMEOUT,
+            )
+        except CircuitBreakerOpen:
+            return {
+                "source_transport_requested": bool(restore_source_transport),
+                "source_transport_restored": False,
+                "source_transport_reason": "breaker_open",
+                "volume_requested": bool(restore_volume),
+                "volume_restored": False,
+                "volume_reason": "breaker_open",
+                "observed": None,
+            }
+        except Exception as exc:
+            logger.error("Conditional TTS restore failed: %s", exc, exc_info=True)
+            return {
+                "source_transport_requested": bool(restore_source_transport),
+                "source_transport_restored": False,
+                "source_transport_reason": "restore_error",
+                "volume_requested": bool(restore_volume),
+                "volume_restored": False,
+                "volume_reason": "restore_error",
+                "observed": None,
+            }
 
     async def _get_cloud_favorites_cached(self) -> list[dict[str, Any]]:
         """Fetch cloud favorites with TTL cache."""

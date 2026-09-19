@@ -22,7 +22,6 @@ from backend.api.routes.scenes import (
 )
 from backend.config import settings
 from backend.services.audio_ownership import (
-    AUDIO_DIMENSIONS,
     MANUAL_QUEUE_DIMENSIONS,
     MANUAL_TRANSPORT_DIMENSIONS,
     MANUAL_VOLUME_DIMENSIONS,
@@ -1069,11 +1068,11 @@ async def speak_guest_toast(body: ToastRequest, request: Request) -> dict:
             logger.warning("Couldn't start sparkle for toast", exc_info=True)
 
     try:
-        spoken = await _run_guest_audio(
-            request,
-            AUDIO_DIMENSIONS,
-            reason="guest_toast_tts",
-            operation=lambda: tts.speak(text, volume=GUEST_TOAST_VOLUME),
+        spoken = await tts.speak(
+            text,
+            volume=GUEST_TOAST_VOLUME,
+            manual_source="guest",
+            manual_reason="guest_toast_tts",
         )
     finally:
         if effect_manager is not None and automation is not None:
