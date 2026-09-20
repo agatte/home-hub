@@ -90,9 +90,10 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 
 ## Deferred cleanup
 
-- [ ] Decide whether the four historical worktrees should be retired after recovery fixes/documentation are committed.
-- [ ] Do not recreate the historical `projector-kasa` worktree merely because stale documentation mentions it.
-- [ ] Remove or archive stale historical documentation only when its replacement/current truth is verified.
+- [x] Retired the four recovery-time worktrees after verifying each was clean, 7-12 commits behind `master`, and had **zero unique commits**. Removal used the guarded `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` path; local branch refs and matching `origin/*` branches were preserved.
+- [x] Did **not** recreate the historical `projector-kasa` worktree. Current workspace documentation explicitly records it as absent/historical.
+- [x] Reviewed stale current-vs-historical documentation. Live surfaces now point to the Windows 11 profile, repo-local deployment skill, Git-for-Windows SSH, and sole `main` worktree. Remaining Windows 10 / Claude-Code paths occur only in explicitly historical context.
+- [x] Classified the historical durable flag queue as unrecovered: `C:\Users\antho\.codex\data\home-hub-flags.jsonl` and the old `.codex` root are absent. The current flag-queue skill now fails closed rather than inventing old rows or silently creating a replacement.
 
 ## Completion standard
 

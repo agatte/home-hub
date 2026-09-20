@@ -140,13 +140,18 @@ C:\Users\Anthony\Documents\home-hub-project\worktrees\<worktree-name>
 Before creating one, inspect `git worktree list` and the intended branch.
 Preserve active work and never overwrite or clean unrelated work.
 
-Verified on the rebuilt Windows 11 machine on 2026-09-20, the registered
-secondary worktrees are:
+As of the 2026-09-20 recovery closeout, `main` is the **only registered
+worktree**. Four recovery-time checkouts were safely retired after verification
+that they were clean, 7-12 commits behind `master`, and had zero unique commits:
 
 - `ambient-ownership-279`
 - `ambient-start-verify-279`
 - `audio-ownership-274`
 - `tts-audio-ownership-280`
+
+Their local branch refs and matching `origin/*` branches were deliberately
+preserved; only the redundant worktree directories were removed through the
+guarded `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` path.
 
 The historical `worktree-projector-kasa` is **not** registered or present on
 the rebuilt machine. Do not recreate it merely because older documentation says
@@ -171,9 +176,10 @@ machine-local artifact survived the later SSD failure:
 
 ## Windows 11 recovery status — 2026-09-20
 
-The canonical repository, four surviving remote-branch worktrees, unified
-supervisor runtime, OpenRGB/PawnIO path, and Windows desktop agents have been
-re-established and verified. Current recovery authority lives in
+The canonical repository, preserved historical branch refs, unified supervisor
+runtime, OpenRGB/PawnIO path, and Windows desktop agents have been re-established
+and verified. The temporary recovery worktrees were retired once proven
+redundant. Current recovery authority lives in
 `docs/WINDOWS11_RECOVERY_STATUS.md`; do not use the historical migration list
 above to recreate missing machine-local artifacts automatically.
 

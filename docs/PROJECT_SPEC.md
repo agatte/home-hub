@@ -2769,16 +2769,19 @@ gitignored).
 
 ### Deployment workflow
 
-**Code changes** flow from dev → production via the Codex `$deploy-home`
-skill (`C:\Users\antho\.codex\skills\deploy-home`), which handles the full
+**Code changes** flow from dev → production via the repo-local
+`.agents/skills/deploy-home/SKILL.md` procedure, which handles the full
 lifecycle end-to-end:
 
 1. Edit code on the Windows dev machine
-2. `git commit` + `git push` happen inside the skill
-3. SSH to the Latitude runs automatically — passwordless via the
-   `id_ed25519_homehub` keypair and `~/.ssh/config` Host alias
-   `homehub` (set up 2026-05-06). Direct CLI shorthand:
-   `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"`
+2. `git commit` + `git push` happen only for the intended reviewed diff
+3. SSH to the Latitude uses the existing Home Hub key at
+   `C:\Users\Anthony\.ssh\id_ed25519_homehub`. On the rebuilt Windows 11
+   desktop, use Git for Windows SSH at
+   `C:\Program Files\Git\usr\bin\ssh.exe`; the inbox Windows OpenSSH
+   client is present but currently exits 255 before connecting. Do not rotate
+   the working key merely to repair that unused client. The production action
+   remains `cd ~/home-hub && ./scripts/deploy.sh`.
 4. Post-deploy verification confirms `/health`, `build_id` rollover when a
    restart is expected, live state shape, touched API/UI surfaces, and the
    post-restart event window. The historical Claude `deploy-verifier` subagent
