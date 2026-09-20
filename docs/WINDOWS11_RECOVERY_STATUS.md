@@ -4,21 +4,23 @@ Updated: 2026-09-20
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
+**Machine-side closeout:** all currently recoverable/actionable Windows and Home Hub recovery items are complete. The only remaining checklist item that requires action is a physical Epson projector menu verification; a new offsite-backup design is explicitly optional future infrastructure, not unfinished recovery.
+
 ## Safety / recovery rules
 
 - Do not expose `.env` values, SSH private-key contents, tokens, passwords, or other secrets.
 - Do not overwrite the canonical Git tree with damaged recovered source.
 - Do not recreate obsolete per-agent Scheduled Tasks or old one-time deploy/probe tasks.
-- Do not run the checked-in supervisor setup script until its stale Windows paths/runtime assumptions are corrected.
-- Preserve the local `AGENTS.md` guarded-worktree-removal change.
-- Retire worktrees only through `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` and only after the recovery baseline is committed.
+- Use the checked-in unified supervisor setup/recovery path only; it now targets the validated AppData launcher + repo `.venv` layout. Do not recreate obsolete per-agent tasks.
+- Preserve the committed `AGENTS.md` guarded-worktree-removal rule.
+- Retire any future worktrees only through `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` after proving they are registered, clean, and not carrying unique work.
 - Prefer verified current Windows 11 state over historical Windows 10 documentation when they conflict.
 
 ## Verified baseline
 
 - [x] Canonical Windows repo is `C:\Users\Anthony\Documents\home-hub-project\main`.
-- [x] Windows `master`, `origin/master`, and live Latitude production match commit `a66d4dc10cd4307d5d46adb50db4b995c3a83f31`.
-- [x] Latitude production checkout is clean and `home-hub.service` is healthy.
+- [x] Windows `master`, `origin/master`, Latitude `master`, Latitude `origin/master`, and Latitude `.last-deployed-sha` match commit `40713d21566a055da774547765c8609ef0f304aa`.
+- [x] Latitude production checkout is clean; `home-hub.service` and `home-hub-latitude-streaming.service` are active and healthy. The backend currently reports runtime `build_id=af12523` because commits after `af12523` were script/docs/skill-only releases and correctly did not restart the backend.
 - [x] Core Home Hub health reports Hue, Sonos, Pi-hole, automation, and overnight jobs healthy.
 - [x] One permanent Windows task, `Home Hub Agent Supervisor`, is enabled and firing on logon plus every 5 minutes.
 - [x] The supervisor manages seven agents: activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, monitor brightness, and peripheral RGB.
@@ -29,8 +31,8 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] PawnIO 2.2.0.0 is installed and its driver/device are healthy.
 - [x] OpenRGB SDK is listening on `127.0.0.1:6742` with an established supervisor connection.
 - [x] Glorious Model O / O- and Keychron Gaming Keyboard 1 are discovered and driven by the peripheral agent.
-- [x] Four recovered secondary worktrees exist, are clean, registered correctly, and match their remote branches.
-- [x] At the read-only audit baseline, Windows `master`, remote `master`, and Latitude had no deployed-code drift. Recovery fixes made after that baseline must be committed/synchronized before this invariant is considered restored.
+- [x] `main` is the sole registered worktree. The four temporary recovery worktrees were retired only after proving they were clean and had zero unique commits; their local and remote branch refs remain preserved.
+- [x] The no-drift invariant is restored: Windows Git, GitHub `origin/master`, Latitude Git, and `.last-deployed-sha` are synchronized at the current recovery closeout commit.
 
 ## Active investigations
 
@@ -70,7 +72,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 ## Recovery debt
 
 - [x] Corrected stale `C:\Users\antho` references where they incorrectly described the current rebuilt machine; retained old-profile paths only when explicitly historical.
-- [x] Updated `docs/LOCAL_WORKSPACE.md` to describe the verified Windows 11 checkout, runtime launchers, four surviving worktrees, deployment skill, SSH client, and historical-vs-current boundaries.
+- [x] Updated `docs/LOCAL_WORKSPACE.md` to describe the verified Windows 11 checkout, runtime launchers, temporary recovery worktrees and their later retirement, deployment skill, SSH client, and historical-vs-current boundaries.
 - [x] Made the checked-in supervisor install/recovery path reproduce the known-good Windows 11 architecture: stable launchers under `%LOCALAPPDATA%\home-hub`, canonical repo working directory, and `.venv\Scripts\pythonw.exe`.
 - [x] Removed the obsolete hard-coded `C:\Python313\pythonw.exe` / `venv` recovery assumptions. The Python 3.13 launcher+interpreter process pair is documented as expected rather than treated as a duplicate supervisor.
 - [x] Updated supervisor documentation/setup to reflect all seven managed agents.
