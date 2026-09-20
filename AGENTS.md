@@ -17,6 +17,7 @@ their subject is actually involved.
 - Canonical repo: `C:\Users\antho\Documents\home-hub-project\main`; worktrees:
   `C:\Users\antho\Documents\home-hub-project\worktrees`. Preserve root file `=`.
 - Use an isolated worktree when overlap or branch isolation materially helps.
+- Worktree deletion is safety-critical. Never recursively delete a worktree with `Remove-Item`, `rm`, `rmdir`, `rd`, `del`, or equivalent. Remove it only with `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1 -Project home-hub -WorktreePath <absolute-path>`; the guard requires an exact registered clean worktree and refuses protected/out-of-project paths.
 - Production is the Latitude. Windows is the development/desktop-agent machine.
   Do not casually restart `home-hub-ambient.service`.
 
