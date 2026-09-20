@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import numpy as np
+
 
 class _Frame:
     def __init__(self, mean: float):
@@ -42,8 +44,20 @@ class _Landmarker:
         self.close_calls += 1
 
 
+class _FaceDetector:
+    def __init__(self, detections):
+        self._detections = detections
+        self.close_calls = 0
+
+    def detect(self, _image):
+        return SimpleNamespace(detections=self._detections)
+
+    def close(self):
+        self.close_calls += 1
+
+
 def _empty_result():
-    return SimpleNamespace(face_blendshapes=[])
+    return SimpleNamespace(face_blendshapes=[], face_landmarks=[])
 
 
 def _usable_result():
@@ -53,7 +67,26 @@ def _usable_result():
                 SimpleNamespace(category_name="_neutral", score=0.1),
                 SimpleNamespace(category_name="mouthSmileLeft", score=0.7),
             ]
-        ]
+        ],
+        face_landmarks=[[
+            SimpleNamespace(x=0.40),
+            SimpleNamespace(x=0.60),
+        ]],
+    )
+
+
+def _neutral_face_result():
+    return SimpleNamespace(
+        face_blendshapes=[
+            [
+                SimpleNamespace(category_name="_neutral", score=0.2),
+                SimpleNamespace(category_name="mouthSmileLeft", score=0.258),
+            ]
+        ],
+        face_landmarks=[[
+            SimpleNamespace(x=0.40),
+            SimpleNamespace(x=0.60),
+        ]],
     )
 
 
@@ -82,6 +115,9 @@ def _agent(monkeypatch):
 
     agent = ec.EmotionCapture("http://test:8000")
     _configure_tick_fakes(monkeypatch, agent)
+    # Existing recovery tests exercise FaceLandmarker lifecycle in isolation.
+    # Tests that need the full-range fallback override this explicitly.
+    monkeypatch.setattr(ec, "_init_face_detector", lambda: None)
     agent.set_enabled(emotion=True)
     return agent
 
@@ -213,6 +249,75 @@ def test_usable_face_resets_semantic_dead_streak(monkeypatch):
             agent.tick()
         assert landmarker.close_calls == 0
         assert agent._face_semantic_dead_streak == 1
+    finally:
+        agent.close()
+
+
+def test_neutral_face_landmarks_are_present_without_expression_threshold(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = _agent(monkeypatch)
+    agent.set_enabled(presence=True)
+    landmarker = _Landmarker([_neutral_face_result()])
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: landmarker)
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    observations = []
+    monkeypatch.setattr(
+        agent, "_post_observation", lambda **kwargs: observations.append(kwargs)
+    )
+    agent._cap = _Cap()
+    try:
+        agent.tick()
+        assert len(observations) == 1
+        assert observations[0]["face_present"] is True
+        assert observations[0]["face_confidence"] == 1.0
+        assert agent._face_semantic_dead_streak == 0
+        assert landmarker.close_calls == 0
+    finally:
+        agent.close()
+
+
+def test_full_range_fallback_recovers_profile_face_and_blendshapes(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = _agent(monkeypatch)
+    agent.set_enabled(presence=True)
+    landmarker = _Landmarker([_empty_result(), _usable_result()])
+    detection = SimpleNamespace(
+        categories=[SimpleNamespace(score=0.66)],
+        bounding_box=SimpleNamespace(
+            origin_x=254, origin_y=198, width=254, height=254,
+        ),
+    )
+    detector = _FaceDetector([detection])
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: landmarker)
+    monkeypatch.setattr(ec, "_init_face_detector", lambda: detector)
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    observations = []
+    blendshape_posts = []
+    monkeypatch.setattr(
+        agent, "_post_observation", lambda **kwargs: observations.append(kwargs)
+    )
+    monkeypatch.setattr(
+        agent,
+        "_post_blendshapes",
+        lambda shapes, confidence, **kwargs: blendshape_posts.append(
+            (shapes, confidence)
+        ),
+    )
+    agent._cap = _Cap(
+        reads=[(True, np.zeros((480, 640, 3), dtype=np.uint8))]
+    )
+    try:
+        agent.tick()
+        assert len(observations) == 1
+        assert observations[0]["face_present"] is True
+        assert observations[0]["face_confidence"] == 0.66
+        assert observations[0]["detection_source"] == "face"
+        assert observations[0]["zone"] == "desk"
+        assert len(blendshape_posts) == 1
+        assert agent._face_semantic_dead_streak == 0
+        assert landmarker.close_calls == 0
     finally:
         agent.close()
 

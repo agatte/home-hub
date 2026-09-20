@@ -44,10 +44,10 @@ import httpx
 CAPTURE_INTERVAL = 2.0
 SETTINGS_POLL_INTERVAL = 30.0
 
-# Minimum face confidence below which we don't POST. Mirrors the
-# FACE_LANDMARKER_TRIGGER_CONFIDENCE constant in camera_service.py so the
-# two sources gate on the same floor.
-FACE_CONFIDENCE_FLOOR = 0.30
+# FaceLandmarker exposes landmarks/blendshapes only after its internal
+# face-detection gates pass, but it does not expose that detector's score.
+# Desktop face presence therefore uses the returned face landmarks directly;
+# do not treat expression blendshape intensity as detection confidence.
 
 # A FaceLandmarker can keep returning successful-but-empty inference results
 # after a desktop capture lifecycle disruption.  Treat only a bounded streak
@@ -66,6 +66,19 @@ FACE_LANDMARKER_MODEL_URL = (
     "face_landmarker/face_landmarker/float16/latest/"
     "face_landmarker.task"
 )
+
+# Full-range BlazeFace fallback for desk/profile geometry. FaceLandmarker is
+# excellent for blendshapes but is intermittent as the primary detector at
+# Anthony's monitor-facing distance/angle. This model is the same full-range
+# detector used by Latitude for robust 2–3 m / three-quarter-profile coverage.
+FACE_DETECTOR_MODEL_FILENAME = "blaze_face_full_range.tflite"
+FACE_DETECTOR_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "face_detector/blaze_face_full_range/float16/latest/"
+    "blaze_face_full_range.tflite"
+)
+DESKTOP_FACE_DETECTION_CONFIDENCE = 0.30
+FACE_LANDMARKER_CROP_SCALE = 2.0
 
 # PoseLandmarker (lite ~5MB) — same model + URL the Latitude uses, each
 # host downloads its own copy. Required for frontal-posture (upright vs
@@ -477,6 +490,37 @@ def _download_model(model_path: Path, url: str, label: str = "model") -> bool:
         return False
 
 
+def _init_face_detector() -> Optional[Any]:
+    """Lazy-create the full-range BlazeFace detector. Returns None on failure."""
+    try:
+        import mediapipe as mp
+    except ImportError:
+        logger.warning("mediapipe not installed — desktop face fallback disabled")
+        return None
+
+    model_path = MODEL_DIR / FACE_DETECTOR_MODEL_FILENAME
+    if not model_path.exists():
+        if not _download_model(
+            model_path, FACE_DETECTOR_MODEL_URL, "full-range face detector model",
+        ):
+            return None
+
+    try:
+        BaseOptions = mp.tasks.BaseOptions
+        FaceDetector = mp.tasks.vision.FaceDetector
+        FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
+        options = FaceDetectorOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            min_detection_confidence=DESKTOP_FACE_DETECTION_CONFIDENCE,
+        )
+        detector = FaceDetector.create_from_options(options)
+        logger.info("Full-range face detector initialized")
+        return detector
+    except Exception as exc:
+        logger.warning("Full-range face detector init failed: %s", exc)
+        return None
+
+
 def _init_face_landmarker() -> Optional[Any]:
     """Lazy-create a FaceLandmarker instance. Returns None on failure."""
     try:
@@ -601,6 +645,8 @@ class EmotionCapture:
         # Lazy-init handles
         self._cap = None
         self._landmarker = None
+        self._face_detector = None
+        self._face_detector_init_failed: bool = False
         self._pose_landmarker = None
         # A successful FaceLandmarker call that yields no usable confidence is
         # distinct from an exception: only the former contributes semantic
@@ -668,6 +714,12 @@ class EmotionCapture:
             self._cap = None
         self._clear_lux_reopen_recovery()
         self._dispose_face_landmarker(reason="shutdown")
+        if self._face_detector is not None:
+            try:
+                self._face_detector.close()
+            except Exception:
+                pass
+            self._face_detector = None
         if self._pose_landmarker is not None:
             try:
                 self._pose_landmarker.close()
@@ -860,6 +912,66 @@ class EmotionCapture:
         logger.info("FaceLandmarker disposed (%s); will recreate lazily", reason)
         return True
 
+    def _detect_full_range_face(
+        self, mp_image: Any,
+    ) -> tuple[bool, Optional[Any], float]:
+        """Return detector-ready, best detection, score for the current frame."""
+        if self._face_detector_init_failed:
+            return False, None, 0.0
+        if self._face_detector is None:
+            self._face_detector = _init_face_detector()
+            if self._face_detector is None:
+                self._face_detector_init_failed = True
+                return False, None, 0.0
+        try:
+            result = self._face_detector.detect(mp_image)
+        except Exception:
+            logger.debug("Full-range face detector failed", exc_info=True)
+            return True, None, 0.0
+        detections = getattr(result, "detections", None) or []
+        if not detections:
+            return True, None, 0.0
+
+        def _score(detection: Any) -> float:
+            categories = getattr(detection, "categories", None) or []
+            return max(
+                (float(getattr(cat, "score", 0.0)) for cat in categories),
+                default=0.0,
+            )
+
+        best = max(detections, key=_score)
+        return True, best, _score(best)
+
+    def _landmark_detected_face_crop(
+        self, *, frame: Any, detection: Any, cv2: Any,
+    ) -> Optional[Any]:
+        """Retry FaceLandmarker on a padded BlazeFace crop without persisting it."""
+        box = getattr(detection, "bounding_box", None)
+        if box is None:
+            return None
+        try:
+            frame_h, frame_w = frame.shape[:2]
+            box_w = float(box.width)
+            box_h = float(box.height)
+            cx = float(box.origin_x) + box_w / 2.0
+            cy = float(box.origin_y) + box_h / 2.0
+            side = max(box_w, box_h) * FACE_LANDMARKER_CROP_SCALE
+            x1 = max(0, int(cx - side / 2.0))
+            y1 = max(0, int(cy - side / 2.0))
+            x2 = min(frame_w, int(cx + side / 2.0))
+            y2 = min(frame_h, int(cy + side / 2.0))
+            crop = frame[y1:y2, x1:x2]
+            if getattr(crop, "size", 0) == 0:
+                return None
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            crop_image = self._mp_image_cls(
+                image_format=self._mp_image_format, data=crop_rgb
+            )
+            return self._landmarker.detect(crop_image)
+        except Exception:
+            logger.debug("FaceLandmarker crop retry failed", exc_info=True)
+            return None
+
     def _note_face_semantic_result(self, *, usable: bool, now: float) -> None:
         """Track completed FaceLandmarker results and recycle bounded failures.
 
@@ -895,7 +1007,7 @@ class EmotionCapture:
             return
 
         logger.warning(
-            "FaceLandmarker produced no usable face confidence for %d completed "
+            "FaceLandmarker produced no usable face semantics for %d completed "
             "inferences; recycling model state",
             self._face_semantic_dead_streak,
         )
@@ -1002,33 +1114,80 @@ class EmotionCapture:
             face_sets = getattr(result, "face_landmarks", None) or []
             face_landmarks = face_sets[0] if face_sets else None
             face_width = _face_mesh_width(face_landmarks)
+            detector_ready = False
+            fallback_detection = None
+            fallback_score = 0.0
 
-            # Face mesh supplies normalized scale for Desk-vs-background
-            # localization. Keep the existing accepted-face contract below:
-            # the strongest non-neutral blendshape remains the confidence proxy.
-            # Empty list -> confidence 0 -> not present.
+            # FaceLandmarker is the preferred blendshape/mesh source, but it is
+            # intermittent as a primary detector at the desktop's monitor-facing
+            # distance/profile. Only on a miss, ask the proven full-range
+            # BlazeFace detector whether a face is actually present.
+            if face_landmarks is None:
+                (
+                    detector_ready,
+                    fallback_detection,
+                    fallback_score,
+                ) = self._detect_full_range_face(mp_image)
+                if fallback_detection is not None:
+                    box = getattr(fallback_detection, "bounding_box", None)
+                    if box is not None and frame.shape[1] > 0:
+                        face_width = float(box.width) / float(frame.shape[1])
+                    crop_result = self._landmark_detected_face_crop(
+                        frame=frame,
+                        detection=fallback_detection,
+                        cv2=cv2,
+                    )
+                    if crop_result is not None:
+                        crop_blends = (
+                            getattr(crop_result, "face_blendshapes", None) or []
+                        )
+                        crop_faces = (
+                            getattr(crop_result, "face_landmarks", None) or []
+                        )
+                        if crop_faces:
+                            face_landmarks = crop_faces[0]
+                        if crop_blends:
+                            face_blendshapes = crop_blends
+
             if face_blendshapes:
                 shapes = face_blendshapes[0]
                 blendshape_dict = {
                     cat.category_name: float(cat.score) for cat in shapes
                 }
-                face_confidence = max(
-                    (
-                        score
-                        for name, score in blendshape_dict.items()
-                        if name != "_neutral"
-                    ),
-                    default=0.0,
-                )
             else:
                 blendshape_dict = {}
-                face_confidence = 0.0
 
-            face_present = face_confidence >= FACE_CONFIDENCE_FLOOR
-            self._note_face_semantic_result(
-                usable=face_present,
-                now=time.monotonic(),
+            face_present = (
+                face_landmarks is not None or fallback_detection is not None
             )
+            # Native FaceLandmarker has no detector score, so 1.0 means it
+            # returned a valid face. On fallback, preserve BlazeFace's actual
+            # detector score. Values are source semantics, not cross-source
+            # comparable probabilities.
+            face_confidence = (
+                fallback_score if fallback_detection is not None else
+                (1.0 if face_landmarks is not None else 0.0)
+            )
+            if face_present:
+                # A visible face without blendshapes is a real semantic failure.
+                self._note_face_semantic_result(
+                    usable=bool(blendshape_dict),
+                    now=time.monotonic(),
+                )
+            elif detector_ready:
+                # Full-range detector agrees nobody is visible: this is not a
+                # poisoned FaceLandmarker and must not trigger recycle churn.
+                self._note_face_semantic_result(
+                    usable=True,
+                    now=time.monotonic(),
+                )
+            else:
+                # If fallback authority itself is unavailable, preserve the
+                # bounded recovery behavior rather than silently masking faults.
+                self._note_face_semantic_result(
+                    usable=False,
+                    now=time.monotonic(),
+                )
             captured_at = datetime.now(timezone.utc)
 
             # Diagnostic snapshot — opt-in, backend-initiated. Fires
@@ -1089,7 +1248,7 @@ class EmotionCapture:
             if not face_present:
                 return
 
-            if self.is_emotion_enabled():
+            if self.is_emotion_enabled() and blendshape_dict:
                 self._post_blendshapes(
                     blendshape_dict, face_confidence, captured_at=captured_at,
                 )
