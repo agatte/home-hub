@@ -24,10 +24,24 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 BACKUP_FILE="$BACKUP_DIR/home_hub_$(date +%Y%m%d_%H%M%S).db"
+PARTIAL_FILE="${BACKUP_FILE}.partial"
 
-sqlite3 "$DB_PATH" ".backup '$BACKUP_FILE'"
+# Never publish a partial/corrupt file under the normal backup filename.
+# The trap also cleans interrupted runs so retention/verification cannot mistake
+# a failed extraction for a usable backup.
+trap 'rm -f "$PARTIAL_FILE"' EXIT
+sqlite3 "$DB_PATH" ".backup '$PARTIAL_FILE'"
 
-# Remove backups older than retention period
+CHECK_RESULT="$(sqlite3 "$PARTIAL_FILE" "PRAGMA quick_check;")"
+if [ "$CHECK_RESULT" != "ok" ]; then
+    echo "Backup verification failed: PRAGMA quick_check returned: $CHECK_RESULT"
+    exit 1
+fi
+
+mv "$PARTIAL_FILE" "$BACKUP_FILE"
+trap - EXIT
+
+# Remove completed backups older than retention period.
 find "$BACKUP_DIR" -name "home_hub_*.db" -mtime +${RETENTION_DAYS} -delete
 
-echo "Backup complete: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
+echo "Backup complete + quick_check=ok: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"

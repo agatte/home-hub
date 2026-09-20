@@ -53,26 +53,36 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 
 ### Sleep / display / projector behavior
 
-- [ ] Trace the current sleep-watcher decision logic end to end.
-- [ ] Determine exactly what Home Hub controls versus Windows power settings.
-- [ ] Verify what causes monitor/display blanking.
-- [ ] Verify what causes Windows PC sleep.
-- [ ] Verify how active use and active watching suppress sleep.
-- [ ] Verify the Epson projector sleep/off path and whether it is commanded directly or follows PC/system state.
-- [ ] Decide whether Windows system sleep should remain disabled while display-off is set to 30 minutes.
+- [x] Traced the current sleep-watcher decision logic end to end.
+- [x] Verified Windows 11 power policy on AC: Balanced plan, display timeout 1800s (30 minutes), automatic system sleep disabled (0 / Never), with S3 available.
+- [x] Verified Home Hub monitor control is brightness/color only. `monitor_brightness` sets the Samsung G50F to a 5% target in `sleeping` mode but does not power the monitor off and does not call Windows `SetThreadExecutionState` / display-required APIs.
+- [x] Verified Windows display blanking is therefore owned by Windows/media execution requests, not Home Hub. Home Hub itself does not suppress the 30-minute display timeout. A live `powercfg /requests` snapshot could not be read from the non-elevated shell, so current per-process display requests were not asserted.
+- [x] Verified PC sleep is Home Hub-owned on AC: `sleep_watcher` arms only while backend mode is `sleeping`, waits 3600s, then calls `SetSuspendState(False, False, False)` for S3. Any mode change cancels the timer.
+- [x] Verified the final local-input safety gate: if keyboard/mouse idle time is under 600s when the 60-minute timer fires, suspend is vetoed and the watcher re-arms for another 60 minutes.
+- [x] Verified active use / active watching do not arm the S3 timer because their effective mode is not `sleeping`. Qualified fresh Desktop interaction can also wake Home Hub out of an existing Sleeping state.
+- [x] Verified the historical automatic `watching -> sleeping` guard is currently dormant: it still requires `zone=bed + posture=reclined`, while the current Desktop path supplies Bed location without inferring sleeping/reclined posture and Latitude no longer owns bedroom-bed geometry. Do **not** weaken this to “Bed means asleep.”
+- [x] Verified the canonical repo contains no live Epson/Kasa/RS-232 projector power-control path. Windows currently enumerates `EPSON PJ` as a connected monitor; Home Hub's projector references are lighting/context policy only.
+- [x] External model verification: H421A is the Epson PowerLite Home Cinema 3010 family. Epson documents projector Sleep Mode as shutting the projector off after loss of video signal with 5/10/30-minute choices; 30 minutes is the factory default.
+- [ ] Manually verify the physical Epson's current `Extended -> Operation -> Sleep Mode` setting. HDMI does not expose that menu setting to Home Hub, so the rebuilt PC cannot prove whether it is still enabled or what timeout is selected.
+- [x] Keep Windows automatic system sleep disabled on AC while retaining the 30-minute display timeout. This avoids generic inactivity suspending the PC during watching/long-running activity; Home Hub's mode-aware watcher remains the deliberate S3 path.
+
+**2026-09-20 conclusion:** screen dimming, Windows display-off, PC S3, and projector power are four separate layers. Home Hub dims the Samsung; Windows may remove video after its display-idle policy; Home Hub only suspends the PC after sustained `sleeping`; and the Epson currently relies on its own no-signal Sleep Mode rather than a Home Hub command. Automatic “fell asleep while watching” shutdown remains intentionally unavailable until trustworthy sleep/posture authority exists.
 ## Recovery debt
 
-- [ ] Correct stale `C:\Users\antho` references to `C:\Users\Anthony` where they describe the current rebuilt machine.
-- [ ] Update `docs/LOCAL_WORKSPACE.md` to accurately describe the current Windows 11 environment.
-- [ ] Make the supervisor installation/recovery path reproduce the known-good current setup.
-- [ ] Update checked-in supervisor launch/setup scripts away from nonexistent `C:\Python313\pythonw.exe` and `venv` assumptions to the validated `.venv` layout or another deliberately documented equivalent.
-- [ ] Ensure supervisor documentation/setup reflects all seven managed agents.
-- [ ] Preserve and commit the existing `AGENTS.md` safe-worktree-removal rule after review.
-- [ ] Validate and make durable the working `openrgb-python 0.3.7` requirement; `requirements.txt` still pins 0.3.6.
-- [ ] Repair the Windows built-in OpenSSH Client or deliberately standardize Home Hub Windows tooling on Git-for-Windows SSH.
-- [ ] Do not rotate/recreate the Home Hub SSH key merely because Windows OpenSSH is broken; Git SSH already proved the existing key authenticates successfully.
-- [ ] Determine whether the historical HomeHub/restic backup workflow is still intended.
-- [ ] If backups are still intended, restore from known-good configuration and validate a backup/restore path rather than reconstructing blindly from stale docs.
+- [x] Corrected stale `C:\Users\antho` references where they incorrectly described the current rebuilt machine; retained old-profile paths only when explicitly historical.
+- [x] Updated `docs/LOCAL_WORKSPACE.md` to describe the verified Windows 11 checkout, runtime launchers, four surviving worktrees, deployment skill, SSH client, and historical-vs-current boundaries.
+- [x] Made the checked-in supervisor install/recovery path reproduce the known-good Windows 11 architecture: stable launchers under `%LOCALAPPDATA%\home-hub`, canonical repo working directory, and `.venv\Scripts\pythonw.exe`.
+- [x] Removed the obsolete hard-coded `C:\Python313\pythonw.exe` / `venv` recovery assumptions. The Python 3.13 launcher+interpreter process pair is documented as expected rather than treated as a duplicate supervisor.
+- [x] Updated supervisor documentation/setup to reflect all seven managed agents.
+- [x] Retired the obsolete standalone ambient/detector setup and detector-restart scripts as fail-closed shims; they can no longer recreate unmanaged per-agent tasks.
+- [x] Preserved and committed the `AGENTS.md` guarded-worktree-removal rule; current-path corrections remain in the present recovery batch.
+- [x] Validated supervisor recovery changes: all edited PowerShell files parse; repo fallback launcher exits cleanly through the live mutex; 57 supervisor/recovery tests pass; the live supervisor identity remained unchanged with seven agents at zero restarts.
+- [x] Made the working `openrgb-python 0.3.7` version durable in `requirements.txt`; live `.venv` reports 0.3.7 and `pip check` reports no broken requirements.
+- [x] Deliberately standardized Home Hub Windows SSH on `C:\Program Files\Git\usr\bin\ssh.exe`. Inbox OpenSSH is present but exits 255 even for `-V` and Home Hub connection attempts; Git SSH 10.3 authenticates successfully with the existing key.
+- [x] Do not rotate/recreate the Home Hub SSH key merely because Windows OpenSSH is broken; the existing key is verified working through Git SSH.
+- [x] Determined backup state: the historical Windows `HomeHubBackups`/restic installation, secrets, verifier runbook, and task did not survive the rebuild and are not cleanly reconstructable from current sources. Do not recreate that offsite layer from stale documentation.
+- [ ] Restore and verify the still-intended Latitude-local daily SQLite backup from the clean tracked script. The 4 AM cron survived, but the deployed script is mode 664 and has been failing with `Permission denied`; the recovery batch changes it to tracked mode 755 and adds atomic partial-file handling plus `PRAGMA quick_check` verification.
+- [ ] After local DB backup is proven, define a new offsite backup strategy separately if desired; do not label a newly designed restic setup as recovery of the lost Windows 10 configuration.
 
 ## Deferred cleanup
 
