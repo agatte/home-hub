@@ -4,7 +4,7 @@ Updated: 2026-09-20
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
-**Machine-side closeout:** all currently recoverable/actionable Windows and Home Hub recovery items are complete. The only remaining checklist item that requires action is a physical Epson projector menu verification; a new offsite-backup design is explicitly optional future infrastructure, not unfinished recovery.
+**Recovery closeout:** all currently recoverable/actionable Windows and Home Hub recovery items are complete, including physical verification of the Epson projector's 30-minute Sleep Mode. The only unchecked item below is an explicitly optional future offsite-backup design; it is new infrastructure, not unfinished recovery.
 
 ## Safety / recovery rules
 
@@ -65,7 +65,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Verified the historical automatic `watching -> sleeping` guard is currently dormant: it still requires `zone=bed + posture=reclined`, while the current Desktop path supplies Bed location without inferring sleeping/reclined posture and Latitude no longer owns bedroom-bed geometry. Do **not** weaken this to “Bed means asleep.”
 - [x] Verified the canonical repo contains no live Epson/Kasa/RS-232 projector power-control path. Windows currently enumerates `EPSON PJ` as a connected monitor; Home Hub's projector references are lighting/context policy only.
 - [x] External model verification: H421A is the Epson PowerLite Home Cinema 3010 family. Epson documents projector Sleep Mode as shutting the projector off after loss of video signal with 5/10/30-minute choices; 30 minutes is the factory default.
-- [ ] Manually verify the physical Epson's current `Extended -> Operation -> Sleep Mode` setting. HDMI does not expose that menu setting to Home Hub, so the rebuilt PC cannot prove whether it is still enabled or what timeout is selected.
+- [x] Manually verified the physical Epson's `Extended -> Operation` menu on 2026-09-20: `Direct Power On = Off`, `Sleep Mode = 30 min`, `Illumination = On`, `High Altitude Mode = Off`. This confirms the projector itself will power down after 30 minutes without video signal; Home Hub does not need a separate projector power command.
 - [x] Keep Windows automatic system sleep disabled on AC while retaining the 30-minute display timeout. This avoids generic inactivity suspending the PC during watching/long-running activity; Home Hub's mode-aware watcher remains the deliberate S3 path.
 
 **2026-09-20 conclusion:** screen dimming, Windows display-off, PC S3, and projector power are four separate layers. Home Hub dims the Samsung; Windows may remove video after its display-idle policy; Home Hub only suspends the PC after sustained `sleeping`; and the Epson currently relies on its own no-signal Sleep Mode rather than a Home Hub command. Automatic “fell asleep while watching” shutdown remains intentionally unavailable until trustworthy sleep/posture authority exists.
