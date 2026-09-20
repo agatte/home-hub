@@ -59,6 +59,16 @@ class AudioOwnershipService:
         self._generation = 0
         self._leases: dict[str, dict[str, Any]] = {}
         self._last_invalidation: dict[str, Any] | None = None
+        # Ephemeral per-dimension epochs for low-priority/opportunistic writers.
+        # These deliberately do not persist: no opportunistic operation survives
+        # process restart, while durable leases still do.
+        self._opportunistic_epochs: dict[str, int] = {
+            dimension: 0 for dimension in AUDIO_DIMENSIONS
+        }
+
+    def _touch_opportunistic_locked(self, dimensions: Iterable[str]) -> None:
+        for dimension in dimensions:
+            self._opportunistic_epochs[dimension] += 1
 
 
     async def load(self) -> None:
@@ -131,6 +141,7 @@ class AudioOwnershipService:
                 if requested.intersection(lease.get("dimensions") or ()):
                     return None
             self._generation += 1
+            self._touch_opportunistic_locked(requested)
             lease_id = uuid.uuid4().hex
             lease = {
                 "lease_id": lease_id,
@@ -247,6 +258,7 @@ class AudioOwnershipService:
             )
 
             self._generation += 1
+            self._touch_opportunistic_locked(requested)
             lease_id = uuid.uuid4().hex
             lease = {
                 "lease_id": lease_id,
@@ -330,6 +342,59 @@ class AudioOwnershipService:
                     return True
             return False
 
+    async def invalidate_opportunistic(
+        self, dimensions: Iterable[str],
+    ) -> dict[str, int]:
+        """Invalidate low-priority writers without disturbing durable leases."""
+        requested = _dimensions(dimensions)
+        async with self._lock:
+            await self._load_locked()
+            self._touch_opportunistic_locked(requested)
+            return {
+                dimension: self._opportunistic_epochs[dimension]
+                for dimension in sorted(requested)
+            }
+
+    async def capture_opportunistic(
+        self, dimensions: Iterable[str],
+    ) -> dict[str, int] | None:
+        """Capture an epoch token only while the requested dimensions are free."""
+        requested = _dimensions(dimensions)
+        async with self._lock:
+            await self._load_locked()
+            for lease in self._leases.values():
+                if requested.intersection(lease.get("dimensions") or ()):
+                    return None
+            return {
+                dimension: self._opportunistic_epochs[dimension]
+                for dimension in sorted(requested)
+            }
+
+    async def run_if_opportunistic(
+        self,
+        token: dict[str, int],
+        operation: Callable[[], Awaitable[Any]],
+    ) -> tuple[bool, Any]:
+        """Run a low-priority write only if its dimensions remain free/current.
+
+        The check and write share the same authority lock as manual actions and
+        durable lease acquisition. A stronger owner or a newer invalidation can
+        therefore finish the current step but prevents every later stale step.
+        """
+        requested = _dimensions(token.keys())
+        expected = {dimension: int(token[dimension]) for dimension in requested}
+        async with self._lock:
+            await self._load_locked()
+            for lease in self._leases.values():
+                if requested.intersection(lease.get("dimensions") or ()):
+                    return False, None
+            if any(
+                self._opportunistic_epochs[dimension] != expected[dimension]
+                for dimension in requested
+            ):
+                return False, None
+            return True, await operation()
+
     async def run_if_valid(
         self,
         lease_id: str,
@@ -380,6 +445,7 @@ class AudioOwnershipService:
                 return False
             remaining = held - selected
             self._generation += 1
+            self._touch_opportunistic_locked(selected)
             if remaining:
                 lease["dimensions"] = sorted(remaining)
                 lease["generation"] = self._generation
@@ -429,8 +495,12 @@ class AudioOwnershipService:
                 })
                 del self._leases[overlaid_id]
 
+            touched_dimensions = set(interruption.get("dimensions") or ())
+            for item in retired:
+                touched_dimensions.update(item.get("dimensions") or ())
             del self._leases[str(lease_id)]
             self._generation += 1
+            self._touch_opportunistic_locked(touched_dimensions)
             await self._persist_locked()
             logger.info(
                 "audio interruption abandoned lease=%s overlaid=%s reason=%s gen=%s",
@@ -467,6 +537,7 @@ class AudioOwnershipService:
                 del self._leases[lease_id]
 
         self._generation += 1
+        self._touch_opportunistic_locked(selected)
         self._last_invalidation = {
             "generation": self._generation,
             "source": str(source or "manual")[:80],

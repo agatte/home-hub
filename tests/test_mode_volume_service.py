@@ -245,3 +245,151 @@ async def test_callback_swallows_exceptions() -> None:
     with patch("backend.services.mode_volume_service.load_setting", AsyncMock(return_value=None)):
         # Should NOT raise.
         await service.on_mode_change("gaming")
+
+
+@pytest.mark.asyncio
+async def test_owned_mode_ramp_uses_opportunistic_authority() -> None:
+    sonos = _make_sonos(volume=20, state="PLAYING")
+    automation = _make_automation(time_period="day")
+    ownership = MagicMock()
+    ownership.invalidate_opportunistic = AsyncMock(return_value={"volume": 1})
+    ownership.capture_opportunistic = AsyncMock(return_value={"volume": 1})
+
+    async def guarded(_token, operation):
+        return True, await operation()
+
+    ownership.run_if_opportunistic = AsyncMock(side_effect=guarded)
+    service = ModeVolumeService(
+        sonos,
+        automation,
+        tts_service=_make_tts(),
+        audio_ownership=ownership,
+    )
+    custom = {
+        "gaming": {
+            "day": 25,
+            "evening": 22,
+            "night": 18,
+            "fade_duration_s": 1,
+        },
+    }
+
+    with patch(
+        "backend.services.mode_volume_service.load_setting",
+        AsyncMock(return_value=custom),
+    ):
+        await service.on_mode_change("gaming")
+        await _settle()
+
+    ownership.invalidate_opportunistic.assert_awaited_once()
+    ownership.capture_opportunistic.assert_awaited_once()
+    ownership.run_if_opportunistic.assert_awaited_once()
+    sonos.set_volume.assert_awaited_once_with(25)
+    sonos.ramp_volume.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owned_ramp_stops_after_authority_token_is_invalidated() -> None:
+    sonos = _make_sonos(volume=20, state="PLAYING")
+    ownership = MagicMock()
+    calls = 0
+
+    async def guarded(_token, operation):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return False, None
+        return True, await operation()
+
+    ownership.run_if_opportunistic = AsyncMock(side_effect=guarded)
+    service = ModeVolumeService(
+        sonos,
+        _make_automation(),
+        audio_ownership=ownership,
+    )
+    service._request_generation = 1
+
+    completed = await service._run_owned_ramp(
+        mode="gaming",
+        generation=1,
+        token={"volume": 4},
+        current=20,
+        target=26,
+        steps=3,
+        interval=0,
+    )
+
+    assert completed is False
+    sonos.set_volume.assert_awaited_once_with(22)
+
+
+@pytest.mark.asyncio
+async def test_newer_mode_generation_stops_remaining_owned_ramp_steps() -> None:
+    sonos = _make_sonos(volume=20, state="PLAYING")
+    ownership = MagicMock()
+
+    async def guarded(_token, operation):
+        return True, await operation()
+
+    ownership.run_if_opportunistic = AsyncMock(side_effect=guarded)
+    service = ModeVolumeService(
+        sonos,
+        _make_automation(),
+        audio_ownership=ownership,
+    )
+    service._request_generation = 1
+
+    async def first_write_then_supersede(volume: int) -> bool:
+        service._request_generation = 2
+        return True
+
+    sonos.set_volume = AsyncMock(side_effect=first_write_then_supersede)
+    completed = await service._run_owned_ramp(
+        mode="gaming",
+        generation=1,
+        token={"volume": 8},
+        current=20,
+        target=26,
+        steps=3,
+        interval=0,
+    )
+
+    assert completed is False
+    sonos.set_volume.assert_awaited_once_with(22)
+
+
+@pytest.mark.asyncio
+async def test_sleeping_silence_uses_guarded_volume_writer() -> None:
+    sonos = _make_sonos(volume=15, state="STOPPED")
+    ownership = MagicMock()
+    ownership.invalidate_opportunistic = AsyncMock(return_value={"volume": 1})
+    ownership.capture_opportunistic = AsyncMock(return_value={"volume": 1})
+
+    async def guarded(_token, operation):
+        return True, await operation()
+
+    ownership.run_if_opportunistic = AsyncMock(side_effect=guarded)
+    service = ModeVolumeService(
+        sonos,
+        _make_automation(),
+        tts_service=_make_tts(),
+        audio_ownership=ownership,
+    )
+    custom = {
+        "sleeping": {
+            "day": 0,
+            "evening": 0,
+            "night": 0,
+            "fade_duration_s": 1,
+        },
+    }
+
+    with patch(
+        "backend.services.mode_volume_service.load_setting",
+        AsyncMock(return_value=custom),
+    ):
+        await service.on_mode_change("sleeping")
+        await _settle()
+
+    sonos.set_volume.assert_awaited_once_with(0)
+    sonos.ramp_volume.assert_not_called()

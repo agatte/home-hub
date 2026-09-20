@@ -497,7 +497,11 @@ async def lifespan(app: FastAPI):
     # mirroring (ambient has its own per-mode volume policy, see
     # ambient_sound_service._sync_sonos_volume).
     mode_volume = ModeVolumeService(
-        sonos, automation, tts_service=tts, ambient_sound_service=ambient_sound,
+        sonos,
+        automation,
+        tts_service=tts,
+        ambient_sound_service=ambient_sound,
+        audio_ownership=audio_ownership,
     )
     automation.register_on_mode_change(mode_volume.on_mode_change)
     app.state.mode_volume = mode_volume
@@ -513,7 +517,22 @@ async def lifespan(app: FastAPI):
             return
         if automation.override_source == "watching_sleep_guard":
             return
-        asyncio.create_task(tts.speak("Good night.", volume=10))
+
+        async def _speak_then_reassert_sleeping_silence() -> None:
+            cancelled = False
+            try:
+                await tts.speak("Good night.", volume=10)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            finally:
+                # TTS is a stronger temporary volume owner and may cancel the
+                # in-flight mode ramp. Once the intentional Good-night speech
+                # finishes, Sleeping must still converge to its authoritative 0.
+                if not cancelled and automation.current_mode == "sleeping":
+                    await mode_volume.on_mode_change("sleeping")
+
+        asyncio.create_task(_speak_then_reassert_sleeping_silence())
 
     automation.register_on_mode_change(_sleeping_tts)
 

@@ -477,3 +477,90 @@ async def test_abandon_interruption_retires_only_exact_overlaid_owners() -> None
     assert not await authority.is_valid(interruption["lease_id"])
     assert not await authority.is_valid(owned["lease_id"])
     assert await authority.is_valid(unrelated["lease_id"], (VOLUME,))
+
+
+@pytest.mark.asyncio
+async def test_opportunistic_volume_token_is_dimension_scoped() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    token = await authority.capture_opportunistic((VOLUME,))
+    assert token is not None
+
+    await authority.run_manual(
+        MANUAL_TRANSPORT_DIMENSIONS,
+        source="dashboard",
+        reason="manual_play",
+        operation=_return_true,
+    )
+    executed, result = await authority.run_if_opportunistic(
+        token, _return_true,
+    )
+    assert (executed, result) == (True, True)
+
+
+@pytest.mark.asyncio
+async def test_manual_volume_invalidates_opportunistic_volume_token() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    token = await authority.capture_opportunistic((VOLUME,))
+    assert token is not None
+
+    await authority.run_manual(
+        MANUAL_VOLUME_DIMENSIONS,
+        source="dashboard",
+        reason="manual_volume",
+        operation=_return_true,
+    )
+    executed, result = await authority.run_if_opportunistic(
+        token, _return_true,
+    )
+    assert (executed, result) == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_stronger_volume_owner_preempts_opportunistic_token() -> None:
+    settings = MemorySettings()
+    authority = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    token = await authority.capture_opportunistic((VOLUME,))
+    assert token is not None
+
+    lease = await authority.acquire(
+        owner="ambient",
+        purpose="ambient_playback",
+        dimensions=(VOLUME,),
+    )
+    assert lease is not None
+    assert await authority.capture_opportunistic((VOLUME,)) is None
+    executed, result = await authority.run_if_opportunistic(
+        token, _return_true,
+    )
+    assert (executed, result) == (False, None)
+
+
+async def _return_true() -> bool:
+    return True
+
+
+@pytest.mark.asyncio
+async def test_opportunistic_token_does_not_persist_across_restart() -> None:
+    settings = MemorySettings()
+    first = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    await first.invalidate_opportunistic((VOLUME,))
+    token = await first.capture_opportunistic((VOLUME,))
+    assert token is not None
+    assert (await first.snapshot())["leases"] == []
+
+    restarted = AudioOwnershipService(
+        setting_loader=settings.load, setting_saver=settings.save,
+    )
+    await restarted.load()
+    assert (await restarted.snapshot())["leases"] == []
+    assert await restarted.capture_opportunistic((VOLUME,)) == {"volume": 0}

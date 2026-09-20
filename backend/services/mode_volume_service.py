@@ -21,6 +21,7 @@ import logging
 from typing import Any, Optional
 
 from backend.api.routes.routines import load_setting
+from backend.services.audio_ownership import VOLUME
 
 from backend.services.mode_volume_policy import (
     MODE_VOLUME_DEFAULTS,
@@ -50,6 +51,7 @@ class ModeVolumeService:
         automation_engine: Any,
         tts_service: Optional[Any] = None,
         ambient_sound_service: Optional[Any] = None,
+        audio_ownership: Optional[Any] = None,
     ) -> None:
         self._sonos = sonos_service
         self._automation = automation_engine
@@ -61,15 +63,23 @@ class ModeVolumeService:
         # ambient=22). Skip our music-tier fade in that case so the two
         # services don't tug-of-war over the speaker.
         self._ambient_sound = ambient_sound_service
+        self._audio_ownership = audio_ownership
+        self._request_generation = 0
 
     async def on_mode_change(self, mode: str) -> None:
         """Mode-change callback. Single-arg contract per AutomationEngine."""
+        self._request_generation += 1
+        generation = self._request_generation
+        if self._audio_ownership is not None:
+            # Supersede every unfinished low-priority ramp before evaluating the
+            # new mode. This does not disturb any durable TTS/Ambient ownership.
+            await self._audio_ownership.invalidate_opportunistic((VOLUME,))
         try:
-            await self._apply(mode)
+            await self._apply(mode, generation)
         except Exception as exc:  # noqa: BLE001 — callback never raises
             logger.error("ModeVolumeService failed for mode=%s: %s", mode, exc, exc_info=True)
 
-    async def _apply(self, mode: str) -> None:
+    async def _apply(self, mode: str, generation: int) -> None:
         if not getattr(self._sonos, "connected", False):
             logger.debug("mode_volume: skipped (sonos disconnected) mode=%s", mode)
             return
@@ -95,6 +105,9 @@ class ModeVolumeService:
         if self._tts is not None and getattr(self._tts, "is_speaking", False):
             logger.debug("mode_volume: deferring %.1fs for TTS mode=%s", _TTS_DEFER_SECONDS, mode)
             await asyncio.sleep(_TTS_DEFER_SECONDS)
+            if generation != self._request_generation:
+                logger.info("mode_volume: superseded during TTS defer mode=%s", mode)
+                return
 
         config = await load_setting(MODE_VOLUME_CURVES_KEY) or {}
         time_period = self._automation._get_time_period()
@@ -128,13 +141,42 @@ class ModeVolumeService:
             )
             return
 
+        if generation != self._request_generation:
+            logger.info("mode_volume: superseded before ramp mode=%s", mode)
+            return
+
         logger.info(
             "mode_volume: ramping mode=%s %d→%d over %.1fs (%d steps) reason=%s",
             mode, current_volume, decision.target,
             decision.fade_steps * decision.fade_interval,
             decision.fade_steps, decision.reason,
         )
-        # Background task — don't block the mode-change callback chain.
+        # Background task — don't block the mode-change callback chain. With
+        # central ownership enabled, each individual write is serialized as a
+        # low-priority opportunistic write. Manual volume, TTS, Ambient, or a
+        # newer mode invalidates the token and stops all remaining steps.
+        if self._audio_ownership is not None:
+            token = await self._audio_ownership.capture_opportunistic((VOLUME,))
+            if token is None:
+                logger.info(
+                    "mode_volume: skipped mode=%s reason=volume_owned_by_stronger_writer",
+                    mode,
+                )
+                return
+            asyncio.create_task(
+                self._run_owned_ramp(
+                    mode=mode,
+                    generation=generation,
+                    token=token,
+                    current=current_volume,
+                    target=decision.target,
+                    steps=decision.fade_steps,
+                    interval=decision.fade_interval,
+                )
+            )
+            return
+
+        # Compatibility fallback for isolated callers without #274 wired in.
         asyncio.create_task(
             self._sonos.ramp_volume(
                 decision.target,
@@ -142,6 +184,44 @@ class ModeVolumeService:
                 interval=decision.fade_interval,
             )
         )
+
+    async def _run_owned_ramp(
+        self,
+        *,
+        mode: str,
+        generation: int,
+        token: dict[str, int],
+        current: int,
+        target: int,
+        steps: int,
+        interval: float,
+    ) -> bool:
+        steps = max(1, int(steps))
+        delta = (int(target) - int(current)) / steps
+        for index in range(1, steps + 1):
+            if generation != self._request_generation:
+                logger.info("mode_volume: cancelled mode=%s reason=newer_mode", mode)
+                return False
+            step_target = max(0, min(100, round(current + delta * index)))
+
+            async def _write() -> bool:
+                if generation != self._request_generation:
+                    return False
+                return await self._sonos.set_volume(step_target)
+
+            executed, success = await self._audio_ownership.run_if_opportunistic(
+                token,
+                _write,
+            )
+            if not executed or not success:
+                logger.info(
+                    "mode_volume: cancelled mode=%s reason=ownership_or_generation_changed",
+                    mode,
+                )
+                return False
+            if index < steps:
+                await asyncio.sleep(interval)
+        return True
 
     @staticmethod
     def merged_config(persisted: Optional[dict[str, dict[str, int]]]) -> dict[str, dict[str, int]]:
