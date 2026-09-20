@@ -81,8 +81,12 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Deliberately standardized Home Hub Windows SSH on `C:\Program Files\Git\usr\bin\ssh.exe`. Inbox OpenSSH is present but exits 255 even for `-V` and Home Hub connection attempts; Git SSH 10.3 authenticates successfully with the existing key.
 - [x] Do not rotate/recreate the Home Hub SSH key merely because Windows OpenSSH is broken; the existing key is verified working through Git SSH.
 - [x] Determined backup state: the historical Windows `HomeHubBackups`/restic installation, secrets, verifier runbook, and task did not survive the rebuild and are not cleanly reconstructable from current sources. Do not recreate that offsite layer from stale documentation.
-- [ ] Restore and verify the still-intended Latitude-local daily SQLite backup from the clean tracked script. The 4 AM cron survived, but the deployed script is mode 664 and has been failing with `Permission denied`; the recovery batch changes it to tracked mode 755 and adds atomic partial-file handling plus `PRAGMA quick_check` verification.
-- [ ] After local DB backup is proven, define a new offsite backup strategy separately if desired; do not label a newly designed restic setup as recovery of the lost Windows 10 configuration.
+- [x] Restored and verified the intended Latitude-local SQLite backup. The surviving 4:00 AM cron had been failing with `Permission denied` because the tracked script was mode 644; it is now tracked/deployed executable, uses an atomic `.partial` target, verifies `PRAGMA quick_check`, and restores backend health before success.
+  - The first live online-backup attempt exposed a second real defect: under the active 3.1 GB DELETE-journal workload, SQLite `.backup` repeatedly restarted/thrashed instead of completing efficiently. That attempt was terminated and its scratch residue removed.
+  - The verified design now briefly quiesces **only** `home-hub.service`, copies and checks the DB, restores the service, and requires `/health` before exit 0. A lock file prevents overlapping runs and the EXIT trap restores the backend on failure.
+  - Live proof on 2026-09-20: `home_hub_20260920_171701.db` = **3,230,666,752 bytes**, script-reported `quick_check=ok`, independent post-run `PRAGMA quick_check` = `ok`, no `.partial` residue, and Home Hub returned healthy at build `af12523`.
+  - Cron is now normalized to **04:30 daily**, avoiding the backend's own 04:00 ML training job; raw crontab bytes end in a normal LF with no stray Windows carriage-return text.
+- [ ] Optional future work: define a new offsite backup strategy separately if desired. The lost Windows 10 restic configuration is not recoverable from clean sources, so any new offsite design must be labeled as new infrastructure rather than “restored” old state.
 
 ## Deferred cleanup
 

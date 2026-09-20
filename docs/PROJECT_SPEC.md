@@ -1139,7 +1139,7 @@ production freshness requires live verification):
 - ~~No rate limiting~~ — partial: slowapi per-route limits (10/min on override/TTS, 5/min on file import). The `120/min` global default is **NOT active** — `SlowAPIMiddleware` is intentionally not registered (a 2026-06-01 attempt was reverted; on a flat trust-the-room LAN it would throttle the kiosk/dev devices, not just guests, and there's no internet path). Only the explicitly `@limiter.limit`-decorated routes are enforced.
 - ~~No log rotation~~ — fixed: RotatingFileHandler (5MB per file, 3 backups, 20MB max)
 - ~~WebSocket crashes on malformed JSON~~ — fixed: try-catch guard around json.loads()
-- ~~No database backup automation~~ — fixed: daily SQLite backup cron on Latitude (4 AM, 7-day retention)
+- ~~No database backup automation~~ — fixed: daily verified SQLite backup cron on Latitude (4:30 AM, 7-day retention). Because the active DB uses DELETE journaling and continuous writes made online `.backup` thrash, the backup script briefly quiesces only `home-hub.service`, writes atomically to a partial file, requires `PRAGMA quick_check`, restarts the backend, and requires `/health` before reporting success.
 - ~~Systemd service files not version-controlled~~ — fixed: `deployment/` dir with service units + kiosk desktop entry
 - ~~Dead frontend code (Sidebar, Header, modeIcon)~~ — fixed: deleted
 - ~~Weather widget shows current temp as high/low~~ — fixed: fetches daily range from NWS 7-day forecast
