@@ -1,6 +1,8 @@
 ﻿# Create or update the Task Scheduler task for the unified PC Agent Supervisor.
-# Replaces the three individual tasks (activity detector, ambient monitor,
-# screen sync) with a single supervisor process.
+# Replaces obsolete individual-agent tasks with one supervisor process that owns
+# all seven Windows agents. Installs the windowless launcher pair under
+# %LOCALAPPDATA%\home-hub so the scheduled task does not depend on stale
+# machine-specific Python paths.
 #
 # Must run as admin (elevated PowerShell).
 #
@@ -8,24 +10,34 @@
 
 $TaskName = "Home Hub Agent Supervisor"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$PythonW = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+$RuntimeDir = Join-Path $env:LOCALAPPDATA "home-hub"
+$RuntimePowerShell = Join-Path $RuntimeDir "start-supervisor.ps1"
+$RuntimeVbs = Join-Path $RuntimeDir "start-supervisor-hidden.vbs"
+
+if (-not (Test-Path -LiteralPath $PythonW)) {
+    throw "Home Hub .venv pythonw.exe was not found at $PythonW"
+}
+
+# Install the two checked-in launchers into the stable machine-local runtime
+# directory. start-supervisor.ps1 detects the repository from the Scheduled
+# Task's WorkingDirectory when running from LocalAppData.
+New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
+Copy-Item (Join-Path $PSScriptRoot "start-supervisor.ps1") $RuntimePowerShell -Force
+Copy-Item (Join-Path $PSScriptRoot "start-supervisor-hidden.vbs") $RuntimeVbs -Force
 
 # Action chain at fire time:
 #   wscript.exe (windowless from process creation)
-#     -> start-supervisor-hidden.vbs (Run "...", 0, False -> hidden powershell)
-#       -> start-supervisor.ps1 (sets PYTHONPATH + workdir)
-#         -> C:\Python313\pythonw.exe -m backend.services.pc_agent.supervisor
+#     -> %LOCALAPPDATA%\home-hub\start-supervisor-hidden.vbs
+#       -> %LOCALAPPDATA%\home-hub\start-supervisor.ps1
+#         -> <repo>\.venv\Scripts\pythonw.exe
+#         -> backend.services.pc_agent.supervisor
 #
-# Why wscript + VBS instead of plain powershell.exe -WindowStyle Hidden:
-# the -WindowStyle flag only hides AFTER PowerShell creates its console
-# window, so each 5-min watchdog fire flashed a window briefly. wscript
-# never creates one, and its Run state 0 enforces hidden at CreateProcess
-# time on the powershell child too. No flash possible. Switched
-# 2026-05-16 after the watchdog landed.
-#
-# (System Python with PYTHONPATH set in the .ps1 still avoids Python 3.13's
-# venv launcher-subprocess duplicate-pythonw issue noted previously.)
-$Executable = "wscript.exe"
-$Arguments = "`"$ProjectRoot\scripts\start-supervisor-hidden.vbs`""
+# The Python 3.13 venv launcher may appear as a launcher + interpreter process
+# pair. That is expected; the Windows mutex and backend supervisor identity are
+# the singleton/runtime-health authority.
+$Executable = "$env:WINDIR\System32\wscript.exe"
+$Arguments = "`"$RuntimeVbs`""
 
 # ── Remove old individual tasks ────────────────────────────────────────
 $OldTasks = @(
@@ -44,7 +56,16 @@ foreach ($old in $OldTasks) {
 
 # ── Kill any orphaned pythonw agent processes ──────────────────────────
 Write-Host "Killing orphaned agent processes..."
-$AgentModules = @("activity_detector", "ambient_monitor", "screen_sync_agent", "supervisor")
+$AgentModules = @(
+    "activity_detector",
+    "ambient_monitor",
+    "screen_sync_agent",
+    "sleep_watcher",
+    "emotion_capture",
+    "monitor_brightness",
+    "peripheral_rgb",
+    "supervisor"
+)
 Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | ForEach-Object {
     foreach ($mod in $AgentModules) {
         if ($_.CommandLine -match $mod) {
@@ -110,7 +131,7 @@ Register-ScheduledTask `
     -Trigger @($loginTrigger, $watchdogTrigger) `
     -Settings $settings `
     -Principal $principal `
-    -Description "Unified supervisor for Home Hub PC agents (activity detector, ambient monitor, screen sync). Reports to Latitude 192.168.86.210."
+    -Description "Unified supervisor for seven Home Hub Windows agents: activity, ambient audio, screen sync, sleep watcher, emotion capture, monitor brightness, and peripheral RGB. Reports to Latitude 192.168.86.210."
 
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green
@@ -118,8 +139,10 @@ Write-Host ""
 Write-Host "Key settings:" -ForegroundColor Cyan
 Write-Host "  - Trigger 1: At logon (30s delay)"
 Write-Host "  - Trigger 2: Watchdog - every 5 min, indefinitely"
-Write-Host "  - Manages: activity_detector, ambient_monitor, screen_sync"
-Write-Host "  - Classifier: YAMNet (shadow mode)"
+Write-Host "  - Manages: activity_detector, ambient_monitor, screen_sync, sleep_watcher, emotion_capture, monitor_brightness, peripheral_rgb"
+Write-Host "  - Classifier: YAMNet (active mode)"
+Write-Host "  - Runtime launcher: $RuntimeVbs"
+Write-Host "  - Python: $PythonW"
 Write-Host "  - StopIfGoingOnBatteries: False"
 Write-Host "  - Restart on failure: 999 times, 1 min apart"
 Write-Host "  - Multiple instances: Ignore new (mutex also prevents duplicates)"

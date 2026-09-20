@@ -214,7 +214,21 @@ class WindowsRecoveryOperations:
 
     def kick_canonical_launcher(self) -> None:
         project_root = Path(__file__).resolve().parents[3]
-        launcher = project_root / "scripts" / "start-supervisor-hidden.vbs"
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        runtime_launcher = (
+            Path(local_app_data) / "home-hub" / "start-supervisor-hidden.vbs"
+            if local_app_data
+            else None
+        )
+        repo_launcher = project_root / "scripts" / "start-supervisor-hidden.vbs"
+        if runtime_launcher is not None and runtime_launcher.exists():
+            launcher = runtime_launcher
+        elif repo_launcher.exists():
+            launcher = repo_launcher
+        else:
+            raise FileNotFoundError(
+                "No Home Hub supervisor launcher is installed or available in the repository"
+            )
         subprocess.Popen(
             ["wscript.exe", str(launcher)],
             cwd=project_root,

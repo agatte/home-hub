@@ -19,7 +19,14 @@ def _run(command: str) -> subprocess.CompletedProcess[str]:
     if not POWERSHELL:
         pytest.skip("PowerShell is unavailable")
     return subprocess.run(
-        [POWERSHELL, "-NoProfile", "-Command", command],
+        [
+            POWERSHELL,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ],
         capture_output=True,
         check=False,
         text=True,
@@ -47,9 +54,10 @@ def test_process_matcher_accepts_system_and_venv_home_hub_modules():
     result = _run(
         f". '{_quoted_path()}' -FunctionsOnly; "
         "$system = Test-HomeHubCommandLine "
-        "'C:\\Python313\\pythonw.exe -m backend.services.pc_agent.supervisor --active'; "
+        "'C:\\Users\\Anthony\\AppData\\Local\\Programs\\Python\\Python313\\pythonw.exe "
+        "-m backend.services.pc_agent.supervisor --active'; "
         "$venv = Test-HomeHubCommandLine "
-        "'C:\\home-hub\\venv\\Scripts\\pythonw.exe -m "
+        "'C:\\home-hub\\.venv\\Scripts\\pythonw.exe -m "
         "backend.services.pc_agent.activity_detector'; "
         "if ($system -and $venv) { exit 0 } else { exit 9 }",
     )
@@ -179,6 +187,13 @@ function Get-CimInstance {{
     param($ClassName, $Filter, $ErrorAction)
     if ($Filter -eq "Name = 'pythonw.exe'" -and $global:launched) {{ $global:replacement }}
 }}
+function Test-Path {{
+    param($LiteralPath)
+    if ($LiteralPath -like '*peripheral_rgb.pid') {{ return $false }}
+    if ($LiteralPath -like '*start-supervisor-hidden.vbs') {{ return $true }}
+    return $false
+}}
+function Remove-Item {{ throw 'test attempted a real file removal' }}
 function Start-Process {{ param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle) {start_body} }}
 function Start-Sleep {{ param($Milliseconds, $Seconds) }}
 function Invoke-RestMethod {{
@@ -195,7 +210,8 @@ def test_reenable_failure_is_nonzero_and_never_prints_final_ok():
     output = result.stdout + result.stderr
     assert result.returncode != 0
     assert "RESTORE_ATTEMPTED" in output
-    assert "Scheduled Task restoration failed: reenable failed" in output
+    normalized = " ".join(output.split())
+    assert "Scheduled Task restoration failed: reenable failed" in normalized
     assert "OK: replacement supervisor" not in output
 
 

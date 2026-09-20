@@ -249,8 +249,17 @@ try {
     # Lower-bound marker only; process identities never derive from DateTime.
     $restartAttemptFileTime = [DateTime]::UtcNow.ToFileTimeUtc()
     $oldKeys = @($owners | ForEach-Object Identity)
-    $launcher = Join-Path $ProjectRoot "scripts\start-supervisor-hidden.vbs"
-    Write-Host "Launching canonical supervisor path..."
+    $runtimeLauncher = Join-Path $env:LOCALAPPDATA "home-hub\start-supervisor-hidden.vbs"
+    $repoLauncher = Join-Path $ProjectRoot "scripts\start-supervisor-hidden.vbs"
+    $launcher = if (Test-Path -LiteralPath $runtimeLauncher) {
+        $runtimeLauncher
+    } elseif (Test-Path -LiteralPath $repoLauncher) {
+        Write-Warning "Installed supervisor launcher is missing; using repository fallback."
+        $repoLauncher
+    } else {
+        throw "No canonical supervisor launcher was found. Run scripts\setup-supervisor-task.ps1."
+    }
+    Write-Host "Launching canonical supervisor path: $launcher"
     Start-Process wscript.exe -ArgumentList "`"$launcher`"" -WorkingDirectory $ProjectRoot -WindowStyle Hidden
 
     $replacement = $null

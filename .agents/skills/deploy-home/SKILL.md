@@ -19,6 +19,12 @@ holds, and Git contract: clean tracked tree, `master`, permanent `origin`,
 Latitude checkout is intentionally pinned to the last deployed SHA. Never
 background-pull production merely to synchronize it.
 
+On Anthony's rebuilt Windows 11 desktop, do not rely on the inbox
+`C:\Windows\System32\OpenSSH\ssh.exe`; it is present but fails before
+connecting. Use Git for Windows SSH at
+`C:\Program Files\Git\usr\bin\ssh.exe` with the existing Home Hub key.
+Do not rotate/recreate the key merely to work around the broken inbox client.
+
 Deploy only through `scripts/deploy.sh`. Verify build rollover, `/health`,
 touched read surfaces, required service state, and the post-restart journal
 window.

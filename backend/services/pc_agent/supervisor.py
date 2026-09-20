@@ -10,6 +10,9 @@ Agents managed:
   - ambient_monitor: mic-based social detection (PyAudio + optional YAMNet)
   - screen_sync_agent: screen color capture for bias lighting (mss)
   - sleep_watcher: suspends Windows 60min after sleeping mode (Windows-only)
+  - emotion_capture: desktop face/presence/emotion capture (MediaPipe)
+  - monitor_brightness: Samsung DDC/CI brightness + warmth control (Windows-only)
+  - peripheral_rgb: OpenRGB control for supported desktop peripherals
 
 Usage:
     python -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000

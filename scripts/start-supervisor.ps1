@@ -1,29 +1,38 @@
-# Wrapper: launches the PC Agent Supervisor under system Python with the
-# venv's site-packages on PYTHONPATH.
+# Canonical Windows launcher for the unified Home Hub PC Agent Supervisor.
 #
-# Why not venv\Scripts\pythonw.exe? Python 3.13's venv on Windows uses a
-# launcher-subprocess pattern: venv\pythonw.exe (1.5 MB stub) chain-loads
-# C:\Python313\pythonw.exe (66 MB real interpreter), producing two
-# pythonw.exe processes that look like a duplicate bug even though the
-# mutex is working. Running system Python directly with PYTHONPATH avoids
-# the launcher indirection — one pythonw.exe, with a small powershell.exe
-# parent that's clearly a wrapper, not a confusable duplicate.
+# This file serves two locations:
+#   1. directly from the repository as a recovery fallback;
+#   2. copied to %LOCALAPPDATA%\home-hub by setup-supervisor-task.ps1.
 #
-# --copies was tried (python -m venv --copies) and ignored by Python 3.13:
-# produces the same launcher binary byte-for-byte.
+# When installed under LocalAppData, the Scheduled Task supplies the canonical
+# repository as its WorkingDirectory. When run from the repository, the script
+# can derive the root from its own path. Both paths intentionally use the
+# repository's .venv instead of a machine-specific Python installation.
 
-$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$SystemPythonW = "C:\Python313\pythonw.exe"
+$ErrorActionPreference = "Stop"
 
-$env:PYTHONPATH = "$ProjectRoot\venv\Lib\site-packages;$ProjectRoot"
+$RepoCandidate = Resolve-Path (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue
+if ($RepoCandidate -and (Test-Path (Join-Path $RepoCandidate.Path "pyproject.toml"))) {
+    $ProjectRoot = $RepoCandidate.Path
+} elseif (Test-Path (Join-Path (Get-Location).Path "pyproject.toml")) {
+    $ProjectRoot = (Get-Location).Path
+} else {
+    throw "Unable to locate the Home Hub repository. Run setup-supervisor-task.ps1 from the canonical checkout."
+}
+
+$PythonW = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+if (-not (Test-Path -LiteralPath $PythonW)) {
+    throw "Home Hub .venv pythonw.exe was not found at $PythonW"
+}
 
 Set-Location $ProjectRoot
 
-# Server URL from the HOME_HUB_URL user env var (set during the 2026-06
-# network re-IP to 192.168.86.x); falls back to the current Latitude LAN IP.
+# Server URL from the HOME_HUB_URL user env var; falls back to the current
+# Latitude LAN IP.
 $Server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { "http://192.168.86.210:8000" }
 
-& $SystemPythonW -m backend.services.pc_agent.supervisor `
+& $PythonW -m backend.services.pc_agent.supervisor `
     --server $Server `
     --classifier `
     --active
+exit $LASTEXITCODE
