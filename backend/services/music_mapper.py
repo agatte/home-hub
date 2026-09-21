@@ -26,6 +26,8 @@ logger = logging.getLogger("home_hub.music")
 # for the T-30 room announcement. Keep this local to Game Day.
 PREGAME_TTS_VOLUME = 24
 PREGAME_TTS_LATE_NIGHT_CAP = 18
+PREGAME_HYPE_SETTLE_ATTEMPTS = 20
+PREGAME_HYPE_SETTLE_INTERVAL_SECONDS = 0.15
 # Bounded Game Day fallback only. Any explicit pregameday mapping wins.
 DEFAULT_PREGAME_HYPE_FAVORITE = "It's Lit!"
 
@@ -409,29 +411,62 @@ class MusicMapper:
             if not success:
                 return False, play_reason
 
-            # Apply the Game Day target only after playback is confirmed.
-            # Queue/source takeovers therefore never inherit a pre-play HomeHub
-            # volume write. Manual volume still wins through lease invalidation
-            # or the exact fresh-volume comparison below.
-            if startup_volume is not None:
-                async def _owned_volume() -> bool:
-                    current = await self._sonos.get_playback_ownership_evidence()
-                    if not current:
-                        return False
-                    if int(current.get("volume") or 0) != final_volume:
-                        return False
-                    if str(current.get("transport_state") or "").upper() != "PLAYING":
-                        return False
-                    if str(current.get("play_mode") or "").upper() != "SHUFFLE":
-                        return False
-                    if int(current.get("queue_size") or 0) <= 0:
-                        return False
-                    if not str(current.get("current_uri") or "").startswith(
+            # Sonos queue replacement returns before the player necessarily
+            # leaves TRANSITIONING. Keep the lease and wait boundedly for the
+            # exact new queue to become PLAYING before applying startup volume
+            # or claiming durable ownership. Every sample re-proves central
+            # queue/transport authority; volume-only takeover is yielded
+            # independently and never blocks the hype source.
+            settled_playback = None
+            for _ in range(PREGAME_HYPE_SETTLE_ATTEMPTS):
+                if not await self._audio_ownership.is_valid(
+                    lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+                ):
+                    break
+                candidate = await self._sonos.get_playback_ownership_evidence()
+                if candidate is None:
+                    await asyncio.sleep(PREGAME_HYPE_SETTLE_INTERVAL_SECONDS)
+                    continue
+
+                if (
+                    startup_volume is not None
+                    and await self._audio_ownership.is_valid(
+                        lease["lease_id"], (VOLUME,),
+                    )
+                    and int(candidate.get("volume") or 0) != final_volume
+                ):
+                    await self._audio_ownership.release(
+                        lease["lease_id"],
+                        dimensions=(VOLUME,),
+                        reason="pregame_hype_volume_changed_during_settle",
+                    )
+                    startup_volume = None
+
+                if (
+                    str(candidate.get("transport_state") or "").upper() == "PLAYING"
+                    and str(candidate.get("play_mode") or "").upper() == "SHUFFLE"
+                    and int(candidate.get("queue_size") or 0) > 0
+                    and str(candidate.get("current_uri") or "").startswith(
                         "x-rincon-queue:"
-                    ):
-                        return False
+                    )
+                ):
+                    settled_playback = candidate
+                    break
+                await asyncio.sleep(PREGAME_HYPE_SETTLE_INTERVAL_SECONDS)
+
+            # Apply the Game Day target only after playback is settled. The
+            # conditional writer re-reads the full queue/transport/volume
+            # fingerprint synchronously, so a racing manual/source change wins.
+            if (
+                startup_volume is not None
+                and settled_playback is not None
+                and await self._audio_ownership.is_valid(
+                    lease["lease_id"], (VOLUME,),
+                )
+            ):
+                async def _owned_volume() -> bool:
                     return await self._sonos.set_volume_if_playback_unchanged(
-                        current,
+                        settled_playback,
                         startup_volume,
                     )
 
@@ -454,24 +489,18 @@ class MusicMapper:
                 )
 
             sonos_evidence = None
-            for _ in range(4):
-                if not await self._audio_ownership.is_valid(
+            if (
+                settled_playback is not None
+                and await self._audio_ownership.is_valid(
                     lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
-                ):
-                    break
+                )
+            ):
                 candidate = await self._sonos.get_queue_ownership_evidence()
-                if (
-                    candidate
-                    and candidate.get("transport_state") == "PLAYING"
-                    and candidate.get("play_mode") == "SHUFFLE"
-                    and int(candidate.get("queue_size") or 0) > 0
-                    and str(candidate.get("current_uri") or "").startswith(
-                        "x-rincon-queue:"
-                    )
+                if self._pregame_source_transport_matches(
+                    settled_playback,
+                    candidate,
                 ):
                     sonos_evidence = candidate
-                    break
-                await asyncio.sleep(0.15)
 
             if (
                 sonos_evidence is not None

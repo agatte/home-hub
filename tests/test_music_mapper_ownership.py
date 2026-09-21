@@ -112,6 +112,35 @@ class Sonos:
         return deepcopy(self.evidence)
 
 
+class SettlingSonos(Sonos):
+    """Model real Sonos returning TRANSITIONING briefly after queue play."""
+
+    def __init__(self, transition_reads: int = 3) -> None:
+        super().__init__()
+        self.transition_reads = transition_reads
+
+    async def play_favorite(
+        self, title: str, *, expected_queue_evidence: dict | None = None,
+    ) -> bool:
+        if expected_queue_evidence is not None:
+            for key, value in self.neutral_evidence.items():
+                assert expected_queue_evidence.get(key) == value
+        self.play_calls.append(title)
+        if self.play_success:
+            self.state = "TRANSITIONING"
+        return self.play_success
+
+    async def get_queue_ownership_evidence(self) -> dict | None:
+        if self.state == "TRANSITIONING":
+            if self.transition_reads > 0:
+                self.transition_reads -= 1
+                evidence = deepcopy(self.evidence)
+                evidence["transport_state"] = "TRANSITIONING"
+                return evidence
+            self.state = "PLAYING"
+        return await super().get_queue_ownership_evidence()
+
+
 def entry(title: str = "2000s Hits Essentials") -> dict:
     return {
         "id": 1,
@@ -355,6 +384,40 @@ async def test_pregame_hype_sets_mode_volume_after_tts_restores_zero() -> None:
     assert lease["metadata"]["mode"] == "gameday"
     assert lease["metadata"]["source"] == "pregame_audio"
     assert lease["evidence"]["phase"] == "owned"
+
+
+@pytest.mark.asyncio
+async def test_pregame_hype_waits_for_transitioning_sonos_to_settle() -> None:
+    settings = MemorySettings()
+    authority = await make_authority(settings)
+    sonos = SettlingSonos(transition_reads=4)
+    automation = PregameAutomation()
+    mapper = MusicMapper(
+        sonos,
+        Ws(),
+        tts_service=PregameTTS(),
+        audio_ownership=authority,
+        setting_loader=_gameday_volume_settings,
+    )
+    mapper.set_automation(automation)
+    mapper._cache["pregameday"] = [entry("Colts Hype")]
+
+    with patch("backend.services.music_mapper.asyncio.sleep", new=_no_sleep):
+        result = await mapper.dispatch_pregame_audio(pregame_decision())
+
+    assert result["sonos_fired"] is True
+    assert result["sonos_reason"] == "played"
+    assert sonos.state == "PLAYING"
+    assert sonos.transition_reads == 0
+    assert sonos.volume == 25
+    assert sonos.volume_writes == [25]
+
+    snapshot = await authority.snapshot()
+    assert len(snapshot["leases"]) == 1
+    lease = snapshot["leases"][0]
+    assert lease["dimensions"] == ["queue_source", "transport"]
+    assert lease["evidence"]["phase"] == "owned"
+    assert lease["evidence"]["sonos"]["transport_state"] == "PLAYING"
 
 
 @pytest.mark.asyncio
