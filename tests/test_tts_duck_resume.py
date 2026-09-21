@@ -6,8 +6,10 @@ Without try/finally a failed TTS leaves Sonos parked at TTS volume
 indefinitely.
 """
 import asyncio
+import sys
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +21,7 @@ from backend.services.audio_ownership import (
     TRANSPORT,
     AudioOwnershipService,
 )
-from backend.services.tts_service import TTSService
+from backend.services.tts_service import PreparedSpeech, TTSService
 
 _REAL_SLEEP = asyncio.sleep
 
@@ -590,6 +592,58 @@ async def test_owned_tts_restores_and_preserves_interrupted_music_owner(
 
 
 @pytest.mark.asyncio
+async def test_owned_tts_consumes_prepared_audio_without_early_authority(
+    tmp_path: Path,
+    immediate_sleep: None,
+) -> None:
+    authority = await _authority()
+    base = await authority.acquire(
+        owner="music_mapper",
+        purpose="mode_auto_play",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "owned", "sonos": _owned_evidence()},
+    )
+    assert base is not None
+    sonos = OwnedTTSFakeSonos()
+    tts = TTSService(
+        sonos,
+        tmp_path,
+        "127.0.0.1",
+        audio_ownership=authority,
+    )
+    path = tmp_path / "owned-prepared.mp3"
+    path.write_bytes(b"mp3")
+    tts._generate_audio = AsyncMock(return_value=path)
+
+    before = deepcopy(sonos.evidence)
+    prepared = await tts.prepare("hello prepared owner")
+
+    assert prepared is not None
+    assert sonos.evidence == before
+    assert sonos.restore_calls == []
+    assert await authority.find_lease(
+        owner="tts",
+        purpose="announcement",
+    ) is None
+
+    assert await tts.speak(
+        "hello prepared owner",
+        volume=60,
+        prepared_audio=prepared,
+    ) is True
+
+    assert tts._generate_audio.await_count == 1
+    assert sonos.evidence["current_uri"] == before["current_uri"]
+    assert sonos.evidence["volume"] == 20
+    assert sonos.restore_calls == [(False, True), (True, False)]
+    assert await authority.is_valid(base["lease_id"], (QUEUE_SOURCE, TRANSPORT))
+    assert await authority.find_lease(
+        owner="tts",
+        purpose="announcement",
+    ) is None
+
+
+@pytest.mark.asyncio
 async def test_owned_tts_manual_source_takeover_cancels_stale_source_restore(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -919,3 +973,168 @@ async def test_tts_restart_retires_stale_interruption_without_sonos_mutation(
     assert await authority.find_lease(owner="tts", purpose="announcement") is None
     assert not await authority.is_valid(base["lease_id"])
     sonos.assert_not_called()
+@pytest.mark.asyncio
+async def test_prepare_generates_audio_without_touching_sonos(tmp_path: Path) -> None:
+    sonos = AsyncMock()
+    tts = TTSService(sonos, tmp_path, "127.0.0.1")
+    path = tmp_path / "static-prepared.mp3"
+    path.write_bytes(b"mp3")
+    tts._generate_audio = AsyncMock(return_value=path)
+
+    prepared = await tts.prepare("hello prepared world")
+
+    assert prepared == PreparedSpeech(
+        text="hello prepared world",
+        path=path,
+    )
+    tts._generate_audio.assert_awaited_once_with("hello prepared world")
+    assert sonos.mock_calls == []
+    assert path in tts._prepared_paths
+
+    await tts.discard_prepared(prepared)
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_speak_consumes_prepared_audio_without_regenerating(
+    tmp_path: Path,
+    immediate_sleep: None,
+) -> None:
+    sonos = AsyncMock()
+    sonos.connected = True
+    sonos.get_current_playback_snapshot = AsyncMock(return_value=MagicMock())
+    sonos.get_status = AsyncMock(return_value={"volume": 25})
+    sonos.play_uri = AsyncMock(return_value=True)
+    sonos.set_volume = AsyncMock(return_value=True)
+    sonos.restore_playback = AsyncMock(return_value=None)
+
+    tts = TTSService(sonos, tmp_path, "127.0.0.1")
+    path = tmp_path / "prepared.mp3"
+    path.write_bytes(b"mp3")
+    tts._generate_audio = AsyncMock(return_value=path)
+    prepared = await tts.prepare("prepared line")
+
+    assert await tts.speak(
+        "prepared line",
+        volume=30,
+        prepared_audio=prepared,
+    ) is True
+
+    assert tts._generate_audio.await_count == 1
+    sonos.play_uri.assert_awaited_once()
+    assert "prepared.mp3" in sonos.play_uri.await_args.args[0]
+    assert path not in tts._prepared_paths
+
+
+@pytest.mark.asyncio
+async def test_prepared_audio_text_mismatch_falls_back_to_generation(
+    tmp_path: Path,
+    immediate_sleep: None,
+) -> None:
+    sonos = AsyncMock()
+    sonos.connected = True
+    sonos.get_current_playback_snapshot = AsyncMock(return_value=MagicMock())
+    sonos.get_status = AsyncMock(return_value={"volume": 25})
+    sonos.play_uri = AsyncMock(return_value=True)
+    sonos.set_volume = AsyncMock(return_value=True)
+    sonos.restore_playback = AsyncMock(return_value=None)
+
+    tts = TTSService(sonos, tmp_path, "127.0.0.1")
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+    tts._generate_audio = AsyncMock(side_effect=[first, second])
+    prepared = await tts.prepare("first line")
+
+    assert await tts.speak(
+        "second line",
+        volume=30,
+        prepared_audio=prepared,
+    ) is True
+
+    assert tts._generate_audio.await_count == 2
+    assert "second.mp3" in sonos.play_uri.await_args.args[0]
+    assert first in tts._prepared_paths
+
+    await tts.discard_prepared(prepared)
+    assert not first.exists()
+
+
+@pytest.mark.asyncio
+async def test_close_removes_unconsumed_prepared_audio(tmp_path: Path) -> None:
+    sonos = AsyncMock()
+    tts = TTSService(sonos, tmp_path, "127.0.0.1")
+    path = tmp_path / "pending-prepared.mp3"
+    path.write_bytes(b"mp3")
+    tts._generate_audio = AsyncMock(return_value=path)
+
+    prepared = await tts.prepare("pending line")
+    assert prepared is not None
+    assert path.exists()
+
+    await tts.close()
+
+    assert not path.exists()
+    assert not tts._prepared_paths
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_inflight_preparation_without_sonos_mutation(
+    tmp_path: Path,
+) -> None:
+    sonos = AsyncMock()
+    tts = TTSService(sonos, tmp_path, "127.0.0.1")
+    started = asyncio.Event()
+
+    async def blocked_generation(_text: str) -> Path:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    tts._generate_audio = blocked_generation
+
+    task = asyncio.create_task(tts.prepare("slow prepared line"))
+    await started.wait()
+
+    await tts.close()
+
+    assert task.cancelled()
+    assert not tts._preparation_tasks
+    assert sonos.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_generation_removes_partial_edge_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sonos = AsyncMock()
+    tts = TTSService(sonos, tmp_path, "127.0.0.1")
+    started = asyncio.Event()
+
+    class FakeCommunicate:
+        def __init__(self, _text: str, _voice: str) -> None:
+            pass
+
+        async def save(self, output: str) -> None:
+            Path(output).write_bytes(b"partial")
+            started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "edge_tts",
+        SimpleNamespace(Communicate=FakeCommunicate),
+    )
+
+    task = asyncio.create_task(tts.prepare("partial generation"))
+    await started.wait()
+    assert list((tmp_path / "tts").glob("*.mp3"))
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert list((tmp_path / "tts").glob("*.mp3")) == []
+    assert sonos.mock_calls == []

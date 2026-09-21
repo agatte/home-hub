@@ -83,6 +83,8 @@ def _make_orchestrator(
 
     tts = MagicMock()
     tts.speak = AsyncMock(return_value=True)
+    tts.prepare = AsyncMock(return_value=None)
+    tts.discard_prepared = AsyncMock()
 
     ws = MagicMock()
     ws.broadcast = AsyncMock()
@@ -1741,3 +1743,200 @@ async def test_final_transition_bypasses_hulu_provider_program_offset() -> None:
         "apply_program_time_offset"
     ] is False
     orch._run_sequence.assert_awaited_once()
+@pytest.mark.asyncio
+async def test_viewer_wait_prepares_scoring_tts_before_release_and_reuses_it() -> None:
+    release = asyncio.Event()
+
+    async def wait_for_release(*_args, **_kwargs):
+        await release.wait()
+        return ViewerReleaseResult.VISIBLE
+
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    viewer.wait_until_visible = AsyncMock(side_effect=wait_for_release)
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    prepared = object()
+    tts.prepare = AsyncMock(return_value=prepared)
+    orch._run_light_steps_serialized = AsyncMock(return_value=set())
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    tts.prepare.assert_awaited_once()
+    tts.speak.assert_not_awaited()
+
+    release.set()
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    prepared_text = tts.prepare.await_args.args[0]
+    tts.speak.assert_awaited_once()
+    assert tts.speak.await_args.args[0] == prepared_text
+    assert tts.speak.await_args.kwargs["prepared_audio"] is prepared
+    tts.discard_prepared.assert_awaited_once_with(prepared)
+
+
+@pytest.mark.asyncio
+async def test_slow_viewer_tts_preparation_never_delays_lights() -> None:
+    prepare_release = asyncio.Event()
+    lights_started = asyncio.Event()
+
+    async def slow_prepare(_text: str):
+        await prepare_release.wait()
+        return object()
+
+    async def light_steps(*_args, **_kwargs):
+        lights_started.set()
+        return set()
+
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    tts.prepare = AsyncMock(side_effect=slow_prepare)
+    orch._run_light_steps_serialized = AsyncMock(side_effect=light_steps)
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.wait_for(lights_started.wait(), timeout=1.0)
+
+    tts.speak.assert_not_awaited()
+
+    prepare_release.set()
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    tts.speak.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_skipped_viewer_score_discards_prepared_tts_without_speaking() -> None:
+    prepared_ready = asyncio.Event()
+    prepared = object()
+
+    async def prepare(_text: str):
+        prepared_ready.set()
+        return prepared
+
+    async def skipped_after_prepare(*_args, **_kwargs):
+        await prepared_ready.wait()
+        return ViewerReleaseResult.SKIPPED_BY_SEEK
+
+    viewer = _viewer_sync(ViewerReleaseResult.SKIPPED_BY_SEEK)
+    viewer.wait_until_visible = AsyncMock(side_effect=skipped_after_prepare)
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    tts.prepare = AsyncMock(side_effect=prepare)
+
+    await orch.on_play_event(_provider_td())
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    tts.speak.assert_not_awaited()
+    tts.discard_prepared.assert_awaited_once_with(prepared)
+
+
+@pytest.mark.asyncio
+async def test_authority_loss_after_viewer_wait_discards_prepared_tts() -> None:
+    prepared = object()
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        side_effect=[
+            (True, "current Game Day authority"),
+            (False, "left Game Day"),
+        ],
+    )
+    tts.prepare = AsyncMock(return_value=prepared)
+
+    await orch.on_play_event(_provider_td())
+    for _ in range(6):
+        await asyncio.sleep(0)
+
+    tts.speak.assert_not_awaited()
+    tts.discard_prepared.assert_awaited_once_with(prepared)
+
+
+@pytest.mark.asyncio
+async def test_immediate_viewer_score_does_not_prepare_tts() -> None:
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    viewer.release_decision = MagicMock(
+        return_value=ViewerSyncDecision(
+            defer=False,
+            drop=False,
+            reason="already visible",
+            seek_generation=0,
+        )
+    )
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    orch._run_sequence = AsyncMock()
+
+    await orch.on_play_event(_provider_td())
+
+    tts.prepare.assert_not_awaited()
+    orch._run_sequence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_viewer_tts_prepare_timeout_falls_back_to_on_demand(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def never_finishes(_text: str):
+        await asyncio.Event().wait()
+
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    tts.prepare = AsyncMock(side_effect=never_finishes)
+    orch._run_light_steps_serialized = AsyncMock(return_value=set())
+    monkeypatch.setattr(
+        orch,
+        "VIEWER_TTS_PREPARE_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0.03)
+    for _ in range(4):
+        await asyncio.sleep(0)
+
+    tts.speak.assert_awaited_once()
+    assert "prepared_audio" not in tts.speak.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_dnd_change_while_preparation_finishes_suppresses_speech() -> None:
+    prepare_release = asyncio.Event()
+    prepared = object()
+
+    async def prepare(_text: str):
+        await prepare_release.wait()
+        return prepared
+
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, tts, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    tts.prepare = AsyncMock(side_effect=prepare)
+    orch._run_light_steps_serialized = AsyncMock(return_value=set())
+
+    await orch.on_play_event(_provider_td())
+    await asyncio.sleep(0)
+    orch._automation.is_dnd_active.return_value = True
+    prepare_release.set()
+    for _ in range(6):
+        await asyncio.sleep(0)
+
+    tts.speak.assert_not_awaited()
+    tts.discard_prepared.assert_awaited_once_with(prepared)

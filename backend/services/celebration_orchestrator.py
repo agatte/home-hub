@@ -11,6 +11,7 @@ Spec: docs/GAMEDAY_SPEC.md §2.2, §3.2, §4.2, §4.4.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import random
 import time
@@ -611,6 +612,15 @@ class CelebrationOrchestrator:
     }
 
     COOLDOWN_SECONDS: float = 8.0
+    VIEWER_TTS_PREPARE_TIMEOUT_SECONDS: float = 15.0
+    VIEWER_TTS_PREPARE_KEYS = frozenset({
+        "touchdown",
+        "field_goal",
+        "safety",
+        "two_point_conv",
+        "defensive_td",
+        "return_td",
+    })
 
     def __init__(
         self,
@@ -829,10 +839,21 @@ class CelebrationOrchestrator:
             return True
         if not decision.defer:
             return False
+        prepare_task = None
+        if (
+            key in self.VIEWER_TTS_PREPARE_KEYS
+            and inspect.iscoroutinefunction(getattr(self._tts, "prepare", None))
+        ):
+            prepare_task = asyncio.create_task(
+                self._prepare_viewer_tts(key, context),
+                name=f"gameday-tts-prepare:{key}",
+            )
+
         task = asyncio.create_task(
             self._run_viewer_synced_sequence(
                 key, context, play, target_time, decision.seek_generation,
                 bypass_cooldown, transition, apply_program_time_offset,
+                prepare_task,
             ),
             name=f"gameday-viewer-sync:{key}",
         )
@@ -848,6 +869,72 @@ class CelebrationOrchestrator:
         self._viewer_sync_wait_tasks.discard(task)
         self._viewer_sync_active_tasks.discard(task)
 
+    async def _prepare_viewer_tts(
+        self,
+        key: str,
+        context: dict,
+    ) -> tuple[Optional[str], Any]:
+        """Generate scoring speech while viewer sync is already waiting."""
+        sequence = self.SEQUENCES.get(key)
+        prepare = getattr(self._tts, "prepare", None)
+        if (
+            sequence is None
+            or not sequence.tts_lines
+            or not callable(prepare)
+        ):
+            return None, None
+
+        text = await self._render_tts_text(sequence, context, key)
+        try:
+            prepared = await asyncio.wait_for(
+                prepare(text),
+                timeout=self.VIEWER_TTS_PREPARE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "celebration: TTS preparation timed out for %s after %.1fs",
+                key,
+                self.VIEWER_TTS_PREPARE_TIMEOUT_SECONDS,
+            )
+            return text, None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("celebration: TTS preparation failed for %s", key)
+            return text, None
+
+        if prepared is None:
+            logger.info(
+                "celebration: TTS preparation unavailable for %s; "
+                "release will generate on demand",
+                key,
+            )
+        else:
+            logger.info("celebration: TTS prepared during viewer wait for %s", key)
+        return text, prepared
+
+    async def _discard_prepared_tts_task(
+        self,
+        task: Optional[asyncio.Task],
+    ) -> None:
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            _text, prepared = await task
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("celebration: prepared TTS cleanup task failed")
+            return
+        discard = getattr(self._tts, "discard_prepared", None)
+        if prepared is not None and callable(discard):
+            try:
+                await discard(prepared)
+            except Exception:
+                logger.exception("celebration: prepared TTS discard failed")
+
     async def _run_viewer_synced_sequence(
         self,
         key: str,
@@ -858,6 +945,7 @@ class CelebrationOrchestrator:
         bypass_cooldown: bool,
         transition: Optional[GameDayStateTransition],
         apply_program_time_offset: bool,
+        tts_prepare_task: Optional[asyncio.Task] = None,
     ) -> None:
         current = asyncio.current_task()
         try:
@@ -927,11 +1015,14 @@ class CelebrationOrchestrator:
                 transition=transition,
                 bypass_cooldown=bypass_cooldown,
                 viewer_delayed=viewer_delayed,
+                prepared_tts_task=tts_prepare_task,
             )
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("celebration: deferred viewer-sync sequence failed: %s", key)
+        finally:
+            await self._discard_prepared_tts_task(tts_prepare_task)
 
     async def on_state_transition(self, transition: GameDayStateTransition) -> None:
         """Celebrate real kickoff and final lifecycle transitions."""
@@ -1034,6 +1125,7 @@ class CelebrationOrchestrator:
         transition: Optional[GameDayStateTransition] = None,
         bypass_cooldown: bool = False,
         viewer_delayed: bool = False,
+        prepared_tts_task: Optional[asyncio.Task] = None,
     ) -> None:
         """Broadcast WS flair, then run light steps + TTS in parallel.
 
@@ -1110,6 +1202,7 @@ class CelebrationOrchestrator:
                     play=play,
                     transition=transition,
                     viewer_delayed=viewer_delayed,
+                    prepared_tts_task=prepared_tts_task,
                 ),
                 return_exceptions=True,
             )
@@ -1295,6 +1388,29 @@ class CelebrationOrchestrator:
                     )
         return successful_lights
 
+    async def _render_tts_text(
+        self,
+        sequence: CelebrationSequence,
+        context: dict,
+        sequence_key: str,
+    ) -> str:
+        """Select and render the exact line that will eventually be spoken."""
+        if sequence_key == "kickoff":
+            template = await self._pick_kickoff_template()
+        elif sequence_key == "field_goal":
+            template = self._pick_field_goal_template(context)
+        elif sequence_key == "touchdown":
+            template = self._pick_touchdown_template(context)
+        elif sequence_key == "end_of_game_win":
+            template = self._pick_eog_win_template(context)
+        else:
+            template = random.choice(sequence.tts_lines)
+        try:
+            return template.format_map(_SafeFormatDict(context))
+        except Exception:
+            logger.exception("celebration: tts template format failed")
+            return template
+
     async def _run_tts(
         self,
         sequence: CelebrationSequence,
@@ -1305,6 +1421,7 @@ class CelebrationOrchestrator:
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
         viewer_delayed: bool = False,
+        prepared_tts_task: Optional[asyncio.Task] = None,
     ) -> None:
         """Pick a random line from the sequence pool, substitute context
         variables, hand off to TTSService.speak (duck-and-resume on Sonos).
@@ -1320,41 +1437,54 @@ class CelebrationOrchestrator:
         when Colts have been winning, Daniel Jones otherwise). Other
         sequences continue to pick from the flat `sequence.tts_lines`.
         """
-        if not sequence.tts_lines:
-            return
-        if target_volume is None:
+        if not sequence.tts_lines or target_volume is None:
             return
 
-        if sequence_key == "kickoff":
-            template = await self._pick_kickoff_template()
-        elif sequence_key == "field_goal":
-            template = self._pick_field_goal_template(context)
-        elif sequence_key == "touchdown":
-            template = self._pick_touchdown_template(context)
-        elif sequence_key == "end_of_game_win":
-            template = self._pick_eog_win_template(context)
-        else:
-            template = random.choice(sequence.tts_lines)
-        try:
-            text = template.format_map(_SafeFormatDict(context))
-        except Exception:
-            # format_map should be safe via _SafeFormatDict, but if a future
-            # template introduces a non-key placeholder, fall back to raw.
-            logger.exception("celebration: tts template format failed")
-            text = template
+        text: Optional[str] = None
+        prepared_audio = None
+        if prepared_tts_task is not None:
+            try:
+                text, prepared_audio = await prepared_tts_task
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "celebration: prepared TTS result failed for %s; "
+                    "generating on demand",
+                    sequence_key,
+                )
 
+        if text is None:
+            text = await self._render_tts_text(sequence, context, sequence_key)
+
+        # Preparation may finish after viewer release. Re-read both lifecycle
+        # authority and volume/DND policy at the actual Sonos handoff boundary.
         allowed, reason = self._authority_allows(
-            play=play, transition=transition, viewer_delayed=viewer_delayed,
+            play=play,
+            transition=transition,
+            viewer_delayed=viewer_delayed,
         )
         if not allowed:
             logger.info(
                 "celebration: suppressing %s TTS — authority changed: %s",
-                sequence_key, reason,
+                sequence_key,
+                reason,
             )
             return
+        fresh_volume = self._compute_target_volume(sequence, play)
+        if fresh_volume is None:
+            return
+        target_volume = fresh_volume
 
         try:
-            await self._tts.speak(text, volume=target_volume)
+            if prepared_audio is not None:
+                await self._tts.speak(
+                    text,
+                    volume=target_volume,
+                    prepared_audio=prepared_audio,
+                )
+            else:
+                await self._tts.speak(text, volume=target_volume)
         except Exception:
             logger.exception("celebration: tts.speak failed")
 

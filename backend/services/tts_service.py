@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,6 +26,14 @@ logger = logging.getLogger("home_hub.tts")
 TTS_AUDIO_OWNER = "tts"
 TTS_AUDIO_PURPOSE = "announcement"
 TTS_SOURCE_TRANSPORT_DIMENSIONS = frozenset({QUEUE_SOURCE, TRANSPORT})
+
+
+@dataclass(frozen=True)
+class PreparedSpeech:
+    """Generated speech audio that has not acquired or touched Sonos."""
+
+    text: str
+    path: Path
 
 
 class TTSService:
@@ -72,6 +81,8 @@ class TTSService:
         # (and leaking the MP3 file on disk).
         self._cleanup_tasks: set[asyncio.Task] = set()
         self._cleanup_paths: dict[asyncio.Task, Path] = {}
+        self._prepared_paths: set[Path] = set()
+        self._preparation_tasks: set[asyncio.Task] = set()
         # Track every live speak() caller, including fire-and-forget tasks
         # created outside this service. Shutdown cancels and joins them so no
         # announcement can acquire ownership or mutate Sonos after close().
@@ -107,8 +118,18 @@ class TTSService:
         if speech_tasks:
             await asyncio.gather(*speech_tasks, return_exceptions=True)
 
+        preparation_tasks = [
+            task
+            for task in self._preparation_tasks
+            if task is not current and not task.done()
+        ]
+        for task in preparation_tasks:
+            task.cancel()
+        if preparation_tasks:
+            await asyncio.gather(*preparation_tasks, return_exceptions=True)
+
         cleanup_tasks = list(self._cleanup_tasks)
-        cleanup_paths = set(self._cleanup_paths.values())
+        cleanup_paths = set(self._cleanup_paths.values()) | set(self._prepared_paths)
         for task in cleanup_tasks:
             task.cancel()
         if cleanup_tasks:
@@ -126,6 +147,8 @@ class TTSService:
 
         self._cleanup_tasks.clear()
         self._cleanup_paths.clear()
+        self._prepared_paths.clear()
+        self._preparation_tasks.clear()
 
     async def recover_stale_interruption(self) -> None:
         """Retire process-orphaned TTS leases without touching Sonos."""
@@ -197,6 +220,74 @@ class TTSService:
         self._cleanup_paths[task] = mp3_path
         task.add_done_callback(self._forget_cleanup_task)
 
+    async def prepare(self, text: str) -> Optional[PreparedSpeech]:
+        """Generate speech audio without acquiring or mutating Sonos."""
+        if not text.strip() or self._shutdown:
+            return None
+
+        current = asyncio.current_task()
+        if current is not None:
+            self._preparation_tasks.add(current)
+        try:
+            path = await self._generate_audio(text)
+            if path is None:
+                return None
+            if self._shutdown:
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception:
+                    logger.exception(
+                        "Failed prepared TTS shutdown cleanup: %s",
+                        path.name,
+                    )
+                return None
+            self._prepared_paths.add(path)
+            logger.info(
+                "Prepared TTS audio without Sonos mutation: %s",
+                path.name,
+            )
+            return PreparedSpeech(text=text, path=path)
+        finally:
+            if current is not None:
+                self._preparation_tasks.discard(current)
+
+    async def discard_prepared(
+        self,
+        prepared: Optional[PreparedSpeech],
+    ) -> None:
+        """Discard an unconsumed prepared file. Safe after consumption."""
+        if prepared is None:
+            return
+        path = prepared.path
+        if path not in self._prepared_paths:
+            return
+        self._prepared_paths.discard(path)
+        try:
+            if path.exists():
+                path.unlink()
+                logger.debug("Discarded prepared TTS audio: %s", path.name)
+        except Exception as exc:
+            logger.warning(
+                "Failed to discard prepared TTS audio %s: %s",
+                path.name,
+                exc,
+            )
+
+    def _consume_prepared(
+        self,
+        text: str,
+        prepared: Optional[PreparedSpeech],
+    ) -> Optional[Path]:
+        if prepared is None or prepared.text != text:
+            return None
+        path = prepared.path
+        if path not in self._prepared_paths or not path.exists():
+            return None
+        self._prepared_paths.discard(path)
+        logger.info("Using prepared TTS audio: %s", path.name)
+        return path
+
     async def speak(
         self,
         text: str,
@@ -204,6 +295,7 @@ class TTSService:
         *,
         manual_source: Optional[str] = None,
         manual_reason: Optional[str] = None,
+        prepared_audio: Optional[PreparedSpeech] = None,
     ) -> bool:
         """Generate TTS and conditionally duck/restore Sonos.
 
@@ -231,18 +323,29 @@ class TTSService:
                     volume, self._default_volume, vol,
                 )
                 if self._audio_ownership is None:
-                    return await self._speak_without_ownership(text, vol)
+                    return await self._speak_without_ownership(
+                        text,
+                        vol,
+                        prepared_audio=prepared_audio,
+                    )
                 return await self._speak_with_ownership(
                     text,
                     vol,
                     manual_source=manual_source,
                     manual_reason=manual_reason,
+                    prepared_audio=prepared_audio,
                 )
         finally:
             if current is not None:
                 self._speech_tasks.discard(current)
 
-    async def _speak_without_ownership(self, text: str, vol: int) -> bool:
+    async def _speak_without_ownership(
+        self,
+        text: str,
+        vol: int,
+        *,
+        prepared_audio: Optional[PreparedSpeech] = None,
+    ) -> bool:
         """Legacy fallback for tests/partial bootstrap without #274 authority."""
         mp3_path: Optional[Path] = None
         snapshot = None
@@ -250,7 +353,9 @@ class TTSService:
         success = False
         self._speaking = True
         try:
-            mp3_path = await self._generate_audio(text)
+            mp3_path = self._consume_prepared(text, prepared_audio)
+            if mp3_path is None:
+                mp3_path = await self._generate_audio(text)
             if not mp3_path:
                 return False
             audio_url = (
@@ -290,6 +395,7 @@ class TTSService:
         *,
         manual_source: Optional[str],
         manual_reason: Optional[str],
+        prepared_audio: Optional[PreparedSpeech] = None,
     ) -> bool:
         mp3_path: Optional[Path] = None
         snapshot = None
@@ -299,8 +405,12 @@ class TTSService:
         success = False
 
         try:
-            # Do network TTS generation before claiming the physical speaker.
-            mp3_path = await self._generate_audio(text)
+            # Network generation always happens before physical speaker
+            # authority. A prepared file can therefore remove synthesis from
+            # the release-time critical path without weakening ownership.
+            mp3_path = self._consume_prepared(text, prepared_audio)
+            if mp3_path is None:
+                mp3_path = await self._generate_audio(text)
             if not mp3_path:
                 return False
             audio_url = (
@@ -538,10 +648,12 @@ class TTSService:
 
         Tries edge-tts first, falls back to gTTS.
         """
-        # Use text hash as filename to avoid regenerating identical audio
+        # Keep the text hash for observability, but use a nanosecond suffix
+        # because viewer-wait preparation can generate multiple clips in
+        # parallel. This is identity, not a persistent audio cache.
         text_hash = hashlib.md5(text.encode()).hexdigest()[:12]
-        timestamp = int(time.time())
-        filename = f"tts_{text_hash}_{timestamp}.mp3"
+        generation_id = time.time_ns()
+        filename = f"tts_{text_hash}_{generation_id}.mp3"
         output_path = self._tts_dir / filename
 
         # Try edge-tts (preferred — async, natural voices)
@@ -552,6 +664,9 @@ class TTSService:
             await communicate.save(str(output_path))
             logger.info(f"Generated TTS audio via edge-tts: {filename}")
             return output_path
+        except asyncio.CancelledError:
+            output_path.unlink(missing_ok=True)
+            raise
         except ImportError:
             logger.warning("edge-tts not installed, trying gTTS fallback")
         except Exception as e:
@@ -565,11 +680,15 @@ class TTSService:
             await asyncio.to_thread(tts.save, str(output_path))
             logger.info(f"Generated TTS audio via gTTS: {filename}")
             return output_path
+        except asyncio.CancelledError:
+            output_path.unlink(missing_ok=True)
+            raise
         except ImportError:
             logger.error("Neither edge-tts nor gTTS installed")
         except Exception as e:
             logger.error(f"gTTS failed: {e}")
 
+        output_path.unlink(missing_ok=True)
         return None
 
     async def _cleanup_file(self, path: Path, delay: int = 60) -> None:
