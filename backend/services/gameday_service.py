@@ -454,6 +454,61 @@ class GameDayService:
         return play.timestamp
 
     @staticmethod
+    def _viewer_frame_timing(
+        previous_state: Optional[GameDayState],
+        new_state: GameDayState,
+        candidate_anchor: Optional[datetime],
+        observed_at: datetime,
+    ) -> tuple[Optional[datetime], bool]:
+        """Resolve one viewer frame's anchor and clock-domain semantics.
+
+        Ordinary in-progress frames use trustworthy ESPN play time and receive
+        the Hulu program-time translation. Quarter changes need special
+        handling: ESPN can advance the status period before a newer drive play
+        exists, so reusing the previous play timestamp would be rejected by the
+        monotonic viewer buffer and leave the displayed quarter stale.
+
+        For a score-neutral quarter change with no genuinely newer trusted play,
+        use the first provider observation time instead. Observation time is
+        already in the same epoch domain used by Hulu MPRIS, so it must not
+        receive the provider-play +29s translation. Score changes remain
+        stronger authority: if their candidate anchor is intentionally absent,
+        this helper never manufactures one.
+        """
+        apply_program_time_offset = new_state.status == "in-progress"
+        if (
+            previous_state is None
+            or previous_state.status != "in-progress"
+            or new_state.status != "in-progress"
+            or new_state.quarter == previous_state.quarter
+        ):
+            return candidate_anchor, apply_program_time_offset
+
+        score_changed = (
+            new_state.score_colts != previous_state.score_colts
+            or new_state.score_opp != previous_state.score_opp
+        )
+        if score_changed:
+            return candidate_anchor, apply_program_time_offset
+
+        previous_play = previous_state.last_play
+        previous_play_time = (
+            previous_play.timestamp
+            if previous_play is not None and previous_play.timestamp_trusted
+            else None
+        )
+        if (
+            candidate_anchor is not None
+            and (
+                previous_play_time is None
+                or candidate_anchor > previous_play_time
+            )
+        ):
+            return candidate_anchor, True
+
+        return observed_at, False
+
+    @staticmethod
     def _viewer_transition_anchor(
         old_status: str, new_state: GameDayState, observed_at: datetime,
     ) -> datetime:
@@ -771,10 +826,19 @@ class GameDayService:
                 scoring_events=tuple(new_plays),
             )
         )
+        viewer_state_anchor, viewer_apply_program_time_offset = (
+            self._viewer_frame_timing(
+                previous_state,
+                new_state,
+                viewer_state_anchor,
+                now_utc,
+            )
+        )
         await self._update_state(
             new_state,
             viewer_anchor=viewer_state_anchor,
             queue_viewer_state=viewer_state_anchor is not None,
+            viewer_apply_program_time_offset=viewer_apply_program_time_offset,
         )
 
         # A single provider poll can discover several events while only one
@@ -831,6 +895,7 @@ class GameDayService:
         *,
         viewer_anchor: Optional[datetime] = None,
         queue_viewer_state: bool = True,
+        viewer_apply_program_time_offset: Optional[bool] = None,
     ) -> None:
         self._current_state = new_state
         if new_state is None:
@@ -851,10 +916,15 @@ class GameDayService:
                     else self._viewer_state_anchor(new_state)
                 )
                 if anchor is not None:
+                    apply_program_time_offset = (
+                        new_state.status == "in-progress"
+                        if viewer_apply_program_time_offset is None
+                        else viewer_apply_program_time_offset
+                    )
                     self._viewer_sync.queue_state(
                         payload,
                         anchor,
-                        apply_program_time_offset=new_state.status == "in-progress",
+                        apply_program_time_offset=apply_program_time_offset,
                     )
             except Exception:
                 logger.exception("viewer-sync state queue failed")

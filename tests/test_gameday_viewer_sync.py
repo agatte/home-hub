@@ -522,3 +522,38 @@ async def test_final_observation_cannot_overtake_last_translated_viewer_frame() 
     selected = sync._select_viewer_state(provider_anchor + 29.0)
     assert selected is not None
     assert selected.payload == {"status": "final"}
+
+
+@pytest.mark.asyncio
+async def test_quarter_observation_frame_advances_after_translated_play_frame() -> None:
+    fake = FakeTime()
+    sync = GameDayViewerSync(
+        clock=fake.clock,
+        monotonic=fake.monotonic,
+        program_time_offset_seconds=29.0,
+    )
+    provider_play = fake.wall - 90.0
+    quarter_observed = provider_play + 60.0
+
+    sync.queue_state(
+        {"status": "in-progress", "quarter": 1},
+        _dt(provider_play),
+        apply_program_time_offset=True,
+    )
+    sync.queue_state(
+        {"status": "in-progress", "quarter": 2},
+        _dt(quarter_observed),
+        apply_program_time_offset=False,
+    )
+
+    first = sync._select_viewer_state(provider_play + 29.0)
+    assert first is not None
+    assert first.payload["quarter"] == 1
+
+    before_q2 = sync._select_viewer_state(quarter_observed - 0.1)
+    assert before_q2 is not None
+    assert before_q2.payload["quarter"] == 1
+
+    second = sync._select_viewer_state(quarter_observed)
+    assert second is not None
+    assert second.payload["quarter"] == 2

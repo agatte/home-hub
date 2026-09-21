@@ -2802,3 +2802,259 @@ def test_qualifying_momentum_without_provider_wallclock_remains_reconsiderable()
     raw["wallclock"] = "2026-09-21T03:35:03Z"
     plays = svc._extract_new_momentum_plays(summary)
     assert [play.event_id for play in plays] == ["pending-momentum"]
+
+
+def test_quarter_change_without_new_play_uses_observation_time() -> None:
+    svc = _make_service()
+    play_time = datetime(2026, 9, 21, 0, 50, 0, tzinfo=timezone.utc)
+    observed_at = play_time + timedelta(seconds=75)
+    play = PlayEvent(
+        timestamp=play_time,
+        play_type="other",
+        description="End of first quarter",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team=None,
+        timestamp_trusted=True,
+    )
+    previous = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=3,
+        quarter=1,
+        clock="0:00",
+        possession=None,
+        last_play=play,
+    )
+    current = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=3,
+        quarter=2,
+        clock="15:00",
+        possession=None,
+        last_play=play,
+    )
+
+    candidate = svc._viewer_state_anchor(
+        current,
+        previous_state=previous,
+        scoring_events=(),
+    )
+    assert candidate == play_time
+
+    anchor, apply_offset = svc._viewer_frame_timing(
+        previous,
+        current,
+        candidate,
+        observed_at,
+    )
+    assert anchor == observed_at
+    assert apply_offset is False
+
+
+def test_quarter_change_with_new_trusted_play_keeps_provider_time() -> None:
+    svc = _make_service()
+    old_time = datetime(2026, 9, 21, 0, 50, 0, tzinfo=timezone.utc)
+    new_time = old_time + timedelta(seconds=80)
+    observed_at = new_time + timedelta(seconds=35)
+    old_play = PlayEvent(
+        timestamp=old_time,
+        play_type="other",
+        description="End of first quarter",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team=None,
+        timestamp_trusted=True,
+    )
+    new_play = PlayEvent(
+        timestamp=new_time,
+        play_type="other",
+        description="First play of second quarter",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team=None,
+        timestamp_trusted=True,
+    )
+    previous = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=3,
+        quarter=1,
+        clock="0:00",
+        possession=None,
+        last_play=old_play,
+    )
+    current = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=3,
+        quarter=2,
+        clock="14:54",
+        possession="colts",
+        last_play=new_play,
+    )
+
+    anchor, apply_offset = svc._viewer_frame_timing(
+        previous,
+        current,
+        new_time,
+        observed_at,
+    )
+    assert anchor == new_time
+    assert apply_offset is True
+
+
+def test_quarter_change_does_not_override_untrusted_score_gate() -> None:
+    svc = _make_service()
+    observed_at = datetime(2026, 9, 21, 0, 55, 0, tzinfo=timezone.utc)
+    previous = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=3,
+        quarter=1,
+        clock="0:00",
+        possession=None,
+        last_play=None,
+    )
+    current = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=10,
+        score_opp=3,
+        quarter=2,
+        clock="15:00",
+        possession=None,
+        last_play=None,
+    )
+
+    anchor, apply_offset = svc._viewer_frame_timing(
+        previous,
+        current,
+        None,
+        observed_at,
+    )
+    assert anchor is None
+    assert apply_offset is True
+
+
+@pytest.mark.asyncio
+async def test_update_state_can_queue_observation_time_without_program_offset() -> None:
+    ws = _make_ws_mock()
+    viewer = MagicMock()
+    viewer.queue_state = MagicMock()
+    svc = _make_service(ws=ws)
+    svc.set_viewer_sync(viewer)
+    viewer.queue_state.reset_mock()
+    anchor = datetime(2026, 9, 21, 0, 55, 0, tzinfo=timezone.utc)
+    state = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=3,
+        quarter=2,
+        clock="15:00",
+        possession=None,
+        last_play=None,
+    )
+
+    await svc._update_state(
+        state,
+        viewer_anchor=anchor,
+        viewer_apply_program_time_offset=False,
+    )
+
+    viewer.queue_state.assert_called_once()
+    assert viewer.queue_state.call_args.args[1] == anchor
+    assert (
+        viewer.queue_state.call_args.kwargs["apply_program_time_offset"]
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_tick_queues_quarter_transition_at_provider_observation_time() -> None:
+    automation = _make_automation_mock(current_mode="gameday")
+    ws = _make_ws_mock()
+    svc = _make_service(automation=automation, ws=ws)
+    play_time = datetime(2026, 9, 21, 0, 50, 0, tzinfo=timezone.utc)
+    observed_at = play_time + timedelta(seconds=75)
+    play = PlayEvent(
+        timestamp=play_time,
+        play_type="other",
+        description="End of first quarter",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team=None,
+        timestamp_trusted=True,
+    )
+    previous = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=play_time - timedelta(hours=1),
+        score_colts=7,
+        score_opp=3,
+        quarter=1,
+        clock="0:00",
+        possession=None,
+        last_play=play,
+    )
+    current = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=previous.kickoff_utc,
+        score_colts=7,
+        score_opp=3,
+        quarter=2,
+        clock="15:00",
+        possession=None,
+        last_play=play,
+    )
+    active = {
+        "id": "quarter-game",
+        "status": "STATUS_IN_PROGRESS",
+        "kickoff_utc": previous.kickoff_utc,
+    }
+    svc._current_game_id = "quarter-game"
+    svc._current_state = previous
+    svc._refresh_schedule_if_stale = AsyncMock()
+    svc._find_active_game = MagicMock(return_value=active)
+    svc._ensure_event_game = MagicMock(return_value="quarter-game")
+    svc._now_utc = MagicMock(return_value=observed_at)
+    svc._fetch_summary = AsyncMock(return_value={})
+    svc._build_state = MagicMock(return_value=current)
+    svc._hydrate_event_history_if_pending = MagicMock(return_value=False)
+    svc._extract_new_plays = MagicMock(return_value=[])
+    svc._extract_new_semantic_plays = MagicMock(return_value=[])
+    svc._extract_new_momentum_plays = MagicMock(return_value=[])
+
+    viewer = MagicMock()
+    viewer.queue_state = MagicMock()
+    svc.set_viewer_sync(viewer)
+    viewer.queue_state.reset_mock()
+
+    await svc._tick()
+
+    viewer.queue_state.assert_called_once()
+    assert viewer.queue_state.call_args.args[1] == observed_at
+    assert viewer.queue_state.call_args.args[0]["quarter"] == 2
+    assert (
+        viewer.queue_state.call_args.kwargs["apply_program_time_offset"]
+        is False
+    )
