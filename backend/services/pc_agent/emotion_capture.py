@@ -90,6 +90,12 @@ HAAR_FACE_CROP_SIZE = 512
 HAAR_FACE_MIN_SIZE_PX = 24
 HAAR_FACE_MAX_CANDIDATES = 6
 
+# Single-frame FaceLandmarker misses are common at the desktop's monitor-facing
+# angle even when the next camera frame is valid. On an initial miss, sample at
+# most two additional frames before escalating to detector/crop fallbacks.
+FACE_MISS_BURST_RETRIES = 2
+FACE_MISS_BURST_DELAY_S = 0.05
+
 # PoseLandmarker (lite ~5MB) — same model + URL the Latitude uses, each
 # host downloads its own copy. Required for frontal-posture (upright vs
 # slouched) classification. Lite variant emits 2D normalized landmarks +
@@ -1255,6 +1261,47 @@ class EmotionCapture:
             face_sets = getattr(result, "face_landmarks", None) or []
             face_landmarks = face_sets[0] if face_sets else None
             face_width = _face_mesh_width(face_landmarks)
+
+            # A single unlucky Brio frame is not strong absence evidence.
+            # Before escalating to BlazeFace/crop recovery, give the same
+            # FaceLandmarker up to two rapid fresh frames. Live 2026-09-21
+            # recovery diagnostics found the real Desk face on frame 0 or 1 in
+            # 8/8 sampled ticks while preserving the existing face authority.
+            if face_landmarks is None and self._cap is not None:
+                for _ in range(FACE_MISS_BURST_RETRIES):
+                    time.sleep(FACE_MISS_BURST_DELAY_S)
+                    retry_ok, retry_frame = self._cap.read()
+                    if not retry_ok or retry_frame is None:
+                        break
+                    retry_rgb = cv2.cvtColor(retry_frame, cv2.COLOR_BGR2RGB)
+                    retry_image = self._mp_image_cls(
+                        image_format=self._mp_image_format,
+                        data=retry_rgb,
+                    )
+                    try:
+                        retry_result = self._landmarker.detect(retry_image)
+                    except Exception:
+                        logger.debug(
+                            "FaceLandmarker burst retry failed",
+                            exc_info=True,
+                        )
+                        continue
+
+                    # Keep the latest successful camera frame as the semantic
+                    # frame for any later pose/snapshot/fallback work.
+                    frame = retry_frame
+                    rgb = retry_rgb
+                    mp_image = retry_image
+                    result = retry_result
+                    face_blendshapes = (
+                        getattr(result, "face_blendshapes", None) or []
+                    )
+                    face_sets = getattr(result, "face_landmarks", None) or []
+                    face_landmarks = face_sets[0] if face_sets else None
+                    face_width = _face_mesh_width(face_landmarks)
+                    if face_landmarks is not None:
+                        break
+
             detector_ready = False
             fallback_detection = None
             fallback_score = 0.0

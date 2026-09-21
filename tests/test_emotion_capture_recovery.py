@@ -116,7 +116,8 @@ def _agent(monkeypatch):
     agent = ec.EmotionCapture("http://test:8000")
     _configure_tick_fakes(monkeypatch, agent)
     # Existing recovery tests exercise FaceLandmarker lifecycle in isolation.
-    # Tests that need the full-range fallback override this explicitly.
+    # Tests that need temporal burst/full-range fallback override explicitly.
+    monkeypatch.setattr(ec, "FACE_MISS_BURST_RETRIES", 0)
     monkeypatch.setattr(ec, "_init_face_detector", lambda: None)
     agent.set_enabled(emotion=True)
     return agent
@@ -273,6 +274,38 @@ def test_neutral_face_landmarks_are_present_without_expression_threshold(monkeyp
         assert observations[0]["face_confidence"] == 1.0
         assert agent._face_semantic_dead_streak == 0
         assert landmarker.close_calls == 0
+    finally:
+        agent.close()
+
+
+def test_short_burst_recovers_intermittent_full_frame_face(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    monkeypatch.setattr(ec.time, "sleep", lambda _seconds: None)
+    agent = _agent(monkeypatch)
+    monkeypatch.setattr(ec, "FACE_MISS_BURST_RETRIES", 2)
+    agent.set_enabled(presence=True)
+    landmarker = _Landmarker([_empty_result(), _usable_result()])
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: landmarker)
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    observations = []
+    monkeypatch.setattr(
+        agent, "_post_observation", lambda **kwargs: observations.append(kwargs)
+    )
+    agent._cap = _Cap(
+        reads=[
+            (True, np.zeros((480, 640, 3), dtype=np.uint8)),
+            (True, np.ones((480, 640, 3), dtype=np.uint8)),
+        ]
+    )
+    try:
+        agent.tick()
+        assert len(observations) == 1
+        assert observations[0]["face_present"] is True
+        assert observations[0]["face_confidence"] == 1.0
+        assert observations[0]["detection_source"] == "face"
+        assert observations[0]["zone"] == "desk"
+        assert agent._face_semantic_dead_streak == 0
     finally:
         agent.close()
 
