@@ -332,6 +332,22 @@ async def test_soft_external_off_clears_league_and_arrival_restores_current_plan
 
 
 @pytest.mark.asyncio
+async def test_external_off_empty_hue_snapshot_is_unknown_not_all_off(
+    mock_hue, mock_hue_v2, mock_ws,
+):
+    engine = _engine(mock_hue, mock_hue_v2, mock_ws)
+    mock_hue.get_all_lights = AsyncMock(return_value=[])
+
+    assert await engine._check_external_off() is False
+    assert engine._external_off_detected is False
+
+    # An unavailable read also must not clear an already-valid suppression.
+    engine._external_off_detected = True
+    assert await engine._check_external_off() is True
+    assert engine._external_off_detected is True
+
+
+@pytest.mark.asyncio
 async def test_native_gaming_scene_releases_league_and_screen_authority(
     mock_hue, mock_hue_v2, mock_ws, monkeypatch,
 ):

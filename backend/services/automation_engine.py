@@ -6191,6 +6191,15 @@ class AutomationEngine:
             return False
 
         lights = await self._hue.get_all_lights()
+        # HueService returns [] when a bridge read is unavailable (including
+        # while its circuit breaker is open). An empty snapshot is therefore
+        # unknown state, not evidence that every light was externally turned
+        # off. In particular, all([]) is True and would otherwise arm a stale
+        # external-off latch that suppresses later autonomous/celebration
+        # lighting until a new physical-presence transition occurs.
+        if not lights:
+            return self._external_off_detected
+
         all_off = all(not light.get("on", False) for light in lights)
 
         if all_off and not self._external_off_detected:
