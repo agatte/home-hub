@@ -656,15 +656,32 @@ class TestMomentumDispatch:
         # No TTS — empty tts_lines list.
         tts.speak.assert_not_awaited()
 
-    async def test_momentum_opponent_side_still_fires(self):
-        """A big WPA swing is the same emotional moment whether the
-        Colts or the opponent caused it — momentum is team-agnostic."""
+    async def test_momentum_explicitly_owned_by_opponent_is_silent(self):
+        """Opponent-owned momentum must never trigger Colts celebration lights."""
         orch, hue, tts, ws, _ = _make_orchestrator()
         evt = _event_with_type("momentum", scoring_team="opp")
         await orch.on_play_event(evt)
-        # Suppression filter only applies to score subtypes (TD/FG/safety/etc).
-        ws.broadcast.assert_awaited_once()
-        assert ws.broadcast.await_args.args[1]["sequence_key"] == "big_play"
+        ws.broadcast.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
+
+    async def test_negative_colts_wpa_momentum_is_silent(self):
+        """Defense in depth: a negative Colts WPA event cannot light the room."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        base = _event_with_type("momentum", scoring_team=None)
+        evt = PlayEvent(
+            timestamp=base.timestamp,
+            play_type="momentum",
+            description="Opponent big play",
+            player=None,
+            kicker=None,
+            yards=None,
+            scoring_team=None,
+            wpa=-0.39,
+            synthetic=True,
+        )
+        await orch.on_play_event(evt)
+        ws.broadcast.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

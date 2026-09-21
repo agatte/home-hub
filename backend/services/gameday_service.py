@@ -144,7 +144,8 @@ PlayType = Literal[
     "blocked_field_goal",
     "interception",
     "fumble_recovery",
-    # WPA momentum lane — emitted for non-scoring plays with |WPA| >= 0.15.
+    # WPA momentum lane — emitted only for Colts-positive non-scoring plays
+    # with WPA >= 0.15. Negative Colts WPA is never celebratory.
     "momentum",
     "other",
 ]
@@ -1465,23 +1466,23 @@ class GameDayService:
         return None
 
     def _extract_new_momentum_plays(self, summary: dict) -> list[PlayEvent]:
-        """Phase 2 — surface non-scoring plays with |WPA| >= threshold.
+        """Surface Colts-positive non-scoring plays with WPA >= threshold.
 
         Walks ``drives.previous[].plays[]`` (and ``drives.current.plays[]``
         when present — in-progress drive's plays land there before the
         drive ends). For each play not already in ``_known_play_ids``:
-          • Compute WPA via the shared ``_compute_wpa`` (reads from the
-            same ``summary.winprobability`` array as scoring plays).
+          • Reject administrative/non-play rows (end-of-period, timeout,
+            penalty/no-play bookkeeping) before looking at WPA.
+          • Compute Colts-perspective WPA via the shared ``_compute_wpa``.
           • If a scoring play with the same id already passed through
             ``_extract_new_plays`` it was added to ``_known_play_ids``,
             so we skip it here — no double-emission.
-          • If ``|wpa| >= MOMENTUM_WPA_THRESHOLD``, emit a momentum
-            PlayEvent (``play_type="momentum"``, lights-only celebration).
+          • Emit only when ``wpa >= MOMENTUM_WPA_THRESHOLD``. Large negative
+            Colts swings are opponent success, not a Home Hub celebration.
 
-        Latency caveat: ESPN's winprobability array lags 30-60s behind
-        real time, same as scoring plays. Momentum celebrations will
-        therefore fire ~1 minute after the actual play. Tolerable for
-        v1; documented in the Plan as out-of-scope to fix.
+        Latency caveat: ESPN's winprobability array can lag the play feed.
+        Viewer sync still controls presentation timing once a qualifying
+        provider event exists.
         """
         out: list[PlayEvent] = []
         active = self._find_active_game() or {}
@@ -1501,8 +1502,11 @@ class GameDayService:
                 play_id = str(raw.get("id") or "")
                 if not play_id or play_id in self._known_play_ids:
                     continue
+                if self._is_administrative_momentum_play(raw):
+                    continue
+
                 wpa = self._compute_wpa(play_id, summary, colts_are_home)
-                if wpa is None or abs(wpa) < MOMENTUM_WPA_THRESHOLD:
+                if wpa is None or wpa < MOMENTUM_WPA_THRESHOLD:
                     continue
                 # Build a minimal PlayEvent. We don't parse player/yards
                 # for momentum — the sequence is lights-only, the TV is
@@ -1532,6 +1536,39 @@ class GameDayService:
                 self._known_play_ids.add(play_id)
 
         return out
+
+    @staticmethod
+    def _is_administrative_momentum_play(raw: dict) -> bool:
+        """True for provider bookkeeping that must never trigger room effects."""
+        if raw.get("scoringPlay") is True:
+            return True
+
+        play_type = str((raw.get("type") or {}).get("text") or "").upper()
+        text = str(raw.get("text") or "").upper()
+
+        administrative_type_tokens = (
+            "END OF",
+            "START OF",
+            "TIMEOUT",
+            "TWO-MINUTE WARNING",
+            "TWO MINUTE WARNING",
+            "PENALTY",
+            "NO PLAY",
+            "COIN TOSS",
+        )
+        if any(token in play_type for token in administrative_type_tokens):
+            return True
+
+        return text.startswith((
+            "END QUARTER",
+            "END OF QUARTER",
+            "END HALF",
+            "END OF HALF",
+            "END GAME",
+            "END OF GAME",
+            "START QUARTER",
+            "START OF QUARTER",
+        ))
 
     @staticmethod
     def _compute_wpa(

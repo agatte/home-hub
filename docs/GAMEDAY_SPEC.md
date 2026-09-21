@@ -212,7 +212,7 @@ class CelebrationOrchestrator:
         "defensive_td": CelebrationSequence(...),    # pick-six / fumble-return TD
         "return_td": CelebrationSequence(...),       # punt/kick/blocked-kick return TD
         "semantic_momentum": CelebrationSequence(...), # competitive semantic event, lower amp
-        "big_play": CelebrationSequence(...),        # WPA momentum lane (non-scoring)
+        "big_play": CelebrationSequence(...),        # Colts-positive WPA momentum lane (non-scoring)
     }
 
     COOLDOWN_SECONDS: float = 8.0
@@ -223,6 +223,10 @@ class CelebrationOrchestrator:
     # win probability is between 5% and 95% inclusive. Outside that competitive
     # window the game is effectively decided. The lane is lights-only and
     # intentionally lower amplitude than `big_play`; scoring plays keep their own sequences.
+    # Generic `big_play` momentum is also Colts-favoring: only positive
+    # Colts-perspective WPA >= 15% may fire. Negative Colts WPA (opponent
+    # success) is silent, and provider bookkeeping rows such as end-of-period,
+    # timeout, penalty/no-play, and coin-toss records are not momentum events.
 
     async def on_play_event(self, evt: PlayEvent) -> None: ...
     async def on_state_transition(self, transition: GameDayStateTransition) -> None: ...

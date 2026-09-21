@@ -598,9 +598,9 @@ class CelebrationOrchestrator:
             duration_seconds=1.2,
             base_volume=0,
         ),
-        # ── WPA momentum lane (Phase 2 — non-scoring big plays) ──────────
+        # ── WPA momentum lane (non-scoring Colts-positive big plays) ─────
         # Lights-only. Fires when _extract_new_momentum_plays surfaces a
-        # play with |WPA| >= MOMENTUM_WPA_THRESHOLD that isn't already a
+        # play with Colts WPA >= MOMENTUM_WPA_THRESHOLD that isn't already a
         # scoring play. 8s orchestrator cooldown caps density.
         "big_play": CelebrationSequence(
             light_steps=_BIG_PLAY_STEPS,
@@ -696,12 +696,22 @@ class CelebrationOrchestrator:
         PAT / safety / defensive TD). Opponent scores are silent by design —
         spec §2.2 ("we don't TTS the other team's points"). Semantic
         defensive/special-teams events are Colts-favoring and lower-amp; the
-        generic WPA momentum lane remains team-agnostic.
+        generic WPA momentum lane is also Colts-favoring: only positive
+        Colts-perspective WPA may produce a ``big_play`` celebration.
         """
         # Score subtypes — Colts-only.
         if evt.scoring_team == "opp" and evt.play_type in (
             "touchdown", "field_goal", "safety",
             "extra_point_good", "two_point_conv", "defensive_td", "return_td",
+        ):
+            return
+
+        # Defense in depth for generic momentum. The extractor should only emit
+        # positive Colts-perspective WPA, but never let a negative swing or an
+        # explicitly opponent-owned momentum event light the room.
+        if evt.play_type == "momentum" and (
+            evt.scoring_team == "opp"
+            or (evt.wpa is not None and evt.wpa <= 0)
         ):
             return
 

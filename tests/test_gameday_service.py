@@ -1839,54 +1839,66 @@ def _momentum_summary(*plays_with_wp: tuple[str, float]) -> dict:
 
 
 class TestMomentumExtraction:
-    """Phase 2 WPA-driven momentum lane: non-scoring plays with
-    |WPA| >= MOMENTUM_WPA_THRESHOLD surface as PlayEvent(play_type="momentum")."""
+    """WPA momentum lane: only Colts-positive non-scoring plays with
+    WPA >= MOMENTUM_WPA_THRESHOLD surface as PlayEvent(play_type="momentum")."""
 
     def test_threshold_below_skips(self):
         svc = _make_service()
-        # WP goes 0.5 → 0.62 → delta = 0.12. Below 0.15 threshold.
-        summary = _momentum_summary(("p1", 0.62))
+        # Colts are away in this synthetic service: home WP 0.5 → 0.38 means
+        # Colts WPA +0.12, below the +0.15 threshold.
+        summary = _momentum_summary(("p1", 0.38))
         out = svc._extract_new_momentum_plays(summary)
         assert out == []
 
     def test_threshold_at_fires(self):
         svc = _make_service()
-        # WP delta exactly 0.15 (0.5 → 0.65). Magnitude meets threshold.
-        # Sign depends on whether Colts are home/away — _make_service has
-        # no active game so colts_are_home defaults to False, but the
-        # threshold check is on |WPA| so either sign qualifies.
-        summary = _momentum_summary(("p1", 0.65))
+        # Colts are away: home WP 0.5 → 0.35 means Colts WPA +0.15.
+        summary = _momentum_summary(("p1", 0.35))
         out = svc._extract_new_momentum_plays(summary)
         assert len(out) == 1
         assert out[0].play_type == "momentum"
-        assert abs(out[0].wpa) == pytest.approx(0.15, abs=1e-9)
+        assert out[0].wpa == pytest.approx(0.15, abs=1e-9)
 
     def test_threshold_above_fires(self):
         svc = _make_service()
-        # WP delta magnitude 0.20 (0.5 → 0.70).
-        summary = _momentum_summary(("p1", 0.70))
+        # Colts are away: home WP 0.5 → 0.30 means Colts WPA +0.20.
+        summary = _momentum_summary(("p1", 0.30))
         out = svc._extract_new_momentum_plays(summary)
         assert len(out) == 1
-        assert abs(out[0].wpa) >= 0.15
+        assert out[0].wpa >= 0.15
 
-    def test_negative_magnitude_fires(self):
-        """Negative-direction WPA (Colts lose ground) is still a momentum
-        moment — magnitude alone clears the threshold. The room reacts to
-        BIG plays, not Colts-favorable plays."""
+    def test_negative_colts_wpa_is_silent(self):
+        """A large swing against Indianapolis must never celebrate."""
         svc = _make_service()
-        # 0.5 → 0.25 home-WP delta = -0.25 home-side. Magnitude 0.25
-        # always >= threshold regardless of home/away sign convention.
-        summary = _momentum_summary(("p1", 0.25))
+        # Colts are away: home WP 0.5 → 0.75 means Colts WPA -0.25.
+        summary = _momentum_summary(("p1", 0.75))
         out = svc._extract_new_momentum_plays(summary)
-        assert len(out) == 1
-        assert abs(out[0].wpa) >= 0.15
+        assert out == []
+
+    def test_end_of_regulation_row_is_not_momentum(self):
+        """Provider bookkeeping must not become a room celebration."""
+        svc = _make_service()
+        summary = {
+            "drives": {"previous": [{"plays": [{
+                "id": "p1",
+                "text": "END QUARTER 4",
+                "type": {"id": "79", "text": "End of Regulation", "abbreviation": "ER"},
+                "scoringPlay": False,
+                "scoringType": {},
+            }]}]},
+            "winprobability": [
+                {"playId": "p1", "homeWinPercentage": 0.10},
+            ],
+        }
+        out = svc._extract_new_momentum_plays(summary)
+        assert out == []
 
     def test_skips_play_already_in_known_ids(self):
         """Scoring plays added themselves to _known_play_ids first.
         Momentum walk must skip them to avoid double-firing."""
         svc = _make_service()
         svc._known_play_ids.add("p1")
-        summary = _momentum_summary(("p1", 0.80))
+        summary = _momentum_summary(("p1", 0.20))
         out = svc._extract_new_momentum_plays(summary)
         assert out == []
 
@@ -1915,7 +1927,7 @@ class TestMomentumExtraction:
                 ]},
             },
             "winprobability": [
-                {"playId": "p1", "homeWinPercentage": 0.75},  # delta +0.25
+                {"playId": "p1", "homeWinPercentage": 0.25},  # Colts WPA +0.25
             ],
         }
         out = svc._extract_new_momentum_plays(summary)
@@ -1925,7 +1937,7 @@ class TestMomentumExtraction:
         """Momentum plays don't parse player/yards — lights-only celebration.
         But fields should be coherent: type=momentum, scoring_team=None."""
         svc = _make_service()
-        summary = _momentum_summary(("p1", 0.70))
+        summary = _momentum_summary(("p1", 0.30))
         out = svc._extract_new_momentum_plays(summary)
         assert out[0].play_type == "momentum"
         assert out[0].scoring_team is None
@@ -1935,7 +1947,7 @@ class TestMomentumExtraction:
 
     def test_adds_to_known_play_ids_so_no_refire(self):
         svc = _make_service()
-        summary = _momentum_summary(("p1", 0.70))
+        summary = _momentum_summary(("p1", 0.30))
         svc._extract_new_momentum_plays(summary)
         # Second call same tick — should return empty (play_id in known set).
         out = svc._extract_new_momentum_plays(summary)
