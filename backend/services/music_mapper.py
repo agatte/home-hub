@@ -179,6 +179,66 @@ class MusicMapper:
             for key in _PREGAME_SOURCE_TRANSPORT_KEYS
         )
 
+    async def _refresh_pregame_baseline_after_tts(
+        self,
+        baseline: dict | None,
+        lease: dict | None,
+    ) -> dict | None:
+        """Refresh only the proven Sonos UpdateID drift caused by TTS.
+
+        The interruption owner may advance Sonos Queue UpdateID while installing
+        and restoring its finite URI even though the stopped queue itself is
+        unchanged. A still-valid pending Game Day lease proves no central manual
+        source/transport takeover occurred. All other source/queue fields must
+        still match exactly, and the counter may advance by at most one.
+        """
+        if (
+            self._audio_ownership is None
+            or baseline is None
+            or lease is None
+            or not await self._audio_ownership.is_valid(
+                lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+            )
+        ):
+            return baseline
+
+        fresh = await self._sonos.get_playback_ownership_evidence()
+        if fresh is None:
+            return baseline
+
+        for key in _PREGAME_SOURCE_TRANSPORT_KEYS:
+            if key == "queue_update_id":
+                continue
+            if baseline.get(key) != fresh.get(key):
+                return baseline
+
+        before_update = str(baseline.get("queue_update_id") or "")
+        fresh_update = str(fresh.get("queue_update_id") or "")
+        if before_update != fresh_update:
+            try:
+                if int(fresh_update) != int(before_update) + 1:
+                    return baseline
+            except (TypeError, ValueError):
+                return baseline
+
+        if before_update != fresh_update:
+            logger.info(
+                "pregame hype refreshed TTS-caused Sonos Queue UpdateID %s -> %s",
+                before_update,
+                fresh_update,
+            )
+        await self._audio_ownership.update_evidence(
+            lease["lease_id"],
+            {"phase": "pending_hype", "sonos": fresh},
+        )
+        # Preserve the original rendering baseline. Off-dashboard volume
+        # changes cannot invalidate the central VOLUME lease, so the later
+        # baseline-vs-final comparison is what lets that newer user intent win.
+        refreshed = dict(fresh)
+        refreshed["volume"] = baseline.get("volume")
+        refreshed["mute"] = baseline.get("mute")
+        return refreshed
+
     @staticmethod
     def _pregame_hype_baseline_replaceable(
         evidence: dict | None,
@@ -1144,6 +1204,11 @@ class MusicMapper:
                     decision.tts_line, volume=_pregame_tts_volume(),
                 )
                 result["tts_fired"] = True
+                if decision.sonos_hype_play and pregame_lease is not None:
+                    baseline_playback = await self._refresh_pregame_baseline_after_tts(
+                        baseline_playback,
+                        pregame_lease,
+                    )
             except asyncio.CancelledError:
                 await self._release_pregame_lease(
                     pregame_lease,

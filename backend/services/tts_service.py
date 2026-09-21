@@ -194,6 +194,46 @@ class TTSService:
         )
         return all(before.get(key) == after.get(key) for key in keys)
 
+    @staticmethod
+    def _rebase_preflight_after_tts_start(
+        preflight: dict[str, Any],
+        active: dict[str, Any] | None,
+        tts_uri: str,
+    ) -> dict[str, Any] | None:
+        """Accept only the queue-id drift caused by installing the TTS URI.
+
+        Real Sonos increments Queue UpdateID when finite direct playback is
+        installed on top of some stopped/shuffled queues even though queue
+        contents are unchanged. Capture that post-start value as the new proof
+        baseline so later external queue mutations still invalidate restore.
+        """
+        if not active:
+            return None
+        if str(active.get("current_uri") or "") != str(tts_uri):
+            return None
+        if str(active.get("transport_state") or "").upper() not in {
+            "PLAYING",
+            "TRANSITIONING",
+            "ZPSTR_BUFFERING",
+        }:
+            return None
+        for key in ("queue_uid", "queue_size", "queue_first_item_hash"):
+            if active.get(key) != preflight.get(key):
+                return None
+
+        before_update = str(preflight.get("queue_update_id") or "")
+        active_update = str(active.get("queue_update_id") or "")
+        if before_update != active_update:
+            try:
+                if int(active_update) != int(before_update) + 1:
+                    return None
+            except (TypeError, ValueError):
+                return None
+
+        rebased = dict(preflight)
+        rebased["queue_update_id"] = active_update
+        return rebased
+
     def _forget_cleanup_task(self, task: asyncio.Task) -> None:
         self._cleanup_tasks.discard(task)
         self._cleanup_paths.pop(task, None)
@@ -461,22 +501,51 @@ class TTSService:
                 },
             )
 
-            async def _play_owned() -> bool:
-                return await self._sonos.play_uri_if_unchanged(
+            async def _play_owned() -> tuple[bool, dict[str, Any] | None]:
+                played = await self._sonos.play_uri_if_unchanged(
                     preflight,
                     audio_url,
                     volume=vol,
                 )
+                if not played:
+                    return False, None
+                # Capture the device's immediate post-start queue fingerprint
+                # under the same central ownership lock. Some Sonos firmware
+                # bumps Queue UpdateID when a direct TTS URI is installed.
+                active = await self._sonos.get_playback_ownership_evidence()
+                return True, active
 
-            executed, played = await self._audio_ownership.run_if_valid(
+            executed, play_result = await self._audio_ownership.run_if_valid(
                 lease_id,
                 AUDIO_DIMENSIONS,
                 _play_owned,
+            )
+            played, active = (
+                play_result
+                if executed and play_result is not None
+                else (False, None)
             )
             success = bool(executed and played)
             if not success:
                 logger.info("TTS play refused: interruption authority/evidence changed")
                 return False
+
+            rebased = self._rebase_preflight_after_tts_start(
+                preflight,
+                active,
+                audio_url,
+            )
+            if rebased is not None:
+                if (
+                    rebased.get("queue_update_id")
+                    != preflight.get("queue_update_id")
+                ):
+                    logger.info(
+                        "TTS rebased self-caused Sonos Queue UpdateID %s -> %s",
+                        preflight.get("queue_update_id"),
+                        rebased.get("queue_update_id"),
+                    )
+                preflight = rebased
 
             await self._audio_ownership.update_evidence(
                 lease_id,

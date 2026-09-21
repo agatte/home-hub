@@ -387,6 +387,74 @@ async def test_pregame_hype_sets_mode_volume_after_tts_restores_zero() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pregame_refreshes_single_tts_queue_update_before_hype() -> None:
+    settings = MemorySettings()
+    authority = await make_authority(settings)
+    sonos = Sonos()
+    sonos.neutral_evidence["play_mode"] = "SHUFFLE"
+    automation = PregameAutomation()
+
+    def tts_self_update() -> None:
+        sonos.neutral_evidence["queue_update_id"] = "7"
+
+    mapper = MusicMapper(
+        sonos,
+        Ws(),
+        tts_service=PregameTTS(tts_self_update),
+        audio_ownership=authority,
+        setting_loader=_gameday_volume_settings,
+    )
+    mapper.set_automation(automation)
+    mapper._cache["pregameday"] = [entry("Colts Hype")]
+
+    with patch("backend.services.music_mapper.asyncio.sleep", new=_no_sleep):
+        result = await mapper.dispatch_pregame_audio(pregame_decision())
+
+    assert result["sonos_fired"] is True
+    assert result["sonos_reason"] == "played"
+    assert sonos.play_calls == ["Colts Hype"]
+    assert sonos.volume == 25
+
+    snapshot = await authority.snapshot()
+    assert len(snapshot["leases"]) == 1
+    lease = snapshot["leases"][0]
+    assert lease["dimensions"] == ["queue_source", "transport"]
+    assert lease["evidence"]["phase"] == "owned"
+    assert lease["evidence"]["sonos"]["queue_update_id"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_pregame_does_not_refresh_unexpected_second_queue_update() -> None:
+    settings = MemorySettings()
+    authority = await make_authority(settings)
+    sonos = Sonos()
+    sonos.neutral_evidence["play_mode"] = "SHUFFLE"
+    automation = PregameAutomation()
+
+    def external_queue_change() -> None:
+        sonos.neutral_evidence["queue_update_id"] = "8"
+
+    mapper = MusicMapper(
+        sonos,
+        Ws(),
+        tts_service=PregameTTS(external_queue_change),
+        audio_ownership=authority,
+        setting_loader=_gameday_volume_settings,
+    )
+    mapper.set_automation(automation)
+    mapper._cache["pregameday"] = [entry("Colts Hype")]
+
+    with patch("backend.services.music_mapper.asyncio.sleep", new=_no_sleep):
+        result = await mapper.dispatch_pregame_audio(pregame_decision())
+
+    assert result["sonos_fired"] is False
+    assert result["sonos_reason"] == "sonos_source_changed_during_tts_gap"
+    assert sonos.play_calls == []
+    assert sonos.volume_writes == []
+    assert (await authority.snapshot())["leases"] == []
+
+
+@pytest.mark.asyncio
 async def test_pregame_hype_waits_for_transitioning_sonos_to_settle() -> None:
     settings = MemorySettings()
     authority = await make_authority(settings)

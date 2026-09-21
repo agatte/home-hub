@@ -390,6 +390,16 @@ class OwnedTTSFakeSonos:
                 result["source_transport_reason"] = "failed_play_prior_source_intact"
             elif self.evidence["current_uri"] != tts_uri:
                 result["source_transport_reason"] = "source_changed"
+            elif any(
+                self.evidence.get(key) != preflight.get(key)
+                for key in (
+                    "queue_uid",
+                    "queue_update_id",
+                    "queue_size",
+                    "queue_first_item_hash",
+                )
+            ):
+                result["source_transport_reason"] = "queue_changed"
             elif self.evidence["transport_state"] == "PAUSED_PLAYBACK":
                 result["source_transport_reason"] = "transport_paused"
             else:
@@ -402,6 +412,54 @@ class OwnedTTSFakeSonos:
                 result["source_transport_reason"] = "tts_active"
         result["observed"] = deepcopy(self.evidence)
         return result
+
+
+class QueueUpdateOnTTSFakeSonos(OwnedTTSFakeSonos):
+    """Model real Sonos bumping Queue UpdateID when direct TTS starts."""
+
+    async def play_uri_if_unchanged(
+        self,
+        expected: dict,
+        uri: str,
+        *,
+        volume: int | None = None,
+        **kwargs,
+    ) -> bool:
+        played = await super().play_uri_if_unchanged(
+            expected,
+            uri,
+            volume=volume,
+            **kwargs,
+        )
+        if played:
+            self.evidence["queue_update_id"] = str(
+                int(self.evidence["queue_update_id"]) + 1
+            )
+        return played
+
+
+class DoubleQueueUpdateOnTTSFakeSonos(QueueUpdateOnTTSFakeSonos):
+    """Model an additional unexpected queue mutation during TTS start."""
+
+    async def play_uri_if_unchanged(
+        self,
+        expected: dict,
+        uri: str,
+        *,
+        volume: int | None = None,
+        **kwargs,
+    ) -> bool:
+        played = await super().play_uri_if_unchanged(
+            expected,
+            uri,
+            volume=volume,
+            **kwargs,
+        )
+        if played:
+            self.evidence["queue_update_id"] = str(
+                int(self.evidence["queue_update_id"]) + 1
+            )
+        return played
 
 
 async def _authority() -> AudioOwnershipService:
@@ -589,6 +647,61 @@ async def test_owned_tts_restores_and_preserves_interrupted_music_owner(
     assert sonos.restore_calls == [(False, True), (True, False)]
     assert await authority.is_valid(base["lease_id"], (QUEUE_SOURCE, TRANSPORT))
     assert await authority.find_lease(owner="tts", purpose="announcement") is None
+
+
+@pytest.mark.asyncio
+async def test_owned_tts_rebases_self_caused_queue_update_id(
+    tmp_path: Path,
+    immediate_sleep: None,
+) -> None:
+    authority = await _authority()
+    base = await authority.acquire(
+        owner="music_mapper",
+        purpose="mode_auto_play",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "owned", "sonos": _owned_evidence()},
+    )
+    assert base is not None
+    sonos = QueueUpdateOnTTSFakeSonos()
+    tts = TTSService(
+        sonos, tmp_path, "127.0.0.1", audio_ownership=authority,
+    )
+    tts._generate_audio = AsyncMock(return_value=tmp_path / "queue-update.mp3")
+
+    assert await tts.speak("hello", volume=60) is True
+
+    assert sonos.evidence["current_uri"] == _owned_evidence()["current_uri"]
+    assert sonos.evidence["queue_update_id"] == "8"
+    assert sonos.evidence["volume"] == 20
+    assert await authority.is_valid(base["lease_id"], (QUEUE_SOURCE, TRANSPORT))
+    assert (await authority.snapshot())["last_invalidation"] is None
+
+
+@pytest.mark.asyncio
+async def test_owned_tts_does_not_mask_unexpected_second_queue_update(
+    tmp_path: Path,
+    immediate_sleep: None,
+) -> None:
+    authority = await _authority()
+    base = await authority.acquire(
+        owner="music_mapper",
+        purpose="mode_auto_play",
+        dimensions=(QUEUE_SOURCE, TRANSPORT),
+        evidence={"phase": "owned", "sonos": _owned_evidence()},
+    )
+    assert base is not None
+    sonos = DoubleQueueUpdateOnTTSFakeSonos()
+    tts = TTSService(
+        sonos, tmp_path, "127.0.0.1", audio_ownership=authority,
+    )
+    tts._generate_audio = AsyncMock(return_value=tmp_path / "queue-update-twice.mp3")
+
+    assert await tts.speak("hello", volume=60) is True
+
+    assert not await authority.is_valid(base["lease_id"], (QUEUE_SOURCE, TRANSPORT))
+    snapshot = await authority.snapshot()
+    assert snapshot["last_invalidation"]["source"] == "sonos_evidence"
+    assert snapshot["last_invalidation"]["reason"] == "tts_external_queue_changed"
 
 
 @pytest.mark.asyncio
