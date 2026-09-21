@@ -22,6 +22,10 @@ def test_setup_installs_stable_localappdata_launcher_and_all_six_agents():
     assert 'Copy-Item (Join-Path $PSScriptRoot "start-supervisor.ps1")' in text
     assert 'Copy-Item (Join-Path $PSScriptRoot "start-supervisor-hidden.vbs")' in text
     assert '.venv\\Scripts\\pythonw.exe' in text
+    assert '.venv\\Scripts\\python.exe' in text
+    assert "requirements-desktop.txt" in text
+    assert "winrt.windows.media.control" in text
+    assert "PyQt6" in text
     for agent in (
         "activity_detector",
         "ambient_monitor",

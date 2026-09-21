@@ -135,6 +135,17 @@ NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
 MAX_MATCHED_WORK_PROCESSES = 3
 
+# Foreground browser pages that are themselves strong work intent. Keep this
+# deliberately narrow so ordinary daytime browsing does not recreate the old
+# "background terminal means Working" false-positive behavior.
+WORKING_BROWSER_TITLE_KEYWORDS: tuple[str, ...] = (
+    "home hub",
+    "homehub",
+    "performance audit",
+    "osrs flipping assistant",
+    "github",
+)
+
 # Gaming authority requires a foreground game window. A merely-running game
 # is context only; normal detector dwell already provides bounded alt-tab grace.
 # This prevents unrelated browser input from indefinitely refreshing Gaming.
@@ -722,6 +733,16 @@ class ActivityDetector:
 
             if fg_proc in WORK_PROCESSES:
                 return classified("working", "foreground_work")
+
+            if (
+                fg_proc in BROWSER_PROCESSES
+                and fg_title
+                and any(
+                    keyword in fg_title.lower()
+                    for keyword in WORKING_BROWSER_TITLE_KEYWORDS
+                )
+            ):
+                return classified("working", "foreground_browser_work")
 
         # Browser running late at night = working
         current_hour = datetime.now().hour

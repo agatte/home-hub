@@ -1,10 +1,10 @@
 # Home Hub Windows 11 Recovery Status
 
-Updated: 2026-09-20
+Updated: 2026-09-21
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
-**Recovery closeout:** all currently recoverable/actionable Windows and Home Hub recovery items are complete, including physical verification of the Epson projector's 30-minute Sleep Mode. The only unchecked item below is an explicitly optional future offsite-backup design; it is new infrastructure, not unfinished recovery.
+**Recovery reopened — 2026-09-21:** the earlier closeout was too broad. Process/thread health was verified, but Windows desktop semantic behavior was not proven mode-by-mode. Live evidence now shows unrecovered desktop dependency and classification failures affecting Watching and Working, plus an unresolved desktop camera/presence failure. Do not call Home Hub recovery complete until the active items below are verified end to end.
 
 ## Safety / recovery rules
 
@@ -34,6 +34,23 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] The no-drift invariant is restored: Windows Git, GitHub `origin/master`, Latitude Git, and `.last-deployed-sha` are synchronized at the current recovery closeout commit.
 
 ## Active investigations
+
+### Windows desktop activity / presence semantic recovery — reopened 2026-09-21
+
+- [x] Established that agent liveness was insufficient recovery evidence: the Windows activity agent was healthy and posting while actively misclassifying real desktop use.
+- [x] Live reproduction while Anthony was using Firefox for Home Hub/Performance Audit work: foreground `firefox.exe`, valid Win32 input telemetry, trusted Keychron/mouse input fresh, work processes present, but desktop classifier reported `idle` with reason `fallback_idle`.
+- [x] Audited production `ml_decisions` since the rebuild by source. Desktop process observations: 4,324 Idle, 762 Gaming, 497 Working, **0 Watching**. All 2,564 process Watching observations came from the Latitude Chromium lane, not Windows.
+- [x] Found the primary recovered-Windows Watching dependency gap: `requirements-desktop.txt` had never been installed into the rebuilt Home Hub `.venv`. PyQt6 and all three tracked WinRT GSMTC packages were absent.
+- [x] Restored the exact tracked desktop dependency set into the existing `.venv`; `pip check` is clean and WinRT now reads real Windows media sessions.
+- [x] Found a second Watching defect after dependency restoration: Firefox on this Windows 11 install exposes an opaque GSMTC source ID (for example `308046b0af4a39cb`) instead of a source containing `firefox`, so the existing matcher still returned `unavailable`.
+- [x] Prepared an isolated worktree fix on `fix/desktop-activity-recovery`: preserve process-name matching when available, but when the GSMTC source is opaque accept only an exact media-title containment match against the foreground browser title. Background/unrelated media remains rejected.
+- [x] Confirmed the Working gap is a pre-wipe classifier contract that is wrong for Anthony's current workflow: daytime browser work falls to Idle unless the foreground process itself is a developer executable. Prepared a narrow foreground-title rule for Home Hub/HomeHub, Performance Audit, OSRS Flipping Assistant, and GitHub; generic browsing still remains Idle and video playback still wins as Watching.
+- [x] Validation of isolated activity fix: 83 targeted tests passed, Python compile clean, `git diff --check` clean. Live dry-run against the actual current Firefox window produced `working / foreground_browser_work`; the patched GSMTC matcher resolved the real opaque Firefox session instead of `unavailable`.
+- [ ] Integrate the isolated activity fix into canonical `master` without disturbing Anthony's unrelated current dirty work, then reload only the unified Windows supervisor after explicit authorization.
+- [ ] Prove live **desktop** Working from an actual Home Hub/Performance Audit browser session after reload.
+- [ ] Prove live **desktop** Watching from actual foreground Firefox video playback after reload, including a process:desktop Watching row in production evidence.
+- [ ] Investigate the separate desktop presence failure. During a 24-second live sample while Anthony was at the PC, all 12 desktop observations reported `face_present=false` and `pose_visible_landmarks=0`; Brio lux capture remained healthy and the Latitude camera independently saw a person. Do not inspect/save webcam imagery without Anthony's explicit consent.
+- [ ] Make the Windows rebuild procedure explicitly install both `requirements.txt` and `requirements-desktop.txt`, so this dependency omission cannot recur.
 
 ### Emotion / FaceLandmarker lane
 

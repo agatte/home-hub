@@ -314,6 +314,40 @@ class TestForegroundWorkIntent:
         assert d._last_classification is not None
         assert d._last_classification.candidate_reason == "foreground_browser_playing"
 
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "HomeHub - presence repair - Mozilla Firefox",
+            "Performance Audit - Home Hub Reorientation Audit - Mozilla Firefox",
+            "OSRS Flipping Assistant - selector review - Mozilla Firefox",
+            "agatte/home-hub - GitHub - Mozilla Firefox",
+        ],
+    )
+    def test_foreground_project_browser_is_working_during_day(self, title):
+        d = _make_detector(
+            processes={"firefox.exe", "windowsterminal.exe"},
+            fg_proc="firefox.exe",
+            fg_title=title,
+        )
+
+        with self._at_hour(15) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 21, 15, 0)
+            assert d._classify() == "working"
+
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "foreground_browser_work"
+
+    def test_generic_foreground_browser_stays_idle_during_day(self):
+        d = _make_detector(
+            processes={"firefox.exe", "windowsterminal.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Reddit - Mozilla Firefox",
+        )
+
+        with self._at_hour(15) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 21, 15, 0)
+            assert d._classify() == "idle"
+
     def test_established_browser_pause_grace_remains_watching(self):
         d = _make_detector(
             processes={"firefox.exe"},

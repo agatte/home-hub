@@ -103,27 +103,41 @@ class WindowsMediaSessionProbe:
         process = process_name.lower()
         stem = process.removesuffix(".exe")
         title_lower = (window_title or "").lower()
+        all_sessions = self.sessions()
         sessions = [
             observation
-            for observation in self.sessions()
+            for observation in all_sessions
             if process in observation[0] or stem in observation[0]
         ]
-        if not sessions:
-            return "unavailable"
 
-        title_matches = [
-            observation
-            for observation in sessions
-            if observation[2] and observation[2].lower() in title_lower
-        ]
-        if title_matches:
+        if sessions:
+            title_matches = [
+                observation
+                for observation in sessions
+                if observation[2] and observation[2].lower() in title_lower
+            ]
+            if title_matches:
+                sessions = title_matches
+            elif any(observation[2] for observation in sessions):
+                # A different same-browser media tab is active/background. Do not
+                # let its Playing state bless the foreground page.
+                return "unmatched"
+            elif len(sessions) > 1:
+                return "ambiguous"
+        else:
+            # Firefox on rebuilt Windows 11 can expose an opaque GSMTC source
+            # app ID instead of a value containing "firefox". In that case,
+            # accept only an exact media-title containment match against the
+            # foreground browser title. This keeps a background session from
+            # blessing an unrelated tab while restoring real video authority.
+            title_matches = [
+                observation
+                for observation in all_sessions
+                if observation[2] and observation[2].lower() in title_lower
+            ]
+            if not title_matches:
+                return "unavailable"
             sessions = title_matches
-        elif any(observation[2] for observation in sessions):
-            # A different same-browser media tab is active/background. Do not
-            # let its Playing state bless the foreground page.
-            return "unmatched"
-        elif len(sessions) > 1:
-            return "ambiguous"
 
         priority = {"playing": 4, "paused": 3, "stopped": 2, "opened": 1}
         return max(

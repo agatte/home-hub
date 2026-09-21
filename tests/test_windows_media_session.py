@@ -33,6 +33,28 @@ def test_matching_media_title_resolves_foreground_playback() -> None:
     ) == "playing"
 
 
+def test_opaque_windows11_source_can_match_foreground_media_title() -> None:
+    probe = WindowsMediaSessionProbe()
+    probe.sessions = lambda: [  # type: ignore[method-assign]
+        ("308046b0af4a39cb", "playing", "Blue Planet"),
+    ]
+
+    assert probe.browser_playback_status(
+        "firefox.exe", "Blue Planet - YouTube - Mozilla Firefox"
+    ) == "playing"
+
+
+def test_opaque_source_cannot_bless_unrelated_foreground_video_page() -> None:
+    probe = WindowsMediaSessionProbe()
+    probe.sessions = lambda: [  # type: ignore[method-assign]
+        ("308046b0af4a39cb", "playing", "Background video"),
+    ]
+
+    assert probe.browser_playback_status(
+        "firefox.exe", "Different video - YouTube - Mozilla Firefox"
+    ) == "unavailable"
+
+
 def test_background_same_browser_session_cannot_bless_foreground_video_page() -> None:
     probe = WindowsMediaSessionProbe()
     probe.sessions = lambda: [  # type: ignore[method-assign]

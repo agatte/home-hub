@@ -76,6 +76,20 @@ project root and launches
 The venv launcher currently resolves to the installed Python 3.13 runtime. Do
 not hard-code the historical `C:\Python313\pythonw.exe` path.
 
+A Windows rebuild is not complete after installing `requirements.txt` alone.
+The desktop supervisor also depends on the tracked Windows-only layer:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-desktop.txt
+```
+
+`requirements-desktop.txt` supplies the WinRT GSMTC packages used by browser
+Watching detection and PyQt6 for desktop-only UI/notifier surfaces. On the
+2026-09-21 recovery audit this entire layer was found missing even though the
+supervisor process itself was healthy, which left every desktop browser playback
+probe reporting `unavailable`. Verify imports/package health rather than treating
+a running supervisor as proof that desktop dependencies are complete.
+
 The Scheduled Task may show `Ready` even while its detached supervisor process
 is healthy and running; verify the process identity and backend agent-health
 report rather than treating task status alone as runtime health.

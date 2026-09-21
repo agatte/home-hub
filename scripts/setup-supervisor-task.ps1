@@ -10,13 +10,22 @@
 
 $TaskName = "Home Hub Agent Supervisor"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $PythonW = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
 $RuntimeDir = Join-Path $env:LOCALAPPDATA "home-hub"
 $RuntimePowerShell = Join-Path $RuntimeDir "start-supervisor.ps1"
 $RuntimeVbs = Join-Path $RuntimeDir "start-supervisor-hidden.vbs"
 
-if (-not (Test-Path -LiteralPath $PythonW)) {
-    throw "Home Hub .venv pythonw.exe was not found at $PythonW"
+if (-not (Test-Path -LiteralPath $PythonW) -or -not (Test-Path -LiteralPath $Python)) {
+    throw "Home Hub .venv Python executables were not found under $ProjectRoot\.venv\Scripts"
+}
+
+# Fail before touching tasks/processes when the Windows-only dependency layer
+# has not been installed. A healthy Python supervisor can otherwise start while
+# browser Watching silently fails because WinRT GSMTC imports are unavailable.
+& $Python -c "from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager; from PyQt6 import QtWidgets"
+if ($LASTEXITCODE -ne 0) {
+    throw "Desktop dependencies are incomplete. Run: .\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-desktop.txt"
 }
 
 # Install the two checked-in launchers into the stable machine-local runtime
