@@ -15,10 +15,9 @@ $AgentModules = @(
     "backend.services.pc_agent.sleep_watcher",
     "backend.services.pc_agent.emotion_capture",
     "backend.services.pc_agent.monitor_brightness",
-    "backend.services.pc_agent.peripheral_rgb",
     "backend.services.pc_agent.supervisor"
 )
-$StalePidLocks = @("logs\peripheral_rgb.pid")
+$StalePidLocks = @()
 $RecoveryTimeoutSeconds = 10
 
 if (-not ("HomeHubProcessNativeMethods" -as [type])) {

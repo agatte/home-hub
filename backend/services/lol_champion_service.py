@@ -102,8 +102,7 @@ class LoLChampionService:
         self._hue = hue_service
         self._engine = automation_engine
         # Optional — when present, apply/clear broadcast a ``champion_color``
-        # event so off-bridge surfaces (the desktop peripheral-RGB agent)
-        # can mirror the champion's color onto the keyboard + mouse.
+        # event for optional off-bridge consumers.
         self._ws_manager = ws_manager
         self._current_champion: Optional[str] = None
         self._current_rgb: Optional[tuple[int, int, int]] = None
@@ -418,8 +417,8 @@ class LoLChampionService:
         Returns ``(rgb, seeded)`` — ``seeded`` is True only when the
         champion had an explicit entry in the map (a real signature
         color), False when we dropped to the generic fallback. Downstream
-        surfaces (the peripheral-RGB agent) use ``seeded`` to decide
-        whether to override their default behavior.
+        consumers can use ``seeded`` to distinguish a signature color
+        from the generic fallback.
         """
         from backend.api.routes.routines import load_setting
 

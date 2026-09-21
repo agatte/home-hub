@@ -16,7 +16,7 @@ def test_supervisor_launcher_uses_repo_dot_venv_not_machine_python():
     assert "\\venv\\Lib\\site-packages" not in text
 
 
-def test_setup_installs_stable_localappdata_launcher_and_all_seven_agents():
+def test_setup_installs_stable_localappdata_launcher_and_all_six_agents():
     text = _text("setup-supervisor-task.ps1")
     assert 'Join-Path $env:LOCALAPPDATA "home-hub"' in text
     assert 'Copy-Item (Join-Path $PSScriptRoot "start-supervisor.ps1")' in text
@@ -29,7 +29,6 @@ def test_setup_installs_stable_localappdata_launcher_and_all_seven_agents():
         "sleep_watcher",
         "emotion_capture",
         "monitor_brightness",
-        "peripheral_rgb",
     ):
         assert agent in text
 

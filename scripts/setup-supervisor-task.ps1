@@ -1,6 +1,6 @@
 ﻿# Create or update the Task Scheduler task for the unified PC Agent Supervisor.
 # Replaces obsolete individual-agent tasks with one supervisor process that owns
-# all seven Windows agents. Installs the windowless launcher pair under
+# all six Windows agents. Installs the windowless launcher pair under
 # %LOCALAPPDATA%\home-hub so the scheduled task does not depend on stale
 # machine-specific Python paths.
 #
@@ -63,7 +63,6 @@ $AgentModules = @(
     "sleep_watcher",
     "emotion_capture",
     "monitor_brightness",
-    "peripheral_rgb",
     "supervisor"
 )
 Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | ForEach-Object {
@@ -131,7 +130,7 @@ Register-ScheduledTask `
     -Trigger @($loginTrigger, $watchdogTrigger) `
     -Settings $settings `
     -Principal $principal `
-    -Description "Unified supervisor for seven Home Hub Windows agents: activity, ambient audio, screen sync, sleep watcher, emotion capture, monitor brightness, and peripheral RGB. Reports to Latitude 192.168.86.210."
+    -Description "Unified supervisor for six Home Hub Windows agents: activity, ambient audio, screen sync, sleep watcher, emotion capture, and monitor brightness. Reports to Latitude 192.168.86.210."
 
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green
@@ -139,7 +138,7 @@ Write-Host ""
 Write-Host "Key settings:" -ForegroundColor Cyan
 Write-Host "  - Trigger 1: At logon (30s delay)"
 Write-Host "  - Trigger 2: Watchdog - every 5 min, indefinitely"
-Write-Host "  - Manages: activity_detector, ambient_monitor, screen_sync, sleep_watcher, emotion_capture, monitor_brightness, peripheral_rgb"
+Write-Host "  - Manages: activity_detector, ambient_monitor, screen_sync, sleep_watcher, emotion_capture, monitor_brightness"
 Write-Host "  - Classifier: YAMNet (active mode)"
 Write-Host "  - Runtime launcher: $RuntimeVbs"
 Write-Host "  - Python: $PythonW"

@@ -177,8 +177,9 @@ machine-local artifact survived the later SSD failure:
 ## Windows 11 recovery status — 2026-09-20
 
 The canonical repository, preserved historical branch refs, unified supervisor
-runtime, OpenRGB/PawnIO path, and Windows desktop agents have been re-established
-and verified. The temporary recovery worktrees were retired once proven
+runtime and Windows desktop agents have been re-established and verified. The
+OpenRGB/peripheral-RGB path was subsequently retired on 2026-09-20 because it
+added polling/runtime complexity for little reliable value; do not recreate it. The temporary recovery worktrees were retired once proven
 redundant. Current recovery authority lives in
 `docs/WINDOWS11_RECOVERY_STATUS.md`; do not use the historical migration list
 above to recreate missing machine-local artifacts automatically.

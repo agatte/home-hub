@@ -12,7 +12,6 @@ Agents managed:
   - sleep_watcher: suspends Windows 60min after sleeping mode (Windows-only)
   - emotion_capture: desktop face/presence/emotion capture (MediaPipe)
   - monitor_brightness: Samsung DDC/CI brightness + warmth control (Windows-only)
-  - peripheral_rgb: OpenRGB control for supported desktop peripherals
 
 Usage:
     python -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000
@@ -77,7 +76,6 @@ for _child_name in (
     "home_hub.screen_sync_agent",
     "home_hub.sleep_watcher",
     "home_hub.emotion_capture",
-    "home_hub.peripheral_rgb",
 ):
     _child = logging.getLogger(_child_name)
     _child.setLevel(logging.INFO)
@@ -317,7 +315,6 @@ class AgentSupervisor:
         self._register_sleep_watcher()
         self._register_emotion_capture()
         self._register_monitor_brightness()
-        self._register_peripheral_rgb()
 
     # ── Agent registration ────────────────────────────────────────────
 
@@ -454,26 +451,6 @@ class AgentSupervisor:
             logger.info("Registered: monitor_brightness")
         except ImportError as e:
             logger.warning("Cannot register monitor_brightness: %s", e)
-
-    def _register_peripheral_rgb(self) -> None:
-        # Windows-only — drives the desk keyboard + mouse RGB via the local
-        # OpenRGB SDK. ImportError (no openrgb-python on the host) is caught
-        # below and the agent is simply skipped, like the other optional
-        # agents. The Latitude never runs the supervisor (systemd manages
-        # its services), so there's no value in running this elsewhere.
-        if sys.platform != "win32":
-            logger.info("Skipping peripheral_rgb (non-Windows platform)")
-            return
-        try:
-            from backend.services.pc_agent.peripheral_rgb_agent import run_agent
-            self._agents["peripheral_rgb"] = AgentState(
-                name="peripheral_rgb",
-                target=run_agent,
-                kwargs={"server_url": self._server_url},
-            )
-            logger.info("Registered: peripheral_rgb")
-        except ImportError as e:
-            logger.warning("Cannot register peripheral_rgb: %s", e)
 
     # ── Thread lifecycle ──────────────────────────────────────────────
 

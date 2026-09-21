@@ -1255,13 +1255,6 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    │                             POST http://192.168.86.210:8000/api/camera/desktop/lux. Self-calibration via
    │                             search_exposure + _run_lux_calibration runs when desktop_lux_calibrate_requested
    │                             is set. Uses CAP_DSHOW per project_desktop_webcam_dshow.md.)
-   ├── peripheral_rgb_agent.py  ON dev machine (Windows-only) ──> GET http://192.168.86.210:8000/api/lights + WS sub /ws
-   │                            (Mirrors the kitchen-pair color onto the Glorious Model O mouse via a local OpenRGB
-   │                             SDK server (127.0.0.1:6742); seeded-champion override (League) + Colts scoring pulse.
-   │                             Shipped 2026-06-01. MOUSE-ONLY: the Keychron K10 (non-Pro) keyboard + PowerColor
-   │                             Red Devil RX5700XT GPU both wedge under OpenRGB — per-LED Custom mode renders once
-   │                             then freezes; only the mouse's Static mode updates continuously. Keyboard would need
-   │                             a QMK-native board. Diagnostic: scripts/probe_openrgb_keyboard.py.)
    └── sleep_watcher.py         ON dev machine (Windows-only)
                                 (Suspends the PC 60min after sleeping mode is set; cancels on any non-sleeping
                                  mode change. Registered by supervisor on win32 only.
@@ -2723,9 +2716,8 @@ core. It runs:
   30s delay + 5-min watchdog repetition trigger added 2026-05-16) plus
   `RestartCount=999 / RestartInterval=1m` on observed failure. Manages
   the pc_agent fleet as in-process daemon threads — activity_detector,
-  ambient_monitor, screen_sync_agent, and (Windows-only)
-  monitor_brightness; emotion_capture, sleep_watcher, and (Windows-only)
-  peripheral_rgb round out the list. Pointed at the Latitude via
+  ambient_monitor, screen_sync_agent, emotion_capture, and (Windows-only)
+  sleep_watcher + monitor_brightness. Pointed at the Latitude via
   `--server http://192.168.86.210:8000`. The watchdog catches the class
   of failure where the supervisor dies but Task Scheduler doesn't see
   a launcher failure (e.g. a Bash background subprocess reaped along

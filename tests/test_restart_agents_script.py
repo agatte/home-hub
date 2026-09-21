@@ -189,7 +189,6 @@ function Get-CimInstance {{
 }}
 function Test-Path {{
     param($LiteralPath)
-    if ($LiteralPath -like '*peripheral_rgb.pid') {{ return $false }}
     if ($LiteralPath -like '*start-supervisor-hidden.vbs') {{ return $true }}
     return $false
 }}

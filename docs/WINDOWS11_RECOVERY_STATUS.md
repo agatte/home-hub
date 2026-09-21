@@ -23,14 +23,13 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Latitude production checkout is clean; `home-hub.service` and `home-hub-latitude-streaming.service` are active and healthy. The backend currently reports runtime `build_id=af12523` because commits after `af12523` were script/docs/skill-only releases and correctly did not restart the backend.
 - [x] Core Home Hub health reports Hue, Sonos, Pi-hole, automation, and overnight jobs healthy.
 - [x] One permanent Windows task, `Home Hub Agent Supervisor`, is enabled and firing on logon plus every 5 minutes.
-- [x] The supervisor manages seven agents: activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, monitor brightness, and peripheral RGB.
-- [x] All seven agents are alive, have zero restarts in the audited supervisor lifetime, and are actively reaching Latitude.
+- [x] The supervisor now manages six agents: activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, and monitor brightness. Peripheral RGB was retired on 2026-09-20.
+- [x] The six retained agents are the supported Windows supervisor fleet and actively reach Latitude.
 - [x] No obsolete per-agent Home Hub tasks, Run-key entries, Startup-folder entries, or separate Home Hub Windows service were found.
 - [x] Samsung G50F DDC/CI brightness control is operational with `screen-brightness-control 0.24.1`.
-- [x] OpenRGB 1.0.0 is installed and running as an automatic Windows service.
+- [x] OpenRGB 1.0.0 was recovered successfully, then retired from Home Hub on 2026-09-20; the Windows service is disabled as part of that retirement.
 - [x] PawnIO 2.2.0.0 is installed and its driver/device are healthy.
-- [x] OpenRGB SDK is listening on `127.0.0.1:6742` with an established supervisor connection.
-- [x] Glorious Model O / O- and Keychron Gaming Keyboard 1 are discovered and driven by the peripheral agent.
+- [x] The former OpenRGB SDK/peripheral agent path is no longer part of the supported runtime; mouse/keyboard/GPU lighting are not Home Hub-owned.
 - [x] `main` is the sole registered worktree. The four temporary recovery worktrees were retired only after proving they were clean and had zero unique commits; their local and remote branch refs remain preserved.
 - [x] The no-drift invariant is restored: Windows Git, GitHub `origin/master`, Latitude Git, and `.last-deployed-sha` are synchronized at the current recovery closeout commit.
 
@@ -75,11 +74,11 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Updated `docs/LOCAL_WORKSPACE.md` to describe the verified Windows 11 checkout, runtime launchers, temporary recovery worktrees and their later retirement, deployment skill, SSH client, and historical-vs-current boundaries.
 - [x] Made the checked-in supervisor install/recovery path reproduce the known-good Windows 11 architecture: stable launchers under `%LOCALAPPDATA%\home-hub`, canonical repo working directory, and `.venv\Scripts\pythonw.exe`.
 - [x] Removed the obsolete hard-coded `C:\Python313\pythonw.exe` / `venv` recovery assumptions. The Python 3.13 launcher+interpreter process pair is documented as expected rather than treated as a duplicate supervisor.
-- [x] Updated supervisor documentation/setup to reflect all seven managed agents.
+- [x] Updated supervisor documentation/setup to reflect the supported six-agent fleet after peripheral RGB retirement.
 - [x] Retired the obsolete standalone ambient/detector setup and detector-restart scripts as fail-closed shims; they can no longer recreate unmanaged per-agent tasks.
 - [x] Preserved and committed the `AGENTS.md` guarded-worktree-removal rule; current-path corrections remain in the present recovery batch.
-- [x] Validated supervisor recovery changes: all edited PowerShell files parse; repo fallback launcher exits cleanly through the live mutex; 57 supervisor/recovery tests pass; the live supervisor identity remained unchanged with seven agents at zero restarts.
-- [x] Made the working `openrgb-python 0.3.7` version durable in `requirements.txt`; live `.venv` reports 0.3.7 and `pip check` reports no broken requirements.
+- [x] Validated supervisor recovery changes before closeout; the later peripheral-RGB retirement preserves the same unified-supervisor recovery path for the remaining six agents.
+- [x] Removed `openrgb-python` from the supported Home Hub dependency set when peripheral RGB was retired on 2026-09-20.
 - [x] Deliberately standardized Home Hub Windows SSH on `C:\Program Files\Git\usr\bin\ssh.exe`. Inbox OpenSSH is present but exits 255 even for `-V` and Home Hub connection attempts; Git SSH 10.3 authenticates successfully with the existing key.
 - [x] Do not rotate/recreate the Home Hub SSH key merely because Windows OpenSSH is broken; the existing key is verified working through Git SSH.
 - [x] Determined backup state: the historical Windows `HomeHubBackups`/restic installation, secrets, verifier runbook, and task did not survive the rebuild and are not cleanly reconstructable from current sources. Do not recreate that offsite layer from stale documentation.
