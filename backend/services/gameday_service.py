@@ -175,6 +175,10 @@ class PlayEvent:
     event_id: Optional[str] = None
     game_id: Optional[str] = None
     synthetic: bool = False
+    # False only when ESPN omitted/invalidated the play wallclock and this
+    # object had to use observation time. Such timestamps are never safe for
+    # viewer synchronization or physical celebration release.
+    timestamp_trusted: bool = True
     # Presentation-only anchor for a provider poll that contains multiple
     # newly discovered plays. Effects may wait for this later snapshot time so
     # they cannot outrun the score/clock frame that represents the batch.
@@ -220,6 +224,7 @@ def _play_event_payload(play: PlayEvent) -> dict[str, Any]:
     payload.pop("event_id", None)
     payload.pop("game_id", None)
     payload.pop("synthetic", None)
+    payload.pop("timestamp_trusted", None)
     payload.pop("viewer_anchor", None)
     payload["timestamp"] = play.timestamp.isoformat()
     return payload
@@ -382,15 +387,71 @@ class GameDayService:
         self._viewer_sync = viewer_sync
         state = self._current_state
         if state is not None:
-            viewer_sync.queue_state(
-                gameday_state_payload(state), self._viewer_state_anchor(state),
-            )
+            anchor = self._viewer_state_anchor(state)
+            if anchor is not None:
+                viewer_sync.queue_state(
+                    gameday_state_payload(state),
+                    anchor,
+                    apply_program_time_offset=state.status == "in-progress",
+                )
 
-    def _viewer_state_anchor(self, state: GameDayState) -> datetime:
-        """Timestamp a viewer snapshot without leaking later poll-time clock drift."""
-        if state.status == "in-progress" and state.last_play is not None:
-            return state.last_play.timestamp
-        return self._now_utc()
+    def _viewer_state_anchor(
+        self,
+        state: GameDayState,
+        *,
+        previous_state: Optional[GameDayState] = None,
+        scoring_events: tuple[PlayEvent, ...] = (),
+    ) -> Optional[datetime]:
+        """Return only a trustworthy provider-time presentation anchor.
+
+        Normal in-progress frames follow the latest trusted provider play.
+        Score-changing frames are stricter: newly extracted, independently
+        timed score events must account for the complete score delta. This
+        keeps canonical provider truth real-time while preventing the viewer
+        timeline from borrowing an older unrelated play timestamp or a TD
+        wallclock for a later embedded PAT/2PT mutation.
+        """
+        if state.status != "in-progress":
+            return self._now_utc()
+
+        if previous_state is not None and previous_state.status == "in-progress":
+            deltas = {
+                "colts": state.score_colts - previous_state.score_colts,
+                "opp": state.score_opp - previous_state.score_opp,
+            }
+            if any(delta < 0 for delta in deltas.values()):
+                return None
+            if any(deltas.values()):
+                points_by_type = {
+                    "touchdown": 6,
+                    "defensive_td": 6,
+                    "return_td": 6,
+                    "field_goal": 3,
+                    "safety": 2,
+                    "extra_point_good": 1,
+                    "two_point_conv": 2,
+                }
+                accounted = {"colts": 0, "opp": 0}
+                trusted_scores: list[PlayEvent] = []
+                for event in scoring_events:
+                    points = points_by_type.get(event.play_type)
+                    if (
+                        points is None
+                        or event.scoring_team not in accounted
+                        or not event.timestamp_trusted
+                    ):
+                        continue
+                    accounted[event.scoring_team] += points
+                    trusted_scores.append(event)
+
+                if accounted != deltas or not trusted_scores:
+                    return None
+                return max(event.timestamp for event in trusted_scores)
+
+        play = state.last_play
+        if play is None or not play.timestamp_trusted:
+            return None
+        return play.timestamp
 
     @staticmethod
     def _viewer_transition_anchor(
@@ -398,7 +459,10 @@ class GameDayService:
     ) -> datetime:
         """Use provider media time for kickoff instead of backend poll time."""
         if old_status == "pregame" and new_state.status == "in-progress":
-            if new_state.last_play is not None:
+            if (
+                new_state.last_play is not None
+                and new_state.last_play.timestamp_trusted
+            ):
                 return new_state.last_play.timestamp
             if new_state.kickoff_utc is not None:
                 return new_state.kickoff_utc
@@ -654,13 +718,33 @@ class GameDayService:
         if summary is None:
             return
 
+        previous_state = self._current_state
         new_state = self._build_state(summary, active)
-        old_status = (
-            self._current_state.status if self._current_state else "no-game"
-        )
+        old_status = previous_state.status if previous_state else "no-game"
 
         if new_state.status == "final" and game_id:
             self._finalized_game_ids.add(game_id)
+
+        # Extract provider event identity/timing before presentation queuing,
+        # but do not fire callbacks yet. Canonical state still publishes first.
+        # This lets a score-changing viewer frame prove that trustworthy timed
+        # score events account for its full delta.
+        hydrated_history = self._hydrate_event_history_if_pending(summary, game_id)
+        if new_state.status == "in-progress" and not hydrated_history:
+            # IMPORTANT: scoring plays first, then semantic football events,
+            # then generic WPA momentum. Earlier lanes claim their play id
+            # so semantic events never escalate into the higher-amp WPA lane.
+            new_plays = self._extract_new_plays(summary)
+            new_semantic_plays = self._extract_new_semantic_plays(summary)
+            new_momentum_plays = self._extract_new_momentum_plays(summary)
+        else:
+            # Final/historical provider rows are evidence, never fresh events.
+            # Remember them so later provider corrections cannot become newly
+            # eligible if the same game is polled again.
+            self._remember_provider_play_ids(summary)
+            new_plays = []
+            new_semantic_plays = []
+            new_momentum_plays = []
 
         # Build lifecycle authority before any callbacks, then publish canonical
         # provider truth immediately. Viewer synchronization only receives a
@@ -680,26 +764,18 @@ class GameDayService:
             )
 
         viewer_state_anchor = (
-            viewer_transition_anchor or self._viewer_state_anchor(new_state)
+            viewer_transition_anchor
+            or self._viewer_state_anchor(
+                new_state,
+                previous_state=previous_state,
+                scoring_events=tuple(new_plays),
+            )
         )
-        await self._update_state(new_state, viewer_anchor=viewer_state_anchor)
-
-        hydrated_history = self._hydrate_event_history_if_pending(summary, game_id)
-        if new_state.status == "in-progress" and not hydrated_history:
-            # IMPORTANT: scoring plays first, then semantic football events,
-            # then generic WPA momentum. Earlier lanes claim their play id
-            # so semantic events never escalate into the higher-amp WPA lane.
-            new_plays = self._extract_new_plays(summary)
-            new_semantic_plays = self._extract_new_semantic_plays(summary)
-            new_momentum_plays = self._extract_new_momentum_plays(summary)
-        else:
-            # Final/historical provider rows are evidence, never fresh events.
-            # Remember them so later provider corrections cannot become newly
-            # eligible if the same game is polled again.
-            self._remember_provider_play_ids(summary)
-            new_plays = []
-            new_semantic_plays = []
-            new_momentum_plays = []
+        await self._update_state(
+            new_state,
+            viewer_anchor=viewer_state_anchor,
+            queue_viewer_state=viewer_state_anchor is not None,
+        )
 
         # A single provider poll can discover several events while only one
         # truthful score/clock snapshot exists. Keep each event's provider
@@ -708,7 +784,8 @@ class GameDayService:
         for play in (*new_plays, *new_semantic_plays, *new_momentum_plays):
             play.viewer_anchor = (
                 viewer_state_anchor
-                if viewer_state_anchor > play.timestamp
+                if viewer_state_anchor is not None
+                and viewer_state_anchor > play.timestamp
                 else play.timestamp
             )
 
@@ -749,7 +826,11 @@ class GameDayService:
                 logger.exception("ws broadcast gameday_play failed")
 
     async def _update_state(
-        self, new_state: Optional[GameDayState], *, viewer_anchor: Optional[datetime] = None,
+        self,
+        new_state: Optional[GameDayState],
+        *,
+        viewer_anchor: Optional[datetime] = None,
+        queue_viewer_state: bool = True,
     ) -> None:
         self._current_state = new_state
         if new_state is None:
@@ -762,11 +843,19 @@ class GameDayService:
 
         # Presentation synchronization consumes a copy only after canonical
         # state is already published. It never delays provider truth.
-        if self._viewer_sync is not None:
+        if self._viewer_sync is not None and queue_viewer_state:
             try:
-                self._viewer_sync.queue_state(
-                    payload, viewer_anchor or self._viewer_state_anchor(new_state),
+                anchor = (
+                    viewer_anchor
+                    if viewer_anchor is not None
+                    else self._viewer_state_anchor(new_state)
                 )
+                if anchor is not None:
+                    self._viewer_sync.queue_state(
+                        payload,
+                        anchor,
+                        apply_program_time_offset=new_state.status == "in-progress",
+                    )
             except Exception:
                 logger.exception("viewer-sync state queue failed")
 
@@ -1291,6 +1380,15 @@ class GameDayService:
                 parse_raw["wallclock"] = drive_raw["wallclock"]
             play = self._parse_play(parse_raw)
             wpa = self._compute_wpa(play_id, summary, colts_are_home)
+            if (
+                play.play_type in score_types
+                and not play.timestamp_trusted
+            ):
+                # ESPN commonly exposes the score before it exposes the play's
+                # wallclock. Do not turn poll time into presentation authority;
+                # leave the id unclaimed so a later poll can emit it with the
+                # real provider timestamp.
+                continue
             if play_id not in self._known_play_ids and play.play_type in score_types:
                 play.wpa = wpa
                 play.event_id = play_id
@@ -1315,6 +1413,11 @@ class GameDayService:
                 wpa=wpa,
                 event_id=conversion_id,
                 game_id=self._current_game_id,
+                # ESPN embedded conversions mutate the TD row and inherit the
+                # parent TD wallclock. That timestamp is truthful for the TD,
+                # not for the later try, so the conversion remains provider
+                # truth but is not independently safe for room actuation.
+                timestamp_trusted=False,
             ))
             self._known_play_ids.add(conversion_id)
 
@@ -1361,14 +1464,14 @@ class GameDayService:
                     # id yet; a later poll can make the competitiveness call.
                     continue
 
-                # Once provider-owned WP exists, this play has a final semantic
-                # eligibility decision. Claim it whether allowed or suppressed.
-                self._known_play_ids.add(play_id)
+                # Once provider-owned WP exists, non-competitive plays have
+                # a final semantic decision and can be claimed immediately.
                 if not (
                     SEMANTIC_EVENT_MIN_WIN_PROBABILITY
                     <= win_probability
                     <= SEMANTIC_EVENT_MAX_WIN_PROBABILITY
                 ):
+                    self._known_play_ids.add(play_id)
                     logger.info(
                         "Game Day semantic event suppressed type=%s play=%s "
                         "colts_wp=%.4f competitive_window=[%.4f, %.4f]",
@@ -1385,7 +1488,12 @@ class GameDayService:
                 timestamp = (
                     _parse_espn_datetime(wallclock_str)
                     if wallclock_str else None
-                ) or datetime.now(timezone.utc)
+                )
+                if timestamp is None:
+                    # A competitive semantic event stays reconsiderable until
+                    # ESPN supplies trustworthy provider time.
+                    continue
+                self._known_play_ids.add(play_id)
                 out.append(PlayEvent(
                     timestamp=timestamp,
                     play_type=play_type,
@@ -1514,13 +1622,15 @@ class GameDayService:
                 # ESPN text for postmortem digest readability.
                 text = str(raw.get("text") or "")
                 wallclock_str = raw.get("wallclock")
-                if wallclock_str:
-                    timestamp = (
-                        _parse_espn_datetime(wallclock_str)
-                        or datetime.now(timezone.utc)
-                    )
-                else:
-                    timestamp = datetime.now(timezone.utc)
+                timestamp = (
+                    _parse_espn_datetime(wallclock_str)
+                    if wallclock_str else None
+                )
+                if timestamp is None:
+                    # Do not claim a qualifying momentum play until its real
+                    # provider wallclock exists; viewer sync cannot safely
+                    # align an observation-time substitute.
+                    continue
                 out.append(PlayEvent(
                     timestamp=timestamp,
                     play_type="momentum",
@@ -1701,12 +1811,16 @@ class GameDayService:
                         yards = None
                     break
 
-        # Wallclock if present, else now.
+        # Preserve whether ESPN supplied a real provider wallclock. Observation
+        # time remains useful for canonical diagnostics, but it must never be
+        # mistaken for provider media time by viewer synchronization.
         wallclock_str = raw.get("wallclock")
-        if wallclock_str:
-            timestamp = _parse_espn_datetime(wallclock_str) or datetime.now(timezone.utc)
-        else:
-            timestamp = datetime.now(timezone.utc)
+        provider_timestamp = (
+            _parse_espn_datetime(wallclock_str)
+            if wallclock_str else None
+        )
+        timestamp_trusted = provider_timestamp is not None
+        timestamp = provider_timestamp or self._now_utc()
 
         return PlayEvent(
             timestamp=timestamp,
@@ -1716,6 +1830,7 @@ class GameDayService:
             kicker=kicker,
             yards=yards,
             scoring_team=scoring_team,
+            timestamp_trusted=timestamp_trusted,
         )
 
     def _pregame_state(self, active: dict) -> GameDayState:

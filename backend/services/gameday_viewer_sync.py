@@ -15,6 +15,11 @@ from enum import Enum
 from typing import Any, Callable, Literal, Optional
 
 
+GAMEDAY_VIEWER_SYNC_SETTING_KEY = "gameday_viewer_sync"
+DEFAULT_HULU_PROGRAM_TIME_OFFSET_SECONDS = 29.0
+MAX_ABS_PROGRAM_TIME_OFFSET_SECONDS = 120.0
+
+
 class ViewerReleaseResult(str, Enum):
     VISIBLE = "visible"
     SKIPPED_BY_SEEK = "skipped_by_seek"
@@ -44,6 +49,7 @@ class BufferedViewerState:
     sequence: int
     anchor_timestamp: float
     payload: dict[str, Any]
+    apply_program_time_offset: bool = True
 
 
 class GameDayViewerSync:
@@ -68,10 +74,14 @@ class GameDayViewerSync:
         ws_manager: Any = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
+        program_time_offset_seconds: float = 0.0,
     ) -> None:
         self._ws = ws_manager
         self._clock = clock
         self._monotonic = monotonic
+        self._program_time_offset_seconds = self._normalize_program_time_offset(
+            program_time_offset_seconds
+        )
         self._enabled = True
         self._closed = False
         self._condition = asyncio.Condition()
@@ -104,6 +114,69 @@ class GameDayViewerSync:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def program_time_offset_seconds(self) -> float:
+        return self._program_time_offset_seconds
+
+    @staticmethod
+    def _normalize_program_time_offset(value: float) -> float:
+        parsed = float(value)
+        return max(
+            -MAX_ABS_PROGRAM_TIME_OFFSET_SECONDS,
+            min(MAX_ABS_PROGRAM_TIME_OFFSET_SECONDS, parsed),
+        )
+
+    def _media_target_epoch(self, provider_epoch: float) -> float:
+        """Translate ESPN provider time into Hulu/Chromium program time."""
+        return provider_epoch + self._program_time_offset_seconds
+
+    def _latest_state_visible_epoch(self) -> Optional[float]:
+        """Return the monotonic viewer-program floor for queued state."""
+        visible_floor: Optional[float] = None
+        for state in self._state_history:
+            raw_visible = (
+                self._media_target_epoch(state.anchor_timestamp)
+                if state.apply_program_time_offset
+                else state.anchor_timestamp
+            )
+            visible_floor = (
+                raw_visible
+                if visible_floor is None
+                else max(visible_floor, raw_visible)
+            )
+        return visible_floor
+
+    def _release_media_target_epoch(
+        self,
+        target_epoch: float,
+        *,
+        apply_program_time_offset: bool,
+    ) -> float:
+        media_target = (
+            self._media_target_epoch(target_epoch)
+            if apply_program_time_offset
+            else target_epoch
+        )
+        if not apply_program_time_offset:
+            state_floor = self._latest_state_visible_epoch()
+            if state_floor is not None:
+                media_target = max(media_target, state_floor)
+        return media_target
+
+    async def set_program_time_offset_seconds(self, seconds: float) -> None:
+        normalized = self._normalize_program_time_offset(seconds)
+        async with self._condition:
+            if normalized == self._program_time_offset_seconds:
+                return
+            self._program_time_offset_seconds = normalized
+            # A different program-time calibration can select a different safe
+            # presentation frame. Clear the published frame and wake pending
+            # effect waiters so they immediately re-evaluate the translated
+            # target against the current trusted media clock.
+            self._invalidate_viewer_state()
+            self._condition.notify_all()
+        await self._publish_outputs(force_status=True)
 
     async def start(self) -> None:
         if self._watchdog_task is not None and not self._watchdog_task.done():
@@ -147,7 +220,13 @@ class GameDayViewerSync:
             -self.MAX_MEDIA_FUTURE_SECONDS <= lag <= self.MAX_MEDIA_LAG_SECONDS
         )
 
-    def queue_state(self, payload: dict[str, Any], anchor: datetime) -> None:
+    def queue_state(
+        self,
+        payload: dict[str, Any],
+        anchor: datetime,
+        *,
+        apply_program_time_offset: bool = True,
+    ) -> None:
         if anchor.tzinfo is None:
             anchor = anchor.replace(tzinfo=timezone.utc)
         anchor_timestamp = anchor.astimezone(timezone.utc).timestamp()
@@ -159,6 +238,7 @@ class GameDayViewerSync:
                 sequence=self._state_sequence,
                 anchor_timestamp=anchor_timestamp,
                 payload=copy.deepcopy(payload),
+                apply_program_time_offset=apply_program_time_offset,
             ),
         )
         self._spawn_publish()
@@ -319,6 +399,7 @@ class GameDayViewerSync:
         if sample is None:
             return {
                 "enabled": self._enabled,
+                "program_time_offset_seconds": self._program_time_offset_seconds,
                 "active": False,
                 "authoritative": False,
                 "presentation_active": False,
@@ -374,6 +455,7 @@ class GameDayViewerSync:
         lag = self._clock() - sample.media_timestamp
         return {
             "enabled": self._enabled,
+            "program_time_offset_seconds": self._program_time_offset_seconds,
             "active": supported and plausible and age <= self.SAMPLE_STALE_SECONDS,
             "authoritative": authoritative,
             "presentation_active": presentation_active,
@@ -391,17 +473,38 @@ class GameDayViewerSync:
             "viewer_state": copy.deepcopy(self._viewer_state),
         }
 
-    def _was_skipped_by_forward_seek(self, target_epoch: float) -> bool:
+    def _was_skipped_by_forward_seek(
+        self,
+        target_epoch: float,
+        *,
+        apply_program_time_offset: bool = True,
+    ) -> bool:
+        media_target_epoch = self._release_media_target_epoch(
+            target_epoch,
+            apply_program_time_offset=apply_program_time_offset,
+        )
         return any(
-            start < target_epoch <= end
+            start < media_target_epoch <= end
             for start, end in reversed(self._forward_seek_ranges)
         )
 
-    def release_decision(self, target: datetime) -> ViewerSyncDecision:
+    def release_decision(
+        self,
+        target: datetime,
+        *,
+        apply_program_time_offset: bool = True,
+    ) -> ViewerSyncDecision:
         if target.tzinfo is None:
             target = target.replace(tzinfo=timezone.utc)
         target_epoch = target.astimezone(timezone.utc).timestamp()
-        if self._was_skipped_by_forward_seek(target_epoch):
+        media_target_epoch = self._release_media_target_epoch(
+            target_epoch,
+            apply_program_time_offset=apply_program_time_offset,
+        )
+        if self._was_skipped_by_forward_seek(
+            target_epoch,
+            apply_program_time_offset=apply_program_time_offset,
+        ):
             return ViewerSyncDecision(
                 False, "skipped by forward seek", self._seek_generation, drop=True,
             )
@@ -413,7 +516,7 @@ class GameDayViewerSync:
                 )
             return ViewerSyncDecision(False, "viewer clock unavailable", self._seek_generation)
         media_timestamp = float(snap["media_timestamp"])
-        if media_timestamp >= target_epoch:
+        if media_timestamp >= media_target_epoch:
             return ViewerSyncDecision(False, "already visible", self._seek_generation)
         return ViewerSyncDecision(True, "await viewer clock", self._seek_generation)
 
@@ -422,6 +525,7 @@ class GameDayViewerSync:
         target: datetime,
         *,
         seek_generation: int,
+        apply_program_time_offset: bool = True,
     ) -> ViewerReleaseResult:
         if target.tzinfo is None:
             target = target.replace(tzinfo=timezone.utc)
@@ -437,13 +541,20 @@ class GameDayViewerSync:
                 return ViewerReleaseResult.UNAVAILABLE
 
             if self._seek_generation != generation:
-                if self._was_skipped_by_forward_seek(target_epoch):
+                if self._was_skipped_by_forward_seek(
+                    target_epoch,
+                    apply_program_time_offset=apply_program_time_offset,
+                ):
                     return ViewerReleaseResult.SKIPPED_BY_SEEK
                 generation = self._seek_generation
 
             snap = self.snapshot()
             if snap.get("authoritative"):
-                if float(snap["media_timestamp"]) >= target_epoch:
+                media_target_epoch = self._release_media_target_epoch(
+                    target_epoch,
+                    apply_program_time_offset=apply_program_time_offset,
+                )
+                if float(snap["media_timestamp"]) >= media_target_epoch:
                     return ViewerReleaseResult.VISIBLE
             elif not snap.get("presentation_active"):
                 return ViewerReleaseResult.UNAVAILABLE
@@ -459,10 +570,22 @@ class GameDayViewerSync:
                 pass
 
     def _select_viewer_state(self, media_timestamp: float) -> Optional[BufferedViewerState]:
-        for state in reversed(self._state_history):
-            if state.anchor_timestamp <= media_timestamp:
-                return state
-        return None
+        selected: Optional[BufferedViewerState] = None
+        visible_floor: Optional[float] = None
+        for state in self._state_history:
+            raw_visible = (
+                self._media_target_epoch(state.anchor_timestamp)
+                if state.apply_program_time_offset
+                else state.anchor_timestamp
+            )
+            visible_floor = (
+                raw_visible
+                if visible_floor is None
+                else max(visible_floor, raw_visible)
+            )
+            if visible_floor <= media_timestamp:
+                selected = state
+        return selected
 
     def _status_payload(self, snap: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -474,6 +597,7 @@ class GameDayViewerSync:
     def _status_key(self, snap: dict[str, Any]) -> tuple[Any, ...]:
         return (
             snap.get("enabled"),
+            snap.get("program_time_offset_seconds"),
             snap.get("active"),
             snap.get("authoritative"),
             snap.get("presentation_active"),

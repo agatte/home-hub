@@ -18,7 +18,11 @@ from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key, require_localhost
 from backend.services.gameday_service import GameDayService, gameday_state_payload
-from backend.services.gameday_viewer_sync import GameDayViewerSync
+from backend.services.gameday_viewer_sync import (
+    GAMEDAY_VIEWER_SYNC_SETTING_KEY,
+    MAX_ABS_PROGRAM_TIME_OFFSET_SECONDS,
+    GameDayViewerSync,
+)
 from backend.services.pregame_audio_policy import VALID_TIERS
 
 
@@ -39,6 +43,15 @@ class ViewerClockReport(BaseModel):
 
 class ViewerSyncToggleRequest(BaseModel):
     enabled: bool
+
+
+class ViewerSyncProgramOffsetRequest(BaseModel):
+    seconds: float = Field(
+        ...,
+        ge=-MAX_ABS_PROGRAM_TIME_OFFSET_SECONDS,
+        le=MAX_ABS_PROGRAM_TIME_OFFSET_SECONDS,
+    )
+
 
 logger = logging.getLogger("home_hub.api.gameday")
 
@@ -130,6 +143,29 @@ async def set_viewer_sync_enabled(
 ) -> dict[str, Any]:
     await _viewer_sync(request).set_enabled(body.enabled)
     return _viewer_sync(request).snapshot()
+
+
+@router.post(
+    "/viewer-sync/program-offset",
+    dependencies=[Depends(require_api_key)],
+)
+async def set_viewer_sync_program_offset(
+    body: ViewerSyncProgramOffsetRequest,
+    request: Request,
+) -> dict[str, Any]:
+    sync = _viewer_sync(request)
+    await sync.set_program_time_offset_seconds(body.seconds)
+
+    # Persist only this Hulu/Chromium clock-domain calibration. Canonical ESPN
+    # timestamps remain untouched and lower-latency/non-Hulu paths never read it.
+    from backend.api.routes.routines import load_setting, save_setting
+
+    config = await load_setting(GAMEDAY_VIEWER_SYNC_SETTING_KEY) or {}
+    config["hulu_program_time_offset_seconds"] = (
+        sync.program_time_offset_seconds
+    )
+    await save_setting(GAMEDAY_VIEWER_SYNC_SETTING_KEY, config)
+    return sync.snapshot()
 
 
 # IMPORTANT — /test/pregame MUST be registered BEFORE /test/{event}. FastAPI

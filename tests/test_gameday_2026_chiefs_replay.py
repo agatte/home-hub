@@ -21,6 +21,9 @@ from backend.services.gameday_service import (
     GameDayState,
     PlayEvent,
 )
+from backend.services.gameday_viewer_sync import (
+    DEFAULT_HULU_PROGRAM_TIME_OFFSET_SECONDS,
+)
 
 
 FIXTURE_PATH = (
@@ -39,7 +42,7 @@ OPPONENT_OR_ADMIN_BIG_SWING_IDS = {
     "4018729454843",  # Mahomes -> Walker 22 yd, Colts WPA -19.8%
 }
 
-EXPECTED_COLTS_CELEBRATION_EVENT_IDS = {
+EXPECTED_COLTS_SCORE_EVENT_IDS = {
     "401872945340",
     "401872945340:extra_point_good",
     "4018729451004",
@@ -49,6 +52,11 @@ EXPECTED_COLTS_CELEBRATION_EVENT_IDS = {
     "4018729453579",
     "4018729453579:extra_point_good",
     "4018729454698",
+}
+EXPECTED_COLTS_ROOM_EFFECT_EVENT_IDS = {
+    event_id
+    for event_id in EXPECTED_COLTS_SCORE_EVENT_IDS
+    if ":" not in event_id
 }
 EXPECTED_OPPONENT_SCORE_EVENT_IDS = {
     "401872945531",
@@ -243,7 +251,7 @@ def test_full_game_event_ledger_has_no_duplicates_or_opponent_momentum() -> None
     }
     momentum = [event for event in events if event.play_type == "momentum"]
 
-    assert colts_scores == EXPECTED_COLTS_CELEBRATION_EVENT_IDS
+    assert colts_scores == EXPECTED_COLTS_SCORE_EVENT_IDS
     assert opponent_scores == EXPECTED_OPPONENT_SCORE_EVENT_IDS
     assert len(momentum) == 1
     assert momentum[0].event_id == EXPECTED_MOMENTUM_EVENT_ID
@@ -276,10 +284,10 @@ async def test_entire_game_routes_only_colts_positive_events_to_room_effects() -
     routed_ids = {play.event_id for _, play in routed}
 
     assert routed_ids == (
-        EXPECTED_COLTS_CELEBRATION_EVENT_IDS
+        EXPECTED_COLTS_ROOM_EFFECT_EVENT_IDS
         | {EXPECTED_MOMENTUM_EVENT_ID}
     )
-    assert len(routed) == 10
+    assert len(routed) == 7
 
     for sequence_key, play in routed:
         if play.play_type == "momentum":
@@ -291,3 +299,25 @@ async def test_entire_game_routes_only_colts_positive_events_to_room_effects() -
 
     assert not (EXPECTED_OPPONENT_SCORE_EVENT_IDS & routed_ids)
     assert not (OPPONENT_OR_ADMIN_BIG_SWING_IDS & routed_ids)
+def test_real_room_hulu_program_targets_match_chiefs_couch_calibration() -> None:
+    events = {
+        event.event_id: event
+        for event in _extract_full_game_events(_load_summary())
+    }
+    offset = DEFAULT_HULU_PROGRAM_TIME_OFFSET_SECONDS
+
+    # These five Colts scoring plays are the ones Anthony evaluated relative
+    # to what was actually visible on Hulu. The +29s program-time translation
+    # explains the formerly early/late mix without baking in stream latency.
+    expected_targets = {
+        "401872945340": datetime(2026, 9, 21, 0, 31, 35, tzinfo=timezone.utc),
+        "4018729451004": datetime(2026, 9, 21, 1, 1, 13, tzinfo=timezone.utc),
+        "4018729451397": datetime(2026, 9, 21, 1, 15, 40, tzinfo=timezone.utc),
+        "4018729452035": datetime(2026, 9, 21, 1, 41, 5, tzinfo=timezone.utc),
+        "4018729453579": datetime(2026, 9, 21, 2, 55, 47, tzinfo=timezone.utc),
+    }
+
+    for event_id, expected in expected_targets.items():
+        translated_epoch = events[event_id].timestamp.timestamp() + offset
+        actual = datetime.fromtimestamp(translated_epoch, tz=timezone.utc)
+        assert actual == expected

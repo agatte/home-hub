@@ -392,3 +392,133 @@ async def test_backward_seek_clears_published_viewer_frame_until_safe_state_rese
         media_timestamp=base + 7.0, observed_at=_dt(fake.wall),
     )
     assert sync.snapshot()["viewer_state"] == {"clock": "12:00"}
+
+
+@pytest.mark.asyncio
+async def test_hulu_program_offset_translates_provider_event_time() -> None:
+    fake = FakeTime()
+    media = fake.wall - 30.0
+    provider_target = media - 19.0
+
+    direct = GameDayViewerSync(clock=fake.clock, monotonic=fake.monotonic)
+    await _trust_chrome_hulu(direct, fake, media)
+    assert direct.release_decision(_dt(provider_target)).defer is False
+
+    # Reset time so both services see the same trusted media position.
+    fake = FakeTime()
+    media = fake.wall - 30.0
+    calibrated = GameDayViewerSync(
+        clock=fake.clock,
+        monotonic=fake.monotonic,
+        program_time_offset_seconds=29.0,
+    )
+    await _trust_chrome_hulu(calibrated, fake, media)
+    decision = calibrated.release_decision(_dt(provider_target))
+
+    assert decision.defer is True
+    assert decision.reason == "await viewer clock"
+    assert calibrated.snapshot()["program_time_offset_seconds"] == 29.0
+
+
+@pytest.mark.asyncio
+async def test_hulu_program_offset_applies_to_viewer_state_selection() -> None:
+    fake = FakeTime()
+    ws = type("WS", (), {"broadcast": AsyncMock()})()
+    sync = GameDayViewerSync(
+        ws_manager=ws,
+        clock=fake.clock,
+        monotonic=fake.monotonic,
+        program_time_offset_seconds=29.0,
+    )
+    provider_anchor = fake.wall - 60.0
+    sync.queue_state({"clock": "score"}, _dt(provider_anchor))
+
+    # Final trusted sample lands at provider_anchor + 28: still one second
+    # before the translated visible moment.
+    await _trust_chrome_hulu(sync, fake, provider_anchor + 26.0)
+    assert sync.snapshot()["viewer_state"] is None
+
+    fake.advance(1.0)
+    await sync.record_sample(
+        service="hulu",
+        player="chromium",
+        playback_status="Playing",
+        media_timestamp=provider_anchor + 29.0,
+        observed_at=_dt(fake.wall),
+    )
+    assert sync.snapshot()["viewer_state"] == {"clock": "score"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_program_offset_change_reselects_safe_viewer_state() -> None:
+    fake = FakeTime()
+    ws = type("WS", (), {"broadcast": AsyncMock()})()
+    sync = GameDayViewerSync(
+        ws_manager=ws,
+        clock=fake.clock,
+        monotonic=fake.monotonic,
+    )
+    provider_anchor = fake.wall - 40.0
+    sync.queue_state({"clock": "score"}, _dt(provider_anchor))
+    await _trust_chrome_hulu(sync, fake, provider_anchor + 10.0)
+    assert sync.snapshot()["viewer_state"] == {"clock": "score"}
+
+    await sync.set_program_time_offset_seconds(29.0)
+
+    assert sync.snapshot()["program_time_offset_seconds"] == 29.0
+    assert sync.snapshot()["viewer_state"] is None
+@pytest.mark.asyncio
+async def test_observation_time_target_can_explicitly_bypass_program_offset() -> None:
+    fake = FakeTime()
+    media = fake.wall - 30.0
+    target = media - 10.0
+    sync = GameDayViewerSync(
+        clock=fake.clock,
+        monotonic=fake.monotonic,
+        program_time_offset_seconds=29.0,
+    )
+    await _trust_chrome_hulu(sync, fake, media)
+
+    assert sync.release_decision(target=_dt(target)).defer is True
+    bypass = sync.release_decision(
+        _dt(target),
+        apply_program_time_offset=False,
+    )
+    assert bypass.defer is False
+    assert bypass.reason == "already visible"
+@pytest.mark.asyncio
+async def test_final_observation_cannot_overtake_last_translated_viewer_frame() -> None:
+    fake = FakeTime()
+    sync = GameDayViewerSync(
+        clock=fake.clock,
+        monotonic=fake.monotonic,
+        program_time_offset_seconds=29.0,
+    )
+    provider_anchor = fake.wall - 60.0
+    final_observed = provider_anchor + 20.0
+    sync.queue_state(
+        {"status": "in-progress"},
+        _dt(provider_anchor),
+        apply_program_time_offset=True,
+    )
+    sync.queue_state(
+        {"status": "final"},
+        _dt(final_observed),
+        apply_program_time_offset=False,
+    )
+
+    # The raw final observation (provider+20) is behind the translated
+    # in-progress frame (provider+29), so neither may become visible at +25.
+    await _trust_chrome_hulu(sync, fake, provider_anchor + 23.0)
+    assert sync._select_viewer_state(provider_anchor + 25.0) is None
+    decision = sync.release_decision(
+        _dt(final_observed),
+        apply_program_time_offset=False,
+    )
+    assert decision.defer is True
+
+    # Once the viewer reaches the translated in-progress floor, final can
+    # advance on the same media instant rather than overtaking it.
+    selected = sync._select_viewer_state(provider_anchor + 29.0)
+    assert selected is not None
+    assert selected.payload == {"status": "final"}

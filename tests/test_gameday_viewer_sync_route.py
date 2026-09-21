@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from backend.api.routes.gameday import (
     ViewerClockReport,
+    ViewerSyncProgramOffsetRequest,
     ViewerSyncToggleRequest,
     get_viewer_sync,
     report_viewer_clock,
     set_viewer_sync_enabled,
+    set_viewer_sync_program_offset,
 )
 
 
@@ -105,3 +107,41 @@ async def test_status_and_toggle_delegate_to_viewer_sync_service():
 
     viewer_sync.set_enabled.assert_awaited_once_with(False)
     assert result == {"enabled": True, "authoritative": True}
+
+
+@pytest.mark.asyncio
+async def test_program_offset_update_persists_hulu_calibration() -> None:
+    viewer_sync = MagicMock()
+    viewer_sync.program_time_offset_seconds = 29.0
+    viewer_sync.set_program_time_offset_seconds = AsyncMock()
+    viewer_sync.snapshot.return_value = {
+        "enabled": True,
+        "program_time_offset_seconds": 29.0,
+    }
+    request = _request(viewer_sync)
+
+    with (
+        patch(
+            "backend.api.routes.routines.load_setting",
+            AsyncMock(return_value={"other": "keep"}),
+        ) as load_setting,
+        patch(
+            "backend.api.routes.routines.save_setting",
+            AsyncMock(),
+        ) as save_setting,
+    ):
+        result = await set_viewer_sync_program_offset(
+            ViewerSyncProgramOffsetRequest(seconds=29.0),
+            request,
+        )
+
+    viewer_sync.set_program_time_offset_seconds.assert_awaited_once_with(29.0)
+    load_setting.assert_awaited_once_with("gameday_viewer_sync")
+    save_setting.assert_awaited_once_with(
+        "gameday_viewer_sync",
+        {
+            "other": "keep",
+            "hulu_program_time_offset_seconds": 29.0,
+        },
+    )
+    assert result["program_time_offset_seconds"] == 29.0

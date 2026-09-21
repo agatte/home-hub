@@ -1483,7 +1483,7 @@ async def test_derived_conversion_followup_bypasses_global_play_cooldown():
 
 
 @pytest.mark.asyncio
-async def test_standalone_two_point_score_keeps_normal_cooldown():
+async def test_standalone_two_point_score_bypasses_parent_score_cooldown():
     orch, _, _, _, _ = _make_orchestrator()
     orch._run_sequence = AsyncMock()
     evt = PlayEvent(
@@ -1493,7 +1493,31 @@ async def test_standalone_two_point_score_keeps_normal_cooldown():
         event_id="standalone-2pt", synthetic=True,
     )
     await orch.on_play_event(evt)
-    assert orch._run_sequence.await_args.kwargs["bypass_cooldown"] is False
+    assert orch._run_sequence.await_args.kwargs["bypass_cooldown"] is True
+
+
+@pytest.mark.asyncio
+async def test_real_embedded_conversion_without_independent_time_is_silent():
+    orch, _, _, _, _ = _make_orchestrator()
+    orch._run_sequence = AsyncMock()
+    evt = PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type="extra_point_good",
+        description="Jonathan Taylor 3 Yd Rush (Spencer Shrader Kick)",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team="colts",
+        event_id="td-1:extra_point_good",
+        game_id="game-1",
+        timestamp_trusted=False,
+        synthetic=False,
+    )
+
+    await orch.on_play_event(evt)
+
+    orch._run_sequence.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_conversion_cooldown_bypass_does_not_extend_global_window(monkeypatch):
@@ -1680,3 +1704,40 @@ async def test_batch_anchor_wait_still_drops_play_skipped_at_its_provider_timest
     viewer.wait_until_visible.assert_awaited_once()
     assert viewer.wait_until_visible.await_args.args[0] == play.viewer_anchor
     orch._run_sequence.assert_not_awaited()
+@pytest.mark.asyncio
+async def test_final_transition_bypasses_hulu_provider_program_offset() -> None:
+    viewer = _viewer_sync(ViewerReleaseResult.VISIBLE)
+    orch, _, _, _, gameday = _make_orchestrator(viewer_sync=viewer)
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority"),
+    )
+    gameday.current_state.return_value = GameDayState(
+        status="final",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=30,
+        score_opp=33,
+        quarter=5,
+        clock="0:00",
+        possession=None,
+        last_play=None,
+    )
+    orch._run_sequence = AsyncMock()
+    transition = GameDayStateTransition(
+        from_status="in-progress",
+        to_status="final",
+        timestamp=datetime.now(timezone.utc),
+        game_id="game-1",
+    )
+
+    await orch.on_state_transition(transition)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert viewer.release_decision.call_args_list[0].kwargs[
+        "apply_program_time_offset"
+    ] is False
+    assert viewer.wait_until_visible.await_args.kwargs[
+        "apply_program_time_offset"
+    ] is False
+    orch._run_sequence.assert_awaited_once()

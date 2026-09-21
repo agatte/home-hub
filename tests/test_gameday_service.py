@@ -176,6 +176,7 @@ def _td_play(play_id: str, text: str = "J.Taylor 5 yard run, TOUCHDOWN.") -> dic
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 2},
         "clock": {"displayValue": "5:32"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -189,6 +190,7 @@ def _fg_play(play_id: str, text: str = "S.Shrader 24 yard field goal is GOOD.") 
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 1},
         "clock": {"displayValue": "10:37"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -204,6 +206,7 @@ def _safety_play(play_id: str = "s1") -> dict:
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 2},
         "clock": {"displayValue": "0:42"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -217,6 +220,7 @@ def _pat_play(play_id: str = "p1") -> dict:
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 2},
         "clock": {"displayValue": "8:12"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -230,6 +234,7 @@ def _2pt_play(play_id: str = "tp1") -> dict:
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 4},
         "clock": {"displayValue": "1:58"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -244,6 +249,7 @@ def _pick_six_play(play_id: str = "ps1") -> dict:
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 3},
         "clock": {"displayValue": "12:04"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -257,6 +263,7 @@ def _fumble_td_play(play_id: str = "ft1") -> dict:
         "team": {"id": COLTS_TEAM_ID},
         "period": {"number": 2},
         "clock": {"displayValue": "6:21"},
+        "wallclock": "2026-09-21T01:00:00Z",
     }
 
 
@@ -1827,6 +1834,7 @@ def _momentum_summary(*plays_with_wp: tuple[str, float]) -> dict:
             "text": f"Synthetic play {pid}",
             "type": {"text": ""},
             "scoringType": {},
+            "wallclock": "2026-09-21T01:00:00Z",
         })
         wp_entries.append({
             "playId": pid,
@@ -1923,7 +1931,8 @@ class TestMomentumExtraction:
                 "previous": [],
                 "current": {"plays": [
                     {"id": "p1", "text": "in-drive big play",
-                     "type": {}, "scoringType": {}},
+                     "type": {}, "scoringType": {},
+                     "wallclock": "2026-09-21T01:00:00Z"},
                 ]},
             },
             "winprobability": [
@@ -1995,6 +2004,7 @@ def _semantic_play(
         "text": text,
         "type": {"text": play_type},
         "scoringPlay": scoring,
+        "wallclock": "2026-09-21T01:00:00Z",
         "start": {"down": down, "team": {"id": start_team}},
         "end": {"down": 1, "team": {"id": end_team}},
     }
@@ -2330,6 +2340,7 @@ class TestRealScoringShapes253:
             "scoringPlay": True, "scoringType": {"abbreviation": "TD"},
             "type": {"text": "Rushing Touchdown"},
             "team": {"id": COLTS_TEAM_ID},
+            "wallclock": "2026-09-21T01:00:00Z",
         }
         first = svc._extract_new_plays({"scoringPlays": [raw]})
         assert [p.play_type for p in first] == ["touchdown"]
@@ -2349,6 +2360,7 @@ class TestRealScoringShapes253:
             "scoringPlay": True, "scoringType": {"abbreviation": "TD"},
             "type": {"text": "Passing Touchdown"},
             "team": {"id": COLTS_TEAM_ID},
+            "wallclock": "2026-09-21T01:00:00Z",
         }
         plays = svc._extract_new_plays({"scoringPlays": [raw]})
         assert [p.play_type for p in plays] == ["touchdown", "two_point_conv"]
@@ -2367,6 +2379,7 @@ class TestRealScoringShapes253:
             "scoringType": {"abbreviation": "TD"},
             "type": {"text": "Passing Touchdown"},
             "team": {"id": COLTS_TEAM_ID},
+            "wallclock": "2026-09-21T01:00:00Z",
         }
         assert [p.play_type for p in svc._extract_new_plays({"scoringPlays": [raw]})] == ["touchdown"]
 
@@ -2590,7 +2603,7 @@ async def test_provider_batch_assigns_shared_visual_anchor_to_each_new_play():
     second = _td_play("batch-2", "A.Richardson 2 yard run, TOUCHDOWN.")
     second["wallclock"] = second_time.isoformat().replace("+00:00", "Z")
     svc._fetch_summary = AsyncMock(return_value=_summary_payload(
-        period=2, clock="5:24", score_colts=14, score_opp=0,
+        period=2, clock="5:24", score_colts=12, score_opp=0,
         plays=[first, second],
     ))
     seen: list[PlayEvent] = []
@@ -2612,3 +2625,180 @@ async def test_provider_batch_assigns_shared_visual_anchor_to_each_new_play():
     assert seen[0].viewer_anchor == second_time
     assert seen[1].viewer_anchor == second_time
     assert viewer.queue_state.call_args.args[1] == second_time
+
+
+def test_score_changing_viewer_anchor_requires_complete_trusted_score_timing() -> None:
+    svc = _make_service()
+    provider_time = datetime(2026, 9, 21, 0, 31, 6, tzinfo=timezone.utc)
+    previous = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=0,
+        score_opp=0,
+        quarter=1,
+        clock="10:00",
+        possession="colts",
+        last_play=None,
+    )
+    touchdown = PlayEvent(
+        timestamp=provider_time,
+        play_type="touchdown",
+        description="TD",
+        player="Tyler Warren",
+        kicker=None,
+        yards=1,
+        scoring_team="colts",
+        event_id="td",
+        game_id="game",
+        timestamp_trusted=True,
+    )
+    scored = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=6,
+        score_opp=0,
+        quarter=1,
+        clock="9:51",
+        possession="colts",
+        last_play=touchdown,
+    )
+
+    assert svc._viewer_state_anchor(
+        scored,
+        previous_state=previous,
+        scoring_events=(touchdown,),
+    ) == provider_time
+
+    embedded_pat = PlayEvent(
+        timestamp=provider_time,
+        play_type="extra_point_good",
+        description="TD row mutated with kick",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team="colts",
+        event_id="td:extra_point_good",
+        game_id="game",
+        timestamp_trusted=False,
+    )
+    after_pat = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=0,
+        quarter=1,
+        clock="9:51",
+        possession="colts",
+        last_play=touchdown,
+    )
+
+    assert svc._viewer_state_anchor(
+        after_pat,
+        previous_state=scored,
+        scoring_events=(embedded_pat,),
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_unanchored_score_frame_still_publishes_canonical_truth() -> None:
+    ws = _make_ws_mock()
+    viewer = MagicMock()
+    viewer.queue_state = MagicMock()
+    svc = _make_service(ws=ws)
+    previous = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=6,
+        score_opp=0,
+        quarter=1,
+        clock="9:51",
+        possession="colts",
+        last_play=None,
+    )
+    svc._current_state = previous
+    new_state = GameDayState(
+        status="in-progress",
+        opponent="Kansas City Chiefs",
+        kickoff_utc=None,
+        score_colts=7,
+        score_opp=0,
+        quarter=1,
+        clock="9:51",
+        possession="colts",
+        last_play=None,
+    )
+    svc.set_viewer_sync(viewer)
+    viewer.queue_state.reset_mock()
+    ws.broadcast.reset_mock()
+
+    await svc._update_state(
+        new_state,
+        viewer_anchor=None,
+        queue_viewer_state=False,
+    )
+
+    ws.broadcast.assert_awaited_once()
+    assert ws.broadcast.await_args.args[0] == "gameday_state"
+    assert ws.broadcast.await_args.args[1]["score_colts"] == 7
+    viewer.queue_state.assert_not_called()
+
+
+def test_score_without_provider_wallclock_stays_pending_until_timestamp_arrives() -> None:
+    svc = _make_service()
+    svc._current_game_id = "timestamp-game"
+    raw = _td_play("timestamp-td")
+    raw.pop("wallclock")
+
+    assert svc._extract_new_plays({"scoringPlays": [raw]}) == []
+    assert "timestamp-td" not in svc._known_play_ids
+
+    raw["wallclock"] = "2026-09-21T00:31:06Z"
+    plays = svc._extract_new_plays({"scoringPlays": [raw]})
+
+    assert [play.play_type for play in plays] == ["touchdown"]
+    assert plays[0].timestamp == datetime(
+        2026, 9, 21, 0, 31, 6, tzinfo=timezone.utc
+    )
+    assert plays[0].timestamp_trusted is True
+
+
+def test_mutated_td_pat_waits_for_real_timestamp_and_preserves_parent_order() -> None:
+    svc = _make_service()
+    svc._current_game_id = "timestamp-pat-game"
+    raw = _td_play("timestamp-pat")
+    raw.pop("wallclock")
+
+    assert svc._extract_new_plays({"scoringPlays": [raw]}) == []
+
+    raw["text"] = (
+        "J.Taylor 5 yard run, TOUCHDOWN. "
+        "S.Shrader extra point is GOOD, Center-X."
+    )
+    raw["wallclock"] = "2026-09-21T00:31:06Z"
+    plays = svc._extract_new_plays({"scoringPlays": [raw]})
+
+    assert [play.play_type for play in plays] == [
+        "touchdown",
+        "extra_point_good",
+    ]
+    assert plays[0].timestamp == plays[1].timestamp
+    assert plays[0].event_id == "timestamp-pat"
+    assert plays[1].event_id == "timestamp-pat:extra_point_good"
+
+
+def test_qualifying_momentum_without_provider_wallclock_remains_reconsiderable() -> None:
+    svc = _make_service()
+    summary = _momentum_summary(("pending-momentum", 0.30))
+    raw = summary["drives"]["previous"][0]["plays"][0]
+    raw.pop("wallclock")
+
+    assert svc._extract_new_momentum_plays(summary) == []
+    assert "pending-momentum" not in svc._known_play_ids
+
+    raw["wallclock"] = "2026-09-21T03:35:03Z"
+    plays = svc._extract_new_momentum_plays(summary)
+    assert [play.event_id for play in plays] == ["pending-momentum"]

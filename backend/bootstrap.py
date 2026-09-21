@@ -1022,12 +1022,34 @@ async def lifespan(app: FastAPI):
     # for play events / state transitions register here in later slices
     # (Slice B: CelebrationOrchestrator). Public read-only via /api/gameday/*.
     from backend.services.gameday_service import GameDayService
-    from backend.services.gameday_viewer_sync import GameDayViewerSync
+    from backend.services.gameday_viewer_sync import (
+        DEFAULT_HULU_PROGRAM_TIME_OFFSET_SECONDS,
+        GAMEDAY_VIEWER_SYNC_SETTING_KEY,
+        GameDayViewerSync,
+    )
     gameday = GameDayService(
         automation_engine=automation,
         ws_manager=ws_manager,
     )
-    gameday_viewer_sync = GameDayViewerSync(ws_manager=ws_manager)
+    viewer_sync_config = await load_setting(GAMEDAY_VIEWER_SYNC_SETTING_KEY) or {}
+    raw_program_offset = viewer_sync_config.get(
+        "hulu_program_time_offset_seconds",
+        DEFAULT_HULU_PROGRAM_TIME_OFFSET_SECONDS,
+    )
+    try:
+        program_time_offset = float(raw_program_offset)
+    except (TypeError, ValueError):
+        program_time_offset = DEFAULT_HULU_PROGRAM_TIME_OFFSET_SECONDS
+        app_logger.warning(
+            "Invalid persisted Game Day viewer program-time offset %r; "
+            "using default %.1fs",
+            raw_program_offset,
+            program_time_offset,
+        )
+    gameday_viewer_sync = GameDayViewerSync(
+        ws_manager=ws_manager,
+        program_time_offset_seconds=program_time_offset,
+    )
     await gameday_viewer_sync.start()
     gameday.set_viewer_sync(gameday_viewer_sync)
     await gameday.connect()

@@ -736,6 +736,24 @@ class CelebrationOrchestrator:
             # `other` and anything unmapped — not a celebratable event.
             return
 
+        # ESPN often embeds a successful PAT/2PT by mutating the parent TD
+        # row. The derived event inherits the TD wallclock, which is not a
+        # trustworthy timestamp for the later try. Preserve that provider truth
+        # for state/history, but never invent a separately synchronized room
+        # moment from the parent's timestamp. Standalone conversion rows with
+        # their own provider wallclock remain celebratable.
+        if (
+            not evt.synthetic
+            and evt.play_type in {"extra_point_good", "two_point_conv"}
+            and not evt.timestamp_trusted
+        ):
+            logger.info(
+                "celebration: skipping %s — embedded conversion has no "
+                "independent provider timestamp",
+                key,
+            )
+            return
+
         context = self._build_context(evt)
         allowed, reason = self._authority_allows(play=evt)
         if not allowed:
@@ -744,10 +762,10 @@ class CelebrationOrchestrator:
                 key, reason,
             )
             return
-        conversion_followup = bool(
-            evt.event_id
-            and evt.event_id.endswith((":extra_point_good", ":two_point_conv"))
-        )
+        conversion_followup = evt.play_type in {
+            "extra_point_good",
+            "two_point_conv",
+        }
         if self._maybe_defer_for_viewer(
             key, context, evt, bypass_cooldown=conversion_followup,
         ):
@@ -775,11 +793,17 @@ class CelebrationOrchestrator:
             return False
         event_time = play.timestamp
         target_time = target or play.viewer_anchor or event_time
+        apply_program_time_offset = not (
+            transition is not None and transition.to_status == "final"
+        )
         try:
             # Skip classification always uses the play's own provider time. A
             # later batch/presentation anchor may delay release, but must never
             # hide the fact that the actual play was jumped over.
-            event_decision = viewer_sync.release_decision(event_time)
+            event_decision = viewer_sync.release_decision(
+                event_time,
+                apply_program_time_offset=apply_program_time_offset,
+            )
             if event_decision.drop:
                 logger.info(
                     "celebration: dropping %s - viewer skipped provider_ts=%s",
@@ -789,7 +813,10 @@ class CelebrationOrchestrator:
             decision = (
                 event_decision
                 if target_time == event_time
-                else viewer_sync.release_decision(target_time)
+                else viewer_sync.release_decision(
+                    target_time,
+                    apply_program_time_offset=apply_program_time_offset,
+                )
             )
         except Exception:
             logger.exception("celebration: viewer sync decision failed")
@@ -805,7 +832,7 @@ class CelebrationOrchestrator:
         task = asyncio.create_task(
             self._run_viewer_synced_sequence(
                 key, context, play, target_time, decision.seek_generation,
-                bypass_cooldown, transition,
+                bypass_cooldown, transition, apply_program_time_offset,
             ),
             name=f"gameday-viewer-sync:{key}",
         )
@@ -830,12 +857,15 @@ class CelebrationOrchestrator:
         seek_generation: int,
         bypass_cooldown: bool,
         transition: Optional[GameDayStateTransition],
+        apply_program_time_offset: bool,
     ) -> None:
         current = asyncio.current_task()
         try:
             try:
                 result = await self._viewer_sync.wait_until_visible(
-                    target, seek_generation=seek_generation,
+                    target,
+                    seek_generation=seek_generation,
+                    apply_program_time_offset=apply_program_time_offset,
                 )
             except Exception:
                 logger.exception(
@@ -856,7 +886,10 @@ class CelebrationOrchestrator:
             # that crossed the actual event can never replay it at the later
             # batch frame.
             try:
-                event_decision = self._viewer_sync.release_decision(play.timestamp)
+                event_decision = self._viewer_sync.release_decision(
+                    play.timestamp,
+                    apply_program_time_offset=apply_program_time_offset,
+                )
             except Exception:
                 logger.exception(
                     "celebration: viewer sync post-wait decision failed for %s", key,
