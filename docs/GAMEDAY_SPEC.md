@@ -407,6 +407,12 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 2. ✓ Real-fixture WPA computation test — extracts win-probability deltas from the 2025-09-07 Colts game.
 3. ✓ Backend re-deployed (commit `ca712bd`); deploy-verifier ok.
 
+**2026-09-20 Colts at Chiefs full-game regression**:
+1. ✓ `tests/fixtures/espn_colts_chiefs_2026_09_20_summary.json` preserves the post-final ESPN evidence for the complete overtime game: 213 drive plays, 13 scoring rows, and 211 win-probability samples.
+2. ✓ `tests/test_gameday_2026_chiefs_replay.py` replays the fixture offline through score/semantic/momentum extraction and celebration routing with all device collaborators mocked.
+3. ✓ The regression locks the incident contract: all Chiefs scores are silent, negative Colts WPA is silent, administrative rows such as `END QUARTER 4` are silent, the only generic `big_play` is the Colts' 48-yard Daniel Jones → Laquon Treadwell completion, event IDs never duplicate, and the final 30–33 overtime state remains truthful.
+4. ✓ This replay test must remain device-free; it is CI protection, not a synthetic production celebration.
+
 **Phase C polish** (also 2026-05-07):
 1. ✓ Celebration EventLogger wiring (β) — 33 celebration tests pass including 3 new `TestEventLoggerWiring` cases for the trigger format + backwards-compat + set_light failure handling. Shipped commit `34fc550`.
 2. ✓ Agent fleet — `gameday-preflight` + `gameday-postmortem` registered as spawnable subagents; runbook entries #12 #13 + Pre-fire detector live. Smoke tests verified both via registered subagent types post-restart.
