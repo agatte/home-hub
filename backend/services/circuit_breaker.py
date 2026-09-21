@@ -185,7 +185,13 @@ class CircuitBreaker:
             result = await asyncio.wait_for(
                 awaitable, timeout=call_timeout or self.call_timeout
             )
-        except BaseException:
+        except asyncio.CancelledError:
+            # Caller/task cancellation is lifecycle control, not evidence that
+            # the wrapped dependency failed. Counting it toward the breaker
+            # can falsely open a healthy service during request disconnects or
+            # superseded background work.
+            raise
+        except Exception:
             with self._lock:
                 self._record_failure_locked()
             raise

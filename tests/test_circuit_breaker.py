@@ -144,6 +144,27 @@ class TestCooldownAndHalfOpen:
         assert second_opened_at > first_opened_at
 
 
+class TestCancellation:
+    @pytest.mark.asyncio
+    async def test_cancelled_call_does_not_count_as_failure(self, breaker):
+        started = asyncio.Event()
+
+        async def _wait_forever() -> None:
+            started.set()
+            await asyncio.sleep(60)
+
+        task = asyncio.create_task(breaker.call(_wait_forever))
+        await started.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        snap = breaker.snapshot()
+        assert snap["consecutive_failures"] == 0
+        assert breaker.state == CircuitBreaker.CLOSED
+
+
 class TestTimeout:
     @pytest.mark.asyncio
     async def test_slow_call_counts_as_failure(self, breaker):
