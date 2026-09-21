@@ -16,7 +16,9 @@ from sqlalchemy import delete, select
 
 from backend.database import async_session
 from backend.models import ModePlaylist
-from backend.services.audio_ownership import QUEUE_SOURCE, TRANSPORT
+from backend.services.audio_ownership import QUEUE_SOURCE, TRANSPORT, VOLUME
+from backend.services.mode_volume_policy import compute_mode_volume
+from backend.services.mode_volume_service import MODE_VOLUME_CURVES_KEY
 
 logger = logging.getLogger("home_hub.music")
 
@@ -29,6 +31,18 @@ DEFAULT_PREGAME_HYPE_FAVORITE = "It's Lit!"
 
 MODE_AUTOPLAY_OWNER = "music_mapper"
 MODE_AUTOPLAY_PURPOSE = "mode_auto_play"
+
+_PREGAME_SOURCE_TRANSPORT_KEYS = (
+    "queue_uid",
+    "queue_update_id",
+    "queue_size",
+    "queue_first_item_hash",
+    "play_mode",
+    "transport_state",
+    "current_uri",
+    "queue_track",
+    "queue_track_uri",
+)
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -98,12 +112,14 @@ class MusicMapper:
         weather_service=None,
         tts_service=None,
         audio_ownership=None,
+        setting_loader=None,
     ) -> None:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
         self._event_logger = event_logger
         self._music_bandit = music_bandit
         self._audio_ownership = audio_ownership
+        self._setting_loader = setting_loader
         # Phase B (2026-05-12): weather context for the bandit's 4-tuple
         # arm key. Optional — when None the bandit falls back to its
         # WEATHER_ANY sentinel and behaves like Phase A's 3-tuple shape.
@@ -124,6 +140,376 @@ class MusicMapper:
     def set_automation(self, automation) -> None:
         """Inject the automation engine reference (called from bootstrap)."""
         self._automation = automation
+
+    def _pregame_audio_lifecycle_reason(
+        self,
+        *,
+        synthetic: bool = False,
+    ) -> Optional[str]:
+        """Return why a pending T-30 audio action is no longer allowed."""
+        if self._automation is None:
+            return None
+        mode = str(getattr(self._automation, "current_mode", "") or "").strip()
+        allowed_modes = {"gameday", "pregameday"} if synthetic else {"gameday"}
+        if mode not in allowed_modes:
+            return f"mode_changed:{mode or 'unknown'}"
+        house_state = str(
+            getattr(self._automation, "house_state", "") or ""
+        ).strip().casefold()
+        if house_state in {"away", "sleeping"}:
+            return f"house_state:{house_state}"
+        try:
+            if self._automation.is_dnd_active():
+                return "dnd_active"
+        except Exception:
+            return "dnd_authority_unavailable"
+        return None
+
+    @staticmethod
+    def _pregame_source_transport_matches(
+        first: dict | None,
+        second: dict | None,
+    ) -> bool:
+        if not first or not second:
+            return False
+        return all(
+            first.get(key) == second.get(key)
+            for key in _PREGAME_SOURCE_TRANSPORT_KEYS
+        )
+
+    @staticmethod
+    def _pregame_hype_baseline_replaceable(
+        evidence: dict | None,
+    ) -> bool:
+        """Whether an idle Sonos source may be conditionally replaced at T-30.
+
+        Pregame may replace an unchanged stopped queue from earlier listening,
+        but active/paused playback and mute are authoritative user intent.
+        """
+        if not evidence:
+            return False
+        if str(evidence.get("transport_state") or "").upper() not in {
+            "STOPPED",
+            "NO_MEDIA_PRESENT",
+        }:
+            return False
+        return not bool(evidence.get("mute"))
+
+    async def _pregame_hype_volume_target(
+        self,
+        *,
+        current_volume: int,
+    ) -> tuple[Optional[int], Optional[str]]:
+        """Resolve the existing Game Day mode-volume policy for startup."""
+        config = {}
+        if self._setting_loader is not None:
+            try:
+                config = await self._setting_loader(MODE_VOLUME_CURVES_KEY) or {}
+            except Exception:
+                logger.exception("pregame hype mode-volume config read failed")
+                return None, "volume_policy_unavailable"
+
+        if self._automation is not None:
+            period_getter = getattr(self._automation, "_get_time_period", None)
+            try:
+                period = (
+                    str(period_getter())
+                    if callable(period_getter)
+                    else _time_period(datetime.now(tz=TZ).hour)
+                )
+            except Exception:
+                return None, "volume_policy_unavailable"
+        else:
+            period = _time_period(datetime.now(tz=TZ).hour)
+
+        decision = compute_mode_volume(
+            "gameday",
+            time_period=period,
+            dnd=False,
+            current_volume=int(current_volume),
+            config=config,
+        )
+        target = int(decision.target)
+        if decision.reason == "no_curve":
+            return None, "volume_policy_unavailable"
+        if target <= 0:
+            return None, "gameday_volume_zero"
+        return target, None
+
+    async def _reserve_pregame_hype_lease(
+        self,
+        baseline_playback: dict | None,
+    ) -> tuple[dict | None, str | None]:
+        """Hold Game Day authority across TTS + the post-speech settle gap."""
+        if self._audio_ownership is None:
+            return None, "ownership_unavailable"
+        if baseline_playback is None:
+            return None, "ownership_preflight_unavailable"
+        if not self._pregame_hype_baseline_replaceable(baseline_playback):
+            if bool(baseline_playback.get("mute")):
+                return None, "sonos_muted_before_tts"
+            state = str(
+                baseline_playback.get("transport_state") or "unknown"
+            ).lower()
+            return None, f"sonos_busy_before_tts:{state}"
+
+        # Do not mark this as phase=reserved: TTS interruption leases are
+        # allowed to overlay established owners, while manual ingress still
+        # invalidates the exact queue/transport/volume dimensions underneath.
+        lease = await self._audio_ownership.acquire(
+            owner=MODE_AUTOPLAY_OWNER,
+            purpose=MODE_AUTOPLAY_PURPOSE,
+            dimensions=(QUEUE_SOURCE, TRANSPORT, VOLUME),
+            evidence={"phase": "pending_hype", "sonos": baseline_playback},
+            metadata={
+                "mode": "gameday",
+                "favorite_title": "pregame_hype_pending",
+                "source": "pregame_audio",
+            },
+        )
+        if lease is None:
+            return None, "audio_ownership_busy"
+        return lease, None
+
+    async def _release_pregame_lease(
+        self,
+        lease: dict | None,
+        *,
+        reason: str,
+    ) -> None:
+        if self._audio_ownership is None or lease is None:
+            return
+        if await self._audio_ownership.is_valid(lease["lease_id"]):
+            await self._audio_ownership.release(
+                lease["lease_id"],
+                reason=reason,
+            )
+
+    async def _play_pregame_hype_owned(
+        self,
+        *,
+        title: str,
+        baseline_playback: dict | None,
+        lease: dict | None,
+        synthetic: bool = False,
+    ) -> tuple[bool, str]:
+        """Start hype only while the pre-TTS authority/evidence still holds."""
+        lifecycle_reason = self._pregame_audio_lifecycle_reason(
+            synthetic=synthetic,
+        )
+        if lifecycle_reason:
+            await self._release_pregame_lease(
+                lease, reason=f"pregame_hype_lifecycle:{lifecycle_reason}",
+            )
+            return False, f"lifecycle:{lifecycle_reason}"
+        if not self._sonos.connected:
+            await self._release_pregame_lease(
+                lease, reason="pregame_hype_sonos_disconnected",
+            )
+            return False, "sonos_disconnected"
+        if baseline_playback is None or lease is None:
+            return False, "ownership_preflight_unavailable"
+        if not await self._audio_ownership.is_valid(
+            lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+        ):
+            await self._release_pregame_lease(
+                lease, reason="pregame_hype_manual_source_takeover",
+            )
+            return False, "manual_source_takeover_during_tts_gap"
+
+        final_playback = await self._sonos.get_playback_ownership_evidence()
+        if not self._pregame_source_transport_matches(
+            baseline_playback,
+            final_playback,
+        ):
+            await self._release_pregame_lease(
+                lease, reason="pregame_hype_source_changed",
+            )
+            return False, "sonos_source_changed_during_tts_gap"
+        if not self._pregame_hype_baseline_replaceable(final_playback):
+            await self._release_pregame_lease(
+                lease, reason="pregame_hype_sonos_busy_after_tts",
+            )
+            if bool((final_playback or {}).get("mute")):
+                return False, "sonos_muted_after_tts"
+            return False, "sonos_busy_after_tts"
+
+        baseline_volume = int(baseline_playback.get("volume") or 0)
+        final_volume = int((final_playback or {}).get("volume") or 0)
+        volume_lease_valid = await self._audio_ownership.is_valid(
+            lease["lease_id"], (VOLUME,),
+        )
+        # Central manual volume invalidates VOLUME. Off-dashboard volume
+        # changes cannot touch the lease, so the value comparison provides the
+        # equivalent protection without blocking queue/transport hype.
+        volume_still_owned = (
+            volume_lease_valid and final_volume == baseline_volume
+        )
+        if not volume_still_owned and volume_lease_valid:
+            # Off-dashboard volume changes do not invalidate central leases.
+            # Relinquish our stale volume claim before continuing at the
+            # externally selected level.
+            await self._audio_ownership.release(
+                lease["lease_id"],
+                dimensions=(VOLUME,),
+                reason="pregame_hype_external_volume_change",
+            )
+
+        startup_volume: Optional[int] = None
+        if volume_still_owned:
+            startup_volume, volume_reason = await self._pregame_hype_volume_target(
+                current_volume=final_volume,
+            )
+            if startup_volume is None:
+                await self._release_pregame_lease(
+                    lease,
+                    reason=f"pregame_hype_{volume_reason or 'volume_policy_unavailable'}",
+                )
+                return False, str(volume_reason or "volume_policy_unavailable")
+
+        play_reason = "play_failed"
+        ownership_established = False
+        try:
+            async def _owned_play() -> tuple[bool, str]:
+                reason = self._pregame_audio_lifecycle_reason(
+                    synthetic=synthetic,
+                )
+                if reason:
+                    return False, f"lifecycle:{reason}"
+
+                latest = await self._sonos.get_playback_ownership_evidence()
+                if not self._pregame_source_transport_matches(
+                    final_playback,
+                    latest,
+                ):
+                    return False, "sonos_changed_before_play"
+                if not self._pregame_hype_baseline_replaceable(latest):
+                    if bool((latest or {}).get("mute")):
+                        return False, "sonos_muted_before_play"
+                    return False, "sonos_busy_before_play"
+
+                success = await self._sonos.play_favorite(
+                    title,
+                    expected_queue_evidence=latest,
+                )
+                return bool(success), "played" if success else "play_failed"
+
+            executed, outcome = await asyncio.wait_for(
+                self._audio_ownership.run_if_valid(
+                    lease["lease_id"],
+                    (QUEUE_SOURCE, TRANSPORT),
+                    _owned_play,
+                ),
+                timeout=12.0,
+            )
+            if not executed:
+                play_reason = "audio_ownership_invalidated"
+                return False, play_reason
+            success, play_reason = outcome
+            if not success:
+                return False, play_reason
+
+            # Apply the Game Day target only after playback is confirmed.
+            # Queue/source takeovers therefore never inherit a pre-play HomeHub
+            # volume write. Manual volume still wins through lease invalidation
+            # or the exact fresh-volume comparison below.
+            if startup_volume is not None:
+                async def _owned_volume() -> bool:
+                    current = await self._sonos.get_playback_ownership_evidence()
+                    if not current:
+                        return False
+                    if int(current.get("volume") or 0) != final_volume:
+                        return False
+                    if str(current.get("transport_state") or "").upper() != "PLAYING":
+                        return False
+                    if str(current.get("play_mode") or "").upper() != "SHUFFLE":
+                        return False
+                    if int(current.get("queue_size") or 0) <= 0:
+                        return False
+                    if not str(current.get("current_uri") or "").startswith(
+                        "x-rincon-queue:"
+                    ):
+                        return False
+                    return await self._sonos.set_volume_if_playback_unchanged(
+                        current,
+                        startup_volume,
+                    )
+
+                volume_executed, volume_applied = await self._audio_ownership.run_if_valid(
+                    lease["lease_id"],
+                    (QUEUE_SOURCE, TRANSPORT, VOLUME),
+                    _owned_volume,
+                )
+                if not volume_executed or not volume_applied:
+                    logger.info(
+                        "pregame hype kept current Sonos volume: "
+                        "manual/ownership/playback evidence changed"
+                    )
+
+            if await self._audio_ownership.is_valid(lease["lease_id"], (VOLUME,)):
+                await self._audio_ownership.release(
+                    lease["lease_id"],
+                    dimensions=(VOLUME,),
+                    reason="pregame_hype_startup_volume_complete",
+                )
+
+            sonos_evidence = None
+            for _ in range(4):
+                if not await self._audio_ownership.is_valid(
+                    lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+                ):
+                    break
+                candidate = await self._sonos.get_queue_ownership_evidence()
+                if (
+                    candidate
+                    and candidate.get("transport_state") == "PLAYING"
+                    and candidate.get("play_mode") == "SHUFFLE"
+                    and int(candidate.get("queue_size") or 0) > 0
+                    and str(candidate.get("current_uri") or "").startswith(
+                        "x-rincon-queue:"
+                    )
+                ):
+                    sonos_evidence = candidate
+                    break
+                await asyncio.sleep(0.15)
+
+            if (
+                sonos_evidence is not None
+                and await self._audio_ownership.is_valid(
+                    lease["lease_id"], (QUEUE_SOURCE, TRANSPORT),
+                )
+            ):
+                await self._audio_ownership.update_evidence(
+                    lease["lease_id"],
+                    {
+                        "phase": "owned",
+                        "sonos": sonos_evidence,
+                        "favorite_title": title,
+                    },
+                )
+                ownership_established = True
+            else:
+                await self._release_pregame_lease(
+                    lease,
+                    reason="pregame_hype_evidence_unavailable",
+                )
+                logger.warning(
+                    "Pregame hype started without durable queue ownership evidence; "
+                    "later mode exit will leave Sonos untouched"
+                )
+            return True, "played"
+        except asyncio.TimeoutError:
+            play_reason = "timeout"
+            return False, play_reason
+        finally:
+            if play_reason != "played" or not ownership_established:
+                # Never leave an unproven durable claim behind. Playback may
+                # already have started, but retirement is authority-only and
+                # deliberately does not mutate Sonos.
+                await self._release_pregame_lease(
+                    lease,
+                    reason=f"pregame_hype_{play_reason}_unproven",
+                )
 
     async def _release_mode_audio_lease(self, new_mode: str) -> None:
         """Retire a mode lease without destructive off-dashboard cleanup.
@@ -663,7 +1049,12 @@ class MusicMapper:
             before_play=before_play,
         )
 
-    async def dispatch_pregame_audio(self, decision) -> dict:
+    async def dispatch_pregame_audio(
+        self,
+        decision,
+        *,
+        synthetic: bool = False,
+    ) -> dict:
         """Fire the pregameday→gameday audio (GAMEDAY_SPEC §10.3).
 
         Called at the T-30 pregameday→gameday transition by bootstrap's
@@ -687,6 +1078,34 @@ class MusicMapper:
             "sonos_reason": "not_requested" if not decision.sonos_hype_play else None,
         }
 
+        lifecycle_reason = self._pregame_audio_lifecycle_reason(
+            synthetic=synthetic,
+        )
+        if lifecycle_reason:
+            if decision.sonos_hype_play:
+                result["sonos_reason"] = f"lifecycle:{lifecycle_reason}"
+            logger.info(
+                "pregame audio suppressed before TTS: reason=%s",
+                lifecycle_reason,
+            )
+            return result
+
+        baseline_playback = None
+        pregame_lease = None
+        pregame_preflight_reason = None
+        if decision.sonos_hype_play and self._audio_ownership is not None:
+            try:
+                baseline_playback = (
+                    await self._sonos.get_playback_ownership_evidence()
+                )
+                (
+                    pregame_lease,
+                    pregame_preflight_reason,
+                ) = await self._reserve_pregame_hype_lease(baseline_playback)
+            except Exception:
+                pregame_preflight_reason = "ownership_preflight_error"
+                logger.exception("pregame hype ownership preflight failed")
+
         if decision.tts_line and self._tts_service:
             try:
                 # Preseason room evidence showed the global TTS default was
@@ -696,15 +1115,28 @@ class MusicMapper:
                     decision.tts_line, volume=_pregame_tts_volume(),
                 )
                 result["tts_fired"] = True
+            except asyncio.CancelledError:
+                await self._release_pregame_lease(
+                    pregame_lease,
+                    reason="pregame_dispatch_cancelled_during_tts",
+                )
+                raise
             except Exception:
                 logger.exception("pregame TTS dispatch failed")
 
         if decision.sonos_hype_play:
             # Brief gap so TTS doesn't get clipped by Sonos transport state
             # change. ~2s matches the §10.3 spec ("Sonos starts after TTS
-            # finishes"). The TTS file plays via Sonos itself, so the gap
-            # gives transport time to settle into "stopped" before play_favorite.
-            await asyncio.sleep(2.0)
+            # finishes"). The final lifecycle + ownership gate below runs after
+            # this gap, immediately before destructive favorite playback.
+            try:
+                await asyncio.sleep(2.0)
+            except asyncio.CancelledError:
+                await self._release_pregame_lease(
+                    pregame_lease,
+                    reason="pregame_dispatch_cancelled_during_gap",
+                )
+                raise
             picked = self._pick_pregame_hype(decision.sonos_vibe)
             pick_source = "mapping"
             # If no explicit mapping exists, normal/big/clutch Game Day may
@@ -714,18 +1146,43 @@ class MusicMapper:
                 if not self._sonos.connected:
                     result["sonos_reason"] = "sonos_disconnected"
                 else:
-                    picked = await self._default_pregame_hype_fallback()
+                    try:
+                        picked = await self._default_pregame_hype_fallback()
+                    except asyncio.CancelledError:
+                        await self._release_pregame_lease(
+                            pregame_lease,
+                            reason="pregame_dispatch_cancelled_during_fallback",
+                        )
+                        raise
                     pick_source = "fallback"
             if picked:
                 try:
-                    success = await asyncio.wait_for(
-                        self._sonos.play_favorite(picked["favorite_title"]),
-                        timeout=6.0,
-                    )
+                    if self._audio_ownership is not None:
+                        if pregame_lease is None:
+                            success = False
+                            reason = (
+                                pregame_preflight_reason
+                                or "ownership_preflight_unavailable"
+                            )
+                        else:
+                            success, reason = await self._play_pregame_hype_owned(
+                                title=picked["favorite_title"],
+                                baseline_playback=baseline_playback,
+                                lease=pregame_lease,
+                                synthetic=synthetic,
+                            )
+                    else:
+                        # Compatibility for isolated callers/tests that have not
+                        # adopted #274. Production always injects ownership.
+                        success = await asyncio.wait_for(
+                            self._sonos.play_favorite(picked["favorite_title"]),
+                            timeout=6.0,
+                        )
+                        reason = "played" if success else "play_failed"
+                    result["sonos_reason"] = reason
                     if success:
                         result["sonos_fired"] = True
                         result["picked_title"] = picked["favorite_title"]
-                        result["sonos_reason"] = "played"
                         logger.info(
                             "pregame hype playing: title=%s vibe=%s tier=%s source=%s",
                             picked["favorite_title"],
@@ -740,10 +1197,9 @@ class MusicMapper:
                             "source": "pregame_audio",
                         })
                     else:
-                        result["sonos_reason"] = "play_failed"
-                        logger.warning(
-                            "pregame Sonos play_favorite returned false: title=%s source=%s",
-                            picked["favorite_title"], pick_source,
+                        logger.info(
+                            "pregame hype suppressed: title=%s source=%s reason=%s",
+                            picked["favorite_title"], pick_source, reason,
                         )
                 except asyncio.TimeoutError:
                     result["sonos_reason"] = "timeout"
@@ -752,6 +1208,10 @@ class MusicMapper:
                     result["sonos_reason"] = "error"
                     logger.exception("pregame Sonos dispatch failed")
             else:
+                await self._release_pregame_lease(
+                    pregame_lease,
+                    reason="pregame_hype_no_mapping_or_fallback",
+                )
                 if result["sonos_reason"] is None:
                     result["sonos_reason"] = "no_mapping_or_fallback"
                 logger.warning(

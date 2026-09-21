@@ -34,7 +34,9 @@ MODE_VOLUME_DEFAULTS: dict[str, dict[str, int]] = {
     "social":   {"day": 30, "evening": 30, "night": 25, "fade_duration_s": 4},
     "cooking":  {"day": 25, "evening": 22, "night": 20, "fade_duration_s": 4},
     "sleeping": {"day":  0, "evening":  0, "night":  0, "fade_duration_s": 3},
-    "gameday":  {"day": 35, "evening": 35, "night": 30, "fade_duration_s": 4},
+    # Sep 20 Chiefs real-room evidence: 30 was too loud for Game Day hype;
+    # 25 was accepted. Keep daytime at 35 until a daytime game calibrates it.
+    "gameday":  {"day": 35, "evening": 25, "night": 25, "fade_duration_s": 4},
     # Pregameday is the T-60 silent visual build (GAMEDAY_SPEC §10) — Sonos
     # is intentionally muted/low during the build window. Audio fires at the
     # T-30 pregameday→gameday flip via the dedicated transition handler.

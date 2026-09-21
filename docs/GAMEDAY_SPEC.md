@@ -475,7 +475,7 @@ Final clamp `[5, 50]`.
 
 ## 10. Pre-game ambient mode (v2 design)
 
-**Status:** Core pregameday behavior shipped 2026-05-15 (5 commits; see `project_pregameday_shipped_2026_05_15.md`). Issue #9 was reopened on 2026-09-18 for one later #276/#274 safety requirement: after TTS and the ~2s gap, Game Day must re-read lifecycle/DND plus central Sonos ownership immediately before destructive `play_favorite()`. A manual song/queue/source/transport takeover during that window must suppress hype playback. The original T-60/T-30 lifecycle and accepted pregame policy remain shipped; this is ownership hardening, not a redesign.
+**Status:** Core pregameday behavior shipped 2026-05-15 (5 commits; see `project_pregameday_shipped_2026_05_15.md`). The 2026-09-21 #9 hardening holds a central Game Day Sonos lease across TTS + the ~2s settle gap, then re-checks lifecycle/DND and exact Sonos source/queue/transport evidence before destructive `play_favorite()`. Newer manual source/queue/transport intent suppresses hype; a volume-only takeover is preserved without blocking hype. The original T-60/T-30 lifecycle and accepted pregame policy remain unchanged.
 
 The pre-game window is the hour leading up to kickoff. The current architecture has the apartment doing whatever it was doing (working, idle, etc) right up until the T-30 auto-flip lands the gameday baseline. v2 fills that hour with anticipation: lighting starts shifting earlier, and audio reads the season's stakes the same way `compute_celebration_volume` reads each play's stakes.
 
@@ -544,12 +544,13 @@ def compute_pregame_audio(
 **Apartment-context modifiers (mirror celebration volume policy):**
 - `sleeping_mode` or `dnd_active` → both `tts_line=None` AND `sonos_hype_play=False` (lights still flip).
 - T-30 TTS uses a Game-Day-specific Sonos base volume of 24 (the global default 10 was inaudible in 2026 preseason room evidence).
+- T-30 hype startup uses the existing `gameday` mode-volume curve after TTS restoration. Sep. 20, 2026 Chiefs real-room evidence found volume 30 too loud and 25 acceptable; the evening/night Game Day music target is therefore 25. Day remains 35 pending representative daytime evidence.
 - Local hour in [22, 06) -> if TTS would fire, gate that volume to <=18 (same late-night cap).
 
 **Fire timing:**
 - T-60: pre-game lighting palette activates (pregameday mode).
 - T-60 → T-30: silent (lights-only build).
-- T-30: gameday flip lands. Audio fires AFTER the flip via the existing mode-change callback that handles `pregameday → gameday`. TTS runs first, followed by the ~2s settle gap. **Open #9 hardening gate:** immediately after that gap and before `play_favorite()`, re-read lifecycle/DND and #274 Sonos ownership; any newer manual source/queue/transport ownership suppresses the destructive hype play.
+- T-30: gameday flip lands. Audio fires AFTER the flip via the existing mode-change callback that handles `pregameday → gameday`. Before TTS, Game Day acquires queue/transport/volume ownership for the pending hype transaction; TTS temporarily overlays that established lease. After TTS and the ~2s settle gap, lifecycle/DND plus exact Sonos evidence are re-read. Newer manual source/queue/transport intent suppresses destructive hype playback; a volume-only takeover relinquishes Game Day volume authority and is preserved. If Game Day still owns volume, the current `gameday` mode-volume target is established before playback.
 
 ### 10.4 Architecture impact
 

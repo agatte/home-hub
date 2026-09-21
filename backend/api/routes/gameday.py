@@ -173,7 +173,9 @@ async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, 
         )
         # Fire-and-forget — caller doesn't wait for TTS/Sonos to finish.
         import asyncio
-        asyncio.create_task(music_mapper.dispatch_pregame_audio(decision))
+        asyncio.create_task(
+            music_mapper.dispatch_pregame_audio(decision, synthetic=True)
+        )
         result["audio"] = {
             "tier": decision.tier,
             "tts_queued": bool(decision.tts_line),

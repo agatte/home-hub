@@ -374,6 +374,7 @@ async def lifespan(app: FastAPI):
         # TTS access for the stakes-tier announcement at T-30.
         tts_service=tts,
         audio_ownership=audio_ownership,
+        setting_loader=load_setting,
     )
     await music_mapper.load_from_db()
     app.state.music_mapper = music_mapper

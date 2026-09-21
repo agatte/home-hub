@@ -35,7 +35,8 @@ class TestDefaults:
         ("relax",    "night",   14),
         ("social",   "day",     30),
         ("cooking",  "evening", 22),
-        ("gameday",  "night",   30),
+        ("gameday",  "evening", 25),
+        ("gameday",  "night",   25),
     ])
     def test_each_default_resolves(self, mode, period, expected):
         decision = compute_mode_volume(
