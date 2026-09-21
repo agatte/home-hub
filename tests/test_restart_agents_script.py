@@ -164,6 +164,37 @@ def test_final_success_requires_matching_pid_and_exact_native_identity():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_health_match_chooses_child_interpreter_not_first_launcher_candidate():
+    result = _run(
+        f". '{_quoted_path()}' -FunctionsOnly; "
+        "$launcher = [pscustomobject]@{ ProcessId = 11640; "
+        "Identity = '11640:134344889455000000' }; "
+        "$child = [pscustomobject]@{ ProcessId = 16656; "
+        "Identity = '16656:134344889455000123' }; "
+        "$health = [pscustomobject]@{ supervisor_pid = 16656; "
+        "supervisor_instance = '16656:134344889455000123' }; "
+        "$match = Find-HealthMatchedReplacement $health @($launcher, $child); "
+        "if ($match -and $match.ProcessId -eq 16656 -and "
+        "$match.Identity -eq $child.Identity) { exit 0 } else { exit 9 }",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_health_match_rejects_all_candidates_when_identity_is_not_exact():
+    result = _run(
+        f". '{_quoted_path()}' -FunctionsOnly; "
+        "$launcher = [pscustomobject]@{ ProcessId = 11640; "
+        "Identity = '11640:111' }; "
+        "$child = [pscustomobject]@{ ProcessId = 16656; "
+        "Identity = '16656:222' }; "
+        "$health = [pscustomobject]@{ supervisor_pid = 16656; "
+        "supervisor_instance = '16656:999' }; "
+        "$match = Find-HealthMatchedReplacement $health @($launcher, $child); "
+        "if ($null -eq $match) { exit 0 } else { exit 9 }",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def _mocked_script(*, enable_fails: bool, launcher_fails: bool) -> str:
     enable_body = (
         "[Console]::WriteLine('RESTORE_ATTEMPTED'); throw 'reenable failed'"

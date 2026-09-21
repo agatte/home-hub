@@ -181,6 +181,16 @@ function Test-ReplacementHealthIdentity($Health, $Replacement) {
     )
 }
 
+function Find-HealthMatchedReplacement($Health, $Candidates) {
+    if (-not $Health -or -not $Candidates) { return $null }
+    foreach ($candidate in @($Candidates)) {
+        if (Test-ReplacementHealthIdentity $Health $candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
 function Wait-IdentityGone($Identity, [int]$TimeoutSeconds = $RecoveryTimeoutSeconds) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
@@ -261,33 +271,55 @@ try {
     Write-Host "Launching canonical supervisor path: $launcher"
     Start-Process wscript.exe -ArgumentList "`"$launcher`"" -WorkingDirectory $ProjectRoot -WindowStyle Hidden
 
-    $replacement = $null
+    $replacementCandidates = @()
     $deadline = (Get-Date).AddSeconds(20)
     do {
-        $replacement = Get-HomeHubProcesses | Where-Object {
-            $_.CommandLine -match 'backend\.services\.pc_agent\.supervisor' -and
-            $_.Identity -and $_.CreationFileTime -gt $restartAttemptFileTime -and
-            $_.Identity -notin $oldKeys
-        } | Select-Object -First 1
-        if ($replacement) { break }
+        $replacementCandidates = @(
+            Get-HomeHubProcesses | Where-Object {
+                $_.CommandLine -match 'backend\.services\.pc_agent\.supervisor' -and
+                $_.Identity -and $_.CreationFileTime -gt $restartAttemptFileTime -and
+                $_.Identity -notin $oldKeys
+            }
+        )
+        if ($replacementCandidates.Count -gt 0) { break }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
-    if (-not $replacement) { throw 'No replacement supervisor newer than this restart attempt was found.' }
+    if ($replacementCandidates.Count -eq 0) {
+        throw 'No replacement supervisor newer than this restart attempt was found.'
+    }
 
-    # Existing API payload is advisory but can bind a fresh health report to the
-    # new Windows identity; never accept a pre-existing process as replacement.
+    # Python 3.13 may expose both the venv launcher and its child interpreter
+    # with the same supervisor command line. Backend health identifies the
+    # interpreter that actually owns the supervisor runtime, so match that
+    # exact PID+native creation identity against all fresh candidates instead
+    # of binding to whichever process CIM happened to enumerate first.
     $server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { 'http://192.168.86.210:8000' }
     $healthOk = $false
+    $replacement = $null
     $deadline = (Get-Date).AddSeconds(15)
     do {
         try {
             $health = Invoke-RestMethod -Uri "$server/api/automation/agent-health" -TimeoutSec 3
-            $healthOk = Test-ReplacementHealthIdentity $health $replacement
-        } catch { $healthOk = $false }
+            $replacementCandidates = @(
+                Get-HomeHubProcesses | Where-Object {
+                    $_.CommandLine -match 'backend\.services\.pc_agent\.supervisor' -and
+                    $_.Identity -and $_.CreationFileTime -gt $restartAttemptFileTime -and
+                    $_.Identity -notin $oldKeys
+                }
+            )
+            $replacement = Find-HealthMatchedReplacement $health $replacementCandidates
+            $healthOk = $null -ne $replacement
+        } catch {
+            $healthOk = $false
+            $replacement = $null
+        }
         if ($healthOk) { break }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
-    if (-not $healthOk) { throw "Replacement $($replacement.Identity) did not publish matching supervisor health." }
+    if (-not $healthOk) {
+        $candidateKeys = @($replacementCandidates | ForEach-Object Identity) -join ', '
+        throw "No fresh replacement supervisor matched backend health. Candidates: $candidateKeys"
+    }
 
     $successMessage = "OK: replacement supervisor $($replacement.Identity) is live and healthy."
 } catch {
