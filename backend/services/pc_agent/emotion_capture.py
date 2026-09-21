@@ -659,6 +659,7 @@ class EmotionCapture:
         self._face_detector_init_failed: bool = False
         self._haar_face_cascades = None
         self._haar_face_init_failed: bool = False
+        self._haar_face_diag_logged: bool = False
         self._pose_landmarker = None
         # A successful FaceLandmarker call that yields no usable confidence is
         # distinct from an exception: only the former contributes semantic
@@ -1086,8 +1087,27 @@ class EmotionCapture:
                     if local_width is not None and frame_w > 0
                     else None
                 )
+                if not self._haar_face_diag_logged:
+                    logger.info(
+                        "Haar-guided FaceLandmarker fallback: candidates=%d "
+                        "validated=true mapped_width=%s",
+                        len(candidates),
+                        (
+                            f"{mapped_width:.3f}"
+                            if mapped_width is not None
+                            else "unknown"
+                        ),
+                    )
+                    self._haar_face_diag_logged = True
                 return result, mapped_width
 
+            if not self._haar_face_diag_logged:
+                logger.info(
+                    "Haar-guided FaceLandmarker fallback: candidates=%d "
+                    "validated=false",
+                    len(candidates),
+                )
+                self._haar_face_diag_logged = True
             return None, None
         except Exception:
             logger.debug("Haar-guided FaceLandmarker crop retry failed", exc_info=True)
