@@ -322,6 +322,49 @@ def test_full_range_fallback_recovers_profile_face_and_blendshapes(monkeypatch):
         agent.close()
 
 
+def test_haar_roi_fallback_requires_mediapipe_validation_and_preserves_desk_width(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = _agent(monkeypatch)
+    agent.set_enabled(presence=True)
+    landmarker = _Landmarker([_empty_result()])
+    detector = _FaceDetector([])
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: landmarker)
+    monkeypatch.setattr(ec, "_init_face_detector", lambda: detector)
+    monkeypatch.setattr(
+        agent,
+        "_landmark_haar_face_crop",
+        lambda **_kwargs: (_usable_result(), ec.DESKTOP_DESK_MIN_FACE_WIDTH + 0.03),
+    )
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    observations = []
+    blendshape_posts = []
+    monkeypatch.setattr(
+        agent, "_post_observation", lambda **kwargs: observations.append(kwargs)
+    )
+    monkeypatch.setattr(
+        agent,
+        "_post_blendshapes",
+        lambda shapes, confidence, **kwargs: blendshape_posts.append(
+            (shapes, confidence)
+        ),
+    )
+    agent._cap = _Cap(
+        reads=[(True, np.zeros((480, 640, 3), dtype=np.uint8))]
+    )
+    try:
+        agent.tick()
+        assert len(observations) == 1
+        assert observations[0]["face_present"] is True
+        assert observations[0]["face_confidence"] == 1.0
+        assert observations[0]["detection_source"] == "face"
+        assert observations[0]["zone"] == "desk"
+        assert len(blendshape_posts) == 1
+        assert agent._face_semantic_dead_streak == 0
+    finally:
+        agent.close()
+
+
 def test_lux_reopen_gate_blocks_dark_actual_frame_then_allows_second_bright(monkeypatch):
     from backend.services.pc_agent import emotion_capture as ec
 

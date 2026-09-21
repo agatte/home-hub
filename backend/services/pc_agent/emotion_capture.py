@@ -80,6 +80,16 @@ FACE_DETECTOR_MODEL_URL = (
 DESKTOP_FACE_DETECTION_CONFIDENCE = 0.30
 FACE_LANDMARKER_CROP_SCALE = 2.0
 
+# Final small-face recovery. On the rebuilt Windows 11 Brio path, full-frame
+# FaceLandmarker and BlazeFace can both miss a valid Desk face even though a
+# tighter ROI lets FaceLandmarker recover the calibrated ~0.20-0.28 face width
+# and blendshapes. OpenCV Haar is proposal-only; MediaPipe must validate the
+# proposed crop before any face/presence authority is granted.
+HAAR_FACE_CROP_SCALE = 4.0
+HAAR_FACE_CROP_SIZE = 512
+HAAR_FACE_MIN_SIZE_PX = 24
+HAAR_FACE_MAX_CANDIDATES = 6
+
 # PoseLandmarker (lite ~5MB) — same model + URL the Latitude uses, each
 # host downloads its own copy. Required for frontal-posture (upright vs
 # slouched) classification. Lite variant emits 2D normalized landmarks +
@@ -647,6 +657,8 @@ class EmotionCapture:
         self._landmarker = None
         self._face_detector = None
         self._face_detector_init_failed: bool = False
+        self._haar_face_cascades = None
+        self._haar_face_init_failed: bool = False
         self._pose_landmarker = None
         # A successful FaceLandmarker call that yields no usable confidence is
         # distinct from an exception: only the former contributes semantic
@@ -972,6 +984,115 @@ class EmotionCapture:
             logger.debug("FaceLandmarker crop retry failed", exc_info=True)
             return None
 
+    def _landmark_haar_face_crop(
+        self, *, frame: Any, cv2: Any,
+    ) -> tuple[Optional[Any], Optional[float]]:
+        """Recover a tiny full-frame face via proposal-only OpenCV Haar crops.
+
+        Haar never grants presence authority. It only proposes candidate ROIs;
+        the existing MediaPipe FaceLandmarker must return a real face from the
+        crop before this helper succeeds. The returned width is mapped back
+        into original-frame normalized coordinates so the existing Desk
+        calibration remains authoritative.
+        """
+        if self._haar_face_init_failed:
+            return None, None
+        try:
+            if self._haar_face_cascades is None:
+                root = cv2.data.haarcascades
+                frontal = cv2.CascadeClassifier(
+                    root + "haarcascade_frontalface_default.xml"
+                )
+                profile = cv2.CascadeClassifier(
+                    root + "haarcascade_profileface.xml"
+                )
+                if frontal.empty() and profile.empty():
+                    self._haar_face_init_failed = True
+                    return None, None
+                self._haar_face_cascades = (frontal, profile)
+
+            frontal, profile = self._haar_face_cascades
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)
+            candidates: list[tuple[int, int, int, int]] = []
+
+            if not frontal.empty():
+                candidates.extend(
+                    tuple(map(int, box))
+                    for box in frontal.detectMultiScale(
+                        gray,
+                        scaleFactor=1.05,
+                        minNeighbors=3,
+                        minSize=(HAAR_FACE_MIN_SIZE_PX, HAAR_FACE_MIN_SIZE_PX),
+                    )
+                )
+
+            if not profile.empty():
+                candidates.extend(
+                    tuple(map(int, box))
+                    for box in profile.detectMultiScale(
+                        gray,
+                        scaleFactor=1.05,
+                        minNeighbors=3,
+                        minSize=(HAAR_FACE_MIN_SIZE_PX, HAAR_FACE_MIN_SIZE_PX),
+                    )
+                )
+                mirrored = cv2.flip(gray, 1)
+                frame_w = int(frame.shape[1])
+                for box in profile.detectMultiScale(
+                    mirrored,
+                    scaleFactor=1.05,
+                    minNeighbors=3,
+                    minSize=(HAAR_FACE_MIN_SIZE_PX, HAAR_FACE_MIN_SIZE_PX),
+                ):
+                    x, y, w, h = map(int, box)
+                    candidates.append((frame_w - x - w, y, w, h))
+
+            # Smaller proposals first; cap inference work because this path runs
+            # only after both full-frame FaceLandmarker and BlazeFace miss.
+            candidates.sort(key=lambda box: box[2] * box[3])
+            frame_h, frame_w = frame.shape[:2]
+
+            for x, y, w, h in candidates[:HAAR_FACE_MAX_CANDIDATES]:
+                cx = x + w / 2.0
+                cy = y + h / 2.0
+                side = max(w, h) * HAAR_FACE_CROP_SCALE
+                x1 = max(0, int(cx - side / 2.0))
+                y1 = max(0, int(cy - side / 2.0))
+                x2 = min(frame_w, int(cx + side / 2.0))
+                y2 = min(frame_h, int(cy + side / 2.0))
+                crop = frame[y1:y2, x1:x2]
+                if getattr(crop, "size", 0) == 0:
+                    continue
+
+                crop_w = x2 - x1
+                resized = cv2.resize(
+                    crop,
+                    (HAAR_FACE_CROP_SIZE, HAAR_FACE_CROP_SIZE),
+                    interpolation=cv2.INTER_CUBIC,
+                )
+                crop_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+                crop_image = self._mp_image_cls(
+                    image_format=self._mp_image_format, data=crop_rgb
+                )
+                result = self._landmarker.detect(crop_image)
+                faces = getattr(result, "face_landmarks", None) or []
+                if not faces:
+                    continue
+
+                local_width = _face_mesh_width(faces[0])
+                mapped_width = (
+                    local_width * float(crop_w) / float(frame_w)
+                    if local_width is not None and frame_w > 0
+                    else None
+                )
+                return result, mapped_width
+
+            return None, None
+        except Exception:
+            logger.debug("Haar-guided FaceLandmarker crop retry failed", exc_info=True)
+            return None, None
+
     def _note_face_semantic_result(self, *, usable: bool, now: float) -> None:
         """Track completed FaceLandmarker results and recycle bounded failures.
 
@@ -1148,6 +1269,30 @@ class EmotionCapture:
                             face_landmarks = crop_faces[0]
                         if crop_blends:
                             face_blendshapes = crop_blends
+
+            # Rebuilt-Windows Brio recovery: at the calibrated Desk geometry a
+            # valid face can be too small for both full-frame MediaPipe paths,
+            # while FaceLandmarker succeeds once OpenCV proposes a tighter ROI.
+            # Haar is proposal-only; a crop is accepted only when MediaPipe
+            # itself returns face landmarks from it.
+            if face_landmarks is None and fallback_detection is None:
+                haar_result, haar_face_width = self._landmark_haar_face_crop(
+                    frame=frame,
+                    cv2=cv2,
+                )
+                if haar_result is not None:
+                    haar_blends = (
+                        getattr(haar_result, "face_blendshapes", None) or []
+                    )
+                    haar_faces = (
+                        getattr(haar_result, "face_landmarks", None) or []
+                    )
+                    if haar_faces:
+                        face_landmarks = haar_faces[0]
+                        if haar_face_width is not None:
+                            face_width = haar_face_width
+                    if haar_blends:
+                        face_blendshapes = haar_blends
 
             if face_blendshapes:
                 shapes = face_blendshapes[0]
