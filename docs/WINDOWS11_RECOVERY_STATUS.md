@@ -27,7 +27,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] The six retained agents are the supported Windows supervisor fleet and actively reach Latitude.
 - [x] No obsolete per-agent Home Hub tasks, Run-key entries, Startup-folder entries, or separate Home Hub Windows service were found.
 - [x] Samsung G50F DDC/CI brightness control is operational with `screen-brightness-control 0.24.1`.
-- [x] OpenRGB 1.0.0 was recovered successfully, then retired from Home Hub on 2026-09-20; the Windows service is disabled as part of that retirement.
+- [x] OpenRGB 1.0.0 was recovered successfully, then retired from Home Hub on 2026-09-20. The Home Hub client/dependency is removed; the separate LocalSystem Windows service remains installed/running until an elevated OS cleanup can disable or uninstall it.
 - [x] PawnIO 2.2.0.0 is installed and its driver/device are healthy.
 - [x] The former OpenRGB SDK/peripheral agent path is no longer part of the supported runtime; mouse/keyboard/GPU lighting are not Home Hub-owned.
 - [x] `main` is the sole registered worktree. The four temporary recovery worktrees were retired only after proving they were clean and had zero unique commits; their local and remote branch refs remain preserved.
