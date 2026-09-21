@@ -497,6 +497,71 @@ def test_tts_restore_accepts_proven_natural_clip_end_but_not_early_stop() -> Non
     snapshot._restore_coordinator.assert_not_called()
 
 
+def test_tts_restore_rebases_queue_update_after_restoring_shuffle() -> None:
+    queue_uri = "x-rincon-queue:RINCON_TEST#0"
+    track_uri = "x-sonos-http:track1"
+    preflight = dict(
+        evidence(),
+        queue_update_id="24",
+        queue_size=100,
+        queue_first_item_hash="abc",
+        play_mode="SHUFFLE",
+        transport_state="STOPPED",
+        current_uri=queue_uri,
+        queue_track=1,
+        queue_track_uri=track_uri,
+        position="0:00:00",
+        duration="0:02:37",
+        volume=0,
+    )
+    tts_uri = f"http://{settings.LOCAL_IP}:8000/static/tts/test.mp3"
+    current = dict(
+        preflight,
+        current_uri=tts_uri,
+        queue_track_uri=tts_uri,
+        play_mode="NORMAL",
+        transport_state="PLAYING",
+        position="0:00:02",
+        duration="0:00:04",
+        volume=24,
+    )
+    selected = dict(
+        preflight,
+        play_mode="NORMAL",
+        transport_state="STOPPED",
+        volume=24,
+    )
+    mode_restored = dict(
+        selected,
+        queue_update_id="25",
+        play_mode="SHUFFLE",
+    )
+    service = service_with(current)
+    service._playback_ownership_evidence_sync = MagicMock(side_effect=[
+        current,
+        selected,
+        selected,
+        mode_restored,
+        mode_restored,
+        mode_restored,
+    ])
+    snapshot = _tts_snapshot(volume=0, state="STOPPED")
+    snapshot.is_playing_queue = True
+    snapshot.playlist_position = 1
+    snapshot.track_position = ""
+    snapshot.play_mode = "SHUFFLE"
+
+    result = service._restore_tts_snapshot_if_unchanged_sync(
+        snapshot, preflight, tts_uri, 24, True, False,
+    )
+
+    assert result["source_transport_restored"] is True
+    assert result["source_transport_reason"] == "restored_after_tts_active"
+    assert preflight["queue_update_id"] == "25"
+    assert service._device.play_mode == "SHUFFLE"
+    service._device.stop.assert_not_called()
+
+
 def test_tts_restore_source_less_idle_to_neutral_empty_queue() -> None:
     preflight = dict(
         evidence(),
@@ -648,6 +713,7 @@ def test_failed_tts_start_restores_queue_play_mode_only_drift() -> None:
         drift,
         drift,
         drift,
+        dict(preflight, transport_state="STOPPED", volume=60),
         dict(preflight, transport_state="STOPPED", volume=60),
         dict(preflight, transport_state="PLAYING", volume=60),
     ])

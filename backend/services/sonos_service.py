@@ -1246,6 +1246,37 @@ class SonosService:
             ).upper()
             if target_mode:
                 device.play_mode = target_mode
+                # Real Sonos may increment Queue UpdateID when restoring the
+                # saved queue play mode even though queue contents/source are
+                # unchanged. Rebase exactly that one self-caused increment;
+                # any other source/track drift still fails the final proof.
+                mode_selected = self._playback_ownership_evidence_sync()
+                before_update = str(preflight.get("queue_update_id") or "")
+                selected_update = str(
+                    mode_selected.get("queue_update_id") or ""
+                )
+                if before_update != selected_update:
+                    try:
+                        one_self_update = (
+                            int(selected_update) == int(before_update) + 1
+                        )
+                    except (TypeError, ValueError):
+                        one_self_update = False
+                    if one_self_update:
+                        rebased = dict(preflight)
+                        rebased["queue_update_id"] = selected_update
+                        if self._tts_prior_source_matches(
+                            mode_selected,
+                            rebased,
+                            playing_queue=True,
+                        ):
+                            logger.info(
+                                "TTS restore rebased self-caused Sonos "
+                                "Queue UpdateID %s -> %s",
+                                before_update,
+                                selected_update,
+                            )
+                            preflight["queue_update_id"] = selected_update
 
         elif prior_uri:
             metadata = str(getattr(snapshot, "media_metadata", "") or "")

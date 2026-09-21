@@ -387,7 +387,7 @@ async def test_pregame_hype_sets_mode_volume_after_tts_restores_zero() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pregame_refreshes_single_tts_queue_update_before_hype() -> None:
+async def test_pregame_refreshes_owned_tts_queue_updates_before_hype() -> None:
     settings = MemorySettings()
     authority = await make_authority(settings)
     sonos = Sonos()
@@ -395,7 +395,8 @@ async def test_pregame_refreshes_single_tts_queue_update_before_hype() -> None:
     automation = PregameAutomation()
 
     def tts_self_update() -> None:
-        sonos.neutral_evidence["queue_update_id"] = "7"
+        sonos.neutral_evidence["queue_update_id"] = "8"
+        sonos.evidence["queue_update_id"] = "8"
 
     mapper = MusicMapper(
         sonos,
@@ -420,11 +421,11 @@ async def test_pregame_refreshes_single_tts_queue_update_before_hype() -> None:
     lease = snapshot["leases"][0]
     assert lease["dimensions"] == ["queue_source", "transport"]
     assert lease["evidence"]["phase"] == "owned"
-    assert lease["evidence"]["sonos"]["queue_update_id"] == "7"
+    assert lease["evidence"]["sonos"]["queue_update_id"] == "8"
 
 
 @pytest.mark.asyncio
-async def test_pregame_does_not_refresh_unexpected_second_queue_update() -> None:
+async def test_pregame_does_not_refresh_unexpected_third_queue_update() -> None:
     settings = MemorySettings()
     authority = await make_authority(settings)
     sonos = Sonos()
@@ -432,7 +433,8 @@ async def test_pregame_does_not_refresh_unexpected_second_queue_update() -> None
     automation = PregameAutomation()
 
     def external_queue_change() -> None:
-        sonos.neutral_evidence["queue_update_id"] = "8"
+        sonos.neutral_evidence["queue_update_id"] = "9"
+        sonos.evidence["queue_update_id"] = "9"
 
     mapper = MusicMapper(
         sonos,

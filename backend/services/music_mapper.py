@@ -190,7 +190,8 @@ class MusicMapper:
         and restoring its finite URI even though the stopped queue itself is
         unchanged. A still-valid pending Game Day lease proves no central manual
         source/transport takeover occurred. All other source/queue fields must
-        still match exactly, and the counter may advance by at most one.
+        still match exactly. Real TTS can advance the counter once on direct
+        URI install and once more while restoring the saved queue play mode.
         """
         if (
             self._audio_ownership is None
@@ -216,7 +217,8 @@ class MusicMapper:
         fresh_update = str(fresh.get("queue_update_id") or "")
         if before_update != fresh_update:
             try:
-                if int(fresh_update) != int(before_update) + 1:
+                update_delta = int(fresh_update) - int(before_update)
+                if update_delta not in {1, 2}:
                     return baseline
             except (TypeError, ValueError):
                 return baseline
