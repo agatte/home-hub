@@ -4,7 +4,7 @@ Updated: 2026-09-21
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
-**Recovery reopened — 2026-09-21:** the earlier closeout was too broad. Process/thread health was verified, but Windows desktop semantic behavior was not proven mode-by-mode. Live evidence now shows unrecovered desktop dependency and classification failures affecting Watching and Working, plus an unresolved desktop camera/presence failure. Do not call Home Hub recovery complete until the active items below are verified end to end.
+**Windows recovery closeout re-verified — 2026-09-21:** the earlier closeout was correctly reopened after process health proved insufficient. Windows desktop Watching, Working, Desk presence, desktop-only dependencies, and supervisor restart identity handling have now each been verified end to end on the rebuilt machine. The only unchecked item below is the explicitly optional future offsite-backup design; it is new infrastructure, not unfinished SSD recovery.
 
 ## Safety / recovery rules
 
@@ -19,8 +19,8 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 ## Verified baseline
 
 - [x] Canonical Windows repo is `C:\Users\Anthony\Documents\home-hub-project\main`.
-- [x] Windows `master`, `origin/master`, Latitude `master`, Latitude `origin/master`, and Latitude `.last-deployed-sha` match commit `40713d21566a055da774547765c8609ef0f304aa`.
-- [x] Latitude production checkout is clean; `home-hub.service` and `home-hub-latitude-streaming.service` are active and healthy. The backend currently reports runtime `build_id=af12523` because commits after `af12523` were script/docs/skill-only releases and correctly did not restart the backend.
+- [x] Windows `master` and GitHub `origin/master` contain the verified Windows-recovery fixes through the current closeout commit. Latitude production remains clean at deployed commit `961fa6d2e5fedadad01e248800f60cf76c925bf1`; the commits after it are Windows PC-agent/recovery-script/tests/docs changes from this recovery session and were not deployed to Latitude without separate authorization.
+- [x] Latitude production checkout is clean at `961fa6d2e5fedadad01e248800f60cf76c925bf1`, with `.last-deployed-sha` matching that commit. The Windows-only recovery delta is explicit rather than hidden drift; live Latitude services did not require a restart for these desktop repairs.
 - [x] Core Home Hub health reports Hue, Sonos, Pi-hole, automation, and overnight jobs healthy.
 - [x] One permanent Windows task, `Home Hub Agent Supervisor`, is enabled and firing on logon plus every 5 minutes.
 - [x] The supervisor now manages six agents: activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, and monitor brightness. Peripheral RGB was retired on 2026-09-20.
@@ -31,7 +31,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] PawnIO 2.2.0.0 is installed and its driver/device are healthy.
 - [x] The former OpenRGB SDK/peripheral agent path is no longer part of the supported runtime; mouse/keyboard/GPU lighting are not Home Hub-owned.
 - [x] `main` is the sole registered worktree. The four temporary recovery worktrees were retired only after proving they were clean and had zero unique commits; their local and remote branch refs remain preserved.
-- [x] The no-drift invariant is restored: Windows Git, GitHub `origin/master`, Latitude Git, and `.last-deployed-sha` are synchronized at the current recovery closeout commit.
+- [x] Repository/deployment state is explicit: Windows Git and GitHub carry the Windows recovery commits; Latitude Git and `.last-deployed-sha` remain together at the last authorized deployment. Do not describe these as synchronized until a future authorized deployment advances Latitude.
 
 ## Active investigations
 
@@ -55,7 +55,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
   - A rapid temporal diagnostic then found the real calibrated Desk face in **8/8 ticks**, always on the initial frame or first retry, with face widths 0.226-0.287. The production fix (`9412a17`) therefore keeps the existing FaceLandmarker authority/thresholds and, only after an initial miss, samples at most two additional in-memory frames before escalating to BlazeFace/Haar fallbacks.
   - Validation: 138 adjacent emotion/presence tests passed; compile and `git diff --check` clean. After the authorized supervisor reload, **10/10 consecutive production backend samples** reported `face_present=true`, `face_confidence=1.0`, `detection_source=face`, `zone=desk`; pose independently reappeared on later samples. All Windows agents remained running with zero restarts.
 - [x] Made the Windows rebuild procedure explicitly require both `requirements.txt` and `requirements-desktop.txt`. `docs/LOCAL_WORKSPACE.md` records the exact install command and `scripts/setup-supervisor-task.ps1` now fails before touching tasks/processes if WinRT/PyQt6 desktop imports are missing.
-- [ ] Finish live verification of the repaired `scripts/restart-agents.ps1` replacement verifier. Root cause: Python 3.13 exposes both a venv launcher and child interpreter with the supervisor command line, while the old helper selected the first fresh candidate and required backend health to match that one PID. The isolated fix keeps exact native PID+creation-time safety but matches backend health against **all** fresh supervisor candidates. Validation so far: 59/59 supervisor/recovery tests passed, PowerShell parse and `git diff --check` clean, and a read-only proof against the current real pair (launcher PID `6340`, child PID `1048`) correctly selected backend health identity `1048:134344925715922463`. Remaining step: integrate/push the helper fix and run one authorized live `restart-agents.ps1` cycle to prove exit 0 + task restoration + healthy replacement.
+- [x] Repaired and live-verified `scripts/restart-agents.ps1` for the Python 3.13 launcher/interpreter pair. Root cause: the old helper selected the first fresh supervisor-shaped `pythonw.exe` and required backend health to match that one PID. The fix preserves exact native PID+creation-time safety while matching backend health against **all** fresh supervisor candidates. Validation: 59/59 supervisor/recovery tests passed, PowerShell parse and `git diff --check` clean; a read-only proof selected the real health-owning child from the pre-restart pair; then the authorized live helper run snapshotted/terminated only exact old identities, launched the canonical AppData VBS, matched the new child identity `20056:134344967304644953` rather than launcher PID `20460`, printed `OK`, exited 0, restored the Scheduled Task to `Ready`, and left all six Windows agents running with zero restarts. Task Scheduler subsequently reported `LastTaskResult=0`.
 
 ### Emotion / FaceLandmarker lane
 
