@@ -31,11 +31,16 @@ Not every Home Hub-related path belongs inside the workspace. Keep these outside
 unless a separate recovery explicitly covers them:
 
 - The historical Windows 10 backup path was `C:\Users\antho\HomeHubBackups`.
-  It is **not present** on the rebuilt Windows 11 machine as of 2026-09-20.
-  Whether the old restic workflow should be restored remains a recovery item;
-  do not recreate secrets or backup configuration from stale documentation.
+  It is **not present** on the rebuilt Windows 11 machine. The old Windows
+  restic layer was classified during recovery as unrecoverable historical
+  infrastructure; do not recreate its secrets or task configuration from stale
+  documentation. Any future offsite backup design is new infrastructure.
 - `%LOCALAPPDATA%\home-hub` — installed Windows runtime launchers for the
   unified supervisor.
+- `%LOCALAPPDATA%\HomeHub` — installed PyInstaller desktop-notifier runtime.
+  `HomeHubNotifier.exe` is owned by the separate `Home Hub Desktop Notifier`
+  At-Logon Scheduled Task because PyQt6 must run on the GUI main thread rather
+  than inside the supervisor's thread-per-agent model.
 - `main\.agents\skills\deploy-home\SKILL.md` — current repo-local deployment
   procedure. The old user-global `%USERPROFILE%\.codex\skills\deploy-home`
   location is not present on this rebuild.
@@ -45,7 +50,12 @@ unless a separate recovery explicitly covers them:
   the inbox `C:\Windows\System32\OpenSSH\ssh.exe` currently exits 255
   before connecting.
 - Windows Scheduled Tasks and environment variables — machine configuration,
-  not repository content.
+  not repository content. On the rebuilt Windows 11 machine the user-level
+  `HOME_HUB_URL=http://192.168.86.210:8000` setting is required by the repo
+  `home-hub` MCP registration so `backend.mcp_server` targets Latitude rather
+  than its localhost fallback. This URL is not a secret; do not recreate an
+  old `HOME_HUB_API_KEY` unless a current authenticated path actually requires
+  one.
 
 Do not assume historical machine-local debris (including the old root file named
 `=`) still exists. If encountered, preserve unrelated files until explicitly
