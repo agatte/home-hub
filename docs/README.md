@@ -53,7 +53,8 @@ Use this page as the entry point for repository documentation.
 
 ## Incidents and audits
 
-- [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) — dated read-only Astra reconciliation of authority docs, relevant code surfaces, and all 77 open GitHub issues; preserves detailed findings, issue classifications, execution packets, and the #240 follow-up brief
+- [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) — dated read-only Astra reconciliation of authority docs, relevant code surfaces, and all 77 open GitHub issues; preserves detailed findings, issue classifications, execution packets, and the original #240 follow-up brief
+- [`audits/REPLAY_ARCHITECTURE_2026_09_22.md`](audits/REPLAY_ARCHITECTURE_2026_09_22.md) — accepted Astra Medium design for #240's bounded deterministic navigation replay, including the evidence-capture gate, bundle/time/checkpoint contracts, structural no-actuation proof, and downstream Luna/Terra implementation slices
 - [`DASHBOARD_UX_AUDIT_2026_08_18.md`](DASHBOARD_UX_AUDIT_2026_08_18.md) — dated pre-redesign Dashboard UI/UX audit and issue-reconciliation evidence; target direction now lives in `DASHBOARD_REDESIGN_VISION.md`
 - [`INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md`](INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md) — lighting instability while Anthony was home but the desktop was inactive, plus its remediation plan
 - [`REPO_CLEANUP_2026_07_31.md`](REPO_CLEANUP_2026_07_31.md) — cleanup inventory, deletion reasoning, retained local state, and regeneration commands

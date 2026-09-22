@@ -1,4 +1,4 @@
-﻿# HomeHub Execution Map
+# HomeHub Execution Map
 
 > **Status:** Living execution/orchestration guidance; not product authority.
 > **Last reconciled:** 2026-09-22 against `master` at `17810d670c9c1d7b05fc1a7fc4aedfbfb8ce0c3e`.
@@ -33,7 +33,7 @@ Important current facts:
 - Scene Curator foundations, shared music intelligence, central Sonos ownership, and cross-Activity desk comfort already exist in code; future work must reconcile/extend them rather than rebuild them.
 - Existing mode-match/fusion accuracy is not independent user-outcome evidence and must not be used as #131 autonomy-graduation proof.
 - Sonos ownership serializes participating HomeHub writers, but read-then-write device operations are not atomic against an external Sonos controller.
-- #240 remains the highest-leverage architecture investment after the bounded correctness work below.
+- #240's bounded navigation-replay architecture is accepted. Implementation is ready in small slices; the first real evidence-backed fixture remains capture-gated.
 
 ## Recommended near-term order
 
@@ -45,7 +45,7 @@ Important current facts:
 | 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Terra High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
 | 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Terra Low** |
-| 7 | #240 deterministic replay architecture | ARCHITECTURE_READY | Run the bounded Astra Medium design pass below | **Astra Medium** |
+| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Start Slice 1 consumption manifest; implementation can proceed while first real fixture awaits bounded capture | **Luna Low** |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -97,7 +97,6 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 
 | Work | Design question | Next model |
 |---|---|---|
-| #240 replay/forensics | Minimum deterministic replay boundary, clocks, initial state, suppression trace, structural no-I/O | **Astra Medium** |
 | #131 per-action autonomy | First action-specific outcome/provenance lifecycle; independent outcome evidence; reversal/demotion semantics | **Sol Medium** |
 | #138 Winding Down | Durable lifecycle session/overlay preserving underlying Activity and ownership across restart/cancel/end | **Sol High** |
 | #139 Morning | Separate accepted wake, confirmed Morning, optional brief, and overnight path assistance | **Sol Medium** |
@@ -158,40 +157,45 @@ Other evidence-gated or parked work is fully classified in **Section 5** of the 
 - A universal physical-source model: #192 geometry truth must not become live occupancy authority.
 - Whole-engine persistence: #246 only needs narrow manual-owner durability.
 
-## #240 — next Astra Medium architecture brief
+## #240 - accepted deterministic navigation-replay architecture
 
-**Model/effort:** GPT-6 Astra, Medium. **Mode:** read-only architecture pass; no implementation or live writes.
+**Accepted design:** [`audits/REPLAY_ARCHITECTURE_2026_09_22.md`](audits/REPLAY_ARCHITECTURE_2026_09_22.md).
 
-**Goal:** Produce an implementation-ready design for the smallest deterministic HomeHub incident replay, using current code and the 2026-09-22 authority audit. Do not design a whole-home simulator.
+**Status:** Architecture resolved for the bounded profile; implementation ready. The first real fixture is **EVIDENCE_GATED** because no retained historical input stream/checkpoint is complete enough to claim deterministic reproduction of the July incident.
 
-Minimum v1 chain:
+Supported v1 profile:
 
-`normalized source-qualified observations → PresenceFusion → relevant Activity/House-State arbitration → DeskExit/navigation decision → owned lighting request`
+`normalized source-qualified physical observations -> PresenceFusion -> retained Working / House-State authority -> TransitLightingService -> LightOverrideManager -> recording adapter result -> Working/day restoration through LightApplicator`
 
-Include ScreenSync only if the chosen incident requires it. Do not include Sonos, Game Day, raw camera/ML inference, dashboard replay, or general event sourcing in v1.
+Boundaries:
+- target incident family: July 14-31 desktop-inactive repeated-transit behavior;
+- first honest fixture: a new bounded natural daytime navigation capture, not a fabricated/reconstructed July sequence;
+- one backend boot; explicit/retained Working intent; desktop sensing unavailable;
+- no active scene/effect/ScreenSync owner;
+- ScreenSync, DeskExit evening/corridor, Sonos, Game Day, raw inference, dashboard replay, and whole-home simulation are out of v1;
+- replay starts after ingress timestamp normalization at `PresenceFusion.on_observation(PresenceReading)`;
+- replay stops at final per-light request, recording adapter result, and resulting simulated owner/cache/navigation state.
 
-The design must answer:
+Implementation order:
+1. **Luna Low** - exact navigation-v1 consumption/state/clock/side-effect manifest.
+2. **Terra Low** - versioned bundle schema + validator/fixture reader.
+3. **Terra Medium** - clock injection and passive import cleanup.
+4. **Terra Medium** - narrow Activity/Working composition extraction with production-equivalence tests.
+5. **Terra High** - deterministic scheduler + checkpoint model.
+6. **Terra High** - offline composition root + structural forbidden-I/O proof.
+7. **Terra Medium** - trace/forensics + synthetic contract replay.
+8. **Terra Medium** - bounded privacy-preserving capture/exporter.
+9. **Terra Medium** - first real fixture + fixed-evidence semantic diff.
+10. **Luna Low** - accepted handoff/status docs.
 
-- which real incident has enough retained normalized evidence and pre-window state;
-- what initial lifecycle/ownership/dwell state must be exported instead of reconstructed;
-- which current decision functions can run unchanged and which narrow seams are required;
-- where replay stops and how requested actions differ from observed device responses;
-- how virtual UTC wall time + monotonic elapsed time preserve freshness, dwell, deadlines and deterministic ordering;
-- how suppressed proposals/eligibility/stronger-owner decisions appear in the trace;
-- how an offline composition root structurally prevents Hue/Sonos/Kasa/projector/network/notification/shutdown actuation;
-- what fixed-evidence counterfactuals are valid and where environmental feedback becomes unknowable.
+Important findings to preserve during implementation:
+- Transit internal `active` state is not proof that a write succeeded; the manager may suppress or receive zero successful acknowledgements.
+- Direct navigation writes through `LightOverrideManager` have different guards from normal `LightApplicator` writes. Replay must expose that distinction rather than normalize it away.
+- Transit currently lacks DeskExit's explicit unknown-physical-authority gate. Treat this as a separate correctness finding, not a replay-extraction change.
+- Missing required initial state/order must yield an incomplete/uncertain replay, never healthy/Home/empty defaults.
+- Counterfactual output is explicitly **FIXED-EVIDENCE COUNTERFACTUAL**; it cannot infer changed human behavior or environmental feedback.
 
-Expected implementation decomposition after design:
-
-1. Luna Low — exact selected-incident input/state/clock/side-effect manifest.
-2. Terra Low — versioned bundle validator and fixture reader.
-3. Terra Medium — narrow clock/tick seams.
-4. Terra High — offline composition root + forbidden-I/O structural tests.
-5. Terra Medium — first real incident replay + golden reason trace.
-6. Terra Medium — baseline/candidate semantic diff.
-7. Terra Medium — bounded export adapter only if the proven schema needs it.
-
-Full schema concerns, no-actuation criteria, acceptance tests and explicit non-goals are preserved in **Section 9** of the dated Astra audit.
+The accepted design contains the full bundle schema, virtual wall/monotonic time rules, initial-state matrix, trace schema, no-actuation proof, counterfactual limits, capture contract, implementation slices, landing order, and acceptance criteria.
 
 ## Model economy
 
@@ -200,7 +204,7 @@ Full schema concerns, no-actuation criteria, acceptance tests and explicit non-g
 - **Terra Medium:** default bounded implementation/debugging/multi-file work.
 - **Terra High:** tricky bounded concurrency, ownership, delayed operations and interactions.
 - **Sol Medium/High:** unresolved cross-system architecture/authority judgment.
-- **Astra:** only exceptional cross-system ambiguity where a high-quality architecture pass can manufacture cheaper downstream work. At this checkpoint, #240 is the only clearly justified Astra task.
+- **Astra:** only exceptional cross-system ambiguity where a high-quality architecture pass can manufacture cheaper downstream work. #240's accepted bounded design no longer requires Astra for implementation; use the assigned Luna/Terra slices unless new architecture ambiguity appears.
 
 ## Update discipline
 
