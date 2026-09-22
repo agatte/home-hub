@@ -22,7 +22,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Windows `master` and GitHub `origin/master` contain the verified Windows-recovery fixes through the current closeout. The functional desktop-presence recovery commit `9d6970f` was deployed to Latitude through the official `scripts/deploy.sh` path after explicit authorization.
 - [x] Latitude production checkout, `origin/master`, and `.last-deployed-sha` were verified synchronized at the deployed recovery commit; `home-hub.service` and `home-hub-latitude-streaming.service` were active and `/health` reported `build_id=9d6970f`.
 - [x] Core Home Hub health reports Hue, Sonos, Pi-hole, automation, and overnight jobs healthy.
-- [x] One permanent Windows task, `Home Hub Agent Supervisor`, is enabled and firing on logon plus every 5 minutes.
+- [x] Two permanent Home Hub Windows tasks are supported: `Home Hub Agent Supervisor` (the only permanent **agent** task; logon plus 5-minute watchdog) and the separate `Home Hub Desktop Notifier` At-Logon GUI task required by the current product contract.
 - [x] The supervisor now manages seven agents: Latitude streaming detector, activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, and monitor brightness. Peripheral RGB was retired on 2026-09-20.
 - [x] The seven retained agents are the supported Windows supervisor fleet and actively reach Latitude.
 - [x] No obsolete per-agent Home Hub tasks, Run-key entries, Startup-folder entries, or separate Home Hub Windows service were found.
@@ -30,7 +30,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] OpenRGB 1.0.0 was recovered successfully, then retired from Home Hub on 2026-09-20. The Home Hub client/dependency is removed, and the separate LocalSystem Windows service is stopped and disabled.
 - [x] PawnIO 2.2.0.0 is installed and its driver/device are healthy.
 - [x] The former OpenRGB SDK/peripheral agent path is no longer part of the supported runtime; mouse/keyboard/GPU lighting are not Home Hub-owned.
-- [x] Historical and reopened-recovery worktrees were retired only after proving the active worktree was clean and carried no unique HEAD; `main` is again the sole registered worktree. Temporary branch refs remain preserved, and unrelated Sonos/music edits in `main` were untouched.
+- [x] Historical and reopened-recovery worktrees were retired only after proving the active worktree was clean and carried no unique HEAD; `main` is again the sole registered worktree. Historical branch refs that still carry useful project provenance remain preserved where applicable; the temporary `recovery/windows11-migration-recovery` branch was deleted after its commits were merged into `master`. Unrelated Sonos/music edits in `main` were untouched.
 - [x] Repository/deployment state is explicit and synchronized through the authorized recovery deployment. The final closeout documentation is maintained on `master` and redeployed through the same official path when this record advances.
 
 ## Verified recovery lanes
