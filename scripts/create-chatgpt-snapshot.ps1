@@ -152,8 +152,15 @@ try {
     }
 
     $status = (Invoke-Git @("status", "--short", "--branch")) -join [Environment]::NewLine
-    $diffStat = (& git -C $RepoRoot diff --stat 2>&1) -join [Environment]::NewLine
-    $cachedDiffStat = (& git -C $RepoRoot diff --cached --stat 2>&1) -join [Environment]::NewLine
+
+    # Snapshot creation is read-only. A working tree with LF files can make Git
+    # emit advisory LF->CRLF warnings on stderr during diff inspection. Under
+    # Windows PowerShell 5.1 + ErrorActionPreference=Stop those warnings become
+    # terminating NativeCommandError records even though Git exits 0. Disable
+    # safecrlf for these two read-only diff-stat calls only; do not change repo
+    # or global Git configuration.
+    $diffStat = (& git -c core.safecrlf=false -C $RepoRoot diff --stat 2>&1) -join [Environment]::NewLine
+    $cachedDiffStat = (& git -c core.safecrlf=false -C $RepoRoot diff --cached --stat 2>&1) -join [Environment]::NewLine
     $remote = (& git -C $RepoRoot remote get-url origin 2>&1 | Select-Object -First 1)
 
     $manifest = @"

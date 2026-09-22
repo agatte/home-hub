@@ -4,7 +4,7 @@ Updated: 2026-09-21
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
-**Windows recovery closeout re-verified — 2026-09-21:** Watching, Working, desktop-only dependencies, supervisor restart identity handling, and desktop physical presence have now been verified end to end on the rebuilt machine. The earlier short camera acceptance windows were explicitly superseded by the longer segmentation-backed validation below. The only unchecked item is the optional future offsite-backup design; it is new infrastructure, not unfinished SSD recovery.
+**Windows recovery reopened — 2026-09-21:** The core Home Hub runtime, desktop activity/presence recovery, supervisor lifecycle, and Latitude production path remain verified. A comparison against the broader 2026-08-18 Windows workspace migration uncovered three Windows-side gaps that were not represented in the prior closeout: the ChatGPT snapshot helper fails under the current Windows 11 PowerShell/Git warning behavior, the supported Desktop Notifier installation/task is absent, and the repo-registered `home-hub` MCP server currently falls back to `http://localhost:8000` because the Windows user `HOME_HUB_URL` variable is absent. Recovery is reopened until those three behaviors are repaired and re-verified. The optional future offsite-backup design remains new infrastructure, not unfinished SSD recovery.
 
 ## Safety / recovery rules
 
@@ -102,6 +102,14 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Keep Windows automatic system sleep disabled on AC while retaining the 30-minute display timeout. This avoids generic inactivity suspending the PC during watching/long-running activity; Home Hub's mode-aware watcher remains the deliberate S3 path.
 
 **2026-09-20 conclusion:** screen dimming, Windows display-off, PC S3, and projector power are four separate layers. Home Hub dims the Samsung; Windows may remove video after its display-idle policy; Home Hub only suspends the PC after sustained `sleeping`; and the Epson currently relies on its own no-signal Sleep Mode rather than a Home Hub command. Automatic “fell asleep while watching” shutdown remains intentionally unavailable until trustworthy sleep/posture authority exists.
+## Reopened migration-era recovery gates — 2026-09-21
+
+- [ ] Repair and live-test `scripts/create-chatgpt-snapshot.ps1` on the rebuilt Windows 11 machine. The tracked helper currently aborts before ZIP creation when `git diff --stat` emits LF→CRLF warnings on native stderr under Windows PowerShell 5.1 with `$ErrorActionPreference = "Stop"`. Acceptance requires a real snapshot ZIP, manifest, secret/runtime exclusions, and cleanup of the test artifact.
+- [ ] Restore and verify the supported Windows Desktop Notifier surface documented in `docs/PROJECT_SPEC.md`: build `HomeHubNotifier.exe` from the current canonical source, install it under `%LOCALAPPDATA%\\HomeHub`, recreate the dedicated `Home Hub Desktop Notifier` At-Logon task, and prove the running notifier subscribes successfully without disturbing the unified supervisor.
+- [ ] Restore and verify the Windows Home Hub MCP target. The repo `.mcp.json` still registers `python -m backend.mcp_server`, but without the user-level `HOME_HUB_URL` variable the module resolves to `http://localhost:8000` while production is healthy at `http://192.168.86.210:8000`. Restore the non-secret URL setting and prove the MCP backend path reaches Latitude. Do not recreate historical secrets unless a current authenticated path actually requires them.
+- [x] Accounted for the historical `physical-context-relax` dirty-work archive without resurrecting the malformed archive file. The clean patchcheck implementation commit `819794b` (`Add physical-context relax fallback`) is an ancestor of current `master`, so the product work survived in Git even though the 2026-08-18 archival patch itself was not a valid Git patch.
+- [x] Kept the historical Windows `HomeHubBackups`/restic layer classified separately. It remains unrecoverable old infrastructure; the restored Latitude-local SQLite backup is the current verified backup behavior, and any future offsite layer is new infrastructure.
+
 ## Recovery debt
 
 - [x] Corrected stale `C:\Users\antho` references where they incorrectly described the current rebuilt machine; retained old-profile paths only when explicitly historical.
