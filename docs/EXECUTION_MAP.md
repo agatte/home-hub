@@ -45,7 +45,7 @@ Important current facts:
 | 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Terra High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
 | 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Terra Low** |
-| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slice 1 manifest complete; implement Slice 2 versioned bundle schema + validator/fixture reader | **Terra Low** |
+| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slices 1-2 complete; implement Slice 3 clock injection + passive import cleanup | **Terra Medium** |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -178,8 +178,8 @@ Boundaries:
 
 Implementation order:
 1. **COMPLETE (Luna Low)** - exact navigation-v1 consumption/state/clock/side-effect manifest: [`replay/NAVIGATION_V1.md`](replay/NAVIGATION_V1.md).
-2. **NEXT (Terra Low)** - versioned bundle schema + validator/fixture reader.
-3. **Terra Medium** - clock injection and passive import cleanup.
+2. **COMPLETE (Terra Low)** - versioned navigation-v1 bundle schema + strict validator/fixture-only reader (`4003d23`), including exact checkpoint-state enforcement, member/digest/order/session validation, explicit incomplete/unsupported errors, and raw-media rejection.
+3. **NEXT (Terra Medium)** - clock injection and passive import cleanup.
 4. **Terra Medium** - narrow Activity/Working composition extraction with production-equivalence tests.
 5. **Terra High** - deterministic scheduler + checkpoint model.
 6. **Terra High** - offline composition root + structural forbidden-I/O proof.
