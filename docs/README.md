@@ -2,7 +2,7 @@
 
 Use this page as the entry point for repository documentation.
 
-**Last repository/GitHub truth reconciliation:** August 30, 2026. See [`DOCS_GH_RECONCILIATION_2026_08_30.md`](DOCS_GH_RECONCILIATION_2026_08_30.md) for the reviewed evidence and remaining known gaps.
+**Last cross-issue architecture/execution reconciliation:** September 22, 2026. See [`EXECUTION_MAP.md`](EXECUTION_MAP.md) for the living execution view and [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) for the dated evidence baseline. The earlier August 30 repository/GitHub reconciliation remains historical evidence.
 
 ## Document ownership
 
@@ -23,6 +23,10 @@ Use this page as the entry point for repository documentation.
 - [`DASHBOARD_REDESIGN_VISION.md`](DASHBOARD_REDESIGN_VISION.md) owns the active
   Dashboard UI/UX target language and information-architecture direction for
   #157 while deferring cross-system policy to `PROJECT_SPEC.md`.
+- [`EXECUTION_MAP.md`](EXECUTION_MAP.md) is the living cross-issue execution and
+  orchestration view: readiness, sequencing, dependencies, model/depth handoffs,
+  and links to detailed packets. It does not override `PROJECT_SPEC.md`, current
+  code/runtime evidence, or the owning GitHub issue.
 - [`Future_Development.md`](Future_Development.md) is a concise,
   non-authoritative idea and GitHub-issue index. Its entries and issue labels
   do not set roadmap priority.
@@ -49,6 +53,7 @@ Use this page as the entry point for repository documentation.
 
 ## Incidents and audits
 
+- [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) — dated read-only Astra reconciliation of authority docs, relevant code surfaces, and all 77 open GitHub issues; preserves detailed findings, issue classifications, execution packets, and the #240 follow-up brief
 - [`DASHBOARD_UX_AUDIT_2026_08_18.md`](DASHBOARD_UX_AUDIT_2026_08_18.md) — dated pre-redesign Dashboard UI/UX audit and issue-reconciliation evidence; target direction now lives in `DASHBOARD_REDESIGN_VISION.md`
 - [`INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md`](INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md) — lighting instability while Anthony was home but the desktop was inactive, plus its remediation plan
 - [`REPO_CLEANUP_2026_07_31.md`](REPO_CLEANUP_2026_07_31.md) — cleanup inventory, deletion reasoning, retained local state, and regeneration commands

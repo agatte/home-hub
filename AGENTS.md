@@ -8,6 +8,10 @@ their subject is actually involved.
 - `docs/PROJECT_SPEC.md` is authoritative for cross-system product direction,
   architecture, status boundaries, and roadmap. `docs/README.md` routes to
   subsystem specs; read only what the task needs.
+- For backlog selection, cross-issue architecture planning, orchestration, or
+  implementation handoff, read `docs/EXECUTION_MAP.md` after the relevant
+  `PROJECT_SPEC.md` section. It is living execution guidance, not product
+  authority; re-check the named code/issues before executing an older packet.
 - Current code/runtime evidence decides whether documented behavior is shipped or
   healthy. Dated audits/incidents are historical evidence unless reconfirmed.
 - Keep `.env.example` and `backend/config.py` aligned when environment settings
