@@ -55,18 +55,54 @@ unless a separate recovery explicitly covers them:
   `home-hub` MCP registration so `backend.mcp_server` targets Latitude rather
   than its localhost fallback. This URL is not a secret; do not recreate an
   old `HOME_HUB_API_KEY` unless a current authenticated path actually requires
-  one.
+  one. Windows user-environment changes are inherited only by **newly launched**
+  processes. After changing `HOME_HUB_URL`, restart the local MCP host,
+  terminal, editor, Claude/Codex session, or other developer process that will
+  launch `backend.mcp_server`; a Windows reboot is not required. Verify from a
+  fresh process by checking that `backend.mcp_server.BASE_URL` resolves to
+  Latitude and that at least one live MCP call such as `get_health()` succeeds.
 
 Do not assume historical machine-local debris (including the old root file named
 `=`) still exists. If encountered, preserve unrelated files until explicitly
 classified rather than staging or deleting them casually.
 
+## Recovery completion gate
+
+Do **not** declare a Windows/Home Hub rebuild or recovery complete merely because
+Git is clean, the Scheduled Task exists, or the supervisor processes are
+running. A closeout must cross-check all three sources of authority:
+
+1. `docs/WINDOWS11_RECOVERY_STATUS.md` for the current recovery checklist and
+   evidence;
+2. the **Historical migration status** section below for migration-era
+   machine/workspace surfaces that may have fallen out of newer checklists; and
+3. `docs/PROJECT_SPEC.md` for current project-adjacent Windows requirements.
+
+At minimum, verify the canonical checkout/worktree state, both tracked dependency
+layers, the unified supervisor and backend agent-health report, the separate
+Desktop Notifier installation/task and WebSocket connection, the ChatGPT
+snapshot helper with a **real canonical dirty-tree snapshot**, the Home Hub MCP
+target from a fresh process, the supported SSH/deployment path, and every
+machine-local component that is either intentionally retained or explicitly
+retired. Restoring tracked source alone is insufficient: Scheduled Tasks,
+`%LOCALAPPDATA%` runtimes, environment variables, SSH configuration, and other
+user-global state require behavioral verification after an OS rebuild.
+
+If an older component has been intentionally superseded or retired, record that
+disposition rather than recreating it. If evidence is incomplete, leave recovery
+open.
+
 ## Windows PC-agent runtime
 
 The unified `Home Hub Agent Supervisor` Scheduled Task is the only permanent
-Windows Home Hub agent task. On the rebuilt Windows 11 machine it starts 30
-seconds after Anthony logs on and has a 5-minute watchdog trigger. Its installed
-task action is:
+Windows Home Hub **agent** task. The separate `Home Hub Desktop Notifier`
+At-Logon task is also supported and permanent, but it is a GUI surface rather
+than a supervisor agent because PyQt6 must own the GUI main thread. Do not delete
+the notifier merely because the supervisor is described as the only permanent
+agent task.
+
+On the rebuilt Windows 11 machine the supervisor starts 30 seconds after Anthony
+logs on and has a 5-minute watchdog trigger. Its installed task action is:
 
 ```text
 C:\Windows\System32\wscript.exe
@@ -152,6 +188,24 @@ The snapshot script:
 
 Snapshots transfer current source context to ChatGPT. They are not backups and
 must not contain production data or secrets.
+
+After a Windows rebuild, migration, or material snapshot-helper change, file
+presence is not enough to call this workflow recovered. Run the helper from the
+canonical `main` checkout while the working tree contains representative dirty
+tracked changes and at least one allowlisted untracked source/docs/config file.
+Inspect the resulting ZIP and require all of the following before closeout:
+
+- `SNAPSHOT_MANIFEST.txt` records the correct branch, HEAD, Git status, and
+  dirty-file context;
+- allowlisted untracked source is actually present in the ZIP, not merely named
+  in the manifest;
+- real `.env` files, private keys, databases, logs, `.git`, caches, and other
+  excluded runtime/secret material are absent (`.env.example` is expected and
+  allowed);
+- the helper exits successfully even when Git emits ordinary Windows
+  line-ending advisories; and
+- any test snapshot is removed afterward so recovery validation does not become
+  permanent clutter.
 
 ## Worktrees
 
