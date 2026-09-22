@@ -394,6 +394,18 @@ def test_desktop_face_present_is_strongly_present() -> None:
     assert fusion.is_strongly_present_any() is True
 
 
+def test_desktop_segmenter_is_strong_presence_but_not_desk() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.0,
+        detection_source="segmenter", zone=None,
+    ))
+    assert fusion.is_strongly_present_any() is True
+    assert fusion.is_at_desk_fresh() is False
+    assert fusion.latest_zone() is None
+
+
 def test_strong_presence_window_is_tight() -> None:
     """Strong presence uses the short window so absent-dwell counters work."""
     fusion = PresenceFusion()

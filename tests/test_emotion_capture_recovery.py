@@ -123,6 +123,106 @@ def _agent(monkeypatch):
     return agent
 
 
+def test_segmenter_presence_requires_dwell_and_debounces_single_dip():
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = ec.EmotionCapture("http://test:8000")
+    try:
+        assert agent._update_segmenter_candidate(True) is None
+        assert agent._update_segmenter_candidate(True) is None
+        assert agent._update_segmenter_candidate(True) is True
+        # One weak frame cannot demote established human presence.
+        assert agent._update_segmenter_candidate(False) is True
+        assert agent._update_segmenter_candidate(True) is True
+        # Five consecutive negatives are required to demote it.
+        assert agent._update_segmenter_candidate(False) is True
+        assert agent._update_segmenter_candidate(False) is True
+        assert agent._update_segmenter_candidate(False) is True
+        assert agent._update_segmenter_candidate(False) is True
+        assert agent._update_segmenter_candidate(False) is False
+    finally:
+        agent.close()
+
+
+def test_segmenter_shape_gate_accepts_person_and_rejects_chair_geometry():
+    from backend.services.pc_agent import emotion_capture as ec
+
+    class Mask:
+        def __init__(self, array):
+            self._array = array
+
+        def numpy_view(self):
+            return self._array
+
+    def result_for(array):
+        return SimpleNamespace(confidence_masks=[Mask(array)])
+
+    agent = ec.EmotionCapture("http://test:8000")
+    try:
+        person = np.zeros((8, 8), dtype=np.float32)
+        person[2:, 1:7] = 1.0
+        agent._person_segmenter = SimpleNamespace(
+            segment=lambda _image: result_for(person)
+        )
+        assert agent._detect_segmented_person(object())[0] is None
+        assert agent._detect_segmented_person(object())[0] is None
+        assert agent._detect_segmented_person(object())[0] is True
+
+        chair = np.zeros((8, 8), dtype=np.float32)
+        chair[5:, :4] = 1.0
+        agent._person_segmenter = SimpleNamespace(
+            segment=lambda _image: result_for(chair)
+        )
+        for _ in range(4):
+            assert agent._detect_segmented_person(object())[0] is True
+        assert agent._detect_segmented_person(object())[0] is False
+    finally:
+        agent.close()
+
+
+def test_segmenter_fallback_posts_presence_without_inventing_desk(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = _agent(monkeypatch)
+    agent.set_enabled(presence=True)
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: _Landmarker([_empty_result()]))
+    monkeypatch.setattr(agent, "_landmark_haar_face_crop", lambda **_kwargs: (None, None))
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    monkeypatch.setattr(agent, "_detect_segmented_person", lambda _image: (True, 0.35))
+    posts = []
+    monkeypatch.setattr(agent, "_post_observation", lambda **kwargs: posts.append(kwargs))
+    agent._cap = _Cap()
+    try:
+        agent.tick()
+        assert len(posts) == 1
+        assert posts[0]["face_present"] is True
+        assert posts[0]["face_confidence"] == 0.0
+        assert posts[0]["detection_source"] == "segmenter"
+        assert posts[0]["zone"] is None
+        assert posts[0]["posture"] is None
+    finally:
+        agent.close()
+
+
+def test_segmenter_startup_ambiguity_abstains_instead_of_posting_absence(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = _agent(monkeypatch)
+    agent.set_enabled(presence=True)
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: _Landmarker([_empty_result()]))
+    monkeypatch.setattr(agent, "_landmark_haar_face_crop", lambda **_kwargs: (None, None))
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    monkeypatch.setattr(agent, "_detect_segmented_person", lambda _image: (None, 0.31))
+    posts = []
+    monkeypatch.setattr(agent, "_post_observation", lambda **kwargs: posts.append(kwargs))
+    agent._cap = _Cap()
+    try:
+        agent.tick()
+        assert posts == []
+    finally:
+        agent.close()
+
+
 def test_sleeping_boundary_discards_landmarker_before_next_active_tick(monkeypatch):
     from backend.services.pc_agent import emotion_capture as ec
 

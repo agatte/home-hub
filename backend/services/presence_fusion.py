@@ -81,8 +81,9 @@ class PresenceReading:
     captured_at: datetime  # UTC
     face_present: Optional[bool] = None
     face_confidence: Optional[float] = None
-    # ``detection_source`` records physical-evidence provenance: face/pose/yolo/None.
-    # Desktop uses face for Desk and calibrated pose geometry for Bed.
+    # ``detection_source`` records physical-evidence provenance:
+    # face/pose/yolo/segmenter/None. Desktop segmentation may establish a real
+    # person only; face still owns Desk and calibrated pose geometry owns Bed.
     detection_source: Optional[str] = None
     zone: Optional[str] = None  # "desk"/"bed" (desktop) | "couch" (Latitude) | None
     # Latitude reports "upright" | "reclined". Desktop adds

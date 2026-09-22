@@ -48,6 +48,37 @@ async def test_desktop_observation_reaches_occupancy_owner_after_fusion_ingest()
 
 
 @pytest.mark.asyncio
+async def test_desktop_segmenter_observation_is_source_qualified_presence():
+    presence = PresenceFusion()
+    automation = SimpleNamespace(
+        notify_presence_observation=AsyncMock(),
+        notify_camera_commit=AsyncMock(),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(
+            presence=presence, automation=automation, away_manager=None,
+        ))
+    )
+    payload = PresenceObservation(
+        source="desktop",
+        captured_at=datetime.now(timezone.utc),
+        face_present=True,
+        face_confidence=0.0,
+        detection_source="segmenter",
+        zone=None,
+    )
+
+    result = await post_observation(payload, request)
+
+    assert result == {"status": "ok"}
+    reading = presence.get_source_reading("desktop")
+    assert reading is not None
+    assert reading.detection_source == "segmenter"
+    assert presence.is_strongly_present_any() is True
+    assert presence.is_at_desk_fresh() is False
+
+
+@pytest.mark.asyncio
 async def test_steady_desktop_desk_heartbeat_does_not_recompose_twice():
     presence = PresenceFusion()
     automation = SimpleNamespace(

@@ -48,7 +48,7 @@ class PresenceObservation(BaseModel):
     captured_at: Optional[datetime] = None
     face_present: Optional[bool] = None
     face_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    detection_source: Optional[Literal["face", "pose"]] = None
+    detection_source: Optional[Literal["face", "pose", "segmenter"]] = None
     zone: Optional[Literal["desk", "bed", "couch"]] = None
     posture: Optional[Literal["upright", "reclined", "slouched"]] = None
     posture_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)

@@ -96,6 +96,30 @@ HAAR_FACE_MAX_CANDIDATES = 6
 FACE_MISS_BURST_RETRIES = 2
 FACE_MISS_BURST_DELAY_S = 0.05
 
+# Presence-only human segmentation fallback. Unlike face/pose, Selfie
+# Segmenter remains reliable through the Brio's long profile/landmark dropout
+# intervals. It may establish person presence only: never Desk/Bed, posture,
+# or emotion. Whole-frame mask fraction is NOT authority: the empty chair can
+# score 0.23-0.28. Instead require a person-shaped mask to reach the upper half
+# and occupy the central upper 3/4 of the frame. Live 2026-09-21 validation:
+# seated upper>=0.0458 / center>=0.3041 in the paired truth-table run, while
+# stable empty-chair frames had upper=0 / center<=0.0837; a separate 140-frame
+# seated stress run had 120 dual face+pose misses and passed this shape gate
+# 120/120, including a 66-frame consecutive outage. Presence requires 3
+# qualifying masks; demotion requires 5 negatives so the leave transition and
+# isolated segmentation glitches cannot flap physical presence.
+PERSON_SEGMENTER_MODEL_FILENAME = "selfie_segmenter.tflite"
+PERSON_SEGMENTER_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "image_segmenter/selfie_segmenter/float16/latest/"
+    "selfie_segmenter.tflite"
+)
+PERSON_SEGMENTER_PIXEL_CONFIDENCE = 0.50
+PERSON_SEGMENTER_MIN_UPPER_FRACTION = 0.015
+PERSON_SEGMENTER_MIN_CENTER_FRACTION = 0.15
+PERSON_SEGMENTER_PRESENT_DWELL_FRAMES = 3
+PERSON_SEGMENTER_ABSENT_DWELL_FRAMES = 5
+
 # PoseLandmarker (lite ~5MB) — same model + URL the Latitude uses, each
 # host downloads its own copy. Required for frontal-posture (upright vs
 # slouched) classification. Lite variant emits 2D normalized landmarks +
@@ -537,6 +561,38 @@ def _init_face_detector() -> Optional[Any]:
         return None
 
 
+def _init_person_segmenter() -> Optional[Any]:
+    """Lazy-create the lightweight human/background ImageSegmenter."""
+    try:
+        import mediapipe as mp
+    except ImportError:
+        logger.warning("mediapipe not installed — desktop person segmenter disabled")
+        return None
+
+    model_path = MODEL_DIR / PERSON_SEGMENTER_MODEL_FILENAME
+    if not model_path.exists():
+        if not _download_model(
+            model_path, PERSON_SEGMENTER_MODEL_URL, "person segmentation model",
+        ):
+            return None
+
+    try:
+        BaseOptions = mp.tasks.BaseOptions
+        ImageSegmenter = mp.tasks.vision.ImageSegmenter
+        ImageSegmenterOptions = mp.tasks.vision.ImageSegmenterOptions
+        options = ImageSegmenterOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            output_confidence_masks=True,
+            output_category_mask=False,
+        )
+        segmenter = ImageSegmenter.create_from_options(options)
+        logger.info("Person ImageSegmenter initialized")
+        return segmenter
+    except Exception as exc:
+        logger.warning("Person ImageSegmenter init failed: %s", exc)
+        return None
+
+
 def _init_face_landmarker() -> Optional[Any]:
     """Lazy-create a FaceLandmarker instance. Returns None on failure."""
     try:
@@ -667,6 +723,11 @@ class EmotionCapture:
         self._haar_face_init_failed: bool = False
         self._haar_face_diag_logged: bool = False
         self._pose_landmarker = None
+        self._person_segmenter = None
+        self._person_segmenter_init_failed: bool = False
+        self._segmenter_committed: Optional[bool] = None
+        self._segmenter_candidate: Optional[bool] = None
+        self._segmenter_candidate_streak: int = 0
         # A successful FaceLandmarker call that yields no usable confidence is
         # distinct from an exception: only the former contributes semantic
         # health evidence.  The cooldown prevents model churn during a real
@@ -745,6 +806,12 @@ class EmotionCapture:
             except Exception:
                 pass
             self._pose_landmarker = None
+        if self._person_segmenter is not None:
+            try:
+                self._person_segmenter.close()
+            except Exception:
+                pass
+            self._person_segmenter = None
         try:
             self._client.close()
         except Exception:
@@ -765,6 +832,10 @@ class EmotionCapture:
         self._zone_candidate = None
         self._zone_candidate_streak = 0
         self._pose_init_failed = False
+        self._person_segmenter_init_failed = False
+        self._segmenter_committed = None
+        self._segmenter_candidate = None
+        self._segmenter_candidate_streak = 0
 
     # ── enable flags ────────────────────────────────────────────────
 
@@ -801,6 +872,10 @@ class EmotionCapture:
             if sleeping != self._mode_is_sleeping:
                 logger.info("mode_is_sleeping → %s (gate)", sleeping)
                 self._mode_is_sleeping = sleeping
+                if sleeping:
+                    self._segmenter_committed = None
+                    self._segmenter_candidate = None
+                    self._segmenter_candidate_streak = 0
 
     def is_emotion_enabled(self) -> bool:
         with self._enabled_lock:
@@ -1237,6 +1312,9 @@ class EmotionCapture:
                 # successful reacquisition after this interruption also gets
                 # a fresh FaceLandmarker rather than retaining stale state.
                 self._dispose_face_landmarker(reason="capture_read_failed")
+                self._segmenter_committed = None
+                self._segmenter_candidate = None
+                self._segmenter_candidate_streak = 0
                 self._release_cap()
                 return
 
@@ -1415,8 +1493,11 @@ class EmotionCapture:
                 cv2=cv2,
             )
 
-            # Run pose for presence even when the close-range face detector
-            # does not fire. This is how the wide desktop FoV can localize Bed.
+            # Run pose for localization/posture even when the close-range face
+            # detector does not fire. Person segmentation is separate fallback
+            # authority for presence only; it must never invent Desk/Bed.
+            raw_face_present = face_present
+            raw_face_confidence = face_confidence
             posture: Optional[str] = None
             posture_confidence: Optional[float] = None
             zone: Optional[str] = None
@@ -1425,26 +1506,41 @@ class EmotionCapture:
             if self.is_presence_enabled():
                 pose_landmarks = self._detect_pose_landmarks(mp_image)
                 pose_visible_landmarks = _pose_visible_landmark_count(pose_landmarks)
+                segmenter_present, _segmenter_fraction = (
+                    self._detect_segmented_person(mp_image)
+                )
                 candidate = _classify_desktop_zone(
-                    face_present,
+                    raw_face_present,
                     pose_landmarks,
                     face_width=face_width,
                 )
                 zone = self._update_zone_candidate(
                     candidate, immediate=candidate == "desk",
                 )
-                if face_present and pose_landmarks is not None:
+                if raw_face_present and pose_landmarks is not None:
                     posture, posture_confidence = self._classify_pose_landmarks(
                         pose_landmarks,
                     )
                 else:
                     self._update_posture_candidate(None, None)
+
                 if zone == "bed":
+                    # Calibrated pose remains Bed authority.
                     detection_source = "pose"
-                elif face_present:
-                    # A detected face is real person evidence even when its
-                    # scale is too small to localize as Desk.
+                elif raw_face_present:
                     detection_source = "face"
+                elif segmenter_present is True:
+                    # Segmentation says a real human remains in frame, but it
+                    # carries no room-localization or posture authority.
+                    face_present = True
+                    face_confidence = 0.0
+                    detection_source = "segmenter"
+                    zone = None
+                    posture = None
+                    posture_confidence = None
+                elif segmenter_present is None:
+                    # Startup/inference ambiguity is abstention, not absence.
+                    return
 
                 self._post_observation(
                     face_present=face_present,
@@ -1457,18 +1553,90 @@ class EmotionCapture:
                     pose_visible_landmarks=pose_visible_landmarks,
                 )
 
-            if not face_present:
+            if not raw_face_present:
                 return
 
             if self.is_emotion_enabled() and blendshape_dict:
                 self._post_blendshapes(
-                    blendshape_dict, face_confidence, captured_at=captured_at,
+                    blendshape_dict, raw_face_confidence, captured_at=captured_at,
                 )
         finally:
             # Explicit dereference so the numpy buffers go out of scope
             # before the next tick — mirrors camera_service's finally pattern.
             frame = None
             rgb = None
+
+    def _update_segmenter_candidate(
+        self, candidate: Optional[bool],
+    ) -> Optional[bool]:
+        """Apply symmetric dwell to human-segmentation presence evidence."""
+        if candidate is None:
+            return self._segmenter_committed
+        if candidate == self._segmenter_committed:
+            self._segmenter_candidate = None
+            self._segmenter_candidate_streak = 0
+            return self._segmenter_committed
+        if candidate == self._segmenter_candidate:
+            self._segmenter_candidate_streak += 1
+        else:
+            self._segmenter_candidate = candidate
+            self._segmenter_candidate_streak = 1
+        required = (
+            PERSON_SEGMENTER_PRESENT_DWELL_FRAMES
+            if candidate else PERSON_SEGMENTER_ABSENT_DWELL_FRAMES
+        )
+        if self._segmenter_candidate_streak >= required:
+            self._segmenter_committed = candidate
+            self._segmenter_candidate = None
+            self._segmenter_candidate_streak = 0
+        return self._segmenter_committed
+
+    def _detect_segmented_person(
+        self, mp_image: Any,
+    ) -> tuple[Optional[bool], Optional[float]]:
+        """Return dwell-qualified person presence and central mask coverage."""
+        if self._person_segmenter_init_failed:
+            return False, None
+        if self._person_segmenter is None:
+            self._person_segmenter = _init_person_segmenter()
+            if self._person_segmenter is None:
+                self._person_segmenter_init_failed = True
+                return False, None
+        try:
+            result = self._person_segmenter.segment(mp_image)
+            masks = getattr(result, "confidence_masks", None) or []
+            if not masks:
+                return (
+                    self._segmenter_committed
+                    if self._segmenter_committed is not None else False
+                ), None
+            mask = masks[-1].numpy_view()
+            if getattr(mask, "ndim", 0) == 3:
+                mask = mask[..., 0]
+            binary = mask >= PERSON_SEGMENTER_PIXEL_CONFIDENCE
+            height, width = binary.shape[:2]
+            if height < 2 or width < 2:
+                return (
+                    self._segmenter_committed
+                    if self._segmenter_committed is not None else False
+                ), None
+            upper_fraction = float(binary[: height // 2].mean())
+            center_fraction = float(
+                binary[: 3 * height // 4, width // 4 : 3 * width // 4].mean()
+            )
+            candidate = (
+                upper_fraction >= PERSON_SEGMENTER_MIN_UPPER_FRACTION
+                and center_fraction >= PERSON_SEGMENTER_MIN_CENTER_FRACTION
+            )
+            # Return central coverage only as an internal diagnostic scalar;
+            # authority is the two-dimensional shape gate above.
+            return self._update_segmenter_candidate(candidate), center_fraction
+        except Exception:
+            logger.debug("Person ImageSegmenter inference failed", exc_info=True)
+            return (
+                self._segmenter_committed
+                if self._segmenter_committed is not None else False
+            ), None
 
     def _detect_pose_landmarks(self, mp_image: Any) -> Optional[Any]:
         """Run one PoseLandmarker inference and return the first pose."""
