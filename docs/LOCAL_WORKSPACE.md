@@ -178,8 +178,14 @@ preserved; only the redundant worktree directories were removed through the
 guarded `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` path.
 
 The historical `worktree-projector-kasa` is **not** registered or present on
-the rebuilt machine. Do not recreate it merely because older documentation says
-it once existed.
+the rebuilt machine. Pre-failure evidence identifies its single unique local
+commit `a075399` as undeployed projector smart-plug hardware/configuration that
+was outside the approved production slice. The current repository no longer has
+the commit object; recovered worktree metadata confirms the old ref, but its
+49,057-byte index is TRIM-zeroed and the recovered pack indexes are corrupt.
+Current product authority still marks projector smart-outlet shutdown as
+research-needed and requires a safe normal shutdown/cooling sequence first, so
+do not recreate this historical experiment merely because the worktree existed.
 
 ## Historical migration status
 
@@ -189,7 +195,7 @@ machine-local artifact survived the later SSD failure:
 
 - canonical checkout moved to `main`;
 - obsolete registered worktrees were retired;
-- dirty `physical-context-relax` work was archived as a validated UTF-8 patch;
+- dirty `physical-context-relax` work was archived during migration; the saved patch was later proven malformed, but the clean patchcheck implementation commit `819794b` is integrated in current `master`;
 - obsolete playoff worktree debris was removed;
 - legacy Claude loop Scheduled Tasks were removed;
 - Windows launcher paths were made relocation-safe;
@@ -198,13 +204,17 @@ machine-local artifact survived the later SSD failure:
 - a user-global `deploy-home` skill and `worktree-projector-kasa` existed at
   that time.
 
-## Windows 11 recovery status — 2026-09-20
+## Windows 11 recovery status — 2026-09-21
 
-The canonical repository, preserved historical branch refs, unified supervisor
-runtime and Windows desktop agents have been re-established and verified. The
-OpenRGB/peripheral-RGB path was subsequently retired on 2026-09-20 because it
-added polling/runtime complexity for little reliable value; do not recreate it. The temporary recovery worktrees were retired once proven
-redundant. Current recovery authority lives in
+The canonical repository, unified supervisor runtime, Windows desktop agents,
+desktop notifier, snapshot workflow, SSH path, and Home Hub MCP target have been
+re-established and verified. The OpenRGB/peripheral-RGB path was intentionally
+retired on 2026-09-20 because it added polling/runtime complexity for little
+reliable value; do not recreate it. Historical local-only artifacts are not
+assumed recoverable merely because metadata survived: `physical-context-relax`
+is accounted for by its integrated clean commit, while the undeployed
+`projector-kasa` experiment is explicitly classified above as unrecoverable and
+not part of the current product contract. Current recovery authority lives in
 `docs/WINDOWS11_RECOVERY_STATUS.md`; do not use the historical migration list
 above to recreate missing machine-local artifacts automatically.
 
