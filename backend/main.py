@@ -578,6 +578,16 @@ async def _handle_sonos_command(app, data: SonosCommandData) -> None:
         if action == "volume"
         else MANUAL_TRANSPORT_DIMENSIONS
     )
+    from backend.services.music_learning_provenance import (
+        capture_owned_music_session,
+    )
+    learning_session = (
+        await capture_owned_music_session(
+            getattr(app.state, "audio_ownership", None)
+        )
+        if action in {"next", "previous"}
+        else None
+    )
 
     async def _manual_ws_operation() -> tuple[bool, Optional[str]]:
         if action == "play":
@@ -610,8 +620,22 @@ async def _handle_sonos_command(app, data: SonosCommandData) -> None:
             mode = automation.current_mode if automation else None
             await event_logger.log_sonos_event(
                 event_type=event_type,
-                favorite_title=None,
+                favorite_title=(
+                    learning_session.favorite_title
+                    if event_type == "skip" and learning_session is not None
+                    else None
+                ),
                 mode_at_time=mode,
                 volume=data.volume,
                 triggered_by="manual",
+                session_id=(
+                    learning_session.session_id
+                    if event_type == "skip" and learning_session is not None
+                    else None
+                ),
+                ownership_lease_id=(
+                    learning_session.ownership_lease_id
+                    if event_type == "skip" and learning_session is not None
+                    else None
+                ),
             )

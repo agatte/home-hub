@@ -15,6 +15,10 @@ from backend.services.audio_ownership import (
     MANUAL_TRANSPORT_DIMENSIONS,
     MANUAL_VOLUME_DIMENSIONS,
 )
+from backend.services.music_learning_provenance import (
+    OwnedMusicLearningSession,
+    capture_owned_music_session,
+)
 
 router = APIRouter(prefix="/api/sonos", tags=["sonos"])
 
@@ -24,6 +28,7 @@ async def _log_manual_sonos(
     event_type: str,
     favorite_title: Optional[str] = None,
     volume: Optional[int] = None,
+    session: OwnedMusicLearningSession | None = None,
 ) -> None:
     """Fire-and-forget manual Sonos event logger."""
     event_logger = getattr(request.app.state, "event_logger", None)
@@ -36,6 +41,10 @@ async def _log_manual_sonos(
             mode_at_time=mode,
             volume=volume,
             triggered_by=source_from_request(request, fallback="manual"),
+            session_id=session.session_id if session is not None else None,
+            ownership_lease_id=(
+                session.ownership_lease_id if session is not None else None
+            ),
         )
 
 
@@ -153,6 +162,9 @@ async def sonos_next(request: Request) -> dict:
     """Skip to next track."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
+    session = await capture_owned_music_session(
+        getattr(request.app.state, "audio_ownership", None)
+    )
     success = await _run_manual_sonos(
         request,
         MANUAL_TRANSPORT_DIMENSIONS,
@@ -160,7 +172,14 @@ async def sonos_next(request: Request) -> dict:
         operation=sonos.next_track,
     )
     if success:
-        await _log_manual_sonos(request, "skip")
+        await _log_manual_sonos(
+            request,
+            "skip",
+            favorite_title=(
+                session.favorite_title if session is not None else None
+            ),
+            session=session,
+        )
     return {"status": "ok" if success else "error"}
 
 
@@ -169,6 +188,9 @@ async def sonos_previous(request: Request) -> dict:
     """Go to previous track."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
+    session = await capture_owned_music_session(
+        getattr(request.app.state, "audio_ownership", None)
+    )
     success = await _run_manual_sonos(
         request,
         MANUAL_TRANSPORT_DIMENSIONS,
@@ -176,7 +198,14 @@ async def sonos_previous(request: Request) -> dict:
         operation=sonos.previous_track,
     )
     if success:
-        await _log_manual_sonos(request, "skip")
+        await _log_manual_sonos(
+            request,
+            "skip",
+            favorite_title=(
+                session.favorite_title if session is not None else None
+            ),
+            session=session,
+        )
     return {"status": "ok" if success else "error"}
 
 

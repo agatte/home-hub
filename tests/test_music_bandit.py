@@ -140,3 +140,127 @@ class TestRetrain:
         # Manual-play arm got REWARD_MANUAL_PLAY on top of PRIOR_DEFAULT.
         synth_key = next(k for k in keys if "Synthwave" in k)
         assert bandit._arms[synth_key][0] == PRIOR_DEFAULT[0] + REWARD_MANUAL_PLAY
+
+
+@pytest.mark.asyncio
+async def test_retrain_auto_play_pause_has_no_passive_positive(bandit, ml_db):
+    now = datetime.now(timezone.utc)
+    async with ml_db() as session:
+        session.add_all([
+            SonosPlaybackEvent(
+                timestamp=now - timedelta(seconds=4),
+                event_type="auto_play",
+                favorite_title="Lo-Fi",
+                mode_at_time="working",
+                triggered_by="auto",
+                session_id="lease-a",
+                ownership_lease_id="lease-a",
+            ),
+            SonosPlaybackEvent(
+                timestamp=now,
+                event_type="pause",
+                favorite_title="Lo-Fi",
+                mode_at_time="working",
+                triggered_by="manual",
+            ),
+        ])
+        await session.commit()
+
+    await bandit.retrain()
+    key = next(k for k in bandit._arms if "Lo-Fi" in k)
+    assert bandit._arms[key] == [PRIOR_DEFAULT[0], PRIOR_DEFAULT[1]]
+
+
+@pytest.mark.asyncio
+async def test_retrain_owned_retention_rewards_session_once(bandit, ml_db):
+    now = datetime.now(timezone.utc)
+    origin = dict(
+        favorite_title="Lo-Fi",
+        mode_at_time="working",
+        session_id="lease-b",
+        ownership_lease_id="lease-b",
+    )
+    async with ml_db() as session:
+        session.add_all([
+            SonosPlaybackEvent(
+                timestamp=now - timedelta(seconds=61),
+                event_type="auto_play", triggered_by="auto", **origin,
+            ),
+            SonosPlaybackEvent(
+                timestamp=now,
+                event_type="owned_retained", triggered_by="owned_session", **origin,
+            ),
+            SonosPlaybackEvent(
+                timestamp=now + timedelta(seconds=1),
+                event_type="owned_retained", triggered_by="owned_session", **origin,
+            ),
+        ])
+        await session.commit()
+
+    await bandit.retrain()
+    key = next(k for k in bandit._arms if "Lo-Fi" in k)
+    assert bandit._arms[key][0] == PRIOR_DEFAULT[0] + REWARD_KEEP_PLAYING
+    assert bandit._arms[key][1] == PRIOR_DEFAULT[1]
+
+
+@pytest.mark.asyncio
+async def test_retrain_scoped_skip_penalizes_exact_origin(bandit, ml_db):
+    now = datetime.now(timezone.utc)
+    async with ml_db() as session:
+        session.add_all([
+            SonosPlaybackEvent(
+                timestamp=now - timedelta(seconds=10),
+                event_type="auto_play",
+                favorite_title="Original Favorite",
+                mode_at_time="social",
+                triggered_by="auto",
+                session_id="lease-c",
+                ownership_lease_id="lease-c",
+            ),
+            SonosPlaybackEvent(
+                timestamp=now,
+                event_type="skip",
+                favorite_title="Original Favorite",
+                mode_at_time="social",
+                triggered_by="off_dashboard",
+                session_id="lease-c",
+                ownership_lease_id="lease-c",
+            ),
+        ])
+        await session.commit()
+
+    await bandit.retrain()
+    key = next(k for k in bandit._arms if "Original Favorite" in k)
+    assert bandit._arms[key][0] == PRIOR_DEFAULT[0]
+    assert bandit._arms[key][1] == PRIOR_DEFAULT[1] + 1.0
+
+
+@pytest.mark.asyncio
+async def test_retrain_unrelated_unscoped_skip_does_not_penalize_auto_play(
+    bandit, ml_db,
+):
+    now = datetime.now(timezone.utc)
+    async with ml_db() as session:
+        session.add_all([
+            SonosPlaybackEvent(
+                timestamp=now - timedelta(seconds=10),
+                event_type="auto_play",
+                favorite_title="Original Favorite",
+                mode_at_time="social",
+                triggered_by="auto",
+                session_id="lease-d",
+                ownership_lease_id="lease-d",
+            ),
+            SonosPlaybackEvent(
+                timestamp=now,
+                event_type="skip",
+                favorite_title="Manual Song",
+                mode_at_time="social",
+                triggered_by="off_dashboard",
+            ),
+        ])
+        await session.commit()
+
+    await bandit.retrain()
+    key = next(k for k in bandit._arms if "Original Favorite" in k)
+    assert bandit._arms[key] == [PRIOR_DEFAULT[0], PRIOR_DEFAULT[1]]

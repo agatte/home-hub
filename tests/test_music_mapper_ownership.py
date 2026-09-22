@@ -852,3 +852,99 @@ async def test_pregame_gap_cancellation_retires_pending_lease() -> None:
             await mapper.dispatch_pregame_audio(pregame_decision())
 
     assert (await authority.snapshot())["leases"] == []
+
+
+class LearningEventLogger:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def log_sonos_event(self, **kwargs) -> None:
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_auto_play_session_logs_provenance_and_retained_reward_once() -> None:
+    from backend.services.music_learning_provenance import (
+        PASSIVE_REWARD_THRESHOLD_SECONDS,
+        session_from_lease,
+    )
+
+    assert PASSIVE_REWARD_THRESHOLD_SECONDS == 60.0
+    settings = MemorySettings()
+    authority = await make_authority(settings)
+    sonos = Sonos()
+    events = LearningEventLogger()
+    mapper = MusicMapper(
+        sonos, Ws(), event_logger=events, audio_ownership=authority,
+    )
+    mapper._cache["social"] = [entry("Owned Favorite")]
+
+    result = await mapper.on_mode_change("social")
+    assert result["action"] == "auto_played"
+
+    lease = (await authority.snapshot())["leases"][0]
+    session = session_from_lease(lease)
+    assert session is not None
+    assert events.calls[0]["event_type"] == "auto_play"
+    assert events.calls[0]["session_id"] == lease["lease_id"]
+    assert events.calls[0]["ownership_lease_id"] == lease["lease_id"]
+
+    assert await mapper._prove_and_log_owned_retention(session) is True
+    assert await mapper._prove_and_log_owned_retention(session) is False
+    retained = [c for c in events.calls if c["event_type"] == "owned_retained"]
+    assert len(retained) == 1
+    assert retained[0]["favorite_title"] == "Owned Favorite"
+    assert retained[0]["session_id"] == lease["lease_id"]
+    await mapper.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_takeover_before_retention_threshold_withholds_positive() -> None:
+    from backend.services.music_learning_provenance import session_from_lease
+
+    settings = MemorySettings()
+    authority = await make_authority(settings)
+    sonos = Sonos()
+    events = LearningEventLogger()
+    mapper = MusicMapper(
+        sonos, Ws(), event_logger=events, audio_ownership=authority,
+    )
+    mapper._cache["social"] = [entry("Owned Favorite")]
+    await mapper.on_mode_change("social")
+
+    lease = (await authority.snapshot())["leases"][0]
+    session = session_from_lease(lease)
+    assert session is not None
+    await authority.invalidate_manual(
+        MANUAL_TRANSPORT_DIMENSIONS,
+        source="dashboard",
+        reason="manual_pause",
+    )
+
+    assert await mapper._prove_and_log_owned_retention(session) is False
+    assert [c for c in events.calls if c["event_type"] == "owned_retained"] == []
+    await mapper.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_reconstruct_passive_retention_timer() -> None:
+    settings = MemorySettings()
+    authority = await make_authority(settings)
+    sonos = Sonos()
+    events = LearningEventLogger()
+    first = MusicMapper(
+        sonos, Ws(), event_logger=events, audio_ownership=authority,
+    )
+    first._cache["social"] = [entry("Owned Favorite")]
+    await first.on_mode_change("social")
+    assert first._learning_tasks
+
+    await first.close()
+    restarted_authority = await make_authority(settings)
+    restarted = MusicMapper(
+        sonos, Ws(), event_logger=events, audio_ownership=restarted_authority,
+    )
+
+    assert restarted._learning_tasks == {}
+    assert [c for c in events.calls if c["event_type"] == "owned_retained"] == []
+    await restarted.close()

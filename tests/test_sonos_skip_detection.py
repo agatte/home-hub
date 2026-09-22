@@ -205,3 +205,50 @@ async def test_unchanged_title_does_not_surrender_owned_queue() -> None:
     await s._maybe_emit_skip(prev, new)
 
     ownership.invalidate_manual.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owned_skip_logs_originating_favorite_before_lease_invalidation() -> None:
+    s, el = _make_service(current_mode="social")
+    lease = {
+        "lease_id": "lease-skip",
+        "owner": "music_mapper",
+        "purpose": "mode_auto_play",
+        "dimensions": ["queue_source", "transport"],
+        "evidence": {"phase": "owned", "sonos": {"transport_state": "PLAYING"}},
+        "metadata": {
+            "mode": "social",
+            "favorite_title": "2000s Hits Essentials",
+            "weather_class": "clouds",
+            "learning_eligible": True,
+        },
+    }
+    ownership = SimpleNamespace(
+        find_lease=AsyncMock(return_value=lease),
+        invalidate_manual=AsyncMock(return_value={}),
+    )
+    s.attach_audio_ownership(ownership)
+    prev = {
+        "state": "PLAYING",
+        "track": "Track Inside Container",
+        "position": "0:00:12",
+        "duration": "0:03:00",
+    }
+    new = {
+        "state": "PLAYING",
+        "track": "Next Track",
+        "position": "0:00:01",
+        "duration": "0:03:10",
+    }
+
+    await s._maybe_emit_skip(prev, new)
+
+    assert len(el.calls) == 1
+    call = el.calls[0]
+    assert call["favorite_title"] == "2000s Hits Essentials"
+    assert call["mode_at_time"] == "social"
+    assert call["weather_class"] == "clouds"
+    assert call["session_id"] == "lease-skip"
+    assert call["ownership_lease_id"] == "lease-skip"
+    ownership.find_lease.assert_awaited_once()
+    ownership.invalidate_manual.assert_awaited_once()

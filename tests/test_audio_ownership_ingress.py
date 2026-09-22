@@ -18,8 +18,13 @@ from backend.services.audio_ownership import (
 
 
 class RecorderOwnership:
-    def __init__(self, events: list) -> None:
+    def __init__(self, events: list, lease=None) -> None:
         self.events = events
+        self.lease = lease
+
+    async def find_lease(self, *, owner: str, purpose: str | None = None):
+        self.events.append(("capture", owner, purpose))
+        return self.lease
 
     async def run_manual(
         self, dimensions, *, source: str, reason: str, operation,
@@ -216,3 +221,73 @@ async def test_guest_toast_serializes_full_manual_interruption(monkeypatch) -> N
             "guest_toast_tts",
         ),
     ]
+
+
+class RecorderEventLogger:
+    def __init__(self, events: list) -> None:
+        self.events = events
+
+    async def log_sonos_event(self, **kwargs) -> None:
+        self.events.append(("log", kwargs))
+
+
+def _learning_lease() -> dict:
+    return {
+        "lease_id": "lease-ingress",
+        "owner": "music_mapper",
+        "purpose": "mode_auto_play",
+        "dimensions": ["queue_source", "transport"],
+        "evidence": {"phase": "owned", "sonos": {"transport_state": "PLAYING"}},
+        "metadata": {
+            "mode": "social",
+            "favorite_title": "Owned Favorite",
+            "weather_class": "clear",
+            "learning_eligible": True,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_rest_next_captures_session_before_manual_invalidation() -> None:
+    events: list = []
+    req = request(events)
+    req.app.state.audio_ownership = RecorderOwnership(events, _learning_lease())
+    req.app.state.event_logger = RecorderEventLogger(events)
+    req.app.state.automation = SimpleNamespace(current_mode="social")
+
+    result = await sonos_routes.sonos_next(req)
+
+    assert result["status"] == "ok"
+    assert events[0] == ("capture", "music_mapper", "mode_auto_play")
+    assert events[1] == (
+        "invalidate", MANUAL_TRANSPORT_DIMENSIONS, "manual", "manual_next",
+    )
+    assert events[2] == ("next",)
+    log = events[3][1]
+    assert log["favorite_title"] == "Owned Favorite"
+    assert log["session_id"] == "lease-ingress"
+    assert log["ownership_lease_id"] == "lease-ingress"
+
+
+@pytest.mark.asyncio
+async def test_websocket_next_captures_session_before_manual_invalidation() -> None:
+    events: list = []
+    req = request(events)
+    req.app.state.audio_ownership = RecorderOwnership(events, _learning_lease())
+    req.app.state.event_logger = RecorderEventLogger(events)
+    req.app.state.automation = SimpleNamespace(current_mode="social")
+
+    await _handle_sonos_command(
+        req.app,
+        SonosCommandData(action="next"),
+    )
+
+    assert events[0] == ("capture", "music_mapper", "mode_auto_play")
+    assert events[1] == (
+        "invalidate", MANUAL_TRANSPORT_DIMENSIONS, "websocket", "manual_ws_next",
+    )
+    assert events[2] == ("next",)
+    log = events[3][1]
+    assert log["favorite_title"] == "Owned Favorite"
+    assert log["session_id"] == "lease-ingress"
+    assert log["ownership_lease_id"] == "lease-ingress"

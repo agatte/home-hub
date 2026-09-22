@@ -439,3 +439,24 @@ async def test_set_camera_service_late_bind_works(ml_db):
     assert rows[0].zone == "desk"
     assert rows[0].posture == "upright"
     assert rows[0].lux == 180.0
+
+
+@pytest.mark.asyncio
+async def test_log_sonos_event_persists_learning_session_provenance(ml_db):
+    from sqlalchemy import select as sa_select
+    from backend.models import SonosPlaybackEvent
+
+    el = EventLogger()
+    await el.log_sonos_event(
+        event_type="owned_retained",
+        favorite_title="Lo-Fi",
+        mode_at_time="working",
+        triggered_by="owned_session",
+        session_id="lease-123",
+        ownership_lease_id="lease-123",
+    )
+
+    async with ml_db() as session:
+        row = (await session.execute(sa_select(SonosPlaybackEvent))).scalar_one()
+    assert row.session_id == "lease-123"
+    assert row.ownership_lease_id == "lease-123"

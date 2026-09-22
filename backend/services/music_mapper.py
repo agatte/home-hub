@@ -19,6 +19,16 @@ from backend.models import ModePlaylist
 from backend.services.audio_ownership import QUEUE_SOURCE, TRANSPORT, VOLUME
 from backend.services.mode_volume_policy import compute_mode_volume
 from backend.services.mode_volume_service import MODE_VOLUME_CURVES_KEY
+from backend.services.music_learning_provenance import (
+    LEARNING_ELIGIBLE_METADATA_KEY,
+    MODE_AUTOPLAY_OWNER,
+    MODE_AUTOPLAY_PURPOSE,
+    OWNED_RETENTION_EVENT,
+    PASSIVE_REWARD_THRESHOLD_SECONDS,
+    OwnedMusicLearningSession,
+    playback_still_matches_session,
+    session_from_lease,
+)
 
 logger = logging.getLogger("home_hub.music")
 
@@ -30,9 +40,6 @@ PREGAME_HYPE_SETTLE_ATTEMPTS = 20
 PREGAME_HYPE_SETTLE_INTERVAL_SECONDS = 0.15
 # Bounded Game Day fallback only. Any explicit pregameday mapping wins.
 DEFAULT_PREGAME_HYPE_FAVORITE = "It's Lit!"
-
-MODE_AUTOPLAY_OWNER = "music_mapper"
-MODE_AUTOPLAY_PURPOSE = "mode_auto_play"
 
 _PREGAME_SOURCE_TRANSPORT_KEYS = (
     "queue_uid",
@@ -138,10 +145,107 @@ class MusicMapper:
         # (chicken-and-egg — engine needs music_mapper, music_mapper needs
         # engine for is_dnd_active() in on_mode_change / on_weather_change).
         self._automation = None
+        # #275 passive learning timers are deliberately process-local. A
+        # backend restart never reconstructs them from durable leases, so a
+        # surviving playback cannot fabricate a positive reward after process
+        # loss. The lease/event ids remain durable for audit.
+        self._learning_tasks: dict[str, asyncio.Task] = {}
+        self._rewarded_learning_sessions: set[str] = set()
 
     def set_automation(self, automation) -> None:
         """Inject the automation engine reference (called from bootstrap)."""
         self._automation = automation
+
+    def _schedule_owned_retention(
+        self,
+        session: OwnedMusicLearningSession,
+    ) -> None:
+        """Start one process-local 60s passive-retention proof."""
+        if self._event_logger is None or self._audio_ownership is None:
+            return
+        if session.session_id in self._learning_tasks:
+            return
+        task = asyncio.create_task(
+            self._owned_retention_after_threshold(session),
+            name=f"music_retention:{session.session_id[:8]}",
+        )
+        self._learning_tasks[session.session_id] = task
+
+    async def _owned_retention_after_threshold(
+        self,
+        session: OwnedMusicLearningSession,
+    ) -> None:
+        try:
+            await asyncio.sleep(PASSIVE_REWARD_THRESHOLD_SECONDS)
+            await self._prove_and_log_owned_retention(session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Owned music retention proof failed session=%s",
+                session.session_id,
+            )
+        finally:
+            current = self._learning_tasks.get(session.session_id)
+            if current is asyncio.current_task():
+                self._learning_tasks.pop(session.session_id, None)
+
+    async def _prove_and_log_owned_retention(
+        self,
+        session: OwnedMusicLearningSession,
+    ) -> bool:
+        """Emit one positive passive event only while exact ownership survives."""
+        if (
+            self._event_logger is None
+            or self._audio_ownership is None
+            or session.session_id in self._rewarded_learning_sessions
+        ):
+            return False
+
+        async def _prove() -> bool:
+            current = await self._sonos.get_queue_ownership_evidence()
+            return playback_still_matches_session(session, current)
+
+        executed, matched = await self._audio_ownership.run_if_valid(
+            session.ownership_lease_id,
+            (QUEUE_SOURCE, TRANSPORT),
+            _prove,
+        )
+        if not executed or not matched:
+            logger.info(
+                "Passive music reward withheld session=%s reason=ownership_or_source_changed",
+                session.session_id,
+            )
+            return False
+        if session.session_id in self._rewarded_learning_sessions:
+            return False
+
+        await self._event_logger.log_sonos_event(
+            event_type=OWNED_RETENTION_EVENT,
+            favorite_title=session.favorite_title,
+            mode_at_time=session.mode,
+            triggered_by="owned_session",
+            weather_class=session.weather_class,
+            session_id=session.session_id,
+            ownership_lease_id=session.ownership_lease_id,
+        )
+        self._rewarded_learning_sessions.add(session.session_id)
+        logger.info(
+            "Passive music reward proven session=%s favorite=%s threshold=%.0fs",
+            session.session_id,
+            session.favorite_title,
+            PASSIVE_REWARD_THRESHOLD_SECONDS,
+        )
+        return True
+
+    async def close(self) -> None:
+        """Cancel process-local learning timers without fabricating outcomes."""
+        tasks = list(self._learning_tasks.values())
+        self._learning_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _pregame_audio_lifecycle_reason(
         self,
@@ -645,7 +749,12 @@ class MusicMapper:
             purpose=MODE_AUTOPLAY_PURPOSE,
             dimensions=(QUEUE_SOURCE, TRANSPORT),
             evidence={"phase": "reserved"},
-            metadata={"mode": mode, "favorite_title": title},
+            metadata={
+                "mode": mode,
+                "favorite_title": title,
+                "weather_class": self._current_weather_class(),
+                LEARNING_ELIGIBLE_METADATA_KEY: True,
+            },
         )
 
     @staticmethod
@@ -1019,6 +1128,7 @@ class MusicMapper:
                         )
                     return None
                 if success:
+                    learning_session = None
                     if lease is not None:
                         sonos_evidence = None
                         for _ in range(4):
@@ -1050,6 +1160,12 @@ class MusicMapper:
                                 lease["lease_id"],
                                 {"phase": "owned", "sonos": sonos_evidence},
                             )
+                            owned_lease = dict(lease)
+                            owned_lease["evidence"] = {
+                                "phase": "owned",
+                                "sonos": sonos_evidence,
+                            }
+                            learning_session = session_from_lease(owned_lease)
                         elif await self._audio_ownership.is_valid(lease["lease_id"]):
                             await self._audio_ownership.release(
                                 lease["lease_id"],
@@ -1073,8 +1189,22 @@ class MusicMapper:
                             favorite_title=title,
                             mode_at_time=mode,
                             triggered_by="auto",
-                            weather_class=self._current_weather_class(),
+                            weather_class=(
+                                learning_session.weather_class
+                                if learning_session is not None
+                                else self._current_weather_class()
+                            ),
+                            session_id=(
+                                learning_session.session_id
+                                if learning_session is not None else None
+                            ),
+                            ownership_lease_id=(
+                                learning_session.ownership_lease_id
+                                if learning_session is not None else None
+                            ),
                         )
+                    if learning_session is not None:
+                        self._schedule_owned_retention(learning_session)
                     return {"action": "auto_played", "title": title, "vibe": vibe}
                 if lease is not None:
                     await self._audio_ownership.release(

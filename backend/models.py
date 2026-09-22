@@ -343,7 +343,8 @@ class SonosPlaybackEvent(Base):
         default=lambda: datetime.now(timezone.utc),
         index=True,
     )
-    # event_type: "play", "pause", "skip", "volume", "auto_play", "suggestion"
+    # event_type: "play", "pause", "skip", "volume", "auto_play",
+    # "owned_retained", "suggestion"
     event_type: Mapped[str] = mapped_column(String(30), nullable=False)
     favorite_title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -355,6 +356,15 @@ class SonosPlaybackEvent(Base):
     # One of: "thunderstorm" / "rain" / "snow" / "clouds" / "golden_hour" /
     # "clear" / "any" (sentinel) / None (pre-migration legacy rows).
     weather_class: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # #275 learning provenance. New HomeHub-owned playback sessions use the
+    # exact shared-audio lease id as both session identity and ownership link.
+    # Historical rows remain NULL; migrations must never invent provenance.
+    session_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True,
+    )
+    ownership_lease_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True,
+    )
 
 
 class SceneActivation(Base):

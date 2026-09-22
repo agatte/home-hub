@@ -605,6 +605,22 @@ stronger provider/device signal that can preserve long-running mode ownership
 across natural track changes without guessing. Volume is never changed as part of
 mode-lease retirement.
 
+**#275 learning provenance contract (2026-09-21).** Ordinary MusicMapper
+auto-play uses the exact shared-audio lease id as its durable learning-session
+identity. The `auto_play` row is a neutral session-start record, not positive
+preference evidence. HomeHub emits one `owned_retained` positive event only after
+60 seconds and only if the same queue/source + transport lease is still valid and
+fresh Sonos evidence still matches the owned queue/source/track in PLAYING state.
+Pause, stop, manual source replacement, or other takeover therefore earns no
+passive positive. A Next/Previous skip captures the eligible session before manual
+lease invalidation and may penalize only that exact originating
+favorite/container; learner code never infers ownership from event adjacency.
+The 60-second timer is intentionally process-local and is not reconstructed after
+restart, so a deploy/crash during a session cannot synthesize a positive reward.
+Historical playback rows retain NULL session provenance; no migration backfills
+invented ownership. Explicit/manual play and explicit feedback remain separate,
+strong evidence.
+
 Manual REST, guest, and WebSocket actions perform lease invalidation and the
 corresponding Sonos read/write transaction under the same shared authority lock,
 so automation cannot reacquire ownership in the gap between human intent and the
@@ -1528,14 +1544,16 @@ deployment. This code has not yet been deployed.
 | artist | String(200) | Nullable |
 | track | String(300) | Nullable |
 | favorite_title | String(200) | Nullable — which favorite was playing |
-| event_type | String(30) | play, pause, skip, volume, auto_play, suggestion |
-| triggered_by | String(30) | manual, auto, suggestion_accepted |
+| event_type | String(30) | play, pause, skip, volume, auto_play, owned_retained, suggestion |
+| triggered_by | String(30) | manual, auto, owned_session, suggestion_accepted |
 | mode_at_time | String(50) | Active mode when playback started |
 | started_at | DateTime | UTC |
 | ended_at | DateTime | UTC, nullable |
 | duration_seconds | Integer | Computed on end |
 | skipped | Boolean | Was track skipped before finishing |
 | weather_class | String(20) | Nullable — Phase B (2026-05-12). Weather class at log time (thunderstorm/rain/snow/clouds/golden_hour/clear/any). Used by bandit nightly retrain to rebuild weather-aware arms. None on pre-migration rows |
+| session_id | String(64) | Nullable — #275 exact HomeHub-owned playback session identity; for MusicMapper auto-play this is the shared #274 lease id. Historical/unscoped rows remain NULL. |
+| ownership_lease_id | String(64) | Nullable — exact shared-audio lease that authorized the scoped playback event; must match the session origin for passive learning. |
 
 ### Additional Live Tables (Phase 3 + ML)
 

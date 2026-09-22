@@ -73,6 +73,18 @@ async def _run_migrations(conn) -> None:
     spe_cols = {row[1] for row in result.fetchall()}
     if "weather_class" not in spe_cols:
         await conn.execute(text("ALTER TABLE sonos_playback_events ADD COLUMN weather_class TEXT"))
+    # #275 (2026-09-21): passive music learning is session/ownership scoped.
+    # Existing rows stay NULL by design; backfilling would invent provenance.
+    if "session_id" not in spe_cols:
+        await conn.execute(text("ALTER TABLE sonos_playback_events ADD COLUMN session_id TEXT"))
+    if "ownership_lease_id" not in spe_cols:
+        await conn.execute(text(
+            "ALTER TABLE sonos_playback_events ADD COLUMN ownership_lease_id TEXT"
+        ))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_sonos_playback_events_session_id "
+        "ON sonos_playback_events (session_id)"
+    ))
 
     # 2026-05-18: rule_suggestions extension for kind="brightness" rows.
     # Adds a discriminator column, a JSON payload, and relaxes rule_id from

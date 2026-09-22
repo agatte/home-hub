@@ -23,10 +23,24 @@ def _rec(artist, track, status, *, mode="general"):
     )
 
 
-def _event(title, event_type, *, triggered_by="manual", mode="social"):
+def _event(
+    title,
+    event_type,
+    *,
+    triggered_by="manual",
+    mode="social",
+    session_id=None,
+    ownership_lease_id=None,
+):
     return SimpleNamespace(
-        favorite_title=title, event_type=event_type, triggered_by=triggered_by,
-        mode_at_time=mode, timestamp=NOW,
+        favorite_title=title,
+        event_type=event_type,
+        triggered_by=triggered_by,
+        mode_at_time=mode,
+        timestamp=NOW,
+        weather_class=None,
+        session_id=session_id,
+        ownership_lease_id=ownership_lease_id,
     )
 
 
@@ -232,3 +246,67 @@ def test_track_feedback_is_identity_safe_and_does_not_mark_track_familiar():
     assert liked.familiarity == 0.0
     assert liked.preference > 0.6
     assert rejected.classification == "rejected"
+
+
+def test_auto_play_without_owned_retention_is_neutral():
+    snapshot = _snapshot(events=[
+        _event(
+            "Auto Favorite", "auto_play", triggered_by="auto",
+            session_id="lease-1", ownership_lease_id="lease-1",
+        ),
+        _event("Auto Favorite", "pause", triggered_by="manual"),
+    ])
+    assert "auto favorite" not in snapshot.favorites
+
+
+def test_owned_retention_rewards_exact_session_once():
+    events = [
+        _event(
+            "Auto Favorite", "auto_play", triggered_by="auto",
+            session_id="lease-1", ownership_lease_id="lease-1",
+        ),
+        _event(
+            "Auto Favorite", "owned_retained", triggered_by="owned_session",
+            session_id="lease-1", ownership_lease_id="lease-1",
+        ),
+        _event(
+            "Auto Favorite", "owned_retained", triggered_by="owned_session",
+            session_id="lease-1", ownership_lease_id="lease-1",
+        ),
+    ]
+    snapshot = _snapshot(events=events)
+    evidence = snapshot.favorites["auto favorite"]
+    assert evidence.positive_weight == 0.25
+    assert evidence.negative_weight == 0.0
+
+
+def test_owned_skip_penalizes_originating_favorite_not_adjacent_title():
+    events = [
+        _event(
+            "Container Favorite", "auto_play", triggered_by="auto",
+            session_id="lease-2", ownership_lease_id="lease-2",
+        ),
+        _event(
+            "Container Favorite", "skip", triggered_by="off_dashboard",
+            session_id="lease-2", ownership_lease_id="lease-2",
+        ),
+    ]
+    snapshot = _snapshot(events=events)
+    evidence = snapshot.favorites["container favorite"]
+    assert evidence.positive_weight == 0.0
+    assert evidence.negative_weight == 1.5
+
+
+def test_invalid_scoped_skip_cannot_mutate_prior_session():
+    events = [
+        _event(
+            "Original Favorite", "auto_play", triggered_by="auto",
+            session_id="lease-3", ownership_lease_id="lease-3",
+        ),
+        _event(
+            "Original Favorite", "skip", triggered_by="off_dashboard",
+            session_id="other", ownership_lease_id="other",
+        ),
+    ]
+    snapshot = _snapshot(events=events)
+    assert "original favorite" not in snapshot.favorites

@@ -14,6 +14,9 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from backend.config import settings
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from backend.services.music_learning_provenance import (
+    capture_owned_music_session,
+)
 
 if TYPE_CHECKING:
     # Avoid runtime import cost — automation_engine pulls in
@@ -2303,6 +2306,14 @@ class SonosService:
         if prev.get("state") != "PLAYING" or new.get("state") != "PLAYING":
             return
 
+        # Capture exact learning provenance before the manual-takeover
+        # invalidation below removes the shared lease. This does not preserve
+        # device authority; it only lets a later proven skip attach to the
+        # HomeHub favorite/container that actually started the session.
+        learning_session = await capture_owned_music_session(
+            self._audio_ownership,
+        )
+
         # Sonos exposes only coarse position evidence here, so HomeHub cannot
         # prove whether an off-dashboard boundary was a natural queue advance
         # or a physical/app Next/Previous. Manual intent must win: surrender
@@ -2328,9 +2339,27 @@ class SonosService:
             try:
                 await self._event_logger.log_sonos_event(
                     event_type="skip",
-                    favorite_title=prev_title,
-                    mode_at_time=mode,
+                    favorite_title=(
+                        learning_session.favorite_title
+                        if learning_session is not None else prev_title
+                    ),
+                    mode_at_time=(
+                        learning_session.mode
+                        if learning_session is not None else mode
+                    ),
                     triggered_by="off_dashboard",
+                    weather_class=(
+                        learning_session.weather_class
+                        if learning_session is not None else None
+                    ),
+                    session_id=(
+                        learning_session.session_id
+                        if learning_session is not None else None
+                    ),
+                    ownership_lease_id=(
+                        learning_session.ownership_lease_id
+                        if learning_session is not None else None
+                    ),
                 )
             except Exception:
                 logger.debug("event_logger.log_sonos_event raised", exc_info=True)

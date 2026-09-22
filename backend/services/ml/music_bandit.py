@@ -28,6 +28,11 @@ from sqlalchemy import select
 from backend.database import async_session
 from backend.models import SonosPlaybackEvent
 from backend.services.ml.health_mixin import HealthTrackable
+from backend.services.music_learning_provenance import (
+    OWNED_RETENTION_EVENT,
+    index_owned_playback_origins,
+    matching_owned_playback_origin,
+)
 
 logger = logging.getLogger("home_hub.ml.bandit")
 
@@ -330,41 +335,91 @@ class MusicBandit(HealthTrackable):
             logger.info("Bandit retrain: no events to process")
             return
 
-        # Rebuild arms from events
+        # Rebuild arms from events. Session-scoped passive outcomes use
+        # the exact shared-audio lease id recorded by #275; event adjacency is
+        # never treated as ownership. Legacy/unscoped auto_play rows remain
+        # auditable but neutral because their retention cannot be proven.
         new_arms: dict[str, list[float]] = {}
+        origins = index_owned_playback_origins(events)
+        rewarded_sessions: set[str] = set()
+        penalized_sessions: set[str] = set()
 
-        for i, event in enumerate(events):
-            if not event.favorite_title or not event.mode_at_time:
-                continue
-
-            title = event.favorite_title
-            mode = event.mode_at_time
-            # Derive period from event timestamp
-            hour = event.timestamp.hour if event.timestamp else 12
+        def _key_for(
+            *,
+            title: str,
+            mode: str,
+            timestamp,
+            weather_class: str | None,
+        ) -> str:
+            hour = timestamp.hour if timestamp else 12
             from backend.services.music_mapper import _time_period
             period = _time_period(hour)
-            # Phase B: read weather_class captured at log time. Legacy
-            # rows (pre-column) and rows where capture failed read as
-            # None — bucket those into WEATHER_ANY.
-            weather = getattr(event, "weather_class", None) or WEATHER_ANY
-            key = self._arm_key(mode, period, weather, title)
+            weather = weather_class or WEATHER_ANY
+            return self._arm_key(mode, period, weather, title)
 
+        def _ensure(key: str) -> None:
             if key not in new_arms:
                 new_arms[key] = [PRIOR_DEFAULT[0], PRIOR_DEFAULT[1]]
 
-            if event.event_type == "auto_play":
-                # Check if next event is a skip within 30s
-                next_evt = events[i + 1] if i + 1 < len(events) else None
-                if (next_evt
-                        and next_evt.event_type == "skip"
-                        and next_evt.timestamp
-                        and event.timestamp
-                        and (next_evt.timestamp - event.timestamp).total_seconds() < 30):
-                    new_arms[key][1] += PENALTY_SKIP
-                else:
-                    new_arms[key][0] += REWARD_KEEP_PLAYING
+        for event in events:
+            event_type = str(event.event_type or "").casefold()
 
-            elif event.event_type == "play" and event.triggered_by == "manual":
+            if event_type == "auto_play":
+                title = str(event.favorite_title or "").strip()
+                mode = str(event.mode_at_time or "").strip()
+                if not title or not mode:
+                    continue
+                key = _key_for(
+                    title=title,
+                    mode=mode,
+                    timestamp=event.timestamp,
+                    weather_class=getattr(event, "weather_class", None),
+                )
+                _ensure(key)
+                continue
+
+            if event_type == OWNED_RETENTION_EVENT:
+                origin = matching_owned_playback_origin(event, origins)
+                if origin is None or origin.session_id in rewarded_sessions:
+                    continue
+                key = _key_for(
+                    title=origin.favorite_title,
+                    mode=origin.mode,
+                    timestamp=origin.timestamp,
+                    weather_class=origin.weather_class,
+                )
+                _ensure(key)
+                new_arms[key][0] += REWARD_KEEP_PLAYING
+                rewarded_sessions.add(origin.session_id)
+                continue
+
+            if event_type == "skip":
+                origin = matching_owned_playback_origin(event, origins)
+                if origin is None or origin.session_id in penalized_sessions:
+                    continue
+                key = _key_for(
+                    title=origin.favorite_title,
+                    mode=origin.mode,
+                    timestamp=origin.timestamp,
+                    weather_class=origin.weather_class,
+                )
+                _ensure(key)
+                new_arms[key][1] += PENALTY_SKIP
+                penalized_sessions.add(origin.session_id)
+                continue
+
+            if event_type == "play" and event.triggered_by == "manual":
+                title = str(event.favorite_title or "").strip()
+                mode = str(event.mode_at_time or "").strip()
+                if not title or not mode:
+                    continue
+                key = _key_for(
+                    title=title,
+                    mode=mode,
+                    timestamp=event.timestamp,
+                    weather_class=getattr(event, "weather_class", None),
+                )
+                _ensure(key)
                 new_arms[key][0] += REWARD_MANUAL_PLAY
 
         self._arms = new_arms

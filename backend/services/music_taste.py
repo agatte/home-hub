@@ -22,6 +22,11 @@ from backend.models import (
     SonosPlaybackEvent,
     TasteProfile,
 )
+from backend.services.music_learning_provenance import (
+    OWNED_RETENTION_EVENT,
+    index_owned_playback_origins,
+    matching_owned_playback_origin,
+)
 
 PLAYBACK_LOOKBACK = timedelta(days=180)
 EXPLICIT_FEEDBACK_WEIGHTS = {
@@ -429,28 +434,61 @@ def build_music_taste_snapshot(
         if action == "fits_me":
             artist.positive_tracks.add(_key(track_name))
 
+    playback_origins = index_owned_playback_origins(playback_events)
+    rewarded_sessions: set[str] = set()
+    penalized_sessions: set[str] = set()
+
     for event in playback_events:
-        title = str(getattr(event, "favorite_title", "") or "").strip()
-        if not title:
-            continue
         event_type = str(getattr(event, "event_type", "") or "").casefold()
         triggered_by = str(getattr(event, "triggered_by", "") or "").casefold()
+        title = str(getattr(event, "favorite_title", "") or "").strip()
+        mode = str(getattr(event, "mode_at_time", "") or "").strip() or None
+        observed_at = getattr(event, "timestamp", None)
         positive = negative = 0.0
-        if event_type == "play" and triggered_by == "manual":
-            positive = 1.5
-        elif event_type == "auto_play":
+
+        if event_type == "auto_play":
+            # Session start is provenance, not preference evidence. Passive
+            # positive weight appears only after an owned_retained proof.
+            continue
+
+        if event_type == OWNED_RETENTION_EVENT:
+            origin = matching_owned_playback_origin(event, playback_origins)
+            if origin is None or origin.session_id in rewarded_sessions:
+                continue
+            title = origin.favorite_title
+            mode = origin.mode
             positive = 0.25
-        elif event_type == "suggestion" and triggered_by == "suggestion_accepted":
-            positive = 2.0
+            rewarded_sessions.add(origin.session_id)
         elif event_type == "skip":
+            scoped = bool(str(getattr(event, "session_id", "") or "").strip())
+            origin = matching_owned_playback_origin(event, playback_origins)
+            if scoped:
+                if origin is None or origin.session_id in penalized_sessions:
+                    continue
+                title = origin.favorite_title
+                mode = origin.mode
+                penalized_sessions.add(origin.session_id)
+            elif not title:
+                continue
             negative = 1.5
+        elif event_type == "play" and triggered_by == "manual":
+            if not title:
+                continue
+            positive = 1.5
+        elif event_type == "suggestion" and triggered_by == "suggestion_accepted":
+            if not title:
+                continue
+            positive = 2.0
+        else:
+            continue
+
         entity(favorite_acc, "favorite", title).observe(
             source="sonos_playback",
             familiarity=1.0,
             positive=positive,
             negative=negative,
-            observed_at=getattr(event, "timestamp", None),
-            mode=str(getattr(event, "mode_at_time", "") or "").strip() or None,
+            observed_at=observed_at,
+            mode=mode,
         )
 
     profile_imported_at = _utc_iso(getattr(profile, "last_import_at", None)) if profile else None

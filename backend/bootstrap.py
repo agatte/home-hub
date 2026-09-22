@@ -1577,6 +1577,7 @@ async def lifespan(app: FastAPI):
     # 1. Stop producers that feed the background loops. If any one raises, the
     #    others still run because _safe_shutdown swallows per-step errors.
     await _safe_shutdown("laptop_loopback", laptop_loopback.stop)
+    await _safe_shutdown("music_mapper", music_mapper.close)
     ambient_sound = getattr(app.state, "ambient_sound", None)
     if ambient_sound is not None:
         await _safe_shutdown("ambient_sound", ambient_sound.shutdown)

@@ -377,6 +377,8 @@ class EventLogger:
         volume: Optional[int] = None,
         triggered_by: str = "manual",
         weather_class: Optional[str] = None,
+        session_id: Optional[str] = None,
+        ownership_lease_id: Optional[str] = None,
     ) -> None:
         """Record a Sonos playback event.
 
@@ -384,6 +386,10 @@ class EventLogger:
         the music bandit's nightly retrain can rebuild weather-aware arms
         across 90 days of history. Callers that don't supply it leave the
         column NULL; retrain treats NULL rows as WEATHER_ANY.
+
+        session_id / ownership_lease_id (#275) are populated only when the
+        event is tied to an exact HomeHub-owned playback lease. Historical and
+        unrelated manual rows intentionally remain NULL.
         """
         async def _write(session) -> None:
             session.add(SonosPlaybackEvent(
@@ -393,6 +399,8 @@ class EventLogger:
                 volume=volume,
                 triggered_by=triggered_by,
                 weather_class=weather_class,
+                session_id=session_id,
+                ownership_lease_id=ownership_lease_id,
             ))
 
         await self._write("sonos", _write)
