@@ -45,7 +45,7 @@ Important current facts:
 | 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Terra High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
 | 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Terra Low** |
-| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Start Slice 1 consumption manifest; implementation can proceed while first real fixture awaits bounded capture | **Luna Low** |
+| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slice 1 manifest complete; implement Slice 2 versioned bundle schema + validator/fixture reader | **Terra Low** |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -177,8 +177,8 @@ Boundaries:
 - replay stops at final per-light request, recording adapter result, and resulting simulated owner/cache/navigation state.
 
 Implementation order:
-1. **Luna Low** - exact navigation-v1 consumption/state/clock/side-effect manifest.
-2. **Terra Low** - versioned bundle schema + validator/fixture reader.
+1. **COMPLETE (Luna Low)** - exact navigation-v1 consumption/state/clock/side-effect manifest: [`replay/NAVIGATION_V1.md`](replay/NAVIGATION_V1.md).
+2. **NEXT (Terra Low)** - versioned bundle schema + validator/fixture reader.
 3. **Terra Medium** - clock injection and passive import cleanup.
 4. **Terra Medium** - narrow Activity/Working composition extraction with production-equivalence tests.
 5. **Terra High** - deterministic scheduler + checkpoint model.
