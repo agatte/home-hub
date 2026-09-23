@@ -25,6 +25,29 @@ their subject is actually involved.
 - Production is the Latitude. Windows is the development/desktop-agent machine.
   Do not casually restart `home-hub-ambient.service`.
 
+## Model routing and delegation
+
+- HomeHub escalation is ChatGPT -> GPT-6 Luna -> GPT-6 Sol -> GPT-6 Astra.
+  Do not select Terra for HomeHub; if Luna is insufficient, escalate to Sol. Use
+  the cheapest credible model and effort after narrowing the task with
+  repo/runtime evidence.
+- Luna Low: scouting, extraction, inventory, classification, deterministic checks,
+  docs, tests, and tiny/mechanical edits. Luna Medium: clear bounded
+  implementation, including ordinary multi-file work when the contract is precise.
+- Sol Medium: implementation, debugging, research, or independent review that
+  needs meaningful engineering judgment. Sol High/xhigh: difficult
+  concurrency/lifecycle/ownership/cross-service work, deep verification, or
+  meaningful runtime/security/data risk.
+- Astra is exceptional only. Before any Astra use, tell Anthony why it is
+  justified, that it uses materially more Codex/Work allowance than Sol, the
+  cheapest credible alternative, and the bounded Astra task; wait for explicit
+  Astra approval. Broad approval such as "continue", "investigate", "fix", or
+  "use the best model" is not Astra approval.
+- Keep Codex model choice task-driven rather than pinning a repo/global default.
+  Delegation prompts should name the recommended model/effort and why delegation
+  helps, then give Goal, Context, Constraints, and Done When. Match review depth
+  to risk; do not spend a stronger model on deterministic work without cause.
+
 ## Product and sensing invariants
 
 - User-facing house states are Away, Home, Winding Down, and Sleeping. `Idle` is
