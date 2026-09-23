@@ -78,6 +78,27 @@ from backend.services.living_room_atmosphere import (
 )
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
 from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
+from backend.services.navigation_activity_policy import (
+    evaluate_override_expiry,
+    has_fresh_mode_replacement,
+    is_recent_desktop_interaction as _is_recent_desktop_interaction,
+    override_is_user_owned,
+    project_activity,
+    project_current_mode,
+    project_effective_mode,
+    project_house_state,
+)
+from backend.services.working_light_composition import (
+    apply_working_brightness,
+    apply_working_fixture_comfort,
+    apply_working_functional_weather,
+    apply_working_gaming_surround_noop,
+    apply_working_learner_overlay,
+    apply_working_lux,
+    apply_working_post_sunset_warmth,
+    apply_working_weather_adjust,
+    apply_working_zone_posture,
+)
 
 logger = logging.getLogger("home_hub.automation")
 
@@ -706,9 +727,11 @@ class AutomationEngine:
 
     @property
     def current_mode(self) -> str:
-        if self._manual_override:
-            return self._override_mode or self._current_mode
-        return self._current_mode
+        return project_current_mode(
+            self._manual_override,
+            self._override_mode,
+            self._current_mode,
+        )
 
     @property
     def house_state(self) -> str:
@@ -720,10 +743,8 @@ class AutomationEngine:
         inferred from the clock; it becomes a real state only when GH#138 does.
         """
         if self._away_hold:
-            return "away"
-        if self.current_mode == "sleeping":
-            return "sleeping"
-        return "home"
+            return project_house_state(True, None)
+        return project_house_state(False, self.current_mode)
 
     @property
     def activity(self) -> Optional[str]:
@@ -733,14 +754,10 @@ class AutomationEngine:
         General activity baseline. Away and Sleeping intentionally expose no
         awake activity.
         """
-        if self.house_state != "home":
-            return None
-        mode = self.current_mode
-        if mode in {"idle", "away"}:
-            return "general"
-        if mode == "sleeping":
-            return None
-        return mode
+        house_state = self.house_state
+        if house_state != "home":
+            return project_activity(house_state, None)
+        return project_activity(house_state, self.current_mode)
 
     @property
     def effective_mode(self) -> str:
@@ -751,11 +768,20 @@ class AutomationEngine:
         project Home + idle to General at API, pipeline, and actuation-audit
         boundaries.
         """
-        if self.house_state == "away":
-            return "away"
-        if self.house_state == "sleeping":
-            return "sleeping"
-        return self.activity or self.current_mode
+        house_state = self.house_state
+        if house_state == "away":
+            return project_effective_mode(house_state, None, None)
+        house_state = self.house_state
+        if house_state == "sleeping":
+            return project_effective_mode(house_state, None, None)
+        activity = self.activity
+        if activity is not None:
+            return project_effective_mode(house_state, activity, None)
+        return project_effective_mode(
+            house_state,
+            None,
+            self.current_mode,
+        )
 
     @property
     def effective_source(self) -> str:
@@ -1725,22 +1751,19 @@ class AutomationEngine:
 
     def _has_fresh_mode_replacement(self, now: datetime) -> bool:
         """Whether a fresh semantic source can safely replace user intent."""
-        if self._current_mode == "idle":
-            return False
-        last_report = self._last_mode_source_report_at.get(
+        return has_fresh_mode_replacement(
+            self._current_mode,
+            self._mode_source,
             self._mode_source_key,
-            self._last_mode_source_report_at.get(self._mode_source),
-        )
-        return bool(
-            last_report
-            and (now - last_report).total_seconds() < SOURCE_STALE_SECONDS
+            self._last_mode_source_report_at,
+            now,
         )
 
     def _override_is_user_owned(self) -> bool:
         """Return whether the active override represents explicit user intent."""
-        return bool(
-            self._manual_override
-            and self._override_source not in AUTONOMOUS_PUSH_SOURCES
+        return override_is_user_owned(
+            self._manual_override,
+            self._override_source,
         )
 
     def is_present_in_room(self) -> bool:
@@ -1932,13 +1955,11 @@ class AutomationEngine:
         skew, or an idle value at/above the bound all fail open so physical
         navigation can proceed.
         """
-        evidence = self._last_process_observation_by_device.get("desktop")
-        if evidence is None or evidence.idle_seconds is None:
-            return False
-        age = (datetime.now(tz=TZ) - evidence.received_at).total_seconds()
-        return bool(
-            -2.0 <= age <= max_report_age_seconds
-            and 0.0 <= evidence.idle_seconds < max_idle_seconds
+        return _is_recent_desktop_interaction(
+            self._last_process_observation_by_device.get("desktop"),
+            datetime.now(tz=TZ),
+            max_idle_seconds=max_idle_seconds,
+            max_report_age_seconds=max_report_age_seconds,
         )
 
     @staticmethod
@@ -4227,6 +4248,116 @@ class AutomationEngine:
             release_light_ids,
         )
 
+    async def _compose_working_day_state(
+        self,
+        state: dict[str, dict[str, Any]],
+        period: str,
+        lighting_learner: Any,
+    ) -> dict[str, dict[str, Any]]:
+        """Compose the replay-shared Working/day branch without moving reads."""
+        learner_overlay = None
+        if lighting_learner:
+            weather_for_overlay = self.current_weather_class or "any"
+            zone_for_overlay, _ = self._current_zone_posture()
+            learner_overlay = lighting_learner.get_overlay(
+                "working",
+                period,
+                weather_for_overlay,
+                zone=zone_for_overlay,
+            )
+
+        learner_stage = apply_working_learner_overlay(
+            state,
+            learner_overlay,
+        )
+        state = learner_stage.state
+        ml_logger_ref = getattr(self, "_ml_logger", None)
+        if learner_stage.learner_deltas and ml_logger_ref:
+            await ml_logger_ref.log_decision(
+                predicted_mode="working",
+                confidence=None,
+                decision_source="lighting_learner",
+                factors={
+                    "period": period,
+                    "deltas": learner_stage.learner_deltas,
+                },
+                applied=True,
+            )
+
+        mode_brightness = self._mode_brightness.get("working", 1.0)
+        state = apply_working_brightness(state, mode_brightness)
+
+        lux_ema, lux_baseline = self._read_fresh_camera_lux()
+        lux_weather_class = self._get_current_weather_condition()
+        lux_stage = apply_working_lux(
+            state,
+            ema_lux=lux_ema,
+            baseline_lux=lux_baseline,
+            last_lux_multiplier=self._last_lux_multiplier,
+            last_weather_class=self._last_weather_class,
+            weather_class=lux_weather_class,
+        )
+        state = lux_stage.state
+        self._last_lux_multiplier = lux_stage.last_lux_multiplier
+        self._last_weather_class = lux_stage.last_weather_class
+
+        functional_weather = self._get_current_weather_condition()
+        learned_weather_ids: set[str] = set()
+        if lighting_learner and functional_weather:
+            try:
+                learned_weather_ids = lighting_learner.has_weather_pref(
+                    "working",
+                    period,
+                    functional_weather,
+                )
+            except Exception:
+                learned_weather_ids = set()
+        state = apply_working_functional_weather(
+            state,
+            period=period,
+            weather_condition=functional_weather,
+            learned_weather_light_ids=learned_weather_ids,
+        )
+
+        gaming_lux_ema, gaming_lux_baseline = self._read_fresh_camera_lux()
+        gaming_weather = self._get_current_weather_condition()
+        state = apply_working_gaming_surround_noop(
+            state,
+            period=period,
+            weather_condition=gaming_weather,
+            ema_lux=gaming_lux_ema,
+            baseline_lux=gaming_lux_baseline,
+            mode_brightness=mode_brightness,
+        )
+
+        zone, posture = self._current_zone_posture()
+        bed_l1 = (
+            getattr(self, "_bed_reclined_l1_night", None)
+            or BED_RECLINED_L1_NIGHT_DEFAULT
+        )
+        state = apply_working_zone_posture(
+            state,
+            period=period,
+            zone=zone,
+            posture=posture,
+            bed_reclined_l1_night=bed_l1,
+        )
+
+        if "working" not in WEATHER_SKIP_MODES:
+            weather_adjust_condition = self._get_current_weather_condition()
+            state = apply_working_weather_adjust(
+                state,
+                weather_adjust_condition,
+            )
+
+        comfort_zone = self._fixture_comfort_zone()
+        state = apply_working_fixture_comfort(
+            state,
+            period=period,
+            comfort_zone=comfort_zone,
+        )
+        return apply_working_post_sunset_warmth(state, period)
+
     async def _apply_mode(self, mode: str, *, force_resend: bool = False) -> None:
         """Apply light state for a given mode.
 
@@ -4626,7 +4757,24 @@ class AutomationEngine:
             # weather-specific bucket when one exists, otherwise falls back
             # to the "any" baseline.
             lighting_learner = getattr(self, "_lighting_learner", None)
-            if lighting_learner and mode != "gaming":
+            working_day_composed = bool(
+                mode == "working"
+                and period == "day"
+                and override_scene is None
+                and desired_effect is None
+                and self._effect_manager.active_name is None
+            )
+            if working_day_composed:
+                state = await self._compose_working_day_state(
+                    state,
+                    period,
+                    lighting_learner,
+                )
+            if (
+                lighting_learner
+                and mode != "gaming"
+                and not working_day_composed
+            ):
                 # Lighting preferences are learned with the concrete learner
                 # weather taxonomy (including neutral ``clear``), not the
                 # lighting-effects classifier where ordinary clear is None.
@@ -4672,7 +4820,8 @@ class AutomationEngine:
                             applied=True,
                         )
 
-            state = self._apply_brightness_multiplier(state, mode)
+            if not working_day_composed:
+                state = self._apply_brightness_multiplier(state, mode)
             atmosphere_brightness_basis = (
                 {
                     light_id: state[light_id].copy()
@@ -4682,23 +4831,32 @@ class AutomationEngine:
                 if atmosphere_active
                 else None
             )
-            state = self._apply_lux_multiplier(state, mode)
-            state = self._functional_weather_brightness(state, mode, period)
-            state = self._gaming_day_surround_brightness(state, mode, period)
-            state = self._apply_zone_overlay(state, mode, period)
-            if mode not in WEATHER_SKIP_MODES:
+            if not working_day_composed:
+                state = self._apply_lux_multiplier(state, mode)
+            if not working_day_composed:
+                state = self._functional_weather_brightness(state, mode, period)
+            if not working_day_composed:
+                state = self._gaming_day_surround_brightness(state, mode, period)
+            if not working_day_composed:
+                state = self._apply_zone_overlay(state, mode, period)
+            if (
+                not working_day_composed
+                and mode not in WEATHER_SKIP_MODES
+            ):
                 state = self._weather_adjust(state)
-            comfort_zone = self._fixture_comfort_zone()
-            state = _enforce_fixture_comfort_invariants(
-                state, mode, period, comfort_zone,
-            )
+            if not working_day_composed:
+                comfort_zone = self._fixture_comfort_zone()
+                state = _enforce_fixture_comfort_invariants(
+                    state, mode, period, comfort_zone,
+                )
             if atmosphere_brightness_basis is not None:
                 state = bound_living_room_atmosphere_brightness(
                     state,
                     atmosphere_brightness_basis,
                     period,
                 )
-            state = _enforce_post_sunset_ct_warmth(state, period)
+            if not working_day_composed:
+                state = _enforce_post_sunset_ct_warmth(state, period)
             if self._screen_sync is not None:
                 prime = getattr(self._screen_sync, "prime_from_mode_state", None)
                 if prime is not None:
@@ -5370,44 +5528,48 @@ class AutomationEngine:
                 # detected-mode path, which can turn lights on while the
                 # user is still asleep. Anthony clears sleeping manually
                 # when he wakes up.
-                if (
-                    self._manual_override
-                    and self._override_time
-                    and self._override_mode != "sleeping"
-                    and self._override_source != "physical_context_relax"
-                ):
-                    # A user override suspends idle dwell. Otherwise days of
-                    # stale idle can trigger ambient_relax immediately after
-                    # the override eventually clears.
+                expiry_decision = evaluate_override_expiry(
+                    manual_override=self._manual_override,
+                    override_time=self._override_time,
+                    override_mode=self._override_mode,
+                    override_source=self._override_source,
+                    override_timeout_hours=self._override_timeout_hours,
+                    current_mode=self._current_mode,
+                    mode_source=self._mode_source,
+                    mode_source_key=self._mode_source_key,
+                    report_times=self._last_mode_source_report_at,
+                    now=now,
+                    expiry_deferred=self._override_expiry_deferred,
+                )
+                if expiry_decision.suspend_idle_dwell:
                     self._idle_entered_at = None
-                    elapsed = now - self._override_time
-                    if elapsed > timedelta(hours=self._override_timeout_hours):
-                        if not self._override_is_user_owned():
-                            logger.info(
-                                "Autonomous override timed out after %dh "
-                                "(mode=%s source=%s)",
-                                self._override_timeout_hours,
-                                self._override_mode,
-                                self._override_source,
-                            )
-                            await self.clear_override(source="timeout_4h")
-                        elif self._has_fresh_mode_replacement(now):
-                            logger.info(
-                                "Manual override timed out after %dh; fresh "
-                                "replacement mode=%s source=%s",
-                                self._override_timeout_hours,
-                                self._current_mode,
-                                self._mode_source_key,
-                            )
-                            await self.clear_override(source="timeout_4h")
-                        elif not self._override_expiry_deferred:
-                            logger.info(
-                                "Manual override expiry deferred: no fresh "
-                                "semantic replacement (underlying=%s source=%s)",
-                                self._current_mode,
-                                self._mode_source_key,
-                            )
-                            self._override_expiry_deferred = True
+
+                if expiry_decision.action == "release_autonomous":
+                    logger.info(
+                        "Autonomous override timed out after %dh "
+                        "(mode=%s source=%s)",
+                        self._override_timeout_hours,
+                        self._override_mode,
+                        self._override_source,
+                    )
+                    await self.clear_override(source="timeout_4h")
+                elif expiry_decision.action == "release_fresh_replacement":
+                    logger.info(
+                        "Manual override timed out after %dh; fresh "
+                        "replacement mode=%s source=%s",
+                        self._override_timeout_hours,
+                        self._current_mode,
+                        self._mode_source_key,
+                    )
+                    await self.clear_override(source="timeout_4h")
+                elif expiry_decision.action == "defer":
+                    logger.info(
+                        "Manual override expiry deferred: no fresh "
+                        "semantic replacement (underlying=%s source=%s)",
+                        self._current_mode,
+                        self._mode_source_key,
+                    )
+                    self._override_expiry_deferred = True
 
                 # Expire stale per-light overrides (same 4h window as the
                 # mode-level override, tracked per-entry via the datetime
