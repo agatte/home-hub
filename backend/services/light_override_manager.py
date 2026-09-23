@@ -25,10 +25,11 @@ tests) are untouched.
 """
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 from backend.services.automation_constants import TZ
+from backend.services.decision_clock import DecisionClock, SystemDecisionClock
 from backend.services.engine_state import EngineState
 
 # Same logger name as the engine so journald output is unchanged.
@@ -48,8 +49,12 @@ class LightOverrideManager:
         reapply_mode: Callable[[str], Awaitable[None]],
         suppressed_getter: Optional[Callable[[], bool]] = None,
         transition_boundary=None,
+        clock: Optional[DecisionClock] = None,
     ) -> None:
         self._st = state
+        self._clock = clock or SystemDecisionClock(
+            utc_now_fn=lambda: datetime.now(tz=TZ).astimezone(timezone.utc),
+        )
         self._hue_getter = hue_getter
         self._event_logger_getter = event_logger_getter
         self._current_mode_getter = current_mode_getter
@@ -68,7 +73,7 @@ class LightOverrideManager:
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
-        self._st.manual_light_overrides[light_id] = datetime.now(tz=TZ)
+        self._st.manual_light_overrides[light_id] = self._clock.utc_now().astimezone(TZ)
         if target is not None:
             normalized = {
                 key: value
@@ -142,7 +147,7 @@ class LightOverrideManager:
         """
         if not self._st.transit_light_overrides:
             return
-        now = datetime.now(tz=TZ)
+        now = self._clock.utc_now().astimezone(TZ)
         expired = [
             lid for lid, deadline in self._st.transit_light_overrides.items()
             if deadline <= now
@@ -241,7 +246,7 @@ class LightOverrideManager:
                 if not states:
                     return
 
-        deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
+        deadline = self._clock.utc_now().astimezone(TZ) + timedelta(seconds=duration_seconds)
         tasks = []
         changed_ids: list[str] = []
         # Capture before-state for event logging — same pattern as

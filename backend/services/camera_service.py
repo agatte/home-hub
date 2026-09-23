@@ -47,6 +47,8 @@ if TYPE_CHECKING:
 
     from backend.services.presence_fusion import PresenceReading
 
+from backend.services.camera_constants import FACE_TRUST_THRESHOLD as FACE_TRUST_THRESHOLD
+
 logger = logging.getLogger("home_hub.camera")
 
 # Polling and detection constants
@@ -114,7 +116,6 @@ LOW_LUX_THRESHOLD = 300.0
 # real-face range during the 2026-05-05 oscillation incident was 0.16–0.65,
 # so the bar sits above the chair-back ceiling. Real desk sessions in good
 # lighting typically clear 0.7–0.85.
-FACE_TRUST_THRESHOLD = 0.70
 # Face-anchor cross-validation for pose detections. MediaPipe pose fires at
 # 0.98 confidence with full landmark visibility on the empty office chair
 # (symmetric back + armrests + headrest reads as a human torso) — observed

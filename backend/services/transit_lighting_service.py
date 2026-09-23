@@ -28,11 +28,12 @@ Runs inside the FastAPI process; poll loop wakes every 2s to align with camera.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from backend.services.camera_service import FACE_TRUST_THRESHOLD
+from backend.services.camera_constants import FACE_TRUST_THRESHOLD
+from backend.services.decision_clock import DecisionClock, SystemDecisionClock
 from backend.services.heartbeat import HeartbeatRegistry
 from backend.services.light_state_calculator import path_light_brightness
 
@@ -166,9 +167,13 @@ class TransitLightingService:
         automation_engine: Any,
         camera_service: Any,
         presence_fusion: Any = None,
+        clock: Optional[DecisionClock] = None,
     ) -> None:
         self._automation = automation_engine
         self._camera = camera_service
+        self._clock = clock or SystemDecisionClock(
+            utc_now_fn=lambda: datetime.now(tz=TZ).astimezone(timezone.utc),
+        )
         # Optional multi-source presence layer — when wired, the
         # strong-presence calc consults it so the desktop camera can
         # defeat a Latitude chair-back FP (and vice versa).
@@ -242,7 +247,7 @@ class TransitLightingService:
 
     async def _check(self) -> None:
         """One tick of the state machine — may activate or deactivate."""
-        now = datetime.now(tz=TZ)
+        now = self._clock.utc_now().astimezone(TZ)
 
         # Use the override-aware mode so a manual relax / working / gaming /
         # watching override still lets transit fire when Anthony leaves the
@@ -500,7 +505,7 @@ class TransitLightingService:
         window. Outside the yield window (eg relax-evening, working-day),
         transit still paints all three lights.
         """
-        hour = datetime.now(tz=TZ).hour
+        hour = self._clock.utc_now().astimezone(TZ).hour
         late_night = hour >= LATE_NIGHT_START_HOUR or hour < LATE_NIGHT_END_HOUR
 
         # Baseline-relative path brightness (D1): scale L1 + kitchen by how
@@ -572,7 +577,7 @@ class TransitLightingService:
             transition_time=5,
         )
         self._active = True
-        self._transit_start = datetime.now(tz=TZ)
+        self._transit_start = self._clock.utc_now().astimezone(TZ)
         self._camera_present_since = None
         self._presence_during_absent_since = None
         self._owned_lights = set(states.keys())
@@ -597,7 +602,7 @@ class TransitLightingService:
         self._presence_during_absent_since = None
         self._transit_start = None
         self._owned_lights = set()
-        self._last_deactivated_at = datetime.now(tz=TZ)
+        self._last_deactivated_at = self._clock.utc_now().astimezone(TZ)
         logger.info("Transit lighting deactivated (%s)", reason)
 
     async def close(self) -> None:

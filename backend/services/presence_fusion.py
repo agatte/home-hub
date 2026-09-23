@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from backend.services.decision_clock import DecisionClock, SystemDecisionClock
+
 logger = logging.getLogger("home_hub.presence_fusion")
 
 
@@ -56,7 +58,7 @@ DEFAULT_FRESHNESS_S = 300
 STRONG_PRESENCE_FRESHNESS_S = 8
 
 # Face confidence ceiling above which the Latitude face path qualifies
-# as "strong" on its own (mirrors ``camera_service.FACE_TRUST_THRESHOLD``
+# as "strong" on its own (mirrors ``camera_constants.FACE_TRUST_THRESHOLD``
 # so the two stay in lockstep — chair-backs / picture frames / wall art
 # typically score 0.15-0.50 and don't clear this bar).
 LATITUDE_STRONG_FACE_THRESHOLD = 0.70
@@ -103,7 +105,10 @@ class PresenceFusion:
     reading per source.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Optional[DecisionClock] = None) -> None:
+        self._clock = clock or SystemDecisionClock(
+            utc_now_fn=lambda: datetime.now(timezone.utc),
+        )
         self._readings: dict[str, PresenceReading] = {}
         # Stamp the last source that confirmed at-desk so dashboards
         # can show "Latitude is currently the source backing your at-desk
@@ -138,7 +143,7 @@ class PresenceFusion:
         prior = self._readings.get(reading.source)
         if prior is not None and reading.captured_at < prior.captured_at:
             prior_skew_s = (
-                prior.captured_at - datetime.now(timezone.utc)
+                prior.captured_at - self._clock.utc_now()
             ).total_seconds()
             if prior_skew_s <= FUTURE_SKEW_TOLERANCE_S:
                 # Out-of-order arrival (clock skew, network reorder) — drop
@@ -158,7 +163,7 @@ class PresenceFusion:
         had_strong_presence = self.is_strongly_present_any()
         self._readings[reading.source] = reading
         has_strong_presence = self.is_strongly_present_any()
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         reading_age_s = (now - reading.captured_at).total_seconds()
         reading_is_fresh = (
             -FUTURE_SKEW_TOLERANCE_S
@@ -199,7 +204,7 @@ class PresenceFusion:
             # until real time catches up to the bad stamp. Clamping to now
             # preserves the stamp's intent (confirmed as recently as
             # possible) and lets the gate age out naturally.
-            now = datetime.now(timezone.utc)
+            now = self._clock.utc_now()
             if (
                 self._last_at_desk_at - now
             ).total_seconds() > FUTURE_SKEW_TOLERANCE_S:
@@ -223,7 +228,7 @@ class PresenceFusion:
         Bed form is retained for backward compatibility with old recordings and
         tests, even though the relocated Latitude no longer emits Bed.
         """
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         for reading in self._readings.values():
             if (now - reading.captured_at).total_seconds() > max_age_s:
                 continue
@@ -256,7 +261,7 @@ class PresenceFusion:
         Cross-source veto: see ``_physical_says_bed`` — when a physical source
         positively localizes the user to Bed, desktop face_present is vetoed.
         """
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         any_at_desk = False
         for reading in self._readings.values():
             if (now - reading.captured_at).total_seconds() > max_age_s:
@@ -280,7 +285,7 @@ class PresenceFusion:
         example LEAVE followed by a camera-confirmed guest still inside) can
         compare the returned ``captured_at`` with their lifecycle timestamp.
         """
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         candidates = [
             reading
             for reading in self._readings.values()
@@ -325,7 +330,7 @@ class PresenceFusion:
             or self._last_strong_reacquisition_at != reading.captured_at
         ):
             return False
-        age_s = (datetime.now(timezone.utc) - reading.captured_at).total_seconds()
+        age_s = (self._clock.utc_now() - reading.captured_at).total_seconds()
         return age_s <= STRONG_PRESENCE_FRESHNESS_S and self._is_strongly_present(
             reading
         )
@@ -339,7 +344,7 @@ class PresenceFusion:
         zone / posture (Latitude commits imply recent presence by
         construction).
         """
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         for reading in self._readings.values():
             if (now - reading.captured_at).total_seconds() > window_s:
                 continue
@@ -371,7 +376,7 @@ class PresenceFusion:
         if self._last_at_desk_at is None:
             return None
         return (
-            datetime.now(timezone.utc) - self._last_at_desk_at
+            self._clock.utc_now() - self._last_at_desk_at
         ).total_seconds()
 
     def get_at_desk_attribution(self) -> Optional[str]:
@@ -386,7 +391,7 @@ class PresenceFusion:
         if self._last_at_desk_at is None:
             return None
         age = (
-            datetime.now(timezone.utc) - self._last_at_desk_at
+            self._clock.utc_now() - self._last_at_desk_at
         ).total_seconds()
         if age > DEFAULT_FRESHNESS_S:
             return None
@@ -478,7 +483,7 @@ class PresenceFusion:
         the subject head-on at high confidence; the Latitude sees a
         three-quarter profile at 2-3m.
         """
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         desktop = self._readings.get("desktop")
         if (
             desktop is not None
@@ -518,7 +523,7 @@ class PresenceFusion:
 
     def get_sources(self) -> dict[str, dict]:
         """Per-source state — for ``/api/camera/status`` + dashboards."""
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         out: dict[str, dict] = {}
         for source, reading in self._readings.items():
             age_s = (now - reading.captured_at).total_seconds()
@@ -557,7 +562,7 @@ class PresenceFusion:
         the analytics constellation. The ``fusion-lane-auditor`` agent
         keys on this to assert both sources are contributing.
         """
-        now = datetime.now(timezone.utc)
+        now = self._clock.utc_now()
         # Wider window than STRONG_PRESENCE_FRESHNESS_S because this is
         # for lane attribution, not real-time gating: 30s catches the
         # desktop 2s cadence even after a single missed POST.
@@ -581,10 +586,9 @@ class PresenceFusion:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _fresh(reading: PresenceReading, max_age_s: int) -> bool:
+    def _fresh(self, reading: PresenceReading, max_age_s: int) -> bool:
         age = (
-            datetime.now(timezone.utc) - reading.captured_at
+            self._clock.utc_now() - reading.captured_at
         ).total_seconds()
         return age <= max_age_s
 
