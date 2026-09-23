@@ -39,13 +39,13 @@ Important current facts:
 
 | Order | Work | Classification | Next action | Cheapest credible model |
 |---|---|---|---|---|
-| 1 | Sunrise ownership safeguard under #139 | EXECUTION_READY | Route the scheduled ramp through owned lighting application and cancel/recheck each delayed step | **Terra High** |
-| 2 | #246 per-light manual ownership persistence | EXECUTION_READY | Persist narrowly scoped manual-owner metadata; restore before automatic reconciliation | **Terra Medium** |
-| 3 | #283 Blue Yeti stream recovery / capability health | EXECUTION_READY | Add bounded resource recovery and separate worker-liveness from usable sensing health | **Terra Medium** |
-| 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Terra High** |
+| 1 | Sunrise ownership safeguard under #139 | EXECUTION_READY | Route the scheduled ramp through owned lighting application and cancel/recheck each delayed step | **Sol High** |
+| 2 | #246 per-light manual ownership persistence | EXECUTION_READY | Persist narrowly scoped manual-owner metadata; restore before automatic reconciliation | **Sol Medium** |
+| 3 | #283 Blue Yeti stream recovery / capability health | EXECUTION_READY | Add bounded resource recovery and separate worker-liveness from usable sensing health | **Sol Medium** |
+| 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
-| 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Terra Low** |
-| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slices 1-2 complete; implement Slice 3 clock injection + passive import cleanup | **Terra Medium** |
+| 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Luna Low** |
+| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slices 1-3 complete; implement Slice 4 narrow Activity/Working composition extraction with production-equivalence tests | **Luna Medium** |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -59,7 +59,7 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 - Restore metadata only; do not replay Hue state or persist the whole engine.
 - Authority surfaces: `EngineState`, `LightOverrideManager`, `AutomationEngine._persist_override_state()/load_override_state()`, `LightApplicator.protected_light_ids()`, bootstrap ordering.
 - Validate fresh/expired/malformed restore, clear-after-restore, delayed-save ordering, and protected-light behavior.
-- **Worker:** Terra Medium.
+- **Worker:** Sol Medium.
 - **Escalate if:** safe persistence requires changing mode-level ownership semantics, writing physical targets on restore, or cannot serialize mark/clear/expiry durably.
 
 ### #283 — microphone recovery and truthful capability health
@@ -67,7 +67,7 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 - Recover closed/unavailable PyAudio streams with bounded retry/backoff.
 - Distinguish worker alive, microphone usable, classifier permitted, and last successful observation.
 - Reset partial sensing evidence after capture loss; never fabricate observations or widen Social authority.
-- **Worker:** Terra Medium.
+- **Worker:** Sol Medium.
 - **Escalate if:** recovery requires process-wide supervisor redesign, forced cross-thread termination, or new sensing authority.
 
 ### Sunrise ownership safeguard — bounded child of #139
@@ -75,7 +75,7 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 - `MorningRoutineService.sunrise_ramp()` must no longer perform stale direct-Hue writes throughout a long loop.
 - Each delayed step must re-evaluate lifecycle/DND/manual/protected/transit/scene/ScreenSync ownership and stop when authority is lost.
 - This is a correctness fix, not the full Morning product implementation.
-- **Worker:** Terra High.
+- **Worker:** Sol High.
 - **Escalate if:** the accepted Morning contract intentionally requires overriding manual/Sleeping ownership or no existing owned apply path can express the request.
 
 ### #276 — remaining Sonos writer/concurrency audit
@@ -83,7 +83,7 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 - Inventory every Sonos mutation path and map owner, dimensions, guard, final mutation boundary, cancellation, restart behavior, and tests.
 - Add only missing fake-device concurrency cases; do not invent another ownership service.
 - Distinguish HomeHub-lock guarantees from external-controller races and worker-thread settlement.
-- **Worker:** Terra High.
+- **Worker:** Sol High.
 - **Escalate if:** an unowned production writer, contradictory lease semantics, destructive cleanup, or absolute guarantee over an unavoidable external race is discovered.
 
 ### Contract reconciliation + #245 closeout
@@ -91,7 +91,7 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 - Refresh stale execution/status prose without rewriting historical evidence.
 - High-priority stale umbrellas: #142, #244, #247, #253, #254, #276, plus #149 and the #157/#192/#217/#270 Dashboard/Canvas chain.
 - For #245, current code/test evidence suggests the original background-game arbitration premise may already be superseded; verify before implementing.
-- **Workers:** Luna Low for prescribed docs/issue reconciliation; Terra Low for #245 code/test closeout.
+- **Workers:** Luna Low for prescribed docs/issue reconciliation and #245 deterministic code/test closeout.
 
 ## Architecture-ready work
 
@@ -101,15 +101,15 @@ Detailed implementation packets, validation, invariants, likely files, review ri
 | #138 Winding Down | Durable lifecycle session/overlay preserving underlying Activity and ownership across restart/cancel/end | **Sol High** |
 | #139 Morning | Separate accepted wake, confirmed Morning, optional brief, and overnight path assistance | **Sol Medium** |
 | #19 outage recovery | Conservative context reacquisition from bounded outage facts; never blind output replay | **Sol Medium** |
-| #74 healed-outage history | Durable bounded outage observations/classification uncertainty | **Terra Medium** |
-| #262 command/intent layer | Small provider-neutral command envelope + dispatcher that cannot carry caller-asserted permission | **Terra Medium** |
-| #132 suggestions | Pending suggestion lifecycle, expiry/context invalidation, explicit accept/reject/modify/defer | **Terra Medium** |
-| #51 operational alerts | Fault identity, acknowledgement, recovery/clear, severity and per-surface delivery | **Terra Medium** |
+| #74 healed-outage history | Durable bounded outage observations/classification uncertainty | **Sol Medium** |
+| #262 command/intent layer | Small provider-neutral command envelope + dispatcher that cannot carry caller-asserted permission | **Sol Medium** |
+| #132 suggestions | Pending suggestion lifecycle, expiry/context invalidation, explicit accept/reject/modify/defer | **Sol Medium** |
+| #51 operational alerts | Fault identity, acknowledgement, recovery/clear, severity and per-surface delivery | **Sol Medium** |
 | #140/#141 events/guests | Temporary event authority + guest capability queues beneath lifecycle/manual/privacy controls | **Sol Medium** |
 | #134 weather ambience | Relax/context eligibility composed with shared audio ownership | **Sol Medium** |
 | #116 fusion metrics | Lane-specific evaluation using independent labels/objectives rather than mode agreement | **Sol Medium** |
-| #36 Scene Browser | Expose existing eligibility/provenance without creating a second curator | **Terra Medium** |
-| #187 cloud semantics | Bounded weather taxonomy using current provider context | **Terra Medium** |
+| #36 Scene Browser | Expose existing eligibility/provenance without creating a second curator | **Sol Medium** |
+| #187 cloud semantics | Bounded weather taxonomy using current provider context | **Sol Medium** |
 
 ## Decision-needed boundaries
 
@@ -178,14 +178,14 @@ Boundaries:
 
 Implementation order:
 1. **COMPLETE (Luna Low)** - exact navigation-v1 consumption/state/clock/side-effect manifest: [`replay/NAVIGATION_V1.md`](replay/NAVIGATION_V1.md).
-2. **COMPLETE (Terra Low)** - versioned navigation-v1 bundle schema + strict validator/fixture-only reader (`4003d23`), including exact checkpoint-state enforcement, member/digest/order/session validation, explicit incomplete/unsupported errors, and raw-media rejection.
-3. **NEXT (Terra Medium)** - clock injection and passive import cleanup.
-4. **Terra Medium** - narrow Activity/Working composition extraction with production-equivalence tests.
-5. **Terra High** - deterministic scheduler + checkpoint model.
-6. **Terra High** - offline composition root + structural forbidden-I/O proof.
-7. **Terra Medium** - trace/forensics + synthetic contract replay.
-8. **Terra Medium** - bounded privacy-preserving capture/exporter.
-9. **Terra Medium** - first real fixture + fixed-evidence semantic diff.
+2. **COMPLETE** - versioned navigation-v1 bundle schema + strict validator/fixture-only reader (`4003d23`), including exact checkpoint-state enforcement, member/digest/order/session validation, explicit incomplete/unsupported errors, and raw-media rejection.
+3. **COMPLETE** - replay-safe DecisionClock injection for PresenceFusion, TransitLightingService, and LightOverrideManager plus passive camera-threshold import cleanup. The replay-excluded legacy ScreenSync wall read in LightApplicator remains unchanged per the exact Slice 1 manifest. Independent Sol Medium review found no blockers; advancing-clock and exact-deadline tests cover separate read opportunities.
+4. **NEXT (Luna Medium)** - narrow Activity/Working composition extraction with production-equivalence tests.
+5. **Sol High** - deterministic scheduler + checkpoint model.
+6. **Sol High** - offline composition root + structural forbidden-I/O proof.
+7. **Luna Medium** - trace/forensics + synthetic contract replay.
+8. **Sol Medium** - bounded privacy-preserving capture/exporter.
+9. **Sol Medium** - first real fixture + fixed-evidence semantic diff.
 10. **Luna Low** - accepted handoff/status docs.
 
 Important findings to preserve during implementation:
@@ -199,12 +199,11 @@ The accepted design contains the full bundle schema, virtual wall/monotonic time
 
 ## Model economy
 
-- **Luna Low:** deterministic inventory/extraction, prescribed documentation reconciliation, mechanical edits, tightly specified small tasks.
-- **Terra Low:** small implementation once architecture and acceptance are explicit.
-- **Terra Medium:** default bounded implementation/debugging/multi-file work.
-- **Terra High:** tricky bounded concurrency, ownership, delayed operations and interactions.
-- **Sol Medium/High:** unresolved cross-system architecture/authority judgment.
-- **Astra:** only exceptional cross-system ambiguity where a high-quality architecture pass can manufacture cheaper downstream work. #240's accepted bounded design no longer requires Astra for implementation; use the assigned Luna/Terra slices unless new architecture ambiguity appears.
+- **Luna Low:** deterministic inventory/extraction, prescribed documentation reconciliation, mechanical edits, tests, and tightly specified small changes.
+- **Luna Medium:** clear bounded implementation and ordinary multi-file work when the contract and validation are precise.
+- **Sol Medium:** debugging, research, review, or implementation requiring meaningful engineering judgment.
+- **Sol High/xhigh:** concurrency, lifecycle, ownership, cross-service, runtime, security, or meaningful data-risk work.
+- **Astra:** exceptional only, with explicit pre-approval. #240's accepted bounded design no longer requires Astra for implementation; if Luna becomes insufficient, escalate directly to Sol.
 
 ## Update discipline
 
