@@ -45,7 +45,7 @@ Important current facts:
 | 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
 | 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Luna Low** |
-| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slices 1-4 complete; implement Slice 5 deterministic scheduler + checkpoint model | **Sol High** |
+| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slices 1-5 complete; implement Slice 6 offline composition root + structural forbidden-I/O proof | **Sol High** |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -181,8 +181,8 @@ Implementation order:
 2. **COMPLETE** - versioned navigation-v1 bundle schema + strict validator/fixture-only reader (`4003d23`), including exact checkpoint-state enforcement, member/digest/order/session validation, explicit incomplete/unsupported errors, and raw-media rejection.
 3. **COMPLETE** - replay-safe DecisionClock injection for PresenceFusion, TransitLightingService, and LightOverrideManager plus passive camera-threshold import cleanup. The replay-excluded legacy ScreenSync wall read in LightApplicator remains unchanged per the exact Slice 1 manifest. Independent Sol Medium review found no blockers; advancing-clock and exact-deadline tests cover separate read opportunities.
 4. **COMPLETE** - narrow Activity/Working composition extraction with production-equivalence tests (`f83d771`). Passive shared policy/composition helpers now preserve strict expiry boundaries, property short-circuits, learner-await/read ordering, lux hysteresis continuity, and normal ScreenSync/application ownership. Independent Sol Medium review found no blockers.
-5. **NEXT (Sol High)** - deterministic scheduler + checkpoint model.
-6. **Sol High** - offline composition root + structural forbidden-I/O proof.
+5. **COMPLETE** - deterministic scheduler + checkpoint model. Replay now has an offline virtual UTC/monotonic clock, stable deadline/enqueue ordering, same-time append semantics, cancellation and exception behavior, recorded-input delivery without synthesized cadence, and typed quiescent checkpoint continuation. Non-empty wall-clock adjustments are rejected until their capture semantics are explicitly defined. Sol High implementation plus independent review found no blockers; 32 replay scheduler/bundle tests, Ruff, and diff-check are green.
+6. **NEXT (Sol High)** - offline composition root + structural forbidden-I/O proof.
 7. **Luna Medium** - trace/forensics + synthetic contract replay.
 8. **Sol Medium** - bounded privacy-preserving capture/exporter.
 9. **Sol Medium** - first real fixture + fixed-evidence semantic diff.
