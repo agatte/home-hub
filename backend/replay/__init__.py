@@ -1,6 +1,6 @@
-"""Offline-only navigation replay bundle contracts.
+"""Offline-only navigation replay contracts and virtual-time primitives.
 
-This package is data/validation only and intentionally imports no production services.
+This package intentionally imports no production services.
 """
 
 from .schema import PROFILE_ID, SCHEMA_ID
