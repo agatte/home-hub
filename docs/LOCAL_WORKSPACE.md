@@ -19,6 +19,8 @@ C:\Users\Anthony\Documents\home-hub-project\
 the helper creates it. Substantial implementation/review work should use sibling
 worktrees under `worktrees\` rather than scattered Desktop clones.
 
+Remote Desktop Commander runs inside Windows Sandbox. The authoritative host repo remains `C:\Users\Anthony\Documents\home-hub-project\main`; RDC sees that same mapped checkout at `C:\Work\home-hub-project\main`. Sandbox path differences are expected and do not indicate a broken host recovery.
+
 The canonical checkout moved from
 `C:\Users\antho\Desktop\home-hub` on 2026-08-18. Windows agent launchers now
 derive the checkout root from their own location, and the

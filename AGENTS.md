@@ -18,8 +18,8 @@ their subject is actually involved.
   change. Never expose or overwrite `.env` secrets.
 - Before editing, inspect relevant Git/worktree state and diffs. Preserve unrelated
   tracked/untracked work; avoid broad resets, cleanup, rewrites, or reformatting.
-- Canonical repo: `C:\Users\Anthony\Documents\home-hub-project\main`; worktrees:
-  `C:\Users\Anthony\Documents\home-hub-project\worktrees`. Preserve root file `=` if it exists.
+- Canonical host repo: `C:\Users\Anthony\Documents\home-hub-project\main`; worktrees:
+  `C:\Users\Anthony\Documents\home-hub-project\worktrees`. Through RDC/Windows Sandbox the same host repo is mapped at `C:\Work\home-hub-project\main`; that path difference does not mean host recovery is broken. Preserve root file `=` if it exists.
 - Use an isolated worktree when overlap or branch isolation materially helps.
 - Worktree deletion is safety-critical. Never recursively delete a worktree with `Remove-Item`, `rm`, `rmdir`, `rd`, `del`, or equivalent. Remove it only with `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1 -Project home-hub -WorktreePath <absolute-path>`; the guard requires an exact registered clean worktree and refuses protected/out-of-project paths.
 - Production is the Latitude. Windows is the development/desktop-agent machine.
