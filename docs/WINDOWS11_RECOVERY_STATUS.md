@@ -1,6 +1,6 @@
 # Home Hub Windows 11 Recovery Status
 
-Updated: 2026-09-22
+Updated: 2026-09-27
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
@@ -23,8 +23,8 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Latitude production checkout, `origin/master`, and `.last-deployed-sha` were verified synchronized at the deployed recovery commit; `home-hub.service` and `home-hub-latitude-streaming.service` were active and `/health` reported `build_id=9d6970f`.
 - [x] Core Home Hub health reports Hue, Sonos, Pi-hole, automation, and overnight jobs healthy.
 - [x] Two permanent Home Hub Windows tasks are supported: `Home Hub Agent Supervisor` (the only permanent **agent** task; logon plus 5-minute watchdog) and the separate `Home Hub Desktop Notifier` At-Logon GUI task required by the current product contract.
-- [x] The supervisor now manages seven agents: Latitude streaming detector, activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, and monitor brightness. Peripheral RGB was retired on 2026-09-20.
-- [x] The seven retained agents are the supported Windows supervisor fleet and actively reach Latitude.
+- [x] The Windows supervisor manages six agents: activity detector, ambient monitor, screen sync, sleep watcher, emotion capture, and monitor brightness. Peripheral RGB was retired on 2026-09-20. The Latitude streaming detector is a separate Latitude `systemd --user` service, not a Windows supervisor agent.
+- [x] The six retained Windows agents are the supported supervisor fleet and actively reach Latitude; the separate Latitude streaming detector is also healthy.
 - [x] No obsolete per-agent Home Hub tasks, Run-key entries, Startup-folder entries, or separate Home Hub Windows service were found.
 - [x] Samsung G50F DDC/CI brightness control is operational with `screen-brightness-control 0.24.1`.
 - [x] OpenRGB 1.0.0 was recovered successfully, then retired from Home Hub on 2026-09-20. The Home Hub client/dependency is removed, and the separate LocalSystem Windows service is stopped and disabled.
@@ -131,10 +131,10 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - [x] Updated `docs/LOCAL_WORKSPACE.md` to describe the verified Windows 11 checkout, runtime launchers, temporary recovery worktrees and their later retirement, deployment skill, SSH client, and historical-vs-current boundaries.
 - [x] Made the checked-in supervisor install/recovery path reproduce the known-good Windows 11 architecture: stable launchers under `%LOCALAPPDATA%\home-hub`, canonical repo working directory, and `.venv\Scripts\pythonw.exe`.
 - [x] Removed the obsolete hard-coded `C:\Python313\pythonw.exe` / `venv` recovery assumptions. The Python 3.13 launcher+interpreter process pair is documented as expected rather than treated as a duplicate supervisor.
-- [x] Updated supervisor documentation/setup for the supported six-agent fleet immediately after peripheral RGB retirement; the later Latitude streaming detector addition is reflected in the current seven-agent baseline above.
+- [x] Updated supervisor documentation/setup for the supported six-agent Windows fleet immediately after peripheral RGB retirement; the later Latitude streaming detector remains a separate Latitude service and is tracked independently.
 - [x] Retired the obsolete standalone ambient/detector setup and detector-restart scripts as fail-closed shims; they can no longer recreate unmanaged per-agent tasks.
 - [x] Preserved and committed the `AGENTS.md` guarded-worktree-removal rule; current-path corrections remain in the present recovery batch.
-- [x] Validated supervisor recovery changes before closeout; peripheral-RGB retirement preserved the same unified-supervisor recovery path, and the later Latitude streaming detector addition uses that same unified supervisor.
+- [x] Validated supervisor recovery changes before closeout; peripheral-RGB retirement preserved the same unified Windows-supervisor recovery path. The Latitude streaming detector remains independently managed on Latitude.
 - [x] Removed `openrgb-python` from the supported Home Hub dependency set when peripheral RGB was retired on 2026-09-20.
 - [x] Deliberately standardized Home Hub Windows SSH on `C:\Program Files\Git\usr\bin\ssh.exe`. Inbox OpenSSH is present but exits 255 even for `-V` and Home Hub connection attempts; Git SSH 10.3 authenticates successfully with the existing key.
 - [x] Do not rotate/recreate the Home Hub SSH key merely because Windows OpenSSH is broken; the existing key is verified working through Git SSH.
@@ -144,6 +144,7 @@ This file is the canonical checklist for recovery and reorientation of the Windo
   - The verified design now briefly quiesces **only** `home-hub.service`, copies and checks the DB, restores the service, and requires `/health` before exit 0. A lock file prevents overlapping runs and the EXIT trap restores the backend on failure.
   - Live proof on 2026-09-20: `home_hub_20260920_171701.db` = **3,230,666,752 bytes**, script-reported `quick_check=ok`, independent post-run `PRAGMA quick_check` = `ok`, no `.partial` residue, and Home Hub returned healthy at build `af12523`.
   - Cron is now normalized to **04:30 daily**, avoiding the backend's own 04:00 ML training job; raw crontab bytes end in a normal LF with no stray Windows carriage-return text.
+  - The quiesced backup intentionally makes the public `/api/ping` unavailable for roughly one minute while `home-hub.service` is stopped. On 2026-09-27 the external monitor observed 502s from 04:30:22 through 04:31:06 EDT; backup completed with `quick_check=ok` and backend healthy. Treat this as planned backup maintenance, not a crash; configure the external uptime monitor with a small 04:29-04:33 Eastern maintenance window if alert noise becomes undesirable.
 - [ ] Optional future work: define a new offsite backup strategy separately if desired. The lost Windows 10 restic configuration is not recoverable from clean sources, so any new offsite design must be labeled as new infrastructure rather than “restored” old state.
 
 ## Deferred cleanup
@@ -158,3 +159,15 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 A recovery item is not complete merely because a file, process, task, or MFT record exists. Mark an item complete only when the intended behavior or content has been verified. For reconstructed items, record what was reconstructed and the evidence used to validate it. For unrecoverable historical items, state that explicitly rather than repeatedly retrying known TRIM-zeroed sources.
 
 When an item above is completed, add a short dated note beneath it describing the change and the verification evidence. Keep this file current until the Windows 11 Home Hub recovery/reorientation is fully closed.
+
+## Second Windows wipe recovery — 2026-09-23/24
+
+- [x] Preserved the post-wipe PNY SSD before reinstall as `D:\windows11-post-wipe-2026-09-23.img` plus ddrescue map. The 240,057,409,536-byte source imaged at 100% with zero read errors.
+- [x] Reinstalled Windows 11 only on Disk 0; the WD D: and Patriot E: source/recovery disks were not reformatted.
+- [x] Re-established Remote Desktop Commander inside Windows Sandbox rather than exposing the rebuilt host C: to remote shell access. Home Hub, OSRS, and PC Audit are the only writable host mappings; D: and E: are read-only mappings.
+- [x] Restored the Windows development checkout from clean GitHub objects to `a2f108c39c48774718375098a205abb37563cfd9` (`Document HomeHub model routing`), which is current `origin/master` and was committed at 2026-09-23 23:15:38Z, about 30 minutes before the second wipe.
+- [x] Independently verified production remains intentionally pinned behind Windows development: live `/health` on 2026-09-24 reported `status=healthy`, `build_id=17810d6`, Hue/Sonos/Pi-hole healthy, no stale core tasks, and closed Hue/Sonos circuit breakers.
+- [x] Corrected stale recovery context during this pass: the four Sep 20 recovery worktrees were briefly recreated even though this canonical checklist records they had already been retired. Each newly created worktree was clean and registered, then removed using a guarded `git worktree remove` safety script; no unique work was discarded.
+- [x] Restored Windows-local Home Hub runtime/configuration and permanent tasks from verified current sources on 2026-09-26. The canonical `.env` was restored from the independently preserved copy and matched the live Home Hub SHA-256 exactly without exposing secrets. The canonical `.venv` was rebuilt from `requirements.txt` + `requirements-desktop.txt`; focused supervisor recovery tests passed. `Home Hub Agent Supervisor` and `Home Hub Desktop Notifier` were restored, the notifier rebuilt from tracked source with PyInstaller 6.22.3, its installed EXE matched the build hash, WebSocket connection succeeded, and a synthetic test toast was observed end to end. `HOME_HUB_URL` and the Home Hub MCP target were restored and live-verified against Latitude.
+- [x] Post-restoration runtime recheck on 2026-09-27: Latitude `/health` is healthy at production build `17810d6`; all six Windows supervisor agents are fresh/running with zero restarts; the separate Latitude streaming detector remains healthy. The ChatGPT snapshot helper successfully created a real dirty-tree snapshot excluding `.env`; the recovery wrapper's final assertion was a false negative because Windows PowerShell/.NET stores `ZipArchiveEntry.FullName` with backslashes (`docs\\...`) while the wrapper compared against a forward-slash path. An independent Windows ZIP probe reproduced that separator behavior; no product/runtime failure occurred.
+- [x] Targeted cross-project recovery items referenced by this Home Hub checklist are accounted for: the Home Hub SSH identity is restored and verified through Git-for-Windows SSH; the Sep 20 PC baseline handoff was recovered; OSRS live database/archive/state recovery and validation were completed in the OSRS recovery lane. No MFT name alone was treated as proof of recoverability.
