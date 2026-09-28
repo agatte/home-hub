@@ -1,6 +1,8 @@
-"""Offline-only navigation replay contracts and virtual-time primitives.
+"""Offline navigation replay contracts, virtual time, and closed-root support.
 
-This package intentionally imports no production services.
+The data-layer modules remain production-service-free. The optional navigation
+composition root imports only the reviewed decision participants named by the
+accepted navigation-v1 architecture.
 """
 
 from .schema import PROFILE_ID, SCHEMA_ID

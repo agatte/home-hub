@@ -45,7 +45,7 @@ Important current facts:
 | 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
 | 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Luna Low** |
-| 7 | #240 deterministic navigation replay | EXECUTION_READY / EVIDENCE_GATED | Slices 1-5 complete; implement Slice 6 offline composition root + structural forbidden-I/O proof | **Sol High** |
+| 7 | #240 deterministic navigation replay | INTEGRATION_READY / ISOLATION_GATED / EVIDENCE_GATED | Slice 6 closed-root + structural/runtime containment candidate is green; land it, then establish a reviewed operational isolation backend before Slice 7 | **Sol High** |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -161,7 +161,7 @@ Other evidence-gated or parked work is fully classified in **Section 5** of the 
 
 **Accepted design:** [`audits/REPLAY_ARCHITECTURE_2026_09_22.md`](audits/REPLAY_ARCHITECTURE_2026_09_22.md).
 
-**Status:** Architecture resolved for the bounded profile; implementation ready. The first real fixture is **EVIDENCE_GATED** because no retained historical input stream/checkpoint is complete enough to claim deterministic reproduction of the July incident.
+**Status:** Slices 1-5 are landed. Slice 6's closed offline composition root, recording sinks, exact import-closure proof, and runtime tripwire are validated locally and integration-ready. Operator-facing replay remains **ISOLATION_GATED** because the repository has no reviewed OS/container launcher that can enforce the accepted filesystem/network/device/subprocess boundary; the runner therefore fails closed. The first real fixture remains **EVIDENCE_GATED** because no retained historical input stream/checkpoint is complete enough to claim deterministic reproduction of the July incident.
 
 Supported v1 profile:
 
@@ -182,8 +182,8 @@ Implementation order:
 3. **COMPLETE** - replay-safe DecisionClock injection for PresenceFusion, TransitLightingService, and LightOverrideManager plus passive camera-threshold import cleanup. The replay-excluded legacy ScreenSync wall read in LightApplicator remains unchanged per the exact Slice 1 manifest. Independent Sol Medium review found no blockers; advancing-clock and exact-deadline tests cover separate read opportunities.
 4. **COMPLETE** - narrow Activity/Working composition extraction with production-equivalence tests (`f83d771`). Passive shared policy/composition helpers now preserve strict expiry boundaries, property short-circuits, learner-await/read ordering, lux hysteresis continuity, and normal ScreenSync/application ownership. Independent Sol Medium review found no blockers.
 5. **COMPLETE** - deterministic scheduler + checkpoint model. Replay now has an offline virtual UTC/monotonic clock, stable deadline/enqueue ordering, same-time append semantics, cancellation and exception behavior, recorded-input delivery without synthesized cadence, and typed quiescent checkpoint continuation. Non-empty wall-clock adjustments are rejected until their capture semantics are explicitly defined. Sol High implementation plus independent review found no blockers; 32 replay scheduler/bundle tests, Ruff, and diff-check are green.
-6. **NEXT (Sol High)** - offline composition root + structural forbidden-I/O proof.
-7. **Luna Medium** - trace/forensics + synthetic contract replay.
+6. **CLOSED-ROOT COMPLETE / ISOLATION_GATED (Sol High)** - offline composition root now wires the bounded production decision participants to data-only recording light/event sinks, restores exact checkpoint state, preserves mode/per-light expiry and Working restoration ordering, rejects unmapped acknowledgement timing, and locks the reviewed project/external import closure. Runtime tripwire evidence and 205 focused replay/production-participant tests are green. The operational runner intentionally refuses execution until a reviewed OS/container isolation backend can enforce the accepted no-network/device/subprocess/production-filesystem contract.
+7. **BLOCKED ON SLICE 6 ISOLATION** - trace/forensics + synthetic contract replay (Luna Medium) resumes only after the operational isolation gate above is resolved or the accepted architecture is explicitly re-scoped.
 8. **Sol Medium** - bounded privacy-preserving capture/exporter.
 9. **Sol Medium** - first real fixture + fixed-evidence semantic diff.
 10. **Luna Low** - accepted handoff/status docs.

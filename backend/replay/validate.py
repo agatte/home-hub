@@ -48,9 +48,7 @@ class BundleValidationError(ValueError):
         super().__init__(f"{code}: {message}")
 
 
-REQUIRED_MEMBERS = frozenset(
-    {"manifest.json", "initial.json", "inputs.jsonl", "expected.json"}
-)
+REQUIRED_MEMBERS = frozenset({"manifest.json", "initial.json", "inputs.jsonl", "expected.json"})
 PAYLOAD_MEMBERS = frozenset(REQUIRED_MEMBERS - {"manifest.json"})
 
 _FUSION_KEYS = frozenset(
@@ -117,9 +115,7 @@ _CAMERA_STATUS_KEYS = frozenset(
         "presence_authority_ready",
     }
 )
-_CAMERA_LUX_KEYS = frozenset(
-    {"enabled", "paused", "ema_lux", "last_lux_update", "baseline_lux"}
-)
+_CAMERA_LUX_KEYS = frozenset({"enabled", "paused", "ema_lux", "last_lux_update", "baseline_lux"})
 _ENGINE_STATE_KEYS = frozenset(
     {
         "manual_light_overrides",
@@ -132,6 +128,7 @@ _ENGINE_STATE_KEYS = frozenset(
 _WORKING_CONTEXT_KEYS = frozenset(
     {
         "schedule_config",
+        "sunset_ts",
         "current_game",
         "mode_brightness_working",
         "learner_overlay_result",
@@ -297,9 +294,7 @@ def _validate_manifest(raw_manifest: object, manifest: ManifestV1) -> None:
     if manifest.completeness_status != "complete":
         _fail(BundleErrorCode.INCOMPLETE_BUNDLE, "manifest marks bundle incomplete")
     consequential_gaps = [
-        gap.field_or_event_id
-        for gap in manifest.gaps
-        if gap.completeness_consequence != "none"
+        gap.field_or_event_id for gap in manifest.gaps if gap.completeness_consequence != "none"
     ]
     if consequential_gaps:
         _fail(
@@ -350,9 +345,7 @@ def _validate_initial(initial: InitialStateV1, manifest: ManifestV1) -> None:
     _known_mapping(initial.working_context, "working_context", _WORKING_CONTEXT_KEYS)
     ownership = _known_mapping(initial.ownership, "ownership", _OWNERSHIP_KEYS)
     _known_mapping(initial.adapter, "adapter", _ADAPTER_KEYS)
-    boundary = _known_mapping(
-        initial.transition_boundary, "transition_boundary", _BOUNDARY_KEYS
-    )
+    boundary = _known_mapping(initial.transition_boundary, "transition_boundary", _BOUNDARY_KEYS)
     if not isinstance(initial.pending_evaluations, KnownValue):
         _fail(
             BundleErrorCode.INCOMPLETE_INITIAL_STATE,
@@ -366,12 +359,12 @@ def _validate_initial(initial: InitialStateV1, manifest: ManifestV1) -> None:
 
     status = camera["status"]
     lux = camera["lux"]
-    if not isinstance(status, dict) or not _CAMERA_STATUS_KEYS.issubset(status):
+    if not isinstance(status, dict) or set(status) != _CAMERA_STATUS_KEYS:
         _fail(
             BundleErrorCode.INCOMPLETE_INITIAL_STATE,
             "camera.status is missing consumed Transit fields",
         )
-    if not isinstance(lux, dict) or not _CAMERA_LUX_KEYS.issubset(lux):
+    if not isinstance(lux, dict) or set(lux) != _CAMERA_LUX_KEYS:
         _fail(
             BundleErrorCode.INCOMPLETE_INITIAL_STATE,
             "camera.lux is missing consumed navigation fields",
@@ -389,6 +382,12 @@ def _validate_initial(initial: InitialStateV1, manifest: ManifestV1) -> None:
             BundleErrorCode.INCOMPLETE_INITIAL_STATE,
             "fusion reading_order must name every reading exactly once",
         )
+    for source, reading in readings.items():
+        if not isinstance(reading, dict) or set(reading) != _PRESENCE_READING_KEYS:
+            _fail(
+                BundleErrorCode.INCOMPLETE_INITIAL_STATE,
+                f"fusion reading {source!r} must capture every PresenceReading field",
+            )
 
     if engine["current_mode"] != "working":
         _fail(BundleErrorCode.UNSUPPORTED_PROFILE, "navigation-v1 requires retained Working")
@@ -459,15 +458,11 @@ def _validate_presence_payload(event: InputEnvelopeV1) -> None:
         )
 
 
-def _load_inputs(
-    path: Path, manifest: ManifestV1
-) -> tuple[InputEnvelopeV1, ...]:
+def _load_inputs(path: Path, manifest: ManifestV1) -> tuple[InputEnvelopeV1, ...]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
-        raise BundleValidationError(
-            BundleErrorCode.BAD_JSON, "invalid inputs.jsonl"
-        ) from exc
+        raise BundleValidationError(BundleErrorCode.BAD_JSON, "invalid inputs.jsonl") from exc
 
     inputs: list[InputEnvelopeV1] = []
     for line_number, line in enumerate(lines, 1):
@@ -518,7 +513,10 @@ def _load_inputs(
                 f"{event.event_id}: backend session differs from checkpoint",
             )
         expected_source_session = manifest.sessions.source_sessions.get(event.source_id)
-        if expected_source_session is not None and event.source_session_id != expected_source_session:
+        if (
+            expected_source_session is not None
+            and event.source_session_id != expected_source_session
+        ):
             _fail(
                 BundleErrorCode.SCHEMA_ERROR,
                 f"{event.event_id}: source session disagrees with manifest",

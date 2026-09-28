@@ -27,6 +27,20 @@ def _unknown(reason: str):
     return {"status": "unknown", "reason": reason}
 
 
+def _schedule_config() -> dict:
+    weekday = {
+        "wake_hour": 5,
+        "wake_brightness": 40,
+        "ramp_start_hour": 6,
+        "ramp_duration_minutes": 60,
+        "evening_start_hour": 18,
+        "winddown_start_hour": 21,
+        "late_night_start_hour": 23,
+    }
+    weekend = {**weekday, "wake_hour": 8, "ramp_start_hour": 8, "ramp_duration_minutes": 120}
+    return {"weekday": weekday, "weekend": weekend}
+
+
 def _base_parts() -> dict:
     initial = {
         "schema_id": "homehub.incident.navigation.initial.v1",
@@ -44,6 +58,12 @@ def _base_parts() -> dict:
                         "source": "latitude",
                         "captured_at": "2026-09-22T11:59:59Z",
                         "face_present": True,
+                        "face_confidence": 0.9,
+                        "detection_source": "face",
+                        "zone": "couch",
+                        "posture": None,
+                        "posture_confidence": None,
+                        "pose_visible_landmarks": None,
                     }
                 },
                 "reading_order": ["latitude"],
@@ -61,7 +81,7 @@ def _base_parts() -> dict:
                 "activity": "Working",
                 "mode_source": "manual",
                 "mode_source_key": "synthetic",
-                "last_mode_source_report_at": "2026-09-22T11:50:00Z",
+                "last_mode_source_report_at": {"synthetic": "2026-09-22T11:50:00Z"},
                 "last_process_observation_by_device": {},
                 "last_process_semantic_by_device": {},
                 "desktop_sensing_state": "unavailable",
@@ -99,8 +119,8 @@ def _base_parts() -> dict:
             {
                 "status": {
                     "enabled": True,
-                    "last_detection": "2026-09-22T11:59:59Z",
-                    "detection_source": "yolo",
+                    "last_detection": "present",
+                    "detection_source": "face",
                     "confidence": 0.9,
                     "zone": "couch",
                     "posture": None,
@@ -126,7 +146,8 @@ def _base_parts() -> dict:
         ),
         "working_context": _known(
             {
-                "schedule_config": {},
+                "schedule_config": _schedule_config(),
+                "sunset_ts": None,
                 "current_game": None,
                 "mode_brightness_working": 1.0,
                 "learner_overlay_result": {},
@@ -210,7 +231,9 @@ def _base_parts() -> dict:
             "backend_boot_id": "synthetic-boot",
             "backend_session_id": "synthetic-backend-session",
             "clock_domain": "backend-boot:synthetic-boot",
-            "normalization_provenance": _not_consumed("scheduler tick has no ingress normalization"),
+            "normalization_provenance": _not_consumed(
+                "scheduler tick has no ingress normalization"
+            ),
             "payload": _known({}),
             "evidence_refs": [],
         },
@@ -290,11 +313,15 @@ def _write_bundle(tmp_path: Path, mutate=None) -> Path:
             parts["initial"], sort_keys=True, separators=(",", ":")
         ).encode(),
         "inputs.jsonl": (
-            "\n".join(
-                json.dumps(item, sort_keys=True, separators=(",", ":"))
-                for item in parts["inputs"]
+            (
+                "\n".join(
+                    json.dumps(item, sort_keys=True, separators=(",", ":"))
+                    for item in parts["inputs"]
+                )
+                + "\n"
             )
-            + "\n"
+            if parts["inputs"]
+            else ""
         ).encode(),
         "expected.json": json.dumps(
             parts["expected"], sort_keys=True, separators=(",", ":")
@@ -469,14 +496,20 @@ def test_rejects_incomplete_presence_reading(tmp_path: Path):
     _assert_code(error, BundleErrorCode.INCOMPLETE_INPUT)
 
 
-def test_replay_package_has_no_production_service_imports():
+def test_replay_data_layer_has_no_production_service_imports():
     package = Path("backend/replay")
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in package.glob("*.py"))
+    data_modules = (
+        "schema.py",
+        "validate.py",
+        "clock.py",
+        "scheduler.py",
+        "checkpoints.py",
+        "isolated_runner.py",
+    )
+    combined = "\n".join((package / name).read_text(encoding="utf-8") for name in data_modules)
     assert "backend.services" not in combined
     assert "backend.bootstrap" not in combined
     assert "HueService" not in combined
-
-
 
 
 def test_rejects_raw_media_payload_and_source_session_mismatch(tmp_path: Path):

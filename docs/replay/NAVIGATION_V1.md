@@ -128,6 +128,21 @@ behavior differences, not fixes or new replay guards.
 | HueService `time.monotonic()` transition bookkeeping | Lives below the selected adapter boundary after a real Hue write | Recording adapter result policy replaces it | REPLAY_EXCLUDED; the replay stops before Hue firmware/transition tracking. |
 | Scene drift/randomness and unrelated delayed tasks | Outside the supported Working/day restoration path | None | NOT_CONSUMED. |
 
+### Slice 6 v1 compatibility correction
+
+The v1 Working checkpoint requires `working_context.sunset_ts`; explicit
+`null` means no trustworthy cached sunset was available. The Slice 2 synthetic
+fixture previously omitted this field even though the consumption table already
+required the cached weather sunset used by period selection.
+`engine.last_mode_source_report_at` is likewise represented as the production
+source-keyed timestamp map rather than the earlier synthetic scalar. Initial
+fusion readings now capture every `PresenceReading` field instead of relying on
+dataclass defaults.
+
+No evidence-backed v1 fixture had been accepted before these corrections, so the
+schema/profile version remains 1. Older synthetic fixtures must be regenerated
+rather than silently defaulting the missing values.
+
 No selected **policy** decision uses `time.time()` or monotonic time today.
 The replay scheduler may use virtual monotonic time for deterministic ordering, but
 must keep existing wall-time comparisons intact. Do not collapse separate current
