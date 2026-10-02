@@ -155,6 +155,8 @@ async def _run(bundle_dir: Path) -> dict[str, Any]:
             "last_applied_per_light": root.state.last_applied_per_light,
         },
         "light_requests": [asdict(request) for request in root.sink.requests],
+        "trace_jsonl": root.trace.to_jsonl(),
+        "trace_record_count": len(root.trace.records),
         "event_sink": {
             "light_adjustments": root.events.light_adjustments,
             "learner_decisions": root.events.learner_decisions,

@@ -63,3 +63,25 @@ focused validation was `44 passed, 1 skipped` and the broader replay suite was
 The first evidence-backed navigation fixture remains separately
 `EVIDENCE_GATED`; no historical acknowledgement timing or human/environment
 counterfactual is invented by this runner contract.
+
+## Deterministic trace result
+
+The Slice 7 replay result adds `trace_jsonl` and `trace_record_count` without
+changing the isolation boundary. `trace_jsonl` is a canonical, deterministic
+JSONL semantic trace produced entirely inside the closed replay root. The
+reviewed project closure explicitly includes `backend/replay/trace.py`; no new
+live adapter, filesystem, process, network, or production-state dependency is
+introduced.
+
+Trace records distinguish `FACT`, `DERIVED_DECISION`, `PROPOSAL`,
+`SUPPRESSION`, `REQUEST`, and `SIMULATED_RESULT`. Gate states are explicit:
+`passed`, `blocked`, `not_evaluated`, or `unknown`. In particular, the current
+Transit path records the missing physical-authority gate as `not_evaluated`;
+it is not silently treated as passed.
+
+Synthetic fixtures are labeled with `certainty="synthetic_contract"`. They may
+prove deterministic replay contracts such as dwell, timeout, no-refire,
+suppression, and fake acknowledgement/cache behavior, but they are not
+historical evidence. The first real historical fixture remains
+`EVIDENCE_GATED`.
+Non-synthetic runs use `certainty="current_code_interpretation"`; they are not labeled as historical reproduction.

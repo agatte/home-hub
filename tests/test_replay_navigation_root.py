@@ -448,6 +448,7 @@ def test_closed_project_import_graph_has_no_live_io_modules():
         "backend.replay.scheduler",
         "backend.replay.schema",
         "backend.replay.sinks",
+        "backend.replay.trace",
         "backend.replay.validate",
         "backend.services",
         "backend.services.automation_constants",

@@ -32,7 +32,13 @@ from backend.services.navigation_activity_policy import (
     project_house_state,
 )
 from backend.services.presence_fusion import PresenceFusion, PresenceReading
-from backend.services.transit_lighting_service import TransitLightingService
+from backend.services.transit_lighting_service import (
+    ABSENT_TRIGGER_SECONDS,
+    DESK_STICKY_SECONDS,
+    HARD_TIMEOUT_SECONDS,
+    STATIONARY_ZONES,
+    TransitLightingService,
+)
 from backend.services.working_light_composition import compose_working_lights
 
 from .checkpoints import PendingEvaluationV1, ReplayCheckpointV1
@@ -40,6 +46,7 @@ from .clock import ReplayTimeError, parse_utc
 from .scheduler import ReplayScheduler, schedule_recorded_inputs
 from .schema import InputEnvelopeV1, KnownValue
 from .sinks import RecordingEventSink, RecordingLightSink, ReplaySinkError
+from .trace import ReplayTrace, TraceContext
 from .validate import IncidentBundleV1
 
 
@@ -88,6 +95,23 @@ _SUPPORTED_INPUT_KINDS = frozenset(
         "restoration_tick",
     }
 )
+
+_TRACE_PARTICIPANTS = {
+    "fusion_ingest": "presence_fusion",
+    "fusion_invalidation": "presence_fusion",
+    "camera_status_change": "camera",
+    "camera_lux_change": "camera",
+    "engine_tick": "activity_authority",
+    "transit_tick": "transit_lighting",
+    "deadline_tick": "light_override_manager",
+    "restoration_tick": "working_restoration",
+}
+_TRACE_BLOCK_REASON_CODES = {
+    "camera disabled": "navigation.camera_disabled",
+    "refire cooldown": "navigation.refire_cooldown",
+    "recent desktop interaction": "navigation.recent_desktop_interaction",
+    "awaiting fresh presence before exit": "navigation.awaiting_presence_edge",
+}
 
 
 def _known_mapping(value: Any, label: str) -> dict[str, Any]:
@@ -448,6 +472,19 @@ class NavigationV1Replay:
         )
         self.clock = self.checkpoint.create_clock()
         self.scheduler = ReplayScheduler(self.clock)
+        provenance = bundle.manifest.capture_provenance
+        synthetic_contract = (
+            provenance.get("kind") == "synthetic_test"
+            and provenance.get("historical_claim") is False
+        )
+        self.trace = ReplayTrace(
+            bundle_id=bundle.manifest.bundle_id,
+            profile_id=bundle.manifest.profile_id,
+            backend_commit=bundle.manifest.implementation.backend_commit,
+            policy_digest=bundle.manifest.configuration.policy_digest,
+            manifest_sha256=bundle.manifest.manifest_sha256,
+            synthetic_contract=synthetic_contract,
+        )
 
         self.engine = _known_mapping(bundle.initial.engine, "engine")
         self.context = _known_mapping(bundle.initial.working_context, "working_context")
@@ -520,6 +557,25 @@ class NavigationV1Replay:
         )
         self._restore_transit()
 
+        initial_trace_state = self._trace_state()
+        self.trace.record(
+            virtual_utc=self.clock.utc_now(),
+            mono_ns=self.clock.monotonic_ns(),
+            participant="replay_checkpoint",
+            kind="FACT",
+            context=TraceContext(
+                dispatch_sequence=None,
+                cause_ids=("checkpoint:initial",),
+                evidence_ids=(),
+            ),
+            state_before=initial_trace_state,
+            state_after=initial_trace_state,
+            decision={
+                "input_kind": "initial_checkpoint",
+                "completeness_status": bundle.manifest.completeness_status,
+            },
+        )
+
         for event in bundle.inputs:
             self._validate_event_identity(event)
 
@@ -539,6 +595,458 @@ class NavigationV1Replay:
     @classmethod
     def from_bundle(cls, bundle: IncidentBundleV1) -> "NavigationV1Replay":
         return cls(bundle)
+
+    def _trace_state(self) -> dict[str, Any]:
+        house, activity, effective = self.authority._project_authority()
+        return {
+            "authority": {
+                "current_mode": self.authority.current_mode,
+                "house_state": house,
+                "activity": activity,
+                "effective_mode": effective,
+            },
+            "engine": {
+                "manual_override": self.engine["manual_override"],
+                "override_expiry_deferred": self.engine["override_expiry_deferred"],
+                "away_hold": self.engine["away_hold"],
+                "external_off_detected": self.engine["external_off_detected"],
+                "enabled": self.engine["enabled"],
+                "idle_entered_at": self.engine["idle_entered_at"],
+            },
+            "camera": {
+                "status": copy.deepcopy(self.camera.status),
+                "lux": copy.deepcopy(self.camera.lux),
+            },
+            "transit": {
+                "active": self.transit.active,
+                "owned_lights": set(self.transit._owned_lights),
+                "presence_armed": self.transit._presence_armed,
+                "strong_absent_streak": self.transit._strong_absent_streak,
+                "last_block_reason": self.transit._last_block_reason,
+                "camera_absent_since": self.transit._camera_absent_since,
+                "camera_present_since": self.transit._camera_present_since,
+                "transit_start": self.transit._transit_start,
+                "last_deactivated_at": self.transit._last_deactivated_at,
+            },
+            "engine_state": {
+                "manual_light_overrides": copy.deepcopy(self.state.manual_light_overrides),
+                "manual_light_targets": copy.deepcopy(self.state.manual_light_targets),
+                "transit_light_overrides": copy.deepcopy(self.state.transit_light_overrides),
+                "transit_light_targets": copy.deepcopy(self.state.transit_light_targets),
+                "last_applied_per_light": copy.deepcopy(self.state.last_applied_per_light),
+            },
+            "light_request_count": len(self.sink.requests),
+        }
+
+    @staticmethod
+    def _trace_context_for_event(event: InputEnvelopeV1) -> TraceContext:
+        return TraceContext(
+            dispatch_sequence=event.backend_dispatch_sequence,
+            cause_ids=(event.event_id,),
+            evidence_ids=tuple(event.evidence_refs),
+        )
+
+    def _trace_fact(
+        self,
+        event: InputEnvelopeV1,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> None:
+        self.trace.record(
+            virtual_utc=self.clock.utc_now(),
+            mono_ns=self.clock.monotonic_ns(),
+            participant=_TRACE_PARTICIPANTS[event.kind],
+            kind="FACT",
+            context=self._trace_context_for_event(event),
+            state_before=before,
+            state_after=after,
+            decision={"input_kind": event.kind},
+            payload=event.payload.model_dump(mode="python"),
+        )
+
+    def _trace_new_requests(
+        self,
+        *,
+        start_index: int,
+        context: TraceContext,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        owner: str,
+    ) -> None:
+        for request in self.sink.requests[start_index:]:
+            request_id = f"light_request:{request.sequence}"
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant="lighting_adapter",
+                kind="REQUEST",
+                context=context,
+                state_before=before,
+                state_after=before,
+                decision={"action": "set_light"},
+                request_id=request_id,
+                owner=owner,
+                light_ids=(request.light_id,),
+                payload=request.payload,
+            )
+            acknowledged = request.result is True
+            reason_codes = (
+                ("lighting.adapter_acknowledged",)
+                if acknowledged
+                else ("lighting.adapter_rejected",)
+            )
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant="lighting_adapter",
+                kind="SIMULATED_RESULT",
+                context=TraceContext(
+                    dispatch_sequence=context.dispatch_sequence,
+                    cause_ids=(request_id,),
+                    evidence_ids=context.evidence_ids,
+                ),
+                state_before=before,
+                state_after=after,
+                decision={"action": "set_light_result"},
+                reason_codes=reason_codes,
+                request_id=request_id,
+                owner=owner,
+                light_ids=(request.light_id,),
+                payload=request.payload,
+                result={
+                    "acknowledged": request.result,
+                    "error": request.error,
+                    "policy_source": request.policy_source,
+                },
+            )
+
+    def _trace_transit_result(
+        self,
+        *,
+        context: TraceContext,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        request_start: int,
+    ) -> None:
+        was_active = bool(before["transit"]["active"])
+        is_active = bool(after["transit"]["active"])
+        new_requests = self.sink.requests[request_start:]
+
+        if not was_active and is_active:
+            proposed = sorted(after["transit"]["owned_lights"])
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant="transit_lighting",
+                kind="PROPOSAL",
+                context=context,
+                state_before=before,
+                state_after=after,
+                decision={"action": "activate_navigation"},
+                gates={
+                    "transit_activation": {
+                        "status": "passed",
+                        "reason_code": None,
+                    },
+                    "physical_authority_gate": {
+                        "status": "not_evaluated",
+                        "reason_code": "navigation.physical_authority_gate_absent",
+                    },
+                    "normal_applicator_guards": {
+                        "status": "not_evaluated",
+                        "reason_code": "lighting.direct_navigation_guard_set",
+                    },
+                },
+                owner="transit",
+                light_ids=proposed,
+            )
+            requested = {request.light_id for request in new_requests}
+            missing = set(proposed) - requested
+            if missing:
+                if self.engine["external_off_detected"] or self.engine["away_hold"]:
+                    code = "lighting.external_off_suppressed"
+                    gate = "automation_write_authority"
+                elif not self.engine["enabled"]:
+                    code = "lighting.automation_disabled"
+                    gate = "automation_enabled"
+                elif missing & {"3", "4"} and set(
+                    after["engine_state"]["manual_light_overrides"]
+                ) & {"3", "4"}:
+                    code = "lighting.manual_kitchen_pair"
+                    gate = "manual_kitchen_pair"
+                elif not self.sink.connected:
+                    code = "lighting.adapter_unavailable"
+                    gate = "adapter_available"
+                else:
+                    code = "lighting.manager_suppressed"
+                    gate = "manager_write"
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="light_override_manager",
+                    kind="SUPPRESSION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={"action": "suppress_navigation_write"},
+                    reason_codes=(code,),
+                    gates={gate: {"status": "blocked", "reason_code": code}},
+                    owner="transit",
+                    light_ids=sorted(missing),
+                )
+
+        block_reason = after["transit"]["last_block_reason"]
+        if block_reason and block_reason != before["transit"]["last_block_reason"]:
+            code = _TRACE_BLOCK_REASON_CODES.get(
+                block_reason,
+                "navigation.blocked",
+            )
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant="transit_lighting",
+                kind="SUPPRESSION",
+                context=context,
+                state_before=before,
+                state_after=after,
+                decision={"action": "hold_navigation"},
+                reason_codes=(code,),
+                gates={"navigation_gate": {"status": "blocked", "reason_code": code}},
+                owner="transit",
+            )
+
+        before_absent = before["transit"]["camera_absent_since"]
+        after_absent = after["transit"]["camera_absent_since"]
+        if (
+            not was_active
+            and not is_active
+            and block_reason is None
+            and after["transit"]["presence_armed"]
+            and after_absent is not None
+        ):
+            elapsed_absent = (self.clock.utc_now().astimezone(TZ) - after_absent).total_seconds()
+            if before_absent is None:
+                action = "start_absence_dwell"
+                code = "navigation.absence_dwell_started"
+            elif elapsed_absent < ABSENT_TRIGGER_SECONDS:
+                action = "await_absence_dwell"
+                code = "navigation.absence_dwell_waiting"
+            else:
+                action = None
+                code = None
+            if action is not None and code is not None:
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="transit_lighting",
+                    kind="DERIVED_DECISION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={
+                        "action": action,
+                        "elapsed_seconds": elapsed_absent,
+                        "required_seconds": ABSENT_TRIGGER_SECONDS,
+                    },
+                    reason_codes=(code,),
+                    gates={
+                        "absence_dwell": {
+                            "status": "blocked",
+                            "reason_code": code,
+                        }
+                    },
+                    owner="transit",
+                )
+
+        start = before["transit"]["transit_start"]
+        if was_active and not is_active and start is not None:
+            elapsed = (self.clock.utc_now().astimezone(TZ) - start).total_seconds()
+            zone = self.fusion.latest_zone() or self.camera.status.get("zone")
+            seconds_since_desk = self.fusion.seconds_since_at_desk()
+            desk_sticky = (
+                seconds_since_desk is not None and seconds_since_desk <= DESK_STICKY_SECONDS
+            )
+            timeout_was_decisive = (
+                before["camera"]["status"].get("enabled") is True
+                and not desk_sticky
+                and zone not in STATIONARY_ZONES
+                and elapsed >= HARD_TIMEOUT_SECONDS
+            )
+            if timeout_was_decisive:
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="transit_lighting",
+                    kind="DERIVED_DECISION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={"action": "release_navigation"},
+                    reason_codes=("navigation.hard_timeout",),
+                    gates={
+                        "hard_timeout": {
+                            "status": "passed",
+                            "reason_code": "navigation.hard_timeout",
+                        }
+                    },
+                    owner="transit",
+                    light_ids=sorted(before["transit"]["owned_lights"]),
+                )
+
+    def _trace_evaluation_result(
+        self,
+        *,
+        kind: str,
+        context: TraceContext,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        request_start: int,
+    ) -> None:
+        if kind == "transit_tick":
+            self._trace_transit_result(
+                context=context,
+                before=before,
+                after=after,
+                request_start=request_start,
+            )
+            if before["transit"]["active"] and not after["transit"]["active"]:
+                owner = "working"
+            else:
+                owner = "transit"
+        elif kind == "engine_tick":
+            owner = "working"
+            if (
+                not before["engine"]["override_expiry_deferred"]
+                and after["engine"]["override_expiry_deferred"]
+            ):
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="activity_authority",
+                    kind="DERIVED_DECISION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={"action": "defer_override_expiry"},
+                    reason_codes=("activity.override_expiry_deferred",),
+                    gates={
+                        "fresh_semantic_replacement": {
+                            "status": "blocked",
+                            "reason_code": "activity.override_expiry_deferred",
+                        }
+                    },
+                )
+            elif before["engine"]["manual_override"] and not after["engine"]["manual_override"]:
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="activity_authority",
+                    kind="DERIVED_DECISION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={"action": "release_override"},
+                    reason_codes=("activity.override_expiry_released",),
+                    gates={
+                        "override_expiry": {
+                            "status": "passed",
+                            "reason_code": "activity.override_expiry_released",
+                        }
+                    },
+                )
+            expired_manual = set(before["engine_state"]["manual_light_overrides"]) - set(
+                after["engine_state"]["manual_light_overrides"]
+            )
+            if expired_manual:
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="light_override_manager",
+                    kind="DERIVED_DECISION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={"action": "expire_manual_light_ownership"},
+                    reason_codes=("lighting.manual_override_expired",),
+                    light_ids=sorted(expired_manual),
+                )
+        elif kind == "deadline_tick":
+            owner = "transit"
+            expired = set(before["engine_state"]["transit_light_overrides"]) - set(
+                after["engine_state"]["transit_light_overrides"]
+            )
+            if expired:
+                self.trace.record(
+                    virtual_utc=self.clock.utc_now(),
+                    mono_ns=self.clock.monotonic_ns(),
+                    participant="light_override_manager",
+                    kind="DERIVED_DECISION",
+                    context=context,
+                    state_before=before,
+                    state_after=after,
+                    decision={"action": "prune_transit_deadline"},
+                    reason_codes=("lighting.transit_deadline_expired",),
+                    owner="transit",
+                    light_ids=sorted(expired),
+                )
+        else:
+            owner = "working"
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant="working_restoration",
+                kind="DERIVED_DECISION",
+                context=context,
+                state_before=before,
+                state_after=after,
+                decision={"action": "reapply_working"},
+                reason_codes=("lighting.working_restoration",),
+                owner="working",
+            )
+
+        self._trace_new_requests(
+            start_index=request_start,
+            context=context,
+            before=before,
+            after=after,
+            owner=owner,
+        )
+
+    async def _evaluate_traced(self, kind: str, context: TraceContext) -> None:
+        before = self._trace_state()
+        request_start = len(self.sink.requests)
+        try:
+            await self._evaluate(kind)
+        except BaseException as exc:
+            after = self._trace_state()
+            self._trace_new_requests(
+                start_index=request_start,
+                context=context,
+                before=before,
+                after=after,
+                owner="transit" if kind in {"transit_tick", "deadline_tick"} else "working",
+            )
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant=_TRACE_PARTICIPANTS[kind],
+                kind="DERIVED_DECISION",
+                context=context,
+                state_before=before,
+                state_after=after,
+                decision={"action": "evaluation_error", "evaluation_kind": kind},
+                reason_codes=("replay.evaluation_error",),
+                result={"error_type": type(exc).__name__, "message": str(exc)},
+            )
+            raise
+        after = self._trace_state()
+        self._trace_evaluation_result(
+            kind=kind,
+            context=context,
+            before=before,
+            after=after,
+            request_start=request_start,
+        )
 
     def _suppressed(self) -> bool:
         return bool(
@@ -829,27 +1337,50 @@ class NavigationV1Replay:
 
     async def _dispatch_input(self, event: InputEnvelopeV1) -> None:
         self.require_day_period()
+        context = self._trace_context_for_event(event)
+        before = self._trace_state()
         if event.kind == "fusion_ingest":
             assert isinstance(event.payload, KnownValue)
             self.fusion.on_observation(_reading(event.payload.value, label=event.event_id))
+            self._trace_fact(event, before, self._trace_state())
             return
         if event.kind == "fusion_invalidation":
             self.fusion.invalidate_source(event.source_id)
+            self._trace_fact(event, before, self._trace_state())
             return
         if event.kind == "camera_status_change":
             assert isinstance(event.payload, KnownValue)
             self.camera.update_status(event.payload.value)
+            self._trace_fact(event, before, self._trace_state())
             return
         if event.kind == "camera_lux_change":
             assert isinstance(event.payload, KnownValue)
             self.camera.update_lux(event.payload.value)
+            self._trace_fact(event, before, self._trace_state())
             return
-        await self._evaluate(event.kind)
+        self._trace_fact(event, before, before)
+        await self._evaluate_traced(event.kind, context)
 
     def _resolve_pending(self, pending: PendingEvaluationV1):
         async def continuation() -> None:
             self.require_day_period()
-            await self._evaluate(pending.kind)
+            before = self._trace_state()
+            context = TraceContext(
+                dispatch_sequence=None,
+                cause_ids=(pending.source_identity,),
+                evidence_ids=(),
+            )
+            self.trace.record(
+                virtual_utc=self.clock.utc_now(),
+                mono_ns=self.clock.monotonic_ns(),
+                participant=_TRACE_PARTICIPANTS[pending.kind],
+                kind="FACT",
+                context=context,
+                state_before=before,
+                state_after=before,
+                decision={"input_kind": pending.kind, "source": "checkpoint"},
+            )
+            await self._evaluate_traced(pending.kind, context)
 
         return continuation
 

@@ -54,6 +54,7 @@ PROJECT_FILES = (
     "backend/replay/scheduler.py",
     "backend/replay/schema.py",
     "backend/replay/sinks.py",
+    "backend/replay/trace.py",
     "backend/replay/validate.py",
     "backend/replay/windows_guest_broker.py",
     "backend/services/__init__.py",
