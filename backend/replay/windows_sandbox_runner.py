@@ -30,6 +30,7 @@ EXPORT_READY_TIMEOUT_SECONDS = 15
 COMMAND_TIMEOUT_SECONDS = 20
 EXEC_TIMING_SIGNAL_SECONDS = 4.0
 EXEC_TIMING_MIN_DELTA_SECONDS = 3.0
+EXEC_DIAGNOSTIC_PHASE_SECONDS = 2.0
 CO_E_APPSINGLEUSE = 0x800401F6
 
 GUEST_STAGE = r"C:\HomeHubReplayStage"
@@ -39,6 +40,8 @@ GUEST_DONE = rf"{GUEST_STATE}\done.marker"
 GUEST_STATUS = rf"{GUEST_STATE}\status.json"
 GUEST_RESULT = rf"{GUEST_STATE}\result.json"
 GUEST_READY = rf"{GUEST_STATE}\host_ready.marker"
+GUEST_LAUNCH_SEEN = r"C:\HomeHubReplayLaunchSeen.marker"
+GUEST_LOCAL_STAGE = r"C:\HomeHubReplayLocal"
 
 PROJECT_FILES = (
     "backend/__init__.py",
@@ -276,6 +279,7 @@ def _write_guest_helpers(stage_root: Path) -> None:
     launch = (
         "@echo off\r\n"
         "setlocal\r\n"
+        f'>"{GUEST_LAUNCH_SEEN}" echo seen\r\n'
         f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
         f'"{GUEST_STAGE}\\project\\backend\\replay\\windows_guest_broker.py"\r\n'
         "exit /b %ERRORLEVEL%\r\n"
@@ -300,6 +304,24 @@ def _write_guest_helpers(stage_root: Path) -> None:
         "if ready.is_file():\n"
         f"    time.sleep({EXEC_TIMING_SIGNAL_SECONDS!r})\n"
     )
+    diagnose_phase_py = (
+        "import time\n"
+        "from pathlib import Path\n"
+        "paths = (\n"
+        f"    {GUEST_LAUNCH_SEEN!r},\n"
+        f"    {GUEST_LOCAL_STAGE!r},\n"
+        f"    {GUEST_STATE!r},\n"
+        f"    {GUEST_STATUS!r},\n"
+        f"    {GUEST_DONE!r},\n"
+        ")\n"
+        "phase = 0\n"
+        "for raw in paths:\n"
+        "    if Path(raw).exists():\n"
+        "        phase += 1\n"
+        "    else:\n"
+        "        break\n"
+        f"time.sleep(phase * {EXEC_DIAGNOSTIC_PHASE_SECONDS!r})\n"
+    )
     exec_fast = (
         "@echo off\r\n"
         f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
@@ -319,6 +341,11 @@ def _write_guest_helpers(stage_root: Path) -> None:
         "@echo off\r\n"
         f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
         f'"{GUEST_STAGE}\\prove_ready.py"\r\n'
+    )
+    diagnose_phase = (
+        "@echo off\r\n"
+        f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
+        f'"{GUEST_STAGE}\\diagnose_phase.py"\r\n'
     )
     probe_export = (
         "@echo off\r\n"
@@ -358,6 +385,8 @@ def _write_guest_helpers(stage_root: Path) -> None:
         ("wait_ready.cmd", wait_ready),
         ("prove_ready.py", prove_ready_py),
         ("prove_ready.cmd", prove_ready),
+        ("diagnose_phase.py", diagnose_phase_py),
+        ("diagnose_phase.cmd", diagnose_phase),
         ("probe_export.cmd", probe_export),
         ("export_result.cmd", export),
     ):
@@ -521,14 +550,18 @@ def parse_sandbox_inventory(raw_output: str) -> list[dict[str, str]]:
             raise WindowsSandboxReplayError(
                 "Windows Sandbox CLI session record has no valid sandbox ID"
             )
-        if not isinstance(status, str) or status.casefold() not in {"running", "stopped"}:
+        if status is None:
+            normalized_status = "unknown"
+        elif isinstance(status, str) and status.casefold() in {"running", "stopped"}:
+            normalized_status = status.casefold()
+        else:
             raise WindowsSandboxReplayError(
                 "Windows Sandbox CLI session record has an unsupported status"
             )
         normalized.append(
             {
                 "id": sandbox_id,
-                "status": status.casefold(),
+                "status": normalized_status,
             }
         )
     return normalized
@@ -576,7 +609,7 @@ def _assert_no_running_sandbox(wsb: str) -> None:
             + (f": {detail}" if detail else "")
         )
     sessions = parse_sandbox_inventory(completed.stdout)
-    if any(session["status"] == "running" for session in sessions):
+    if sessions:
         raise _exclusive_access_error()
 
 
@@ -675,6 +708,30 @@ def _prove_guest_ready(wsb: str, sandbox_id: str) -> None:
         )
 
 
+def _diagnose_guest_phase(wsb: str, sandbox_id: str) -> str:
+    labels = (
+        "logon_not_observed",
+        "launch_started_before_local_stage",
+        "local_stage_present_state_absent",
+        "state_present_status_absent",
+        "status_present_done_absent",
+        "done_present",
+    )
+    _verify_exec_timing_channel(wsb, sandbox_id)
+    fast_helper = f"{GUEST_STAGE}\\exec_fast.cmd"
+    phase_helper = f"{GUEST_STAGE}\\diagnose_phase.cmd"
+    fast_before = _measure_exec_duration(wsb, sandbox_id, fast_helper)
+    phase_duration = _measure_exec_duration(wsb, sandbox_id, phase_helper)
+    fast_after = _measure_exec_duration(wsb, sandbox_id, fast_helper)
+    baseline = max(fast_before, fast_after)
+    delta = phase_duration - baseline
+    phase = int(round(delta / EXEC_DIAGNOSTIC_PHASE_SECONDS))
+    expected = phase * EXEC_DIAGNOSTIC_PHASE_SECONDS
+    if phase < 0 or phase >= len(labels) or abs(delta - expected) > 0.75:
+        return f"indeterminate(delta={delta:.3f}s)"
+    return labels[phase]
+
+
 def _wait_for_replay(
     wsb: str,
     sandbox_id: str,
@@ -690,8 +747,13 @@ def _wait_for_replay(
             timeout=timeout,
         )
     except WindowsSandboxReplayError as exc:
+        try:
+            phase = _diagnose_guest_phase(wsb, sandbox_id)
+        except BaseException as diagnostic_exc:
+            phase = f"diagnostic_unavailable({type(diagnostic_exc).__name__})"
         raise WindowsSandboxReplayError(
-            "isolated replay did not become ready before timeout or exec failed"
+            "isolated replay did not become ready before timeout or exec failed; "
+            f"guest_phase={phase}"
         ) from exc
     if completed.returncode != 0:
         raise WindowsSandboxReplayError(

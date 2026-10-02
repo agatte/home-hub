@@ -245,6 +245,9 @@ def test_guest_export_helper_uses_stream_redirection_and_completion_markers(tmp_
     stage.mkdir()
     sandbox_runner._write_guest_helpers(stage)
 
+    launch_cmd = (stage / "launch_guest.cmd").read_text(encoding="ascii")
+    assert sandbox_runner.GUEST_LAUNCH_SEEN in launch_cmd
+
     fast_cmd = (stage / "exec_fast.cmd").read_text(encoding="ascii")
     fast_py = (stage / "exec_fast.py").read_text(encoding="ascii")
     slow_cmd = (stage / "exec_slow.cmd").read_text(encoding="ascii")
@@ -273,6 +276,20 @@ def test_guest_export_helper_uses_stream_redirection_and_completion_markers(tmp_
     assert "prove_ready.py" in prove_cmd
     assert repr(sandbox_runner.GUEST_READY) in prove_py
     assert f"time.sleep({sandbox_runner.EXEC_TIMING_SIGNAL_SECONDS!r})" in prove_py
+
+    diagnose_cmd = (stage / "diagnose_phase.cmd").read_text(encoding="ascii")
+    diagnose_py = (stage / "diagnose_phase.py").read_text(encoding="ascii")
+    assert f"{sandbox_runner.GUEST_STAGE}\\runtime\\python.exe" in diagnose_cmd
+    assert "diagnose_phase.py" in diagnose_cmd
+    for guest_path in (
+        sandbox_runner.GUEST_LAUNCH_SEEN,
+        sandbox_runner.GUEST_LOCAL_STAGE,
+        sandbox_runner.GUEST_STATE,
+        sandbox_runner.GUEST_STATUS,
+        sandbox_runner.GUEST_DONE,
+    ):
+        assert repr(guest_path) in diagnose_py
+    assert f"phase * {sandbox_runner.EXEC_DIAGNOSTIC_PHASE_SECONDS!r}" in diagnose_py
 
     export = (stage / "export_result.cmd").read_text(encoding="ascii")
     assert 'type "C:\\HomeHubReplayState\\status.json"' in export
@@ -406,6 +423,68 @@ def test_guest_ready_proof_requires_positive_timing_signal(monkeypatch):
         sandbox_runner._prove_guest_ready("wsb.exe", sandbox_id)
 
 
+@pytest.mark.parametrize(
+    ("phase_duration", "expected"),
+    [
+        (0.5, "logon_not_observed"),
+        (2.5, "launch_started_before_local_stage"),
+        (4.5, "local_stage_present_state_absent"),
+        (6.5, "state_present_status_absent"),
+        (8.5, "status_present_done_absent"),
+        (10.5, "done_present"),
+    ],
+)
+def test_guest_phase_diagnostic_decodes_guest_local_progress(
+    monkeypatch,
+    phase_duration,
+    expected,
+):
+    durations = iter([0.5, phase_duration, 0.5])
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_verify_exec_timing_channel",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_measure_exec_duration",
+        lambda *_args, **_kwargs: next(durations),
+    )
+
+    assert (
+        sandbox_runner._diagnose_guest_phase(
+            "wsb.exe",
+            "12345678-1234-1234-1234-1234567890ab",
+        )
+        == expected
+    )
+
+
+def test_replay_wait_timeout_reports_guest_phase(monkeypatch):
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_exec",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            sandbox_runner.WindowsSandboxReplayError("exec timed out")
+        ),
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_diagnose_guest_phase",
+        lambda *_args: "local_stage_present_state_absent",
+    )
+
+    with pytest.raises(
+        sandbox_runner.WindowsSandboxReplayError,
+        match="guest_phase=local_stage_present_state_absent",
+    ):
+        sandbox_runner._wait_for_replay(
+            "wsb.exe",
+            "12345678-1234-1234-1234-1234567890ab",
+            timeout=1.0,
+        )
+
+
 def test_replay_readiness_requires_guest_marker_even_when_cli_returns_zero(monkeypatch):
     sandbox_id = "12345678-1234-1234-1234-1234567890ab"
     calls = []
@@ -506,6 +585,9 @@ def test_parse_sandbox_inventory_is_strict_and_normalized():
         {"id": running_id, "status": "running"},
         {"id": stopped_id, "status": "stopped"},
     ]
+    assert sandbox_runner.parse_sandbox_inventory(
+        json.dumps({"WindowsSandboxEnvironments": [{"Id": running_id}]})
+    ) == [{"id": running_id, "status": "unknown"}]
 
     with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="invalid JSON"):
         sandbox_runner.parse_sandbox_inventory("not-json")
@@ -519,7 +601,7 @@ def test_parse_sandbox_inventory_is_strict_and_normalized():
         )
 
 
-def test_existing_running_sandbox_blocks_operational_replay(monkeypatch):
+def test_existing_sandbox_record_blocks_operational_replay(monkeypatch):
     running_id = "12345678-1234-1234-1234-1234567890ab"
     monkeypatch.setattr(
         sandbox_runner,
@@ -527,7 +609,7 @@ def test_existing_running_sandbox_blocks_operational_replay(monkeypatch):
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             args=["wsb", "list", "--raw"],
             returncode=0,
-            stdout=json.dumps([{"id": running_id, "status": "Running"}]),
+            stdout=json.dumps({"WindowsSandboxEnvironments": [{"Id": running_id}]}),
             stderr="",
         ),
     )
