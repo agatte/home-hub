@@ -26,6 +26,7 @@ RESULT_SCHEMA_ID = "homehub.replay.navigation.result.v1"
 MIN_WINDOWS_BUILD = 26100
 SANDBOX_START_TIMEOUT_SECONDS = 45
 REPLAY_READY_TIMEOUT_SECONDS = 90
+BROKER_EXEC_TIMEOUT_SECONDS = 120
 EXPORT_READY_TIMEOUT_SECONDS = 15
 COMMAND_TIMEOUT_SECONDS = 20
 EXEC_TIMING_SIGNAL_SECONDS = 4.0
@@ -437,7 +438,6 @@ def build_stage(bundle_path: str | Path, stage_root: Path) -> Path:
 
 def build_wsb_configuration(stage_root: Path) -> str:
     stage_text = escape(str(stage_root.resolve()))
-    command = escape(f"cmd.exe /d /q /c {GUEST_STAGE}\\launch_guest.cmd")
     return (
         "<Configuration>"
         "<vGPU>Disable</vGPU>"
@@ -453,9 +453,6 @@ def build_wsb_configuration(stage_root: Path) -> str:
         f"<SandboxFolder>{GUEST_STAGE}</SandboxFolder>"
         "<ReadOnly>true</ReadOnly>"
         "</MappedFolder></MappedFolders>"
-        "<LogonCommand>"
-        f"<Command>{command}</Command>"
-        "</LogonCommand>"
         "</Configuration>"
     )
 
@@ -691,6 +688,15 @@ def _verify_exec_timing_channel(wsb: str, sandbox_id: str) -> None:
             "Windows Sandbox exec timing does not prove guest-process completion; "
             f"slow_fast_delta={delta:.3f}s"
         )
+
+
+def _run_guest_broker(wsb: str, sandbox_id: str) -> None:
+    _exec(
+        wsb,
+        sandbox_id,
+        f"{GUEST_STAGE}\\launch_guest.cmd",
+        timeout=BROKER_EXEC_TIMEOUT_SECONDS,
+    )
 
 
 def _prove_guest_ready(wsb: str, sandbox_id: str) -> None:
@@ -937,6 +943,7 @@ def run_windows_sandbox_replay(bundle_path: str | Path) -> dict[str, Any]:
         startup_attempted = True
         sandbox_id = _start_sandbox(wsb, config)
         _verify_exec_timing_channel(wsb, sandbox_id)
+        _run_guest_broker(wsb, sandbox_id)
         _wait_for_replay(wsb, sandbox_id)
         # Share writable output only after the replay child exits.
         _share_export(wsb, sandbox_id, export_root)

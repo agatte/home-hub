@@ -192,6 +192,7 @@ def test_runner_preserves_roots_and_primary_error_when_stop_fails(
 
     monkeypatch.setattr(sandbox_runner, "_verify_exec_timing_channel", verify)
     for name in (
+        "_run_guest_broker",
         "_wait_for_replay",
         "_share_export",
         "_wait_for_export_share_ready",
@@ -329,9 +330,7 @@ def test_wsb_configuration_exposes_only_read_only_stage(tmp_path):
     assert mapping.findtext("HostFolder") == str(stage.resolve())
     assert mapping.findtext("SandboxFolder") == sandbox_runner.GUEST_STAGE
     assert mapping.findtext("ReadOnly") == "true"
-    assert root.findtext("./LogonCommand/Command") == (
-        f"cmd.exe /d /q /c {sandbox_runner.GUEST_STAGE}\\launch_guest.cmd"
-    )
+    assert root.find("LogonCommand") is None
 
 
 def test_wsb_exec_wraps_batch_helpers_in_cmd(monkeypatch):
@@ -365,6 +364,34 @@ def test_wsb_exec_wraps_batch_helpers_in_cmd(monkeypatch):
             ],
             12.5,
             False,
+        )
+    ]
+
+
+def test_guest_broker_is_explicitly_started_via_system_exec(monkeypatch):
+    calls = []
+
+    def fake_exec(wsb, sandbox_id, command, *, timeout):
+        calls.append((wsb, sandbox_id, command, timeout))
+        return subprocess.CompletedProcess(
+            args=["wsb", "exec"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(sandbox_runner, "_exec", fake_exec)
+    sandbox_runner._run_guest_broker(
+        "wsb.exe",
+        "12345678-1234-1234-1234-1234567890ab",
+    )
+
+    assert calls == [
+        (
+            "wsb.exe",
+            "12345678-1234-1234-1234-1234567890ab",
+            f"{sandbox_runner.GUEST_STAGE}\\launch_guest.cmd",
+            sandbox_runner.BROKER_EXEC_TIMEOUT_SECONDS,
         )
     ]
 
@@ -696,6 +723,9 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     def verify_exec(_wsb, _sandbox_id):
         events.append("verify_exec_timing")
 
+    def run_broker(_wsb, _sandbox_id):
+        events.append("run_broker")
+
     def wait(_wsb, _sandbox_id, **_kwargs):
         events.append("wait_done")
 
@@ -724,6 +754,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     monkeypatch.setattr(sandbox_runner, "build_stage", build_stage)
     monkeypatch.setattr(sandbox_runner, "_start_sandbox", start)
     monkeypatch.setattr(sandbox_runner, "_verify_exec_timing_channel", verify_exec)
+    monkeypatch.setattr(sandbox_runner, "_run_guest_broker", run_broker)
     monkeypatch.setattr(sandbox_runner, "_wait_for_replay", wait)
     monkeypatch.setattr(sandbox_runner, "_share_export", share)
     monkeypatch.setattr(sandbox_runner, "_wait_for_export_share_ready", wait_share)
@@ -739,6 +770,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
         "build",
         "start",
         "verify_exec_timing",
+        "run_broker",
         "wait_done",
         "share_writable_export",
         "wait_share_host_backed",
@@ -826,6 +858,11 @@ def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
         "_verify_exec_timing_channel",
         lambda _wsb, _sandbox_id: events.append("verify_exec_timing"),
     )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_run_guest_broker",
+        lambda _wsb, _sandbox_id: events.append("run_broker"),
+    )
 
     def fail_wait(_wsb, _sandbox_id, **_kwargs):
         events.append("wait_failed")
@@ -846,7 +883,14 @@ def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
     with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="not ready"):
         sandbox_runner.run_windows_sandbox_replay("synthetic")
 
-    assert events == ["build", "start", "verify_exec_timing", "wait_failed", "stop"]
+    assert events == [
+        "build",
+        "start",
+        "verify_exec_timing",
+        "run_broker",
+        "wait_failed",
+        "stop",
+    ]
 
 
 def test_export_share_handshake_requires_host_visible_marker(tmp_path, monkeypatch):
