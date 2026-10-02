@@ -1,16 +1,14 @@
-"""Fail-closed operational isolation contract for navigation replay.
-
-The in-process replay root is testable evidence, not the operational sandbox.
-A supported runner must enforce these restrictions outside the child process.
-"""
+"""Operational navigation-v1 isolation contract and backend selection."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 
 class ReplayIsolationUnavailable(RuntimeError):
-    """No reviewed OS/container isolation backend is available."""
+    """The reviewed operational isolation backend cannot run here."""
 
 
 @dataclass(frozen=True)
@@ -25,40 +23,43 @@ class ReplayIsolationContract:
 
 
 REQUIRED_ISOLATION = ReplayIsolationContract()
+WINDOWS_SANDBOX_BACKEND = "windows-sandbox-appcontainer-v1"
 
 
 def supported_isolation_backend() -> str | None:
-    """Return a reviewed backend name once HomeHub actually has one.
+    """Return the reviewed backend only when its host prerequisites are present."""
 
-    The repository currently contains no launcher that can establish every
-    navigation-v1 isolation guarantee. Returning None is deliberate: a normal
-    Python process, including one guarded by monkeypatches, is not the accepted
-    no-actuation boundary.
-    """
-
-    return None
+    try:
+        from .windows_sandbox_runner import backend_available
+    except (ImportError, OSError):
+        return None
+    return WINDOWS_SANDBOX_BACKEND if backend_available() else None
 
 
 def require_supported_isolation() -> str:
     backend = supported_isolation_backend()
     if backend is None:
         raise ReplayIsolationUnavailable(
-            "navigation-v1 operational replay is disabled: no reviewed "
-            "OS/container isolation backend can enforce the required "
-            "network/device/subprocess/filesystem restrictions"
+            "navigation-v1 operational replay requires a Windows 11 24H2+ "
+            "host with the Windows Sandbox CLI. Nested execution from the "
+            "normal RDC Windows Sandbox is intentionally unsupported."
         )
     return backend
 
 
-def run_navigation_v1_isolated(*, bundle_path: str) -> None:
-    """Fail closed until an external launcher can enforce REQUIRED_ISOLATION.
+def run_navigation_v1_isolated(*, bundle_path: str | Path) -> dict[str, Any]:
+    """Run a validated bundle in the reviewed transient Windows Sandbox backend."""
 
-    bundle_path is intentionally not opened here. When an isolation backend
-    is accepted, the launcher -- not this unrestricted parent process -- must
-    expose immutable input and a preopened result stream to the child artifact.
-    """
+    backend = require_supported_isolation()
+    if backend != WINDOWS_SANDBOX_BACKEND:
+        raise ReplayIsolationUnavailable(f"unsupported replay isolation backend {backend}")
 
-    if not isinstance(bundle_path, str) or not bundle_path:
-        raise ValueError("bundle_path must be a nonempty string")
-    require_supported_isolation()
-    raise AssertionError("unreachable without an accepted isolation backend")
+    from .windows_sandbox_runner import (
+        WindowsSandboxReplayError,
+        run_windows_sandbox_replay,
+    )
+
+    try:
+        return run_windows_sandbox_replay(bundle_path)
+    except WindowsSandboxReplayError as exc:
+        raise ReplayIsolationUnavailable(str(exc)) from exc

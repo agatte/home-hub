@@ -344,8 +344,12 @@ def test_recording_sink_is_data_only_and_fails_closed():
     assert sink.requests[-1].result is None
 
 
-def test_operational_runner_fails_closed_without_reviewed_os_isolation():
-    with pytest.raises(ReplayIsolationUnavailable, match="operational replay is disabled"):
+def test_operational_runner_fails_closed_without_reviewed_os_isolation(monkeypatch):
+    monkeypatch.setattr(
+        "backend.replay.isolated_runner.supported_isolation_backend",
+        lambda: None,
+    )
+    with pytest.raises(ReplayIsolationUnavailable, match="operational replay requires"):
         require_supported_isolation()
     with pytest.raises(ReplayIsolationUnavailable):
         run_navigation_v1_isolated(bundle_path="synthetic-only")
