@@ -1,6 +1,6 @@
 # Home Hub Windows 11 Recovery Status
 
-Updated: 2026-09-27
+Updated: 2026-10-02
 
 This file is the canonical checklist for recovery and reorientation of the Windows-side Home Hub environment after the failed Windows 10 SSD and clean Windows 11 rebuild. It records what is verified, what was reconstructed, what remains to investigate, and what must not be blindly restored from stale Windows 10 assumptions.
 
@@ -15,6 +15,18 @@ This file is the canonical checklist for recovery and reorientation of the Windo
 - Preserve the committed `AGENTS.md` guarded-worktree-removal rule.
 - Retire any future worktrees only through `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` after proving they are registered, clean, and not carrying unique work.
 - Prefer verified current Windows 11 state over historical Windows 10 documentation when they conflict.
+
+## Finalized protected Windows workflow — 2026-10-02
+
+- [x] Protected Windows Sandbox is the normal Windows development and remote-execution environment. The protected host-owned `.wsb` mappings are the filesystem boundary; stale project-folder `.wsb` copies are historical evidence, not launch authority.
+- [x] Final accepted exposure treats Windows Sandbox itself as the filesystem/blast-radius boundary: host `C:\Users\Anthony\Documents\home-hub-project` -> Sandbox `C:\Work\home-hub-project` is writable; host `C:\Users\Anthony\Documents\osrs-flip-assistant-project` -> Sandbox `C:\Work\osrs-flip-assistant-project` is writable; PC Audit remains writable. D:/E: forensic mappings and Git/Python/Java tool mappings remain read-only. Host Bridge Requests are writable and Responses are read-only. There is no whole-host `C:` mapping. Corrected protected WSB SHA-256: `1C3843E3A522E9E7DBF8A797921032EF7DF79008386012C436C0D1154D862980`.
+- [x] Real write/read/cleanup probes passed for both Home Hub and OSRS after reopening the exact protected WSB, and automatic Sandbox RDC reconnect remained healthy.
+- [x] Unrestricted RDC to the real host `C:` is prohibited. The real-host RDC device is the restricted Home Hub control plane with no arbitrary shell, generic filesystem, or production authority.
+- [x] Real-host administration uses only the bounded Host Bridge allowlist. Do not widen it into generic command execution, arbitrary paths, registry/service/task control, deletion, disk/partition, driver, firmware, credential, or other broad host authority for routine development.
+- [x] Normal issue-driven work may edit files, create branches/worktrees as appropriate, run tests, and use Codex within the writable Home Hub and OSRS project roots. Writable mapping does not waive unrelated-work protection, secret handling, Git/worktree rules, or authorization gates for commit/push/merge/deploy/restart and other consequential actions. Codex cannot be used to bypass them.
+- [x] Destructive operations require exact-path verification before execution; Git/worktree targets additionally require registration/cleanliness and unique-state checks as applicable. Use the narrowest native operation available and preserve before/after or rollback evidence. Guarded Home Hub worktree removal remains mandatory.
+- [x] This Windows safety model does not change production authority or deployment policy. Latitude remains production; commit/push/merge/deploy/restart remain distinct consequential actions, and authorized Home Hub deployment still uses only `scripts/deploy.sh` with direct post-deploy verification.
+- [x] This workflow amendment does not reopen previously closed recovery lanes or authorize reconstruction of retired recovery trees, obsolete Windows tasks, retired integrations, or unrecoverable historical state.
 
 ## Verified baseline
 
