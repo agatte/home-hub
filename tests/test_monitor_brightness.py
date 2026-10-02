@@ -8,24 +8,48 @@ from backend.services.pc_agent import monitor_brightness as mb
 
 
 class _FakeVCP:
-    def __init__(self, *, current: int = 29, maximum: int = 50, raw_caps: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        current: int = 29,
+        maximum: int = 50,
+        raw_caps: str = "",
+        supported: bool = True,
+        apply_write: bool = True,
+    ) -> None:
         self.current = current
         self.maximum = maximum
         self.raw_caps = raw_caps
+        self.supported = supported
+        self.apply_write = apply_write
+        self.set_calls: list[tuple[int, int]] = []
 
     def get_vcp_feature(self, code: int):
         assert code == 0x10
+        if not self.supported:
+            raise RuntimeError("synthetic VCP read failure")
         return self.current, self.maximum
+
+    def set_vcp_feature(self, code: int, value: int) -> None:
+        assert code == 0x10
+        if not self.supported:
+            raise RuntimeError("synthetic VCP write failure")
+        self.set_calls.append((code, value))
+        if self.apply_write:
+            self.current = value
 
     def get_vcp_capabilities(self) -> str:
         return self.raw_caps
 
 
-
-
 class _FakeGainVCP:
     def __init__(self, *, fail_once_code: int | None = None) -> None:
-        self.values = {0x16: [50, 100], 0x18: [50, 100], 0x1A: [50, 100]}
+        self.values = {
+            0x10: [25, 50],
+            0x16: [50, 100],
+            0x18: [50, 100],
+            0x1A: [50, 100],
+        }
         self.fail_once_code = fail_once_code
         self.set_calls: list[tuple[int, int]] = []
 
@@ -84,6 +108,7 @@ class _FakeSBC:
 
 
 def _reset_caches(monkeypatch) -> None:
+    monkeypatch.setattr(mb, "_PRIMARY_MONITOR_INDEX", None)
     monkeypatch.setattr(mb, "_PRIMARY_LUMINANCE_MAX", None)
     monkeypatch.setattr(mb, "_SUPPORTED_COLOR_PRESETS", None)
 
@@ -107,6 +132,32 @@ def test_primary_luminance_max_reads_and_caches_monitor_vcp(monkeypatch):
     assert mb._primary_luminance_max() == 50
 
 
+def test_selector_skips_non_ddc_projector_and_selects_samsung_handle(monkeypatch):
+    projector = _FakeMonitor(vcp=_FakeVCP(supported=False))
+    samsung = _FakeMonitor(vcp=_FakeVCP(current=25, maximum=50))
+    _reset_caches(monkeypatch)
+    monkeypatch.setattr(mb, "_HAS_MC", True)
+    monkeypatch.setattr(
+        mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [projector, samsung])
+    )
+
+    assert mb._primary_monitor_index() == 1
+    assert mb.get_current_brightness() == 50
+
+
+def test_selector_refuses_ambiguous_multiple_ddc_monitors(monkeypatch):
+    first = _FakeMonitor(vcp=_FakeVCP(current=20, maximum=50))
+    second = _FakeMonitor(vcp=_FakeVCP(current=25, maximum=50))
+    _reset_caches(monkeypatch)
+    monkeypatch.setattr(mb, "_HAS_MC", True)
+    monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [first, second]))
+
+    assert mb._primary_monitor_index() is None
+    assert mb.set_brightness(40) is False
+    assert first.vcp.set_calls == []
+    assert second.vcp.set_calls == []
+
+
 def test_transient_luminance_probe_failure_is_not_cached_and_write_is_deferred(monkeypatch):
     calls = 0
     monitor = _FakeMonitor(vcp=_FakeVCP(current=29, maximum=50))
@@ -118,53 +169,50 @@ def test_transient_luminance_probe_failure_is_not_cached_and_write_is_deferred(m
             raise RuntimeError("transient DDC probe failure")
         return [monitor]
 
-    fake_sbc = _FakeSBC(raw=29)
     _reset_caches(monkeypatch)
     monkeypatch.setattr(mb, "_HAS_MC", True)
-    monkeypatch.setattr(mb, "_HAS_SBC", True)
     monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=get_monitors))
-    monkeypatch.setattr(mb, "sbc", fake_sbc)
 
     assert mb.set_brightness(20) is False
-    assert fake_sbc.set_calls == []
+    assert monitor.vcp.set_calls == []
+    assert mb._PRIMARY_MONITOR_INDEX is None
     assert mb._PRIMARY_LUMINANCE_MAX is None
 
     assert mb.set_brightness(20) is True
-    assert fake_sbc.set_calls == [(10, mb.PRIMARY_DISPLAY_INDEX)]
+    assert monitor.vcp.set_calls == [(0x10, 10)]
+    assert mb._PRIMARY_MONITOR_INDEX == 0
     assert mb._PRIMARY_LUMINANCE_MAX == 50
 
 
 def test_get_current_brightness_returns_normalized_percent(monkeypatch):
-    fake_sbc = _FakeSBC(raw=29)
-    monkeypatch.setattr(mb, "_HAS_SBC", True)
-    monkeypatch.setattr(mb, "sbc", fake_sbc)
-    monkeypatch.setattr(mb, "_PRIMARY_LUMINANCE_MAX", 50)
+    monitor = _FakeMonitor(vcp=_FakeVCP(current=29, maximum=50))
+    _reset_caches(monkeypatch)
+    monkeypatch.setattr(mb, "_HAS_MC", True)
+    monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [monitor]))
 
     assert mb.get_current_brightness() == 58
-    assert fake_sbc.get_calls == [mb.PRIMARY_DISPLAY_INDEX]
 
 
 def test_set_brightness_scales_to_native_range_and_verifies(monkeypatch):
-    fake_sbc = _FakeSBC(raw=29, apply_write=True)
-    monkeypatch.setattr(mb, "_HAS_SBC", True)
-    monkeypatch.setattr(mb, "sbc", fake_sbc)
-    monkeypatch.setattr(mb, "_PRIMARY_LUMINANCE_MAX", 50)
+    monitor = _FakeMonitor(vcp=_FakeVCP(current=29, maximum=50, apply_write=True))
+    _reset_caches(monkeypatch)
+    monkeypatch.setattr(mb, "_HAS_MC", True)
+    monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [monitor]))
 
     assert mb.set_brightness(80) is True
-    assert fake_sbc.set_calls == [(40, mb.PRIMARY_DISPLAY_INDEX)]
-    assert fake_sbc.raw == 40
+    assert monitor.vcp.set_calls == [(0x10, 40)]
+    assert monitor.vcp.current == 40
 
 
 def test_set_brightness_returns_false_when_monitor_ignores_write(monkeypatch):
-    fake_sbc = _FakeSBC(raw=29, apply_write=False)
-    monkeypatch.setattr(mb, "_HAS_SBC", True)
-    monkeypatch.setattr(mb, "sbc", fake_sbc)
-    monkeypatch.setattr(mb, "_PRIMARY_LUMINANCE_MAX", 50)
+    monitor = _FakeMonitor(vcp=_FakeVCP(current=29, maximum=50, apply_write=False))
+    _reset_caches(monkeypatch)
+    monkeypatch.setattr(mb, "_HAS_MC", True)
+    monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [monitor]))
     monkeypatch.setattr(mb, "BRIGHTNESS_VERIFY_DELAY_S", 0.0)
 
     assert mb.set_brightness(80) is False
-    assert fake_sbc.set_calls == [(40, mb.PRIMARY_DISPLAY_INDEX)]
-    assert len(fake_sbc.get_calls) == mb.BRIGHTNESS_VERIFY_ATTEMPTS
+    assert monitor.vcp.set_calls == [(0x10, 40)]
 
 
 def test_failed_brightness_write_is_not_claimed_by_reconciler(monkeypatch):
@@ -236,22 +284,21 @@ def test_5000k_does_not_silently_fall_back_to_6500k(monkeypatch):
     assert mb._resolve_preset("COLOR_TEMP_5000K") is None
 
 
-def test_set_color_preset_targets_primary_monitor_only(monkeypatch):
+def test_set_color_preset_targets_selected_ddc_monitor_only(monkeypatch):
     if mb.ColorPreset is None:
         pytest.skip("monitorcontrol not installed")
-    primary = _FakeMonitor()
-    secondary = _FakeMonitor()
+    projector = _FakeMonitor(vcp=_FakeVCP(supported=False))
+    samsung = _FakeMonitor(vcp=_FakeVCP())
+    _reset_caches(monkeypatch)
     monkeypatch.setattr(mb, "_HAS_MC", True)
     monkeypatch.setattr(
-        mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [primary, secondary])
+        mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [projector, samsung])
     )
-    monkeypatch.setattr(
-        mb, "_resolve_preset", lambda _name: mb.ColorPreset.COLOR_TEMP_6500K
-    )
+    monkeypatch.setattr(mb, "_resolve_preset", lambda _name: mb.ColorPreset.COLOR_TEMP_6500K)
 
     assert mb.set_color_preset("day") is True
-    assert primary.set_presets == [mb.ColorPreset.COLOR_TEMP_6500K]
-    assert secondary.set_presets == []
+    assert projector.set_presets == []
+    assert samsung.set_presets == [mb.ColorPreset.COLOR_TEMP_6500K]
 
 
 def test_failed_color_attempt_stays_unapplied_and_retries_after_verify_interval(monkeypatch):
@@ -260,9 +307,7 @@ def test_failed_color_attempt_stays_unapplied_and_retries_after_verify_interval(
     reconciler = mb.Reconciler()
     monkeypatch.setattr(mb.time, "time", lambda: now[0])
     monkeypatch.setattr(mb, "_rgb_gain_matches_period", lambda _period: False)
-    monkeypatch.setattr(
-        mb, "set_color_temperature", lambda period: calls.append(period) or False
-    )
+    monkeypatch.setattr(mb, "set_color_temperature", lambda period: calls.append(period) or False)
 
     reconciler._maybe_apply_color_temperature("night")
     reconciler._maybe_apply_color_temperature("night")
@@ -280,12 +325,8 @@ def test_color_reverify_repairs_gain_drift_without_period_change(monkeypatch):
     now = [100.0]
     reconciler = mb.Reconciler()
     monkeypatch.setattr(mb.time, "time", lambda: now[0])
-    monkeypatch.setattr(
-        mb, "_rgb_gain_matches_period", lambda _period: matches.pop(0)
-    )
-    monkeypatch.setattr(
-        mb, "set_color_temperature", lambda period: calls.append(period) or True
-    )
+    monkeypatch.setattr(mb, "_rgb_gain_matches_period", lambda _period: matches.pop(0))
+    monkeypatch.setattr(mb, "set_color_temperature", lambda period: calls.append(period) or True)
 
     reconciler._maybe_apply_color_temperature("late_night")
     assert calls == ["late_night"]
@@ -349,18 +390,30 @@ def test_rgb_gain_partial_failure_rolls_back(monkeypatch):
     monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=lambda: [monitor]))
 
     assert mb.set_rgb_gain_warmth("night") is False
-    assert {code: values[0] for code, values in vcp.values.items()} == {
-        0x16: 50, 0x18: 50, 0x1A: 50,
+    assert {code: vcp.values[code][0] for code in (0x16, 0x18, 0x1A)} == {
+        0x16: 50,
+        0x18: 50,
+        0x1A: 50,
     }
 
 
 def test_color_temperature_prefers_rgb_gain_path(monkeypatch):
-    monkeypatch.setattr(mb, "_read_primary_rgb_gains", lambda: {
-        "red": (50, 100), "green": (50, 100), "blue": (50, 100),
-    })
+    monkeypatch.setattr(
+        mb,
+        "_read_primary_rgb_gains",
+        lambda: {
+            "red": (50, 100),
+            "green": (50, 100),
+            "blue": (50, 100),
+        },
+    )
     calls: list[str] = []
     monkeypatch.setattr(mb, "set_rgb_gain_warmth", lambda period: calls.append(period) or True)
-    monkeypatch.setattr(mb, "set_color_preset", lambda _period: (_ for _ in ()).throw(AssertionError("preset fallback used")))
+    monkeypatch.setattr(
+        mb,
+        "set_color_preset",
+        lambda _period: (_ for _ in ()).throw(AssertionError("preset fallback used")),
+    )
 
     assert mb.set_color_temperature("late_night") is True
     assert calls == ["late_night"]

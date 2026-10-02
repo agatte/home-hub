@@ -36,6 +36,7 @@ CLI:
     --color-temp warm|neutral|cool   Smoke test the monitor-native color path
     --server URL    Home Hub base URL (default http://192.168.86.210:8000)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,6 +57,7 @@ import httpx
 
 try:
     import screen_brightness_control as sbc  # type: ignore[import-untyped]
+
     _HAS_SBC = True
 except ImportError:
     sbc = None  # type: ignore[assignment]
@@ -64,6 +66,7 @@ except ImportError:
 try:
     import monitorcontrol  # type: ignore[import-untyped]
     from monitorcontrol import ColorPreset  # type: ignore[import-untyped]
+
     _HAS_MC = True
 except ImportError:
     monitorcontrol = None  # type: ignore[assignment]
@@ -73,6 +76,7 @@ except ImportError:
 try:
     import websockets  # type: ignore[import-untyped]
     import websockets.sync.client  # type: ignore[import-untyped]
+
     _HAS_WS = True
 except ImportError:
     websockets = None  # type: ignore[assignment]
@@ -87,7 +91,7 @@ DEFAULT_SERVER = "http://192.168.86.210:8000"
 
 RECONCILE_INTERVAL_S = 30.0
 LUX_POLL_INTERVAL_S = 30.0
-SUN_POLL_INTERVAL_S = 30 * 60.0   # sunrise/sunset only change at midnight
+SUN_POLL_INTERVAL_S = 30 * 60.0  # sunrise/sunset only change at midnight
 # Consecutive sun-refresh failures before escalating from DEBUG to WARNING.
 # A single blip (boot before weather warms, brief network hiccup) is noise;
 # 3 straight failures (~60 min at the poll interval) means something is
@@ -106,9 +110,9 @@ WS_RECONNECT_MAX_S = 30.0
 # Astronomical-ish twilight is done ~90 min after sunset. The earlier 60 min
 # fired while the sun was still ~9–10° up — a touch early — so it was tightened
 # to 45 on 2026-05-30. Calibrated for the apartment's east-facing windows.
-DAY_START_AFTER_SUNRISE_S   = 30 * 60
+DAY_START_AFTER_SUNRISE_S = 30 * 60
 EVENING_START_BEFORE_SUNSET_S = 45 * 60
-NIGHT_START_AFTER_SUNSET_S  = 90 * 60
+NIGHT_START_AFTER_SUNSET_S = 90 * 60
 # Hard late_night floor — on summer nights sunset can be 9pm+ which
 # would push "night" past midnight without a wall-clock backstop.
 LATE_NIGHT_HOUR = 23
@@ -119,7 +123,13 @@ HYSTERESIS = 4
 
 # HomeHub brightness is normalized 0..100, but some monitors expose a
 # different native VCP luminance range (the Samsung G50F reports 0..50).
-PRIMARY_DISPLAY_INDEX = 0
+#
+# Do NOT assume physical monitor index 0 is the Samsung. Windows can expose
+# multiple physical handles behind one HMONITOR (for example the Epson
+# projector plus the Samsung G50F), while screen_brightness_control's display
+# metadata may enumerate only one of them. Select the unique physical monitor
+# that actually responds to VCP luminance (0x10) and refuse to write if that
+# selection is ambiguous.
 BRIGHTNESS_VERIFY_TOLERANCE_PERCENT = 2
 BRIGHTNESS_VERIFY_ATTEMPTS = 3
 BRIGHTNESS_VERIFY_DELAY_S = 0.15
@@ -130,7 +140,7 @@ COLOR_PRESET_MAX_FALLBACK_K = 1000
 # buttons (or anything else moves the backlight away from what we last set
 # by more than this), back off so we don't fight them.
 MANUAL_OVERRIDE_DELTA = 5
-MANUAL_OVERRIDE_BACKOFF_S = 30 * 60   # 30 min
+MANUAL_OVERRIDE_BACKOFF_S = 30 * 60  # 30 min
 
 # If two reconcile() calls are separated by more than this, the agent was
 # paused (Windows sleep, process restart, hung WS) — any drift from
@@ -165,10 +175,10 @@ SLEEPING_BRIGHTNESS = 5
 # resolver falls back to the closest supported preset if the monitor
 # doesn't expose the named one.
 COLOR_TEMP_PERIOD_PRESET: dict[str, str] = {
-    "day":        "COLOR_TEMP_6500K",   # neutral
-    "evening":    "COLOR_TEMP_5000K",   # mild warm
-    "night":      "COLOR_TEMP_5000K",   # warm (often the warmest preset available)
-    "late_night": "COLOR_TEMP_5000K",   # warm
+    "day": "COLOR_TEMP_6500K",  # neutral
+    "evening": "COLOR_TEMP_5000K",  # mild warm
+    "night": "COLOR_TEMP_5000K",  # warm (often the warmest preset available)
+    "late_night": "COLOR_TEMP_5000K",  # warm
 }
 
 # Preferred monitor-native warmth path on the Samsung G50F. The monitor
@@ -206,7 +216,10 @@ if not logger.handlers:
     _console.setFormatter(_fmt)
     logger.addHandler(_console)
     _fh = RotatingFileHandler(
-        LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8",
+        LOG_FILE,
+        maxBytes=2 * 1024 * 1024,
+        backupCount=2,
+        encoding="utf-8",
     )
     _fh.setFormatter(_fmt)
     logger.addHandler(_fh)
@@ -216,31 +229,41 @@ if not logger.handlers:
 # DDC/CI display-control wrappers
 # ---------------------------------------------------------------------------
 
+
 def detect_monitors() -> list[dict[str, Any]]:
-    """Enumerate displays and probe each for DDC/CI brightness support."""
-    if not _HAS_SBC:
-        return [{"error": "screen-brightness-control not installed"}]
-    out: list[dict[str, Any]] = []
+    """Enumerate physical monitors and probe each directly for DDC luminance."""
+    if not _HAS_MC:
+        return [{"error": "monitorcontrol not installed"}]
     try:
-        monitors = sbc.list_monitors_info()  # type: ignore[union-attr]
+        monitors = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
     except Exception as e:
-        return [{"error": f"list_monitors_info failed: {e}"}]
-    for m in monitors:
-        info: dict[str, Any] = {
-            "name": m.get("name"),
-            "model": m.get("model"),
-            "method": str(m.get("method")),
-            "serial": m.get("serial"),
-        }
-        try:
-            cur = sbc.get_brightness(display=m.get("index", 0))  # type: ignore[union-attr]
-            info["brightness"] = cur
-            info["supported"] = True
-        except Exception as e:
-            info["brightness"] = None
-            info["supported"] = False
-            info["error"] = str(e)
-        out.append(info)
+        return [{"error": f"physical monitor enumeration failed: {e}"}]
+    out: list[dict[str, Any]] = []
+    for idx, monitor in enumerate(monitors):
+        reading = _probe_luminance(monitor)
+        if reading is None:
+            out.append(
+                {
+                    "name": f"Physical DDC monitor {idx}",
+                    "method": "monitorcontrol.VCP",
+                    "physical_index": idx,
+                    "brightness": None,
+                    "supported": False,
+                }
+            )
+            continue
+        current, maximum = reading
+        out.append(
+            {
+                "name": f"Physical DDC monitor {idx}",
+                "method": "monitorcontrol.VCP",
+                "physical_index": idx,
+                "brightness": [_raw_to_percent(current, maximum)],
+                "native_brightness": current,
+                "native_max": maximum,
+                "supported": True,
+            }
+        )
     return out
 
 
@@ -259,32 +282,85 @@ def _percent_to_raw(percent: int, maximum: int) -> int:
     return max(0, min(int(maximum), round(percent * int(maximum) / 100)))
 
 
+_PRIMARY_MONITOR_INDEX: Optional[int] = None
 _PRIMARY_LUMINANCE_MAX: Optional[int] = None
 
 
-def _primary_luminance_max() -> Optional[int]:
-    """Return the verified primary-display VCP 0x10 maximum.
+def _invalidate_primary_monitor() -> None:
+    """Forget cached DDC monitor identity/range after a read or write failure."""
+    global _PRIMARY_MONITOR_INDEX, _PRIMARY_LUMINANCE_MAX, _SUPPORTED_COLOR_PRESETS
+    _PRIMARY_MONITOR_INDEX = None
+    _PRIMARY_LUMINANCE_MAX = None
+    _SUPPORTED_COLOR_PRESETS = None
 
-    A transient DDC failure must not become a cached synthetic 0..100 range:
-    that can turn a requested 20% into raw 20 on a 0..50 panel (40% actual).
-    Leave the range unknown and retry on the next reconcile instead.
-    """
-    global _PRIMARY_LUMINANCE_MAX
-    if _PRIMARY_LUMINANCE_MAX is not None:
-        return _PRIMARY_LUMINANCE_MAX
+
+def _probe_luminance(monitor: Any) -> Optional[tuple[int, int]]:
+    """Read VCP 0x10 from one physical monitor, returning current/max if valid."""
+    try:
+        with monitor:
+            current, maximum = monitor.vcp.get_vcp_feature(0x10)
+        current = int(current)
+        maximum = int(maximum)
+        if maximum <= 0:
+            return None
+        return current, maximum
+    except Exception:
+        return None
+
+
+def _primary_monitor_index() -> Optional[int]:
+    """Resolve the unique physical DDC monitor that exposes luminance VCP 0x10."""
+    global _PRIMARY_MONITOR_INDEX
     if not _HAS_MC:
         return None
     try:
         mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-        if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+    except Exception as e:
+        logger.debug("physical monitor enumeration failed: %s", e)
+        return None
+
+    if _PRIMARY_MONITOR_INDEX is not None:
+        idx = _PRIMARY_MONITOR_INDEX
+        if 0 <= idx < len(mons) and _probe_luminance(mons[idx]) is not None:
+            return idx
+        _invalidate_primary_monitor()
+
+    candidates = [idx for idx, monitor in enumerate(mons) if _probe_luminance(monitor) is not None]
+    if len(candidates) != 1:
+        if len(candidates) > 1:
+            logger.warning(
+                "DDC monitor selection ambiguous; %d physical monitors expose luminance: %s",
+                len(candidates),
+                candidates,
+            )
+        return None
+
+    _PRIMARY_MONITOR_INDEX = candidates[0]
+    logger.info("Selected DDC luminance monitor physical index=%d", _PRIMARY_MONITOR_INDEX)
+    return _PRIMARY_MONITOR_INDEX
+
+
+def _primary_luminance_max() -> Optional[int]:
+    """Return the verified selected-monitor VCP 0x10 maximum."""
+    global _PRIMARY_LUMINANCE_MAX
+    if _PRIMARY_LUMINANCE_MAX is not None:
+        return _PRIMARY_LUMINANCE_MAX
+    idx = _primary_monitor_index()
+    if idx is None or not _HAS_MC:
+        return None
+    try:
+        mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+        if idx >= len(mons):
+            _invalidate_primary_monitor()
             return None
-        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
-            _current, raw_max = monitor.vcp.get_vcp_feature(0x10)
-        raw_max = int(raw_max)
-        if raw_max <= 0:
+        reading = _probe_luminance(mons[idx])
+        if reading is None:
+            _invalidate_primary_monitor()
             return None
+        _current, raw_max = reading
     except Exception as e:
         logger.debug("luminance max probe failed; will retry: %s", e)
+        _invalidate_primary_monitor()
         return None
     _PRIMARY_LUMINANCE_MAX = raw_max
     return raw_max
@@ -297,22 +373,25 @@ def _invalidate_primary_luminance_max() -> None:
 
 
 def _read_primary_brightness_raw() -> Optional[int]:
-    """Read the primary display's raw VCP luminance through SBC."""
-    if not _HAS_SBC:
+    """Read selected physical monitor's raw VCP luminance directly."""
+    idx = _primary_monitor_index()
+    if idx is None or not _HAS_MC:
         return None
     try:
-        vals = sbc.get_brightness(  # type: ignore[union-attr]
-            display=PRIMARY_DISPLAY_INDEX,
-        )
+        mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+        if idx >= len(mons):
+            _invalidate_primary_monitor()
+            return None
+        reading = _probe_luminance(mons[idx])
     except Exception as e:
-        logger.debug("get_brightness failed: %s", e)
+        logger.debug("get brightness failed: %s", e)
+        _invalidate_primary_monitor()
         return None
-    if not vals:
+    if reading is None:
+        _invalidate_primary_monitor()
         return None
-    try:
-        return int(vals[0])
-    except (TypeError, ValueError, IndexError):
-        return None
+    current, _maximum = reading
+    return current
 
 
 def get_current_brightness() -> Optional[int]:
@@ -328,22 +407,28 @@ def get_current_brightness() -> Optional[int]:
 
 
 def set_brightness(target: int) -> bool:
-    """Apply and verify a normalized 0..100 target on the primary display."""
-    if not _HAS_SBC:
-        logger.warning("set_brightness skipped - screen-brightness-control missing")
+    """Apply and verify a normalized 0..100 target on the selected DDC display."""
+    if not _HAS_MC:
+        logger.warning("set_brightness skipped - monitorcontrol missing")
         return False
     target = max(0, min(100, int(target)))
+    idx = _primary_monitor_index()
+    if idx is None:
+        logger.warning("Brightness write deferred: DDC monitor unavailable or ambiguous")
+        return False
     maximum = _primary_luminance_max()
     if maximum is None:
         logger.warning("Brightness write deferred: native luminance range unavailable")
         return False
     raw_target = _percent_to_raw(target, maximum)
     try:
-        sbc.set_brightness(  # type: ignore[union-attr]
-            raw_target, display=PRIMARY_DISPLAY_INDEX,
-        )
+        mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+        if idx >= len(mons):
+            raise RuntimeError("selected physical monitor index disappeared")
+        with mons[idx] as monitor:
+            monitor.vcp.set_vcp_feature(0x10, raw_target)
     except Exception as e:
-        _invalidate_primary_luminance_max()
+        _invalidate_primary_monitor()
         logger.warning("set_brightness(%d) failed: %s", target, e)
         return False
 
@@ -358,10 +443,13 @@ def set_brightness(target: int) -> bool:
             time.sleep(BRIGHTNESS_VERIFY_DELAY_S)
 
     actual_text = "unreadable" if raw is None else str(_raw_to_percent(raw, maximum))
-    _invalidate_primary_luminance_max()
+    _invalidate_primary_monitor()
     logger.warning(
         "Brightness write did not verify (target=%d%% raw_target=%d/%d actual=%s%%)",
-        target, raw_target, maximum, actual_text,
+        target,
+        raw_target,
+        maximum,
+        actual_text,
     )
     return False
 
@@ -390,15 +478,16 @@ def _parse_color_presets_from_raw_capabilities(raw: str) -> list[Any]:
 
 
 def _read_primary_rgb_gains() -> Optional[dict[str, tuple[int, int]]]:
-    """Read current/max standard RGB video gains from the primary display."""
-    if not _HAS_MC:
+    """Read current/max standard RGB video gains from the selected display."""
+    idx = _primary_monitor_index()
+    if idx is None or not _HAS_MC:
         return None
     try:
         mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-        if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+        if idx >= len(mons):
             return None
         values: dict[str, tuple[int, int]] = {}
-        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+        with mons[idx] as monitor:
             for channel, code in RGB_GAIN_VCP_CODES.items():
                 current, maximum = monitor.vcp.get_vcp_feature(code)
                 current = int(current)
@@ -434,11 +523,14 @@ def set_rgb_gain_warmth(period: str) -> bool:
     target = RGB_GAIN_PERIOD_PERCENT.get(period)
     if target is None or not _HAS_MC:
         return False
+    idx = _primary_monitor_index()
+    if idx is None:
+        return False
     try:
         mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-        if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+        if idx >= len(mons):
             return False
-        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+        with mons[idx] as monitor:
             original: dict[str, int] = {}
             raw_targets: dict[str, int] = {}
             for channel, code in RGB_GAIN_VCP_CODES.items():
@@ -490,12 +582,16 @@ def _supported_color_presets() -> list[Any]:
     if not _HAS_MC:
         _SUPPORTED_COLOR_PRESETS = []
         return _SUPPORTED_COLOR_PRESETS
+    idx = _primary_monitor_index()
+    if idx is None:
+        _SUPPORTED_COLOR_PRESETS = []
+        return _SUPPORTED_COLOR_PRESETS
     try:
         mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-        if not mons:
+        if idx >= len(mons):
             _SUPPORTED_COLOR_PRESETS = []
             return _SUPPORTED_COLOR_PRESETS
-        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+        with mons[idx] as monitor:
             try:
                 caps = monitor.get_vcp_capabilities()
                 presets = caps.get("color_presets") or []
@@ -525,16 +621,18 @@ def _resolve_preset(name: str) -> Optional[Any]:
     target = getattr(ColorPreset, name, None)
     if target is not None and target in supported:
         return target
+
     # Fallback by kelvin proximity. ColorPreset enum values aren't kelvin
     # numbers directly; parse them from the name.
     def _kelvin(p: Any) -> int:
         n = p.name
         if n.startswith("COLOR_TEMP_") and n.endswith("K"):
             try:
-                return int(n[len("COLOR_TEMP_"):-1])
+                return int(n[len("COLOR_TEMP_") : -1])
             except ValueError:
                 return 0
         return 0
+
     want_k = _kelvin(target) if target is not None else 5000
     by_distance = sorted(
         (p for p in supported if _kelvin(p) > 0),
@@ -560,14 +658,17 @@ def set_color_preset(period: str) -> bool:
     if target is None:
         logger.debug("no supported preset close to %s", target_name)
         return False
+    idx = _primary_monitor_index()
+    if idx is None:
+        return False
     try:
         mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
     except Exception as e:
         logger.warning("get_monitors failed: %s", e)
         return False
-    if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+    if idx >= len(mons):
         return False
-    monitor = mons[PRIMARY_DISPLAY_INDEX]
+    monitor = mons[idx]
     try:
         with monitor:
             monitor.set_color_preset(target)
@@ -587,6 +688,7 @@ def set_color_temperature(period: str) -> bool:
 # ---------------------------------------------------------------------------
 # Curve resolution
 # ---------------------------------------------------------------------------
+
 
 def resolve_target(
     mode: str,
@@ -613,6 +715,7 @@ def resolve_target(
 # ---------------------------------------------------------------------------
 # Reconciler — single source of truth that applies state
 # ---------------------------------------------------------------------------
+
 
 class Reconciler:
     """Owns the last-applied brightness + monitor-native warmth state.
@@ -657,9 +760,10 @@ class Reconciler:
             )
             if drifted and agent_was_running and now >= self._manual_override_until:
                 logger.info(
-                    "Manual brightness change detected (last=%d, current=%d) — "
-                    "backing off for %ds",
-                    self._last_applied_brightness, current, MANUAL_OVERRIDE_BACKOFF_S,
+                    "Manual brightness change detected (last=%d, current=%d) — backing off for %ds",
+                    self._last_applied_brightness,
+                    current,
+                    MANUAL_OVERRIDE_BACKOFF_S,
                 )
                 self._manual_override_until = now + MANUAL_OVERRIDE_BACKOFF_S
                 # Also forget our last_applied so we don't keep tripping the
@@ -670,7 +774,9 @@ class Reconciler:
                 logger.info(
                     "Brightness drift across pause (last=%d current=%d gap=%.1fs) — "
                     "resyncing baseline, no backoff",
-                    self._last_applied_brightness, current, gap,
+                    self._last_applied_brightness,
+                    current,
+                    gap,
                 )
                 self._last_applied_brightness = current
 
@@ -689,7 +795,10 @@ class Reconciler:
                 if set_brightness(target):
                     logger.info(
                         "Brightness %s -> %d (mode=%s period=%s lux=%s)",
-                        self._last_applied_brightness, target, mode, period,
+                        self._last_applied_brightness,
+                        target,
+                        mode,
+                        period,
                         f"{ema_lux:.0f}" if ema_lux is not None else "n/a",
                     )
                     self._last_applied_brightness = target
@@ -724,13 +833,15 @@ class Reconciler:
         if set_color_temperature(period):
             logger.info(
                 "Monitor color period %s -> %s",
-                self._last_applied_period_for_color, period,
+                self._last_applied_period_for_color,
+                period,
             )
             self._last_applied_period_for_color = period
             return
         logger.warning(
             "Monitor warmth unavailable for period=%s target=%s; leaving monitor color unchanged",
-            period, COLOR_TEMP_PERIOD_PRESET.get(period),
+            period,
+            COLOR_TEMP_PERIOD_PRESET.get(period),
         )
 
 
@@ -782,7 +893,10 @@ def _sun_aware_time_period(
     now_ts = now_ts if now_ts is not None else time.time()
     now_local = datetime.fromtimestamp(now_ts, tz=_INDY_TZ)
     late_night_floor_ts = now_local.replace(
-        hour=LATE_NIGHT_HOUR, minute=0, second=0, microsecond=0,
+        hour=LATE_NIGHT_HOUR,
+        minute=0,
+        second=0,
+        microsecond=0,
     ).timestamp()
 
     day_start = sunrise_ts + DAY_START_AFTER_SUNRISE_S
@@ -867,6 +981,7 @@ class SharedState:
 # WS listener — subscribes for mode_update events
 # ---------------------------------------------------------------------------
 
+
 class WsListener(threading.Thread):
     """Connects to /ws and pushes mode_update events into SharedState.
 
@@ -898,14 +1013,17 @@ class WsListener(threading.Thread):
             try:
                 logger.info("Connecting to %s", self._url)
                 with websockets.sync.client.connect(  # type: ignore[union-attr]
-                    self._url, close_timeout=2.0,
+                    self._url,
+                    close_timeout=2.0,
                 ) as ws:
                     logger.info("WS connected")
                     backoff = WS_RECONNECT_INITIAL_S
                     self._recv_loop(ws)
             except Exception as e:
                 logger.warning(
-                    "WS disconnect: %s (reconnecting in %.1fs)", e, backoff,
+                    "WS disconnect: %s (reconnecting in %.1fs)",
+                    e,
+                    backoff,
                 )
             finally:
                 if self._stop.is_set():
@@ -939,6 +1057,7 @@ class WsListener(threading.Thread):
 # ---------------------------------------------------------------------------
 # Lux provider — polls /api/camera/status
 # ---------------------------------------------------------------------------
+
 
 class LuxProvider:
     """Caches the latest lux reading; refreshed by a poll thread."""
@@ -979,6 +1098,7 @@ class LuxProvider:
 # Sun provider — polls /api/weather/current for sunrise/sunset
 # ---------------------------------------------------------------------------
 
+
 class SunProvider:
     """Caches today's sunrise/sunset unix-epoch timestamps from weather.
 
@@ -1012,8 +1132,7 @@ class SunProvider:
             sunset = weather.get("sunset")
             if sunrise is None or sunset is None:
                 raise ValueError(
-                    f"weather response missing sunrise/sunset "
-                    f"(keys: {sorted(weather)})"
+                    f"weather response missing sunrise/sunset (keys: {sorted(weather)})"
                 )
             sunrise_f, sunset_f = float(sunrise), float(sunset)
         except Exception as e:
@@ -1039,12 +1158,15 @@ class SunProvider:
             logger.warning(
                 "sun refresh failed %d× in a row (%s) — falling back to "
                 "wall-clock time_period; check %s",
-                self._consecutive_failures, exc, self._url,
+                self._consecutive_failures,
+                exc,
+                self._url,
             )
         else:
             logger.debug(
                 "sun refresh failed (attempt %d): %s",
-                self._consecutive_failures, exc,
+                self._consecutive_failures,
+                exc,
             )
 
     def close(self) -> None:
@@ -1057,6 +1179,7 @@ class SunProvider:
 # ---------------------------------------------------------------------------
 # Bootstrap — fetch initial mode / period via REST in case WS is slow
 # ---------------------------------------------------------------------------
+
 
 def _bootstrap_state(server_url: str, state: SharedState) -> None:
     """One-shot REST fetch so we don't sit on stale defaults until WS connects."""
@@ -1075,6 +1198,7 @@ def _bootstrap_state(server_url: str, state: SharedState) -> None:
 # ---------------------------------------------------------------------------
 # Supervisor entrypoint
 # ---------------------------------------------------------------------------
+
 
 def run_agent(
     server_url: str = DEFAULT_SERVER,
@@ -1097,8 +1221,8 @@ def run_agent(
     reachable = [m for m in monitors if m.get("supported")]
     if not reachable:
         logger.warning(
-            "No DDC/CI-reachable monitors detected; display comfort writes "
-            "will no-op. monitors=%s", monitors,
+            "No DDC/CI-reachable monitors detected; display comfort writes will no-op. monitors=%s",
+            monitors,
         )
     else:
         logger.info(
@@ -1116,15 +1240,23 @@ def run_agent(
     lux.refresh()
 
     # WS URL derived from REST URL by swapping the scheme.
-    ws_url = server_url.rstrip("/").replace("http://", "ws://", 1).replace(
-        "https://", "wss://", 1,
-    ) + "/ws"
+    ws_url = (
+        server_url.rstrip("/")
+        .replace("http://", "ws://", 1)
+        .replace(
+            "https://",
+            "wss://",
+            1,
+        )
+        + "/ws"
+    )
     listener = WsListener(ws_url, shared, reconciler, lux, _stop)
     listener.start()
 
     logger.info(
         "Monitor brightness agent started — server=%s ws=%s",
-        server_url, ws_url,
+        server_url,
+        ws_url,
     )
 
     last_lux_refresh = 0.0
@@ -1156,22 +1288,30 @@ def run_agent(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Home Hub Monitor Brightness Agent")
     parser.add_argument(
-        "--server", default=DEFAULT_SERVER,
+        "--server",
+        default=DEFAULT_SERVER,
         help=f"Home Hub base URL (default: {DEFAULT_SERVER})",
     )
     parser.add_argument(
-        "--detect", action="store_true",
+        "--detect",
+        action="store_true",
         help="List monitors and probe DDC/CI brightness, then exit.",
     )
     parser.add_argument(
-        "--apply", type=int, default=None, metavar="N",
+        "--apply",
+        type=int,
+        default=None,
+        metavar="N",
         help="Force-set brightness to N (0-100) and exit. Smoke test.",
     )
     parser.add_argument(
-        "--color-temp", choices=("warm", "neutral", "cool"), default=None,
+        "--color-temp",
+        choices=("warm", "neutral", "cool"),
+        default=None,
         help="Apply monitor-native color (warm=night target, neutral=day target; "
         "cool probes the optional 7500K preset fallback).",
     )
@@ -1203,11 +1343,12 @@ def _cli() -> int:
                 print("cool preset unavailable")
                 return 1
             try:
+                idx = _primary_monitor_index()
                 mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-                if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+                if idx is None or idx >= len(mons):
                     print("primary monitor unavailable")
                     return 1
-                with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+                with mons[idx] as monitor:
                     monitor.set_color_preset(target)
                 print(f"set_color_preset({target.name}) -> ok")
                 return 0
