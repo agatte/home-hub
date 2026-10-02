@@ -25,13 +25,15 @@ SANDBOX_START_TIMEOUT_SECONDS = 45
 REPLAY_READY_TIMEOUT_SECONDS = 90
 EXPORT_READY_TIMEOUT_SECONDS = 15
 COMMAND_TIMEOUT_SECONDS = 20
+EXEC_EXIT_SENTINEL = 73
 CO_E_APPSINGLEUSE = 0x800401F6
 
 GUEST_STAGE = r"C:\HomeHubReplayStage"
 GUEST_EXPORT = r"C:\HomeHubReplayExport"
-GUEST_DONE = r"C:\HomeHubReplayState\done.marker"
-GUEST_STATUS = r"C:\HomeHubReplayState\status.json"
-GUEST_RESULT = r"C:\HomeHubReplayState\result.json"
+GUEST_STATE = r"C:\HomeHubReplayState"
+GUEST_DONE = rf"{GUEST_STATE}\done.marker"
+GUEST_STATUS = rf"{GUEST_STATE}\status.json"
+GUEST_RESULT = rf"{GUEST_STATE}\result.json"
 
 PROJECT_FILES = (
     "backend/__init__.py",
@@ -221,7 +223,14 @@ def _write_guest_helpers(stage_root: Path) -> None:
         f'"{GUEST_STAGE}\\project\\backend\\replay\\windows_guest_broker.py"\r\n'
         "exit /b %ERRORLEVEL%\r\n"
     )
-    poll = f'@echo off\r\nif exist "{GUEST_DONE}" exit /b 0\r\nexit /b 3\r\n'
+    verify_exec_exit = f"@echo off\r\nexit /b {EXEC_EXIT_SENTINEL}\r\n"
+    poll = (
+        "@echo off\r\n"
+        f'if not exist "{GUEST_STATE}" exit /b 31\r\n'
+        f'if not exist "{GUEST_DONE}" exit /b 32\r\n'
+        f'if not exist "{GUEST_STATUS}" exit /b 33\r\n'
+        "exit /b 0\r\n"
+    )
     probe_export = (
         "@echo off\r\n"
         f'if not exist "{GUEST_EXPORT}" exit /b 4\r\n'
@@ -232,8 +241,16 @@ def _write_guest_helpers(stage_root: Path) -> None:
         "@echo off\r\n"
         f'if not exist "{GUEST_EXPORT}" exit /b 4\r\n'
         f'>"{GUEST_EXPORT}\\export_begin.marker" echo begin\r\n'
+        f'>"{GUEST_EXPORT}\\exec_context.txt" echo USERNAME=%USERNAME%\r\n'
+        f'>>"{GUEST_EXPORT}\\exec_context.txt" echo USERDOMAIN=%USERDOMAIN%\r\n'
+        f'>>"{GUEST_EXPORT}\\exec_context.txt" echo SESSIONNAME=%SESSIONNAME%\r\n'
+        f'whoami /user >>"{GUEST_EXPORT}\\exec_context.txt" 2>&1\r\n'
+        f'if exist "{GUEST_STATE}" >"{GUEST_EXPORT}\\state_dir_seen.marker" echo seen\r\n'
+        f'if exist "{GUEST_DONE}" >"{GUEST_EXPORT}\\done_source_seen.marker" echo seen\r\n'
+        f'if exist "{GUEST_STATUS}" >"{GUEST_EXPORT}\\status_source_seen.marker" echo seen\r\n'
+        f'if exist "{GUEST_RESULT}" >"{GUEST_EXPORT}\\result_source_seen.marker" echo seen\r\n'
+        f'dir /a "{GUEST_STATE}" >"{GUEST_EXPORT}\\state_dir.txt" 2>&1\r\n'
         f'if not exist "{GUEST_STATUS}" exit /b 5\r\n'
-        f'>"{GUEST_EXPORT}\\status_source_seen.marker" echo seen\r\n'
         f'type "{GUEST_STATUS}" > "{GUEST_EXPORT}\\status.json" || exit /b 6\r\n'
         f'>"{GUEST_EXPORT}\\status_written.marker" echo written\r\n'
         f'if exist "{GUEST_RESULT}" type "{GUEST_RESULT}" > '
@@ -244,6 +261,7 @@ def _write_guest_helpers(stage_root: Path) -> None:
     )
     for name, content in (
         ("launch_guest.cmd", launch),
+        ("verify_exec_exit.cmd", verify_exec_exit),
         ("poll_ready.cmd", poll),
         ("probe_export.cmd", probe_export),
         ("export_result.cmd", export),
@@ -506,6 +524,16 @@ def _exec(
     )
 
 
+def _verify_exec_exit_propagation(wsb: str, sandbox_id: str) -> None:
+    helper = f"{GUEST_STAGE}\\verify_exec_exit.cmd"
+    completed = _exec(wsb, sandbox_id, helper)
+    if completed.returncode != EXEC_EXIT_SENTINEL:
+        raise WindowsSandboxReplayError(
+            "Windows Sandbox exec exit-code propagation is not trustworthy; "
+            f"expected sentinel {EXEC_EXIT_SENTINEL}, got {completed.returncode}"
+        )
+
+
 def _wait_for_replay(
     wsb: str,
     sandbox_id: str,
@@ -578,15 +606,33 @@ def _wait_for_export_share_ready(
     )
 
 
-def _export_result(wsb: str, sandbox_id: str) -> None:
+def _read_export_diagnostics(export_root: Path) -> dict[str, Any]:
+    visible = sorted(path.name for path in export_root.iterdir()) if export_root.is_dir() else []
+    details: dict[str, Any] = {"visible": visible}
+    for name in ("exec_context.txt", "state_dir.txt"):
+        path = export_root / name
+        if not path.is_file():
+            details[name] = None
+            continue
+        try:
+            details[name] = path.read_text(encoding="utf-8", errors="replace")[:4096]
+        except OSError:
+            details[name] = None
+    return details
+
+
+def _export_result(wsb: str, sandbox_id: str, export_root: Path) -> None:
     completed = _exec(
         wsb,
         sandbox_id,
         f"{GUEST_STAGE}\\export_result.cmd",
     )
     if completed.returncode != 0:
+        time.sleep(0.1)
+        diagnostics = _read_export_diagnostics(export_root)
         raise WindowsSandboxReplayError(
-            f"replay result export failed with exit code {completed.returncode}"
+            "replay result export failed with exit code "
+            f"{completed.returncode}; diagnostics={diagnostics!r}"
         )
 
 
@@ -625,10 +671,10 @@ def _wait_for_export_visibility(
                         return
         time.sleep(0.1)
 
-    visible = sorted(path.name for path in export_root.iterdir()) if export_root.is_dir() else []
+    diagnostics = _read_export_diagnostics(export_root)
     raise WindowsSandboxReplayError(
         "replay sandbox export did not become visible on the host before timeout; "
-        f"visible={visible!r}, status={last_status!r}"
+        f"diagnostics={diagnostics!r}, status={last_status!r}"
     )
 
 
@@ -687,12 +733,13 @@ def run_windows_sandbox_replay(bundle_path: str | Path) -> dict[str, Any]:
             sandbox_id: str | None = None
             try:
                 sandbox_id = _start_sandbox(wsb, config)
+                _verify_exec_exit_propagation(wsb, sandbox_id)
                 _wait_for_replay(wsb, sandbox_id)
                 # The writable result share is deliberately absent until the
                 # replay child has exited and the broker has closed its pipe.
                 _share_export(wsb, sandbox_id, export_root)
                 _wait_for_export_share_ready(wsb, sandbox_id, export_root)
-                _export_result(wsb, sandbox_id)
+                _export_result(wsb, sandbox_id, export_root)
                 _wait_for_export_visibility(export_root)
                 return _load_export(export_root)
             finally:

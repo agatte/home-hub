@@ -21,12 +21,28 @@ def test_guest_export_helper_uses_stream_redirection_and_completion_markers(tmp_
     stage.mkdir()
     sandbox_runner._write_guest_helpers(stage)
 
+    sentinel = (stage / "verify_exec_exit.cmd").read_text(encoding="ascii")
+    assert f"exit /b {sandbox_runner.EXEC_EXIT_SENTINEL}" in sentinel
+
+    poll = (stage / "poll_ready.cmd").read_text(encoding="ascii")
+    assert sandbox_runner.GUEST_STATE in poll
+    assert sandbox_runner.GUEST_DONE in poll
+    assert sandbox_runner.GUEST_STATUS in poll
+    assert "exit /b 31" in poll
+    assert "exit /b 32" in poll
+    assert "exit /b 33" in poll
+
     export = (stage / "export_result.cmd").read_text(encoding="ascii")
     assert 'type "C:\\HomeHubReplayState\\status.json"' in export
     assert 'type "C:\\HomeHubReplayState\\result.json"' in export
     assert "copy /y" not in export.casefold()
     assert "move /y" not in export.casefold()
+    assert "exec_context.txt" in export
+    assert "state_dir.txt" in export
+    assert "state_dir_seen.marker" in export
+    assert "done_source_seen.marker" in export
     assert "status_source_seen.marker" in export
+    assert "result_source_seen.marker" in export
     assert "status_written.marker" in export
     assert "result_written.marker" in export
     assert "export_complete.marker" in export
@@ -87,6 +103,40 @@ def test_wsb_exec_wraps_batch_helpers_in_cmd(monkeypatch):
             "System",
         ]
     ]
+
+
+def test_wsb_exec_exit_propagation_is_calibrated_before_replay(monkeypatch):
+    sandbox_id = "12345678-1234-1234-1234-1234567890ab"
+    calls: list[str] = []
+
+    def sentinel_ok(_wsb, _sandbox_id, command):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            args=["wsb", "exec"],
+            returncode=sandbox_runner.EXEC_EXIT_SENTINEL,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(sandbox_runner, "_exec", sentinel_ok)
+    sandbox_runner._verify_exec_exit_propagation("wsb.exe", sandbox_id)
+    assert calls == [f"{sandbox_runner.GUEST_STAGE}\\verify_exec_exit.cmd"]
+
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_exec",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["wsb", "exec"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        ),
+    )
+    with pytest.raises(
+        sandbox_runner.WindowsSandboxReplayError,
+        match="exit-code propagation is not trustworthy",
+    ):
+        sandbox_runner._verify_exec_exit_propagation("wsb.exe", sandbox_id)
 
 
 def test_backend_availability_is_capability_and_context_gated(monkeypatch):
@@ -247,6 +297,9 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
         assert "<ReadOnly>true</ReadOnly>" in config
         return "12345678-1234-1234-1234-1234567890ab"
 
+    def verify_exec(_wsb, _sandbox_id):
+        events.append("verify_exec_exit")
+
     def wait(_wsb, _sandbox_id, **_kwargs):
         events.append("wait_done")
 
@@ -256,7 +309,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     def wait_share(_wsb, _sandbox_id, _export_root):
         events.append("wait_share_host_backed")
 
-    def export(_wsb, _sandbox_id):
+    def export(_wsb, _sandbox_id, _export_root):
         events.append("export")
 
     def wait_export(_export_root):
@@ -271,6 +324,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
 
     monkeypatch.setattr(sandbox_runner, "build_stage", build_stage)
     monkeypatch.setattr(sandbox_runner, "_start_sandbox", start)
+    monkeypatch.setattr(sandbox_runner, "_verify_exec_exit_propagation", verify_exec)
     monkeypatch.setattr(sandbox_runner, "_wait_for_replay", wait)
     monkeypatch.setattr(sandbox_runner, "_share_export", share)
     monkeypatch.setattr(sandbox_runner, "_wait_for_export_share_ready", wait_share)
@@ -284,6 +338,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     assert events == [
         "build",
         "start",
+        "verify_exec_exit",
         "wait_done",
         "share_writable_export",
         "wait_share_host_backed",
@@ -292,6 +347,47 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
         "load",
         "stop",
     ]
+
+
+def test_runner_stops_before_share_when_exec_calibration_fails(monkeypatch):
+    events: list[str] = []
+
+    monkeypatch.setattr(sandbox_runner, "backend_available", lambda: True)
+    monkeypatch.setattr(sandbox_runner, "_find_wsb", lambda: "wsb.exe")
+    monkeypatch.setattr(sandbox_runner, "_assert_no_running_sandbox", lambda _wsb: None)
+
+    def build_stage(_bundle_path, stage_root):
+        events.append("build")
+        stage_root.mkdir(parents=True)
+        return stage_root
+
+    monkeypatch.setattr(sandbox_runner, "build_stage", build_stage)
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_start_sandbox",
+        lambda _wsb, _config: events.append("start") or "12345678-1234-1234-1234-1234567890ab",
+    )
+
+    def fail_calibration(_wsb, _sandbox_id):
+        events.append("verify_exec_failed")
+        raise sandbox_runner.WindowsSandboxReplayError("exit propagation untrusted")
+
+    monkeypatch.setattr(sandbox_runner, "_verify_exec_exit_propagation", fail_calibration)
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_share_export",
+        lambda *_args, **_kwargs: events.append("share"),
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_stop_sandbox",
+        lambda *_args, **_kwargs: events.append("stop"),
+    )
+
+    with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="untrusted"):
+        sandbox_runner.run_windows_sandbox_replay("synthetic")
+
+    assert events == ["build", "start", "verify_exec_failed", "stop"]
 
 
 def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
@@ -311,6 +407,11 @@ def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
         sandbox_runner,
         "_start_sandbox",
         lambda _wsb, _config: events.append("start") or "12345678-1234-1234-1234-1234567890ab",
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_verify_exec_exit_propagation",
+        lambda _wsb, _sandbox_id: events.append("verify_exec_exit"),
     )
 
     def fail_wait(_wsb, _sandbox_id, **_kwargs):
@@ -332,7 +433,7 @@ def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
     with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="not ready"):
         sandbox_runner.run_windows_sandbox_replay("synthetic")
 
-    assert events == ["build", "start", "wait_failed", "stop"]
+    assert events == ["build", "start", "verify_exec_exit", "wait_failed", "stop"]
 
 
 def test_export_share_handshake_requires_host_visible_marker(tmp_path, monkeypatch):
