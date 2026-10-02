@@ -21,6 +21,20 @@ worktrees under `worktrees\` rather than scattered Desktop clones.
 
 Remote Desktop Commander runs inside Windows Sandbox. The authoritative host repo remains `C:\Users\Anthony\Documents\home-hub-project\main`; RDC sees that same mapped checkout at `C:\Work\home-hub-project\main`. Sandbox path differences are expected and do not indicate a broken host recovery.
 
+### Protected Windows Sandbox / host boundary
+
+Protected Windows Sandbox is the normal environment for Windows-side Home Hub development, repo inspection, Codex work, and RDC shell/filesystem operations. The protected host-owned `.wsb` is the authority for what host filesystem state exists inside that environment; `-C`, an RDC allowed-directory setting, or a stale workspace copy of the `.wsb` is not a security boundary.
+
+The finalized protected mapping treats the Sandbox itself as the filesystem/blast-radius boundary. Host `C:\Users\Anthony\Documents\home-hub-project` maps to `C:\Work\home-hub-project` **writable**, and host `C:\Users\Anthony\Documents\osrs-flip-assistant-project` maps to `C:\Work\osrs-flip-assistant-project` **writable**. `C:\Work\PC-Performance-Audit` remains writable. D:/E: forensic sources and Git/Python/Java toolchains remain read-only. Host Bridge exposes `Exchange\Requests` as writable and `Exchange\Responses` as read-only. There is no whole-host `C:` mapping. Read-only mappings stay read-only unless the protected `.wsb` boundary is deliberately changed after review. The corrected protected WSB SHA-256 is `1C3843E3A522E9E7DBF8A797921032EF7DF79008386012C436C0D1154D862980`.
+
+Real write/read/cleanup probes passed after reopening the exact protected WSB for both Home Hub and OSRS, and automatic Sandbox RDC reconnect remained healthy. Within those writable project roots, normal issue-driven development may edit files, create branches/worktrees as appropriate, run tests, and use Codex. The mapping grants filesystem write capability only; it does not waive Home Hub rules protecting unrelated work and secrets or the separate authorization gates for commit, push, merge, deploy, restart, credentials, hardware/device writes, and other consequential actions.
+
+Unrestricted RDC to real host `C:` is prohibited. The real-host endpoint is the restricted Home Hub control plane, not a generic filesystem or shell surface. Real-host administration uses only the typed Host Bridge allowlist; do not create a generic command, arbitrary-path filesystem, registry, service/task, delete, disk/partition, driver, firmware, or credential bridge to solve convenience problems.
+
+Codex may run inside the protected Sandbox and work normally within the writable Home Hub or OSRS project roots, using the documented externally-sandboxed invocation. It gains no extra host authority by delegation and must preserve unrelated work, avoid secret-bearing files, and leave commit/push/merge/deploy/restart and other consequential actions behind their normal authorization gates.
+
+For destructive operations, prove the exact path first; for Git/worktrees, also prove registration, cleanliness, ancestry/unique-state as applicable. Prefer the narrowest native operation over recursive/broad deletion and retain before/after or rollback evidence sufficient to show what changed and what was preserved. Worktree removal remains subject to the stricter `Safe-RemoveGitWorktree.ps1` rule below.
+
 The canonical checkout moved from
 `C:\Users\antho\Desktop\home-hub` on 2026-08-18. Windows agent launchers now
 derive the checkout root from their own location, and the
