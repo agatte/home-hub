@@ -19,7 +19,8 @@ the child replay process starts:
 - immutable replay code and immutable bounded input;
 - no production filesystem, Home directory, `.env`, credentials, databases, or
   service state;
-- output only through a preopened result stream owned by the launcher.
+- no writable host output path while the replay child runs; bounded output is
+  exported only after guest completion is positively proven.
 
 The launcher must fail closed if any guarantee cannot be established. It must not
 fall back to an ordinary Python process or accept a caller-supplied adapter,
@@ -28,15 +29,36 @@ active object.
 
 ## Current status
 
-The repository does not currently contain a reviewed launcher that can enforce
-all of the requirements above. Therefore
-`backend.replay.isolated_runner.require_supported_isolation()` and
-`run_navigation_v1_isolated()` intentionally refuse operational execution.
+**Operational isolation accepted on Windows 11 - 2026-10-02.** The reviewed
+backend now runs navigation-v1 through a fresh transient Windows Sandbox and a
+broker-created zero-capability AppContainer child. The Sandbox starts with
+networking, audio/video input, printer, clipboard, and vGPU disabled and exposes
+only the immutable replay stage as a read-only mapping. It does not mount the
+Home Hub checkout, Home directory, `.env`, credentials, production databases,
+Host Bridge paths, or device/service state into the replay Sandbox.
 
-This does **not** block unit/contract testing of the closed root with synthetic
-validated bundles. It does block describing those in-process tests as the
-production no-actuation sandbox and blocks an operator-facing replay command
-until a real isolation backend is accepted.
+The trusted guest broker is launched explicitly with `wsb exec -r System`
+after Sandbox startup; the implementation does not rely on WSB
+`LogonCommand` or guest process exit-code propagation. The broker copies and
+verifies the staged closure inside the guest, creates a zero-capability
+AppContainer profile, denies that child access to the guest control-plane state,
+and runs the replay child with the reviewed process/handle/Win32k restrictions.
+No writable host mapping exists while that child is running.
+
+After the broker has written guest-local `status.json` and `done.marker`,
+the host positively proves guest readiness through the calibrated WSB exec
+timing channel. Only then does the host add a fresh writable export mapping,
+perform a host-visible share handshake, export the bounded result, verify the
+isolation self-test, stop the exact Sandbox ID, and clean only the exact replay
+temp roots after a proven successful stop. Ambiguous start/stop outcomes fail
+closed and preserve evidence.
+
+The controlled real-host acceptance E2E on 2026-10-02 passed:
+`1 passed, 44 deselected in 31.57s`, pytest exit `0`, with post-test
+`wsb list --raw` exit `0` and no remaining Sandbox record. The same accepted
+replay implementation remained byte-unchanged after merging current `master`;
+focused validation was `44 passed, 1 skipped` and the broader replay suite was
+`90 passed, 1 skipped`.
 
 The first evidence-backed navigation fixture remains separately
 `EVIDENCE_GATED`; no historical acknowledgement timing or human/environment
