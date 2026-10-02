@@ -28,7 +28,8 @@ SANDBOX_START_TIMEOUT_SECONDS = 45
 REPLAY_READY_TIMEOUT_SECONDS = 90
 EXPORT_READY_TIMEOUT_SECONDS = 15
 COMMAND_TIMEOUT_SECONDS = 20
-EXEC_EXIT_SENTINEL = 73
+EXEC_TIMING_SIGNAL_SECONDS = 4.0
+EXEC_TIMING_MIN_DELTA_SECONDS = 3.0
 CO_E_APPSINGLEUSE = 0x800401F6
 
 GUEST_STAGE = r"C:\HomeHubReplayStage"
@@ -37,6 +38,7 @@ GUEST_STATE = r"C:\HomeHubReplayState"
 GUEST_DONE = rf"{GUEST_STATE}\done.marker"
 GUEST_STATUS = rf"{GUEST_STATE}\status.json"
 GUEST_RESULT = rf"{GUEST_STATE}\result.json"
+GUEST_READY = rf"{GUEST_STATE}\host_ready.marker"
 
 PROJECT_FILES = (
     "backend/__init__.py",
@@ -278,13 +280,45 @@ def _write_guest_helpers(stage_root: Path) -> None:
         f'"{GUEST_STAGE}\\project\\backend\\replay\\windows_guest_broker.py"\r\n'
         "exit /b %ERRORLEVEL%\r\n"
     )
-    verify_exec_exit = f"@echo off\r\nexit /b {EXEC_EXIT_SENTINEL}\r\n"
-    poll = (
+    exec_fast_py = "pass\n"
+    exec_slow_py = f"import time\ntime.sleep({EXEC_TIMING_SIGNAL_SECONDS!r})\n"
+    wait_ready_py = (
+        "import time\n"
+        "from pathlib import Path\n"
+        f"state = Path({GUEST_STATE!r})\n"
+        f"done = Path({GUEST_DONE!r})\n"
+        f"status = Path({GUEST_STATUS!r})\n"
+        f"ready = Path({GUEST_READY!r})\n"
+        "while not (state.is_dir() and done.is_file() and status.is_file()):\n"
+        "    time.sleep(0.1)\n"
+        'ready.write_text("ready\\n", encoding="ascii")\n'
+    )
+    prove_ready_py = (
+        "import time\n"
+        "from pathlib import Path\n"
+        f"ready = Path({GUEST_READY!r})\n"
+        "if ready.is_file():\n"
+        f"    time.sleep({EXEC_TIMING_SIGNAL_SECONDS!r})\n"
+    )
+    exec_fast = (
         "@echo off\r\n"
-        f'if not exist "{GUEST_STATE}" exit /b 31\r\n'
-        f'if not exist "{GUEST_DONE}" exit /b 32\r\n'
-        f'if not exist "{GUEST_STATUS}" exit /b 33\r\n'
-        "exit /b 0\r\n"
+        f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
+        f'"{GUEST_STAGE}\\exec_fast.py"\r\n'
+    )
+    exec_slow = (
+        "@echo off\r\n"
+        f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
+        f'"{GUEST_STAGE}\\exec_slow.py"\r\n'
+    )
+    wait_ready = (
+        "@echo off\r\n"
+        f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
+        f'"{GUEST_STAGE}\\wait_ready.py"\r\n'
+    )
+    prove_ready = (
+        "@echo off\r\n"
+        f'"{GUEST_STAGE}\\runtime\\python.exe" -I -S -B '
+        f'"{GUEST_STAGE}\\prove_ready.py"\r\n'
     )
     probe_export = (
         "@echo off\r\n"
@@ -316,8 +350,14 @@ def _write_guest_helpers(stage_root: Path) -> None:
     )
     for name, content in (
         ("launch_guest.cmd", launch),
-        ("verify_exec_exit.cmd", verify_exec_exit),
-        ("poll_ready.cmd", poll),
+        ("exec_fast.py", exec_fast_py),
+        ("exec_fast.cmd", exec_fast),
+        ("exec_slow.py", exec_slow_py),
+        ("exec_slow.cmd", exec_slow),
+        ("wait_ready.py", wait_ready_py),
+        ("wait_ready.cmd", wait_ready),
+        ("prove_ready.py", prove_ready_py),
+        ("prove_ready.cmd", prove_ready),
         ("probe_export.cmd", probe_export),
         ("export_result.cmd", export),
     ):
@@ -560,6 +600,8 @@ def _exec(
     wsb: str,
     sandbox_id: str,
     command: str,
+    *,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
     guest_command = command
     if command.casefold().endswith(".cmd"):
@@ -575,17 +617,61 @@ def _exec(
             "-r",
             "System",
         ],
+        timeout=timeout,
         check=False,
     )
 
 
-def _verify_exec_exit_propagation(wsb: str, sandbox_id: str) -> None:
-    helper = f"{GUEST_STAGE}\\verify_exec_exit.cmd"
-    completed = _exec(wsb, sandbox_id, helper)
-    if completed.returncode != EXEC_EXIT_SENTINEL:
+def _measure_exec_duration(
+    wsb: str,
+    sandbox_id: str,
+    helper: str,
+    *,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
+) -> float:
+    started = time.monotonic()
+    completed = _exec(
+        wsb,
+        sandbox_id,
+        helper,
+        timeout=timeout,
+    )
+    elapsed = time.monotonic() - started
+    if completed.returncode != 0:
         raise WindowsSandboxReplayError(
-            "Windows Sandbox exec exit-code propagation is not trustworthy; "
-            f"expected sentinel {EXEC_EXIT_SENTINEL}, got {completed.returncode}"
+            "Windows Sandbox exec timing helper could not be invoked successfully; "
+            f"cli_exit={completed.returncode}, helper={helper}"
+        )
+    return elapsed
+
+
+def _verify_exec_timing_channel(wsb: str, sandbox_id: str) -> None:
+    fast_helper = f"{GUEST_STAGE}\\exec_fast.cmd"
+    slow_helper = f"{GUEST_STAGE}\\exec_slow.cmd"
+    fast_before = _measure_exec_duration(wsb, sandbox_id, fast_helper)
+    slow = _measure_exec_duration(wsb, sandbox_id, slow_helper)
+    fast_after = _measure_exec_duration(wsb, sandbox_id, fast_helper)
+    baseline = max(fast_before, fast_after)
+    delta = slow - baseline
+    if delta < EXEC_TIMING_MIN_DELTA_SECONDS:
+        raise WindowsSandboxReplayError(
+            "Windows Sandbox exec timing does not prove guest-process completion; "
+            f"slow_fast_delta={delta:.3f}s"
+        )
+
+
+def _prove_guest_ready(wsb: str, sandbox_id: str) -> None:
+    fast_helper = f"{GUEST_STAGE}\\exec_fast.cmd"
+    proof_helper = f"{GUEST_STAGE}\\prove_ready.cmd"
+    fast_before = _measure_exec_duration(wsb, sandbox_id, fast_helper)
+    proof = _measure_exec_duration(wsb, sandbox_id, proof_helper)
+    fast_after = _measure_exec_duration(wsb, sandbox_id, fast_helper)
+    baseline = max(fast_before, fast_after)
+    delta = proof - baseline
+    if delta < EXEC_TIMING_MIN_DELTA_SECONDS:
+        raise WindowsSandboxReplayError(
+            "guest replay readiness marker was not positively confirmed; "
+            f"proof_fast_delta={delta:.3f}s"
         )
 
 
@@ -595,18 +681,24 @@ def _wait_for_replay(
     *,
     timeout: float = REPLAY_READY_TIMEOUT_SECONDS,
 ) -> None:
-    deadline = time.monotonic() + timeout
-    poll_command = f"{GUEST_STAGE}\\poll_ready.cmd"
-    last_code = None
-    while time.monotonic() < deadline:
-        completed = _exec(wsb, sandbox_id, poll_command)
-        last_code = completed.returncode
-        if completed.returncode == 0:
-            return
-        time.sleep(0.5)
-    raise WindowsSandboxReplayError(
-        f"isolated replay did not become ready before timeout; last poll={last_code}"
-    )
+    wait_command = f"{GUEST_STAGE}\\wait_ready.cmd"
+    try:
+        completed = _exec(
+            wsb,
+            sandbox_id,
+            wait_command,
+            timeout=timeout,
+        )
+    except WindowsSandboxReplayError as exc:
+        raise WindowsSandboxReplayError(
+            "isolated replay did not become ready before timeout or exec failed"
+        ) from exc
+    if completed.returncode != 0:
+        raise WindowsSandboxReplayError(
+            "Windows Sandbox readiness wait could not be invoked successfully; "
+            f"cli_exit={completed.returncode}"
+        )
+    _prove_guest_ready(wsb, sandbox_id)
 
 
 def _share_export(
@@ -642,11 +734,8 @@ def _wait_for_export_share_ready(
     marker = export_root / "share_ready.marker"
     probe_command = f"{GUEST_STAGE}\\probe_export.cmd"
     deadline = time.monotonic() + timeout
-    last_code: int | None = None
-
     while time.monotonic() < deadline:
-        completed = _exec(wsb, sandbox_id, probe_command)
-        last_code = completed.returncode
+        _exec(wsb, sandbox_id, probe_command)
         if marker.is_file():
             try:
                 if marker.read_text(encoding="ascii").strip() == "ready":
@@ -656,8 +745,7 @@ def _wait_for_export_share_ready(
         time.sleep(0.1)
 
     raise WindowsSandboxReplayError(
-        "writable replay export share did not become host-backed before timeout; "
-        f"last probe={last_code}"
+        "writable replay export share did not become host-backed before timeout"
     )
 
 
@@ -677,18 +765,11 @@ def _read_export_diagnostics(export_root: Path) -> dict[str, Any]:
 
 
 def _export_result(wsb: str, sandbox_id: str, export_root: Path) -> None:
-    completed = _exec(
+    _exec(
         wsb,
         sandbox_id,
         f"{GUEST_STAGE}\\export_result.cmd",
     )
-    if completed.returncode != 0:
-        time.sleep(0.1)
-        diagnostics = _read_export_diagnostics(export_root)
-        raise WindowsSandboxReplayError(
-            "replay result export failed with exit code "
-            f"{completed.returncode}; diagnostics={diagnostics!r}"
-        )
 
 
 def _wait_for_export_visibility(
@@ -793,7 +874,7 @@ def run_windows_sandbox_replay(bundle_path: str | Path) -> dict[str, Any]:
         config = build_wsb_configuration(stage_root)
         startup_attempted = True
         sandbox_id = _start_sandbox(wsb, config)
-        _verify_exec_exit_propagation(wsb, sandbox_id)
+        _verify_exec_timing_channel(wsb, sandbox_id)
         _wait_for_replay(wsb, sandbox_id)
         # Share writable output only after the replay child exits.
         _share_export(wsb, sandbox_id, export_root)

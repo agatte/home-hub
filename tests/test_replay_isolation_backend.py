@@ -190,7 +190,7 @@ def test_runner_preserves_roots_and_primary_error_when_stop_fails(
         if replay_fails:
             raise primary
 
-    monkeypatch.setattr(sandbox_runner, "_verify_exec_exit_propagation", verify)
+    monkeypatch.setattr(sandbox_runner, "_verify_exec_timing_channel", verify)
     for name in (
         "_wait_for_replay",
         "_share_export",
@@ -245,16 +245,34 @@ def test_guest_export_helper_uses_stream_redirection_and_completion_markers(tmp_
     stage.mkdir()
     sandbox_runner._write_guest_helpers(stage)
 
-    sentinel = (stage / "verify_exec_exit.cmd").read_text(encoding="ascii")
-    assert f"exit /b {sandbox_runner.EXEC_EXIT_SENTINEL}" in sentinel
+    fast_cmd = (stage / "exec_fast.cmd").read_text(encoding="ascii")
+    fast_py = (stage / "exec_fast.py").read_text(encoding="ascii")
+    slow_cmd = (stage / "exec_slow.cmd").read_text(encoding="ascii")
+    slow_py = (stage / "exec_slow.py").read_text(encoding="ascii")
+    assert f"{sandbox_runner.GUEST_STAGE}\\runtime\\python.exe" in fast_cmd
+    assert "exec_fast.py" in fast_cmd
+    assert fast_py.strip() == "pass"
+    assert f"{sandbox_runner.GUEST_STAGE}\\runtime\\python.exe" in slow_cmd
+    assert "exec_slow.py" in slow_cmd
+    assert f"time.sleep({sandbox_runner.EXEC_TIMING_SIGNAL_SECONDS!r})" in slow_py
 
-    poll = (stage / "poll_ready.cmd").read_text(encoding="ascii")
-    assert sandbox_runner.GUEST_STATE in poll
-    assert sandbox_runner.GUEST_DONE in poll
-    assert sandbox_runner.GUEST_STATUS in poll
-    assert "exit /b 31" in poll
-    assert "exit /b 32" in poll
-    assert "exit /b 33" in poll
+    wait_cmd = (stage / "wait_ready.cmd").read_text(encoding="ascii")
+    wait_py = (stage / "wait_ready.py").read_text(encoding="ascii")
+    prove_cmd = (stage / "prove_ready.cmd").read_text(encoding="ascii")
+    prove_py = (stage / "prove_ready.py").read_text(encoding="ascii")
+    assert f"{sandbox_runner.GUEST_STAGE}\\runtime\\python.exe" in wait_cmd
+    assert "wait_ready.py" in wait_cmd
+    assert repr(sandbox_runner.GUEST_STATE) in wait_py
+    assert repr(sandbox_runner.GUEST_DONE) in wait_py
+    assert repr(sandbox_runner.GUEST_STATUS) in wait_py
+    assert repr(sandbox_runner.GUEST_READY) in wait_py
+    assert 'ready.write_text("ready\\n", encoding="ascii")' in wait_py
+    assert "while not" in wait_py
+    assert "time.sleep(0.1)" in wait_py
+    assert f"{sandbox_runner.GUEST_STAGE}\\runtime\\python.exe" in prove_cmd
+    assert "prove_ready.py" in prove_cmd
+    assert repr(sandbox_runner.GUEST_READY) in prove_py
+    assert f"time.sleep({sandbox_runner.EXEC_TIMING_SIGNAL_SECONDS!r})" in prove_py
 
     export = (stage / "export_result.cmd").read_text(encoding="ascii")
     assert 'type "C:\\HomeHubReplayState\\status.json"' in export
@@ -300,10 +318,10 @@ def test_wsb_configuration_exposes_only_read_only_stage(tmp_path):
 
 
 def test_wsb_exec_wraps_batch_helpers_in_cmd(monkeypatch):
-    captured: list[list[str]] = []
+    captured = []
 
     def fake_run_command(args, *, timeout=sandbox_runner.COMMAND_TIMEOUT_SECONDS, check=False):
-        captured.append(args)
+        captured.append((args, timeout, check))
         return subprocess.CompletedProcess(args=args, returncode=7, stdout="", stderr="")
 
     monkeypatch.setattr(sandbox_runner, "_run_command", fake_run_command)
@@ -311,56 +329,125 @@ def test_wsb_exec_wraps_batch_helpers_in_cmd(monkeypatch):
     completed = sandbox_runner._exec(
         "wsb.exe",
         "12345678-1234-1234-1234-1234567890ab",
-        r"C:\HomeHubReplayStage\poll_ready.cmd",
+        r"C:\HomeHubReplayStage\wait_ready.cmd",
+        timeout=12.5,
     )
 
     assert completed.returncode == 7
     assert captured == [
-        [
-            "wsb.exe",
-            "exec",
-            "--id",
-            "12345678-1234-1234-1234-1234567890ab",
-            "-c",
-            'cmd.exe /d /q /c "C:\\HomeHubReplayStage\\poll_ready.cmd"',
-            "-r",
-            "System",
-        ]
+        (
+            [
+                "wsb.exe",
+                "exec",
+                "--id",
+                "12345678-1234-1234-1234-1234567890ab",
+                "-c",
+                'cmd.exe /d /q /c "C:\\HomeHubReplayStage\\wait_ready.cmd"',
+                "-r",
+                "System",
+            ],
+            12.5,
+            False,
+        )
     ]
 
 
-def test_wsb_exec_exit_propagation_is_calibrated_before_replay(monkeypatch):
+def test_wsb_exec_timing_channel_distinguishes_guest_runtime(monkeypatch):
     sandbox_id = "12345678-1234-1234-1234-1234567890ab"
-    calls: list[str] = []
+    calls = []
+    durations = iter([0.4, 4.5, 0.5])
 
-    def sentinel_ok(_wsb, _sandbox_id, command):
-        calls.append(command)
-        return subprocess.CompletedProcess(
-            args=["wsb", "exec"],
-            returncode=sandbox_runner.EXEC_EXIT_SENTINEL,
-            stdout="",
-            stderr="",
-        )
+    def measure(_wsb, _sandbox_id, helper, **_kwargs):
+        calls.append(helper)
+        return next(durations)
 
-    monkeypatch.setattr(sandbox_runner, "_exec", sentinel_ok)
-    sandbox_runner._verify_exec_exit_propagation("wsb.exe", sandbox_id)
-    assert calls == [f"{sandbox_runner.GUEST_STAGE}\\verify_exec_exit.cmd"]
+    monkeypatch.setattr(sandbox_runner, "_measure_exec_duration", measure)
+    sandbox_runner._verify_exec_timing_channel("wsb.exe", sandbox_id)
+    assert calls == [
+        f"{sandbox_runner.GUEST_STAGE}\\exec_fast.cmd",
+        f"{sandbox_runner.GUEST_STAGE}\\exec_slow.cmd",
+        f"{sandbox_runner.GUEST_STAGE}\\exec_fast.cmd",
+    ]
 
+    # Even multi-second CLI overhead must fail if it does not track guest runtime.
+    durations = iter([3.0, 3.2, 3.1])
     monkeypatch.setattr(
         sandbox_runner,
-        "_exec",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+        "_measure_exec_duration",
+        lambda *_args, **_kwargs: next(durations),
+    )
+    with pytest.raises(
+        sandbox_runner.WindowsSandboxReplayError,
+        match="does not prove guest-process completion",
+    ):
+        sandbox_runner._verify_exec_timing_channel("wsb.exe", sandbox_id)
+
+
+def test_guest_ready_proof_requires_positive_timing_signal(monkeypatch):
+    sandbox_id = "12345678-1234-1234-1234-1234567890ab"
+    durations = iter([0.5, 4.5, 0.6])
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_measure_exec_duration",
+        lambda *_args, **_kwargs: next(durations),
+    )
+    sandbox_runner._prove_guest_ready("wsb.exe", sandbox_id)
+
+    durations = iter([0.5, 0.7, 0.6])
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_measure_exec_duration",
+        lambda *_args, **_kwargs: next(durations),
+    )
+    with pytest.raises(
+        sandbox_runner.WindowsSandboxReplayError,
+        match="readiness marker was not positively confirmed",
+    ):
+        sandbox_runner._prove_guest_ready("wsb.exe", sandbox_id)
+
+
+def test_replay_readiness_requires_guest_marker_even_when_cli_returns_zero(monkeypatch):
+    sandbox_id = "12345678-1234-1234-1234-1234567890ab"
+    calls = []
+
+    def exec_zero(_wsb, _sandbox_id, command, *, timeout):
+        calls.append((command, timeout))
+        return subprocess.CompletedProcess(
             args=["wsb", "exec"],
             returncode=0,
             stdout="",
             stderr="",
+        )
+
+    monkeypatch.setattr(sandbox_runner, "_exec", exec_zero)
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_prove_guest_ready",
+        lambda *_args: calls.append(("proof", None)),
+    )
+    sandbox_runner._wait_for_replay("wsb.exe", sandbox_id, timeout=12.5)
+    assert calls == [
+        (
+            f"{sandbox_runner.GUEST_STAGE}\\wait_ready.cmd",
+            12.5,
+        ),
+        ("proof", None),
+    ]
+
+    # Model a readiness helper that crashed while this CLI misleadingly returned zero:
+    # the independent guest-marker proof still blocks the writable export share.
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_prove_guest_ready",
+        lambda *_args: (_ for _ in ()).throw(
+            sandbox_runner.WindowsSandboxReplayError("marker not confirmed")
         ),
     )
     with pytest.raises(
         sandbox_runner.WindowsSandboxReplayError,
-        match="exit-code propagation is not trustworthy",
+        match="marker not confirmed",
     ):
-        sandbox_runner._verify_exec_exit_propagation("wsb.exe", sandbox_id)
+        sandbox_runner._wait_for_replay("wsb.exe", sandbox_id, timeout=12.5)
 
 
 def test_backend_availability_is_capability_and_context_gated(monkeypatch):
@@ -525,7 +612,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
         return "12345678-1234-1234-1234-1234567890ab"
 
     def verify_exec(_wsb, _sandbox_id):
-        events.append("verify_exec_exit")
+        events.append("verify_exec_timing")
 
     def wait(_wsb, _sandbox_id, **_kwargs):
         events.append("wait_done")
@@ -554,7 +641,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
 
     monkeypatch.setattr(sandbox_runner, "build_stage", build_stage)
     monkeypatch.setattr(sandbox_runner, "_start_sandbox", start)
-    monkeypatch.setattr(sandbox_runner, "_verify_exec_exit_propagation", verify_exec)
+    monkeypatch.setattr(sandbox_runner, "_verify_exec_timing_channel", verify_exec)
     monkeypatch.setattr(sandbox_runner, "_wait_for_replay", wait)
     monkeypatch.setattr(sandbox_runner, "_share_export", share)
     monkeypatch.setattr(sandbox_runner, "_wait_for_export_share_ready", wait_share)
@@ -569,7 +656,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     assert events == [
         "build",
         "start",
-        "verify_exec_exit",
+        "verify_exec_timing",
         "wait_done",
         "share_writable_export",
         "wait_share_host_backed",
@@ -602,9 +689,9 @@ def test_runner_stops_before_share_when_exec_calibration_fails(monkeypatch, clea
 
     def fail_calibration(_wsb, _sandbox_id):
         events.append("verify_exec_failed")
-        raise sandbox_runner.WindowsSandboxReplayError("exit propagation untrusted")
+        raise sandbox_runner.WindowsSandboxReplayError("exec synchrony untrusted")
 
-    monkeypatch.setattr(sandbox_runner, "_verify_exec_exit_propagation", fail_calibration)
+    monkeypatch.setattr(sandbox_runner, "_verify_exec_timing_channel", fail_calibration)
     monkeypatch.setattr(
         sandbox_runner,
         "_share_export",
@@ -654,8 +741,8 @@ def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
     )
     monkeypatch.setattr(
         sandbox_runner,
-        "_verify_exec_exit_propagation",
-        lambda _wsb, _sandbox_id: events.append("verify_exec_exit"),
+        "_verify_exec_timing_channel",
+        lambda _wsb, _sandbox_id: events.append("verify_exec_timing"),
     )
 
     def fail_wait(_wsb, _sandbox_id, **_kwargs):
@@ -677,7 +764,7 @@ def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
     with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="not ready"):
         sandbox_runner.run_windows_sandbox_replay("synthetic")
 
-    assert events == ["build", "start", "verify_exec_exit", "wait_failed", "stop"]
+    assert events == ["build", "start", "verify_exec_timing", "wait_failed", "stop"]
 
 
 def test_export_share_handshake_requires_host_visible_marker(tmp_path, monkeypatch):
@@ -702,6 +789,28 @@ def test_export_share_handshake_requires_host_visible_marker(tmp_path, monkeypat
     )
 
     assert calls == [f"{sandbox_runner.GUEST_STAGE}\\probe_export.cmd"]
+
+
+def test_export_result_does_not_trust_wsb_exec_guest_exit_code(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_exec(_wsb, _sandbox_id, command):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            args=["wsb", "exec"],
+            returncode=5,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(sandbox_runner, "_exec", fake_exec)
+    sandbox_runner._export_result(
+        "wsb.exe",
+        "12345678-1234-1234-1234-1234567890ab",
+        tmp_path,
+    )
+
+    assert calls == [f"{sandbox_runner.GUEST_STAGE}\\export_result.cmd"]
 
 
 def test_export_visibility_wait_tolerates_dynamic_share_delay(tmp_path):
