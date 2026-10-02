@@ -1044,4 +1044,4 @@ def test_windows_sandbox_appcontainer_end_to_end(tmp_path):
     assert result["schema_id"] == sandbox_runner.RESULT_SCHEMA_ID
     assert result["status"] == "ok"
     assert result["isolation_self_test"]["status"] == "passed"
-    assert result["bundle_id"] == "synthetic-navigation-v1"
+    assert result["bundle_id"] == "synthetic-test-only"
