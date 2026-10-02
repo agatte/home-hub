@@ -7,11 +7,14 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -99,6 +102,58 @@ _UUID_RE = re.compile(
 
 class WindowsSandboxReplayError(RuntimeError):
     """A transient Windows Sandbox replay could not be established or completed."""
+
+
+@dataclass(frozen=True)
+class _ReplayTempRoot:
+    path: Path
+    parent: Path
+    prefix: str
+    identity: tuple[int, int]
+
+    def cleanup(self) -> None:
+        info = self.path.lstat()
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            self.path.parent != self.parent
+            or self.path.parent.resolve() != self.parent
+            or not self.path.name.startswith(self.prefix)
+            or self.path.is_symlink()
+            or getattr(info, "st_file_attributes", 0) & reparse_flag
+            or not stat.S_ISDIR(info.st_mode)
+            or (info.st_dev, info.st_ino) != self.identity
+        ):
+            raise WindowsSandboxReplayError(f"refusing unsafe replay temp cleanup: {self.path}")
+        # Exact verified root created by this replay only; never a wildcard or parent path.
+        shutil.rmtree(self.path)
+
+
+def _create_replay_temp_root(prefix: str) -> _ReplayTempRoot:
+    parent = Path(tempfile.gettempdir()).resolve()
+    if os.name == "nt":
+        for _ in range(10):
+            path = parent / f"{prefix}{secrets.token_hex(16)}"
+            try:
+                # Python 3.13's 0o700 mkdir installs a protected Windows ACL.
+                # Default mkdir instead inherits the temp parent's normal ACL.
+                path.mkdir(mode=0o777, parents=False, exist_ok=False)
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise WindowsSandboxReplayError("could not create a fresh replay temp root")
+    else:
+        path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    info = path.lstat()
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        path.parent != parent
+        or path.is_symlink()
+        or getattr(info, "st_file_attributes", 0) & reparse_flag
+        or not stat.S_ISDIR(info.st_mode)
+    ):
+        raise WindowsSandboxReplayError(f"unsafe replay temp root created: {path}")
+    return _ReplayTempRoot(path, parent, prefix, (info.st_dev, info.st_ino))
 
 
 def repository_root() -> Path:
@@ -682,7 +737,7 @@ def _stop_sandbox(wsb: str, sandbox_id: str) -> None:
     _run_command(
         [wsb, "stop", "--id", sandbox_id],
         timeout=COMMAND_TIMEOUT_SECONDS,
-        check=False,
+        check=True,
     )
 
 
@@ -723,25 +778,68 @@ def run_windows_sandbox_replay(bundle_path: str | Path) -> dict[str, Any]:
     assert wsb is not None
     _assert_no_running_sandbox(wsb)
 
-    with tempfile.TemporaryDirectory(prefix="homehub-replay-stage-") as stage_dir:
-        with tempfile.TemporaryDirectory(prefix="homehub-replay-export-") as export_dir:
-            stage_root = Path(stage_dir) / "stage"
-            export_root = Path(export_dir)
-            build_stage(bundle_path, stage_root)
-            config = build_wsb_configuration(stage_root)
-
-            sandbox_id: str | None = None
+    roots: list[_ReplayTempRoot] = []
+    sandbox_id: str | None = None
+    startup_attempted = False
+    primary_error: BaseException | None = None
+    try:
+        stage_dir = _create_replay_temp_root("homehub-replay-stage-")
+        roots.append(stage_dir)
+        export_dir = _create_replay_temp_root("homehub-replay-export-")
+        roots.append(export_dir)
+        stage_root = stage_dir.path / "stage"
+        export_root = export_dir.path
+        build_stage(bundle_path, stage_root)
+        config = build_wsb_configuration(stage_root)
+        startup_attempted = True
+        sandbox_id = _start_sandbox(wsb, config)
+        _verify_exec_exit_propagation(wsb, sandbox_id)
+        _wait_for_replay(wsb, sandbox_id)
+        # Share writable output only after the replay child exits.
+        _share_export(wsb, sandbox_id, export_root)
+        _wait_for_export_share_ready(wsb, sandbox_id, export_root)
+        _export_result(wsb, sandbox_id, export_root)
+        _wait_for_export_visibility(export_root)
+        return _load_export(export_root)
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        cleanup_allowed = not startup_attempted
+        if sandbox_id is not None:
             try:
-                sandbox_id = _start_sandbox(wsb, config)
-                _verify_exec_exit_propagation(wsb, sandbox_id)
-                _wait_for_replay(wsb, sandbox_id)
-                # The writable result share is deliberately absent until the
-                # replay child has exited and the broker has closed its pipe.
-                _share_export(wsb, sandbox_id, export_root)
-                _wait_for_export_share_ready(wsb, sandbox_id, export_root)
-                _export_result(wsb, sandbox_id, export_root)
-                _wait_for_export_visibility(export_root)
-                return _load_export(export_root)
-            finally:
-                if sandbox_id is not None:
-                    _stop_sandbox(wsb, sandbox_id)
+                _stop_sandbox(wsb, sandbox_id)
+                cleanup_allowed = True
+            except Exception as exc:
+                message = (
+                    f"Sandbox stop failed for {sandbox_id}: {exc}; "
+                    f"preserved replay temp roots: {[str(root.path) for root in roots]}"
+                )
+                if primary_error is not None:
+                    primary_error.add_note(message)
+                else:
+                    raise WindowsSandboxReplayError(message) from exc
+        elif startup_attempted:
+            message = (
+                "Sandbox start outcome could not be proven stopped because no exact Sandbox ID "
+                f"was available; preserved replay temp roots: {[str(root.path) for root in roots]}"
+            )
+            if primary_error is not None:
+                primary_error.add_note(message)
+            else:
+                raise WindowsSandboxReplayError(message)
+        if cleanup_allowed:
+            cleanup_error = None
+            for root in reversed(roots):
+                try:
+                    root.cleanup()
+                except Exception as exc:
+                    message = f"replay temp cleanup failed for {root.path}: {exc}"
+                    if primary_error is not None:
+                        primary_error.add_note(message)
+                    elif cleanup_error is None:
+                        cleanup_error = WindowsSandboxReplayError(message)
+                    else:
+                        cleanup_error.add_note(message)
+            if cleanup_error is not None:
+                raise cleanup_error

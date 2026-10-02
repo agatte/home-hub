@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -14,6 +16,228 @@ import backend.replay.isolated_runner as isolated_runner
 import backend.replay.windows_sandbox_runner as sandbox_runner
 from tests.test_replay_bundle import _write_bundle
 from tests.test_replay_navigation_root import _project_import_closure, _project_module_path
+
+
+def test_windows_temp_root_inherits_acl_and_retries_only_collisions(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "os", SimpleNamespace(name="nt"))
+    prefix = "homehub-replay-stage-"
+    collision = tmp_path / f"{prefix}collision"
+    collision.mkdir()
+    marker = collision / "keep"
+    marker.write_text("untouched")
+    tokens = iter(["collision", "fresh"])
+    monkeypatch.setattr(sandbox_runner.secrets, "token_hex", lambda _size: next(tokens))
+    original_mkdir = Path.mkdir
+    calls = []
+
+    def mkdir(path, mode=0o777, parents=False, exist_ok=False):
+        calls.append((path, mode, parents, exist_ok))
+        original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    root = sandbox_runner._create_replay_temp_root(prefix)
+    assert root.path == tmp_path.resolve() / f"{prefix}fresh"
+    assert calls == [(collision, 0o777, False, False), (root.path, 0o777, False, False)]
+    root.cleanup()
+    assert not root.path.exists()
+    assert marker.read_text() == "untouched"
+
+
+def test_windows_temp_root_collision_retries_are_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "os", SimpleNamespace(name="nt"))
+    calls = []
+    monkeypatch.setattr(sandbox_runner.secrets, "token_hex", lambda size: calls.append(size) or "x")
+    collision = tmp_path / "homehub-replay-stage-x"
+    collision.mkdir()
+    with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="fresh replay temp"):
+        sandbox_runner._create_replay_temp_root("homehub-replay-stage-")
+    assert calls == [16] * 10
+    assert collision.is_dir()
+
+
+def test_temp_root_does_not_retry_permission_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "os", SimpleNamespace(name="nt"))
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append(args)
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "mkdir", denied)
+    with pytest.raises(PermissionError, match="denied"):
+        sandbox_runner._create_replay_temp_root("homehub-replay-stage-")
+    assert len(calls) == 1
+
+
+def test_non_windows_temp_root_uses_private_tempfile_semantics(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "os", SimpleNamespace(name="posix"))
+    original = sandbox_runner.tempfile.mkdtemp
+    calls = []
+
+    def mkdtemp(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(sandbox_runner.tempfile, "mkdtemp", mkdtemp)
+    root = sandbox_runner._create_replay_temp_root("homehub-replay-stage-")
+    assert calls == [{"prefix": "homehub-replay-stage-", "dir": tmp_path.resolve()}]
+    root.cleanup()
+
+
+@pytest.mark.parametrize("invalid", ["parent", "prefix", "identity", "reparse"])
+def test_temp_cleanup_rejects_unsafe_roots(tmp_path, monkeypatch, invalid):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    root = sandbox_runner._create_replay_temp_root("homehub-replay-stage-")
+    unsafe = root
+    with monkeypatch.context() as patch:
+        if invalid == "parent":
+            unsafe = replace(root, parent=tmp_path / "elsewhere")
+        elif invalid == "prefix":
+            unsafe = replace(root, prefix="wrong-")
+        elif invalid == "identity":
+            unsafe = replace(root, identity=(-1, -1))
+        else:
+            info = root.path.lstat()
+
+            class ReparseInfo:
+                st_file_attributes = sandbox_runner.stat.FILE_ATTRIBUTE_REPARSE_POINT
+                st_mode = info.st_mode
+                st_dev = info.st_dev
+                st_ino = info.st_ino
+
+            patch.setattr(Path, "lstat", lambda _path: ReparseInfo())
+        with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="unsafe"):
+            unsafe.cleanup()
+    assert root.path.exists()
+    root.cleanup()
+
+
+def test_runner_preserves_roots_when_start_outcome_has_no_exact_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "backend_available", lambda: True)
+    monkeypatch.setattr(sandbox_runner, "_find_wsb", lambda: "wsb.exe")
+    monkeypatch.setattr(sandbox_runner, "_assert_no_running_sandbox", lambda _wsb: None)
+    monkeypatch.setattr(sandbox_runner, "build_stage", lambda _bundle, root: root.mkdir())
+
+    start_error = sandbox_runner.WindowsSandboxReplayError("start response could not be trusted")
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_start_sandbox",
+        lambda *_args: (_ for _ in ()).throw(start_error),
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_stop_sandbox",
+        lambda *_args: pytest.fail("cannot stop without an exact Sandbox ID"),
+    )
+
+    with pytest.raises(sandbox_runner.WindowsSandboxReplayError) as caught:
+        sandbox_runner.run_windows_sandbox_replay("synthetic")
+
+    assert caught.value is start_error
+    roots = list(tmp_path.iterdir())
+    assert len(roots) == 2
+    assert {path.name.split("-")[2] for path in roots} == {"stage", "export"}
+    assert any((path / "stage").is_dir() for path in roots)
+    notes = " ".join(getattr(caught.value, "__notes__", []))
+    assert "no exact Sandbox ID" in notes
+    assert all(path.name in notes for path in roots)
+
+
+def test_runner_cleans_exact_roots_when_failure_occurs_before_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "backend_available", lambda: True)
+    monkeypatch.setattr(sandbox_runner, "_find_wsb", lambda: "wsb.exe")
+    monkeypatch.setattr(sandbox_runner, "_assert_no_running_sandbox", lambda _wsb: None)
+
+    build_error = sandbox_runner.WindowsSandboxReplayError("stage build failed")
+    monkeypatch.setattr(
+        sandbox_runner,
+        "build_stage",
+        lambda *_args: (_ for _ in ()).throw(build_error),
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_start_sandbox",
+        lambda *_args: pytest.fail("startup must not be attempted after build failure"),
+    )
+
+    with pytest.raises(sandbox_runner.WindowsSandboxReplayError) as caught:
+        sandbox_runner.run_windows_sandbox_replay("synthetic")
+
+    assert caught.value is build_error
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("replay_fails", [False, True])
+def test_runner_preserves_roots_and_primary_error_when_stop_fails(
+    tmp_path, monkeypatch, replay_fails
+):
+    monkeypatch.setattr(sandbox_runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sandbox_runner, "backend_available", lambda: True)
+    monkeypatch.setattr(sandbox_runner, "_find_wsb", lambda: "wsb.exe")
+    monkeypatch.setattr(sandbox_runner, "_assert_no_running_sandbox", lambda _wsb: None)
+    monkeypatch.setattr(sandbox_runner, "build_stage", lambda _bundle, root: root.mkdir())
+    sandbox_id = "12345678-1234-1234-1234-1234567890ab"
+    monkeypatch.setattr(sandbox_runner, "_start_sandbox", lambda *_args: sandbox_id)
+    primary = ValueError("original replay failure")
+
+    def verify(*_args):
+        if replay_fails:
+            raise primary
+
+    monkeypatch.setattr(sandbox_runner, "_verify_exec_exit_propagation", verify)
+    for name in (
+        "_wait_for_replay",
+        "_share_export",
+        "_wait_for_export_share_ready",
+        "_export_result",
+        "_wait_for_export_visibility",
+    ):
+        monkeypatch.setattr(sandbox_runner, name, lambda *_args: None)
+    monkeypatch.setattr(sandbox_runner, "_load_export", lambda *_args: {"status": "ok"})
+
+    def stop(_wsb, exact_id):
+        assert exact_id == sandbox_id
+        raise RuntimeError("stop unavailable")
+
+    monkeypatch.setattr(sandbox_runner, "_stop_sandbox", stop)
+    expected = ValueError if replay_fails else sandbox_runner.WindowsSandboxReplayError
+    with pytest.raises(expected) as caught:
+        sandbox_runner.run_windows_sandbox_replay("synthetic")
+    roots = list(tmp_path.iterdir())
+    assert len(roots) == 2
+    assert {path.name.split("-")[2] for path in roots} == {"stage", "export"}
+    assert any((path / "stage").is_dir() for path in roots)
+    message = (
+        " ".join(getattr(caught.value, "__notes__", [])) if replay_fails else str(caught.value)
+    )
+    assert "stop unavailable" in message
+    assert all(path.name in message for path in roots)
+    if replay_fails:
+        assert caught.value is primary
+
+
+def test_stop_requires_exact_id_and_success(monkeypatch):
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append((args, kwargs))
+        raise sandbox_runner.WindowsSandboxReplayError("stop failed")
+
+    monkeypatch.setattr(sandbox_runner, "_run_command", command)
+    with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="stop failed"):
+        sandbox_runner._stop_sandbox("wsb.exe", "exact-id")
+    assert calls == [
+        (
+            ["wsb.exe", "stop", "--id", "exact-id"],
+            {"timeout": sandbox_runner.COMMAND_TIMEOUT_SECONDS, "check": True},
+        )
+    ]
 
 
 def test_guest_export_helper_uses_stream_redirection_and_completion_markers(tmp_path):
@@ -282,6 +506,7 @@ def test_guest_broker_constructs_zero_capability_restricted_child():
 
 def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     events: list[str] = []
+    roots: list[Path] = []
 
     monkeypatch.setattr(sandbox_runner, "backend_available", lambda: True)
     monkeypatch.setattr(sandbox_runner, "_find_wsb", lambda: "wsb.exe")
@@ -289,6 +514,8 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
 
     def build_stage(_bundle_path, stage_root):
         events.append("build")
+        roots.append(stage_root.parent)
+        assert stage_root.name == "stage"
         stage_root.mkdir(parents=True)
         return stage_root
 
@@ -305,6 +532,8 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
 
     def share(_wsb, _sandbox_id, _export_root):
         events.append("share_writable_export")
+        roots.append(_export_root)
+        assert roots[0] != roots[1]
 
     def wait_share(_wsb, _sandbox_id, _export_root):
         events.append("wait_share_host_backed")
@@ -321,6 +550,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
 
     def stop(_wsb, _sandbox_id):
         events.append("stop")
+        assert all(root.is_dir() for root in roots)
 
     monkeypatch.setattr(sandbox_runner, "build_stage", build_stage)
     monkeypatch.setattr(sandbox_runner, "_start_sandbox", start)
@@ -335,6 +565,7 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
 
     result = sandbox_runner.run_windows_sandbox_replay("synthetic")
     assert result["status"] == "ok"
+    assert all(not root.exists() for root in roots)
     assert events == [
         "build",
         "start",
@@ -349,7 +580,8 @@ def test_runner_adds_writable_export_only_after_replay_completion(monkeypatch):
     ]
 
 
-def test_runner_stops_before_share_when_exec_calibration_fails(monkeypatch):
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_runner_stops_before_share_when_exec_calibration_fails(monkeypatch, cleanup_fails):
     events: list[str] = []
 
     monkeypatch.setattr(sandbox_runner, "backend_available", lambda: True)
@@ -384,10 +616,22 @@ def test_runner_stops_before_share_when_exec_calibration_fails(monkeypatch):
         lambda *_args, **_kwargs: events.append("stop"),
     )
 
-    with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="untrusted"):
+    original_cleanup = sandbox_runner._ReplayTempRoot.cleanup
+    if cleanup_fails:
+
+        def cleanup(root):
+            original_cleanup(root)
+            raise OSError("cleanup failure")
+
+        monkeypatch.setattr(sandbox_runner._ReplayTempRoot, "cleanup", cleanup)
+
+    with pytest.raises(sandbox_runner.WindowsSandboxReplayError, match="untrusted") as caught:
         sandbox_runner.run_windows_sandbox_replay("synthetic")
 
     assert events == ["build", "start", "verify_exec_failed", "stop"]
+    if cleanup_fails:
+        assert len(caught.value.__notes__) == 2
+        assert all("cleanup failure" in note for note in caught.value.__notes__)
 
 
 def test_runner_stops_vm_without_export_when_replay_never_finishes(monkeypatch):
