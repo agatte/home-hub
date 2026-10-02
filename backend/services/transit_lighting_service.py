@@ -220,6 +220,58 @@ class TransitLightingService:
         # before the user reached the kitchen).
         self._owned_lights: set[str] = set()
         self._heartbeat: Optional[HeartbeatRegistry] = None
+        self._incident_capture: object | None = None
+        self._last_capture_event_id: str | None = None
+
+    def set_navigation_incident_capture(self, capture: object | None) -> None:
+        """Attach/detach the passive recorder without enabling capture by default."""
+        self._incident_capture = capture
+        presence_setter = getattr(
+            self._presence_fusion,
+            "set_navigation_incident_capture",
+            None,
+        )
+        if callable(presence_setter):
+            presence_setter(capture)
+        engine_setter = getattr(
+            self._automation,
+            "set_navigation_incident_capture",
+            None,
+        )
+        if callable(engine_setter):
+            engine_setter(capture)
+
+    def _capture_call(self, method: str, **kwargs):
+        capture = self._incident_capture
+        callback = getattr(capture, method, None) if capture is not None else None
+        if not callable(callback):
+            return None
+        try:
+            return callback(**kwargs)
+        except Exception:
+            logger.exception("navigation incident capture hook failed: %s", method)
+            return None
+
+    def _capture_authority(self) -> dict[str, Any]:
+        dnd_check = getattr(self._automation, "is_dnd_active", None)
+        dnd_active = bool(dnd_check()) if callable(dnd_check) else False
+        house_state = getattr(self._automation, "house_state", None)
+        activity = getattr(self._automation, "activity", None)
+        return {
+            "current_mode": getattr(self._automation, "current_mode", None),
+            "house_state": house_state.title() if isinstance(house_state, str) else house_state,
+            "activity": activity.title() if isinstance(activity, str) else activity,
+            "manual_override": getattr(self._automation, "_manual_override", None),
+            "away_hold": getattr(self._automation, "_away_hold", None),
+            "host_return_hold": getattr(self._automation, "_host_return_hold", None),
+            "external_off_detected": getattr(
+                self._automation,
+                "_external_off_detected",
+                None,
+            ),
+            "enabled": getattr(self._automation, "_enabled", None),
+            "dnd": {"active": dnd_active},
+        }
 
     def set_heartbeat_registry(self, registry: HeartbeatRegistry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
@@ -256,7 +308,15 @@ class TransitLightingService:
         mode = getattr(self._automation, "current_mode", "idle")
 
         # Camera may be disabled (opt-in); bail if no camera signal available.
+        # The capture hook consumes this exact in-memory view: it never asks the
+        # camera for another frame or calls a device-facing method.
         cam_status = self._camera.get_status() if self._camera else {}
+        self._last_capture_event_id = self._capture_call(
+            "record_transit_evaluation",
+            camera_status=cam_status,
+            camera=self._camera,
+            authority=self._capture_authority(),
+        )
         if not cam_status.get("enabled"):
             # Reset any trigger timer so we don't fire the moment the camera
             # comes back online.

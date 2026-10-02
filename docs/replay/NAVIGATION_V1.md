@@ -252,3 +252,33 @@ adapter acknowledgements at a quiescent cut. If that cannot be established
 without importing the full engine/bootstrap or changing production interleaving,
 escalate before Slice 2 rather than inventing state. Otherwise Slice 1 is ready
 for Terra Low Slice 2.
+
+## Slice 8 bounded capture/export implementation
+
+`backend/services/navigation_incident_capture.py` implements the opt-in
+navigation-v1 recorder. It is not imported or enabled by bootstrap. Arming is
+explicit through `NavigationIncidentCapture.arm_runtime()` and is restricted to
+the accepted Home + Working/day, desktop-unavailable, single-boot profile.
+
+The recorder takes a double-read quiescent checkpoint, rejects an in-flight
+lighting transition or active excluded owner, attaches passive hooks, and
+rechecks participant state across the snapshot-to-hook handoff. Capture reuses
+the camera status view already consumed by Transit; it never requests a frame,
+bridge read, or other device action.
+
+The default bounds are 15 minutes and 16 MiB. Duration/size overflow, missing
+source identity, ambiguous adapter outcomes, authority drift, or post-stop
+records create explicit incomplete gaps; records are never silently overwritten.
+Runtime payloads are field-allowlisted, configuration identity is restricted to
+the navigation-v1 profile marker, and raw image/audio/screen content,
+credentials, process command lines, window titles, and media URLs are excluded.
+
+Export writes only `manifest.json`, `initial.json`, `inputs.jsonl`, and
+`expected.json`. Recorded adapter acknowledgements become an exact
+`by_request` result policy with no default outcome, so a novel counterfactual
+request fails closed instead of inheriting synthetic success. Observed output
+assertions are labeled as the bounded modern capture and explicitly do not
+claim reproduction of the July 2026 incident.
+
+No real fixture has been captured by this implementation work. Historical
+fixture readiness therefore remains **EVIDENCE_GATED**.

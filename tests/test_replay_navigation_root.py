@@ -125,6 +125,29 @@ async def test_transit_success_and_failure_preserve_acknowledgement_semantics(tm
 
 
 @pytest.mark.asyncio
+async def test_by_request_only_adapter_policy_replays_exact_outcomes(tmp_path):
+    def exact(parts):
+        _make_absent_ready(
+            parts,
+            result_policy={
+                "by_request": {
+                    "1": True,
+                    "2": False,
+                    "3": True,
+                }
+            },
+        )
+
+    root = _root(tmp_path, exact)
+    await root.run_until(1_000_000_000)
+    assert [request.result for request in root.sink.requests] == [True, False, True]
+    assert [
+        request.policy_source for request in root.sink.requests
+    ] == ["by_request:1", "by_request:2", "by_request:3"]
+    assert set(root.state.transit_light_overrides) == {"1", "4"}
+
+
+@pytest.mark.asyncio
 async def test_suppression_terminates_before_recording_sink(tmp_path):
     root = _root(tmp_path, lambda parts: parts.__setitem__("inputs", []))
     root.engine["external_off_detected"] = True
@@ -249,13 +272,6 @@ def test_rejects_unavailable_profile_ambiguity_and_adapter_completion(tmp_path):
 
     with pytest.raises(UnsupportedNavigationReplay, match="adapter_completion"):
         _root(tmp_path / "completion", adapter_completion)
-
-    def no_default_result(parts):
-        parts["initial"]["adapter"]["value"]["result_policy"] = {"by_light": {"1": True}}
-
-    with pytest.raises(UnsupportedNavigationReplay, match="default outcome"):
-        _root(tmp_path / "result-policy", no_default_result)
-
 
 def test_rejects_envelope_time_source_and_camera_contradictions(tmp_path):
     def wrong_source(parts):

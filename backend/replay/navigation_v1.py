@@ -1138,10 +1138,9 @@ class NavigationV1Replay:
         if "sunset_ts" not in self.context:
             raise UnsupportedNavigationReplay("INCOMPLETE_INITIAL_STATE: Working sunset_ts")
         result_policy = self.adapter_state.get("result_policy")
-        if not isinstance(result_policy, dict) or "default" not in result_policy:
+        if not isinstance(result_policy, dict):
             raise UnsupportedNavigationReplay(
-                "INCOMPLETE_INITIAL_STATE: adapter result_policy requires "
-                "an explicit default outcome"
+                "INCOMPLETE_INITIAL_STATE: adapter result_policy must be explicit"
             )
 
         unsupported = [

@@ -890,3 +890,35 @@ class _FrozenDatetime:
 
     def now(self, tz=None):
         return datetime(*self._args, tzinfo=tz or TZ)
+
+
+@pytest.mark.asyncio
+async def test_incident_capture_reuses_existing_camera_status_read():
+    class CountingCamera(_FakeCamera):
+        def __init__(self):
+            super().__init__()
+            self.status_calls = 0
+
+        def get_status(self):
+            self.status_calls += 1
+            return super().get_status()
+
+    class CaptureSpy:
+        def __init__(self):
+            self.calls = []
+
+        def record_transit_evaluation(self, **kwargs):
+            self.calls.append(kwargs)
+            return "capture-tick"
+
+    automation = _FakeAutomation()
+    camera = CountingCamera()
+    capture = CaptureSpy()
+    service = TransitLightingService(automation, camera)
+    service.set_navigation_incident_capture(capture)
+
+    await service._check()
+
+    assert camera.status_calls == 1
+    assert len(capture.calls) == 1
+    assert capture.calls[0]["camera_status"]["enabled"] is True

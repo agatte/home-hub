@@ -716,10 +716,33 @@ class AutomationEngine:
         # Heartbeat registry — set via set_heartbeat_registry from lifespan
         # so /health can flag a stalled run_loop.
         self._heartbeat = None
+        self._incident_capture: object | None = None
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_navigation_incident_capture(self, capture: object | None) -> None:
+        """Attach/detach passive replay evidence hooks on existing writers."""
+        self._incident_capture = capture
+        self._overrides.set_navigation_incident_capture(capture)
+        self._applicator.set_navigation_incident_capture(capture)
+
+    def _capture_navigation_evaluation(self, kind: str) -> None:
+        callback = getattr(
+            self._incident_capture,
+            "record_backend_evaluation",
+            None,
+        )
+        if not callable(callback):
+            return
+        try:
+            callback(kind)
+        except Exception:
+            logger.exception(
+                "navigation incident capture evaluation hook failed: %s",
+                kind,
+            )
 
     # ------------------------------------------------------------------
     # Properties
@@ -1920,6 +1943,7 @@ class AutomationEngine:
         Uses the override-aware ``current_mode`` property — never the raw
         ``_current_mode`` field (see feedback_current_mode_field_footgun).
         """
+        self._capture_navigation_evaluation("restoration_tick")
         await self._apply_mode(self.current_mode, force_resend=force_resend)
 
     def is_recent_process_working(
@@ -4069,6 +4093,7 @@ class AutomationEngine:
 
     def _prune_expired_transit_overrides(self) -> None:
         """Remove transit overrides whose deadline has passed."""
+        self._capture_navigation_evaluation("deadline_tick")
         self._overrides.prune_expired_transit()
 
     async def apply_transit_override(
@@ -5515,6 +5540,7 @@ class AutomationEngine:
                     continue
 
                 now = datetime.now(tz=TZ)
+                self._capture_navigation_evaluation("engine_tick")
 
                 # DND auto-expiry — once-per-tick lazy clear. is_dnd_active()
                 # itself is side-effect free; we run the persist + WS broadcast
@@ -5712,6 +5738,7 @@ class AutomationEngine:
                     # Re-apply activity mode to pick up day→evening→night transitions.
                     # force_resend=False so dedup in _last_applied_per_light makes
                     # this a true no-op when nothing changed (the common case).
+                    self._capture_navigation_evaluation("restoration_tick")
                     await self._apply_mode(self._current_mode)
                 elif (
                     self._manual_override

@@ -64,6 +64,24 @@ class LightOverrideManager:
         # suppressed they would churn path-lighting for an empty room.
         self._suppressed_getter = suppressed_getter or (lambda: False)
         self._transition_boundary = transition_boundary
+        self._incident_capture: object | None = None
+
+    def set_navigation_incident_capture(self, capture: object | None) -> None:
+        """Attach/detach the passive navigation recorder."""
+        self._incident_capture = capture
+
+    def _capture_outcome(self, **kwargs) -> None:
+        callback = getattr(
+            self._incident_capture,
+            "record_navigation_outcome",
+            None,
+        )
+        if not callable(callback):
+            return
+        try:
+            callback(**kwargs)
+        except Exception:
+            logger.exception("navigation incident capture output hook failed")
 
     # ── Manual stamps ───────────────────────────────────────────────────
 
@@ -192,6 +210,7 @@ class LightOverrideManager:
                 ``"desk_exit_kitchen"`` so analytics can distinguish the two
                 paths.
         """
+        proposed_light_ids = set(states)
         if (
             self._transition_boundary is not None
             and not self._transition_boundary.held_by_current_task
@@ -212,10 +231,28 @@ class LightOverrideManager:
             logger.debug(
                 "%s override skipped — away/external-off suppressed", trigger,
             )
+            self._capture_outcome(
+                phase=f"{trigger}_override",
+                requested_states={},
+                acknowledged_light_ids=(),
+                skipped_light_ids=proposed_light_ids,
+                cache=self._st.last_applied_per_light,
+                reason="away_or_external_off_suppressed",
+                owner=trigger,
+            )
             return
 
         hue = self._hue_getter()
         if not hue or not hue.connected:
+            self._capture_outcome(
+                phase=f"{trigger}_override",
+                requested_states={},
+                acknowledged_light_ids=(),
+                failed_light_ids=proposed_light_ids,
+                cache=self._st.last_applied_per_light,
+                reason="adapter_unavailable",
+                owner=trigger,
+            )
             return
 
         # Kitchen-pair atomicity: L3 + L4 must move as a unit in functional
@@ -244,6 +281,15 @@ class LightOverrideManager:
                     lid: s for lid, s in states.items() if lid not in ("3", "4")
                 }
                 if not states:
+                    self._capture_outcome(
+                        phase=f"{trigger}_override",
+                        requested_states={},
+                        acknowledged_light_ids=(),
+                        skipped_light_ids=proposed_light_ids,
+                        cache=self._st.last_applied_per_light,
+                        reason="manual_kitchen_pair",
+                        owner=trigger,
+                    )
                     return
 
         deadline = self._clock.utc_now().astimezone(TZ) + timedelta(seconds=duration_seconds)
@@ -289,6 +335,16 @@ class LightOverrideManager:
             "%s override writes: success=%s failed=%s (expires %s)",
             trigger, successful, failed,
             deadline.strftime("%H:%M:%S"),
+        )
+        self._capture_outcome(
+            phase=f"{trigger}_override",
+            requested_states=states,
+            acknowledged_light_ids=successful,
+            failed_light_ids=failed,
+            skipped_light_ids=proposed_light_ids - set(states),
+            owned_light_ids=successful,
+            cache=self._st.last_applied_per_light,
+            owner=trigger,
         )
         event_logger = self._event_logger_getter()
         if event_logger:

@@ -105,10 +105,15 @@ class PresenceFusion:
     reading per source.
     """
 
-    def __init__(self, clock: Optional[DecisionClock] = None) -> None:
+    def __init__(
+        self,
+        clock: Optional[DecisionClock] = None,
+        incident_capture: object | None = None,
+    ) -> None:
         self._clock = clock or SystemDecisionClock(
             utc_now_fn=lambda: datetime.now(timezone.utc),
         )
+        self._incident_capture = incident_capture
         self._readings: dict[str, PresenceReading] = {}
         # Stamp the last source that confirmed at-desk so dashboards
         # can show "Latitude is currently the source backing your at-desk
@@ -126,6 +131,20 @@ class PresenceFusion:
         # edge first. Source startup/silence alone is not permission to relight.
         self._last_global_absence_observed_at: Optional[datetime] = None
 
+    def set_navigation_incident_capture(self, capture: object | None) -> None:
+        """Attach or detach the passive navigation evidence recorder."""
+        self._incident_capture = capture
+
+    def _capture_call(self, method: str, *args) -> None:
+        capture = self._incident_capture
+        callback = getattr(capture, method, None) if capture is not None else None
+        if not callable(callback):
+            return
+        try:
+            callback(*args)
+        except Exception:
+            logger.exception("navigation incident capture hook failed: %s", method)
+
     # ------------------------------------------------------------------
     # Ingest
     # ------------------------------------------------------------------
@@ -140,6 +159,7 @@ class PresenceFusion:
             # camera observation. Ignore delayed legacy packets defensively.
             logger.debug("ignoring non-physical legacy media reading")
             return
+        self._capture_call("record_fusion_ingest", reading)
         prior = self._readings.get(reading.source)
         if prior is not None and reading.captured_at < prior.captured_at:
             prior_skew_s = (
@@ -212,6 +232,7 @@ class PresenceFusion:
 
     def invalidate_source(self, source: str) -> None:
         """Discard one source's live reading without touching other sources."""
+        self._capture_call("record_fusion_invalidation", source)
         self._readings.pop(source, None)
         if self._last_at_desk_source == source:
             self._last_at_desk_source = None

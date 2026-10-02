@@ -99,6 +99,43 @@ class LightApplicator:
         # before the run_loop external-off continue). Paths that legitimately
         # re-light clear the flag first (signal_presence, user override).
         self._suppressed = suppressed_getter
+        self._incident_capture: object | None = None
+
+    def set_navigation_incident_capture(self, capture: object | None) -> None:
+        """Attach/detach the passive navigation recorder."""
+        self._incident_capture = capture
+
+    def _capture_apply_result(
+        self,
+        states: dict[str, dict],
+        result: LightApplyResult,
+    ) -> None:
+        callback = getattr(
+            self._incident_capture,
+            "record_navigation_outcome",
+            None,
+        )
+        if not callable(callback):
+            return
+        attempted = result.successful | result.failed
+        requested = {
+            light_id: states[light_id]
+            for light_id in states
+            if light_id in attempted
+        }
+        try:
+            callback(
+                phase="applicator_per_light",
+                requested_states=requested,
+                acknowledged_light_ids=result.successful,
+                failed_light_ids=result.failed,
+                skipped_light_ids=result.skipped,
+                deduplicated_light_ids=result.deduplicated,
+                cache=self._st.last_applied_per_light,
+                owner=self._current_mode_getter(),
+            )
+        except Exception:
+            logger.exception("navigation incident capture applicator hook failed")
 
     # ── Protected-light filter ──────────────────────────────────────────
 
@@ -230,13 +267,12 @@ class LightApplicator:
                 result, log_entries = await self._apply_per_light_locked(
                     states, transitiontime,
                 )
-            await self._log_successful_writes(log_entries)
-            return result
-
-        result, log_entries = await self._apply_per_light_locked(
-            states, transitiontime,
-        )
+        else:
+            result, log_entries = await self._apply_per_light_locked(
+                states, transitiontime,
+            )
         await self._log_successful_writes(log_entries)
+        self._capture_apply_result(states, result)
         return result
 
     async def _apply_per_light_locked(
