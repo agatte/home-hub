@@ -488,6 +488,9 @@ def _exec(
     sandbox_id: str,
     command: str,
 ) -> subprocess.CompletedProcess[str]:
+    guest_command = command
+    if command.casefold().endswith(".cmd"):
+        guest_command = f'cmd.exe /d /q /c "{command}"'
     return _run_command(
         [
             wsb,
@@ -495,7 +498,7 @@ def _exec(
             "--id",
             sandbox_id,
             "-c",
-            command,
+            guest_command,
             "-r",
             "System",
         ],

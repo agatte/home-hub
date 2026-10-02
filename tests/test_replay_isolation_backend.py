@@ -59,6 +59,36 @@ def test_wsb_configuration_exposes_only_read_only_stage(tmp_path):
     )
 
 
+def test_wsb_exec_wraps_batch_helpers_in_cmd(monkeypatch):
+    captured: list[list[str]] = []
+
+    def fake_run_command(args, *, timeout=sandbox_runner.COMMAND_TIMEOUT_SECONDS, check=False):
+        captured.append(args)
+        return subprocess.CompletedProcess(args=args, returncode=7, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox_runner, "_run_command", fake_run_command)
+
+    completed = sandbox_runner._exec(
+        "wsb.exe",
+        "12345678-1234-1234-1234-1234567890ab",
+        r"C:\HomeHubReplayStage\poll_ready.cmd",
+    )
+
+    assert completed.returncode == 7
+    assert captured == [
+        [
+            "wsb.exe",
+            "exec",
+            "--id",
+            "12345678-1234-1234-1234-1234567890ab",
+            "-c",
+            'cmd.exe /d /q /c "C:\\HomeHubReplayStage\\poll_ready.cmd"',
+            "-r",
+            "System",
+        ]
+    ]
+
+
 def test_backend_availability_is_capability_and_context_gated(monkeypatch):
     monkeypatch.setattr(sandbox_runner, "_windows_build", lambda: sandbox_runner.MIN_WINDOWS_BUILD)
     monkeypatch.setattr(sandbox_runner, "_find_wsb", lambda: r"C:\Windows\System32\wsb.exe")
