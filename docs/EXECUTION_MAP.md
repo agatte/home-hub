@@ -1,7 +1,7 @@
 # HomeHub Execution Map
 
 > **Status:** Living execution/orchestration guidance; not product authority.
-> **Last reconciled:** 2026-09-23 against `master` at `f83d771`.
+> **Last reconciled:** 2026-10-02 through the accepted #240 Slice 10 handoff.
 > **Evidence baseline:** [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md).
 > **Product authority:** [`PROJECT_SPEC.md`](PROJECT_SPEC.md).
 
@@ -21,6 +21,7 @@ Readiness vocabulary:
 - **ARCHITECTURE_READY** — direction is resolved but a bounded design pass remains.
 - **DECISION_NEEDED** — a real product/authority choice is still missing.
 - **EVIDENCE_GATED** — current real-world/runtime evidence is required first.
+- **IMPLEMENTATION_COMPLETE** — accepted implementation work is complete; only an explicit operational/evidence gate remains.
 - **PARKED** — valid retained work, but not worth detailed planning now.
 
 ## Current architectural checkpoint
@@ -33,7 +34,7 @@ Important current facts:
 - Scene Curator foundations, shared music intelligence, central Sonos ownership, and cross-Activity desk comfort already exist in code; future work must reconcile/extend them rather than rebuild them.
 - Existing mode-match/fusion accuracy is not independent user-outcome evidence and must not be used as #131 autonomy-graduation proof.
 - Sonos ownership serializes participating HomeHub writers, but read-then-write device operations are not atomic against an external Sonos controller.
-- #240's bounded navigation-replay architecture is accepted. Implementation is ready in small slices; the first real evidence-backed fixture remains capture-gated.
+- #240's bounded navigation-replay architecture is implemented through bounded capture/export and fixed-evidence semantic diff. The first real evidence-backed fixture remains capture-gated; no synthetic fixture satisfies that gate.
 
 ## Recommended near-term order
 
@@ -45,7 +46,7 @@ Important current facts:
 | 4 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
 | 5 | Stale docs/GitHub execution-contract reconciliation | EXECUTION_READY | Refresh #142/#149/#244/#247/#253/#254/#276 and Dashboard/Canvas status pointers without changing product decisions | **Luna Low** |
 | 6 | #245 closeout verification | EXECUTION_READY | Verify current regression coverage/deployment evidence before deciding whether anything remains | **Luna Low** |
-| 7 | #240 deterministic navigation replay | ISOLATION_ACCEPTED / EVIDENCE_GATED | Slice 6 closed root + reviewed Windows Sandbox/AppContainer operational isolation are accepted; Slice 7 may proceed, while the first historical fixture remains separately evidence-gated | **Sol High** |
+| 7 | #240 deterministic navigation replay | IMPLEMENTATION_COMPLETE / EVIDENCE_GATED | Slices 1-8 plus fixed-evidence trace diff are implemented; obtain one eligible natural daytime capture before claiming real-fixture acceptance | **Luna Low** for capture/status handling; **Sol Medium** only for unexpected divergence |
 
 The first four correctness items do not require #240. #240 should not be used as a reason to postpone small, already-understood safety/reliability fixes.
 
@@ -161,7 +162,7 @@ Other evidence-gated or parked work is fully classified in **Section 5** of the 
 
 **Accepted design:** [`audits/REPLAY_ARCHITECTURE_2026_09_22.md`](audits/REPLAY_ARCHITECTURE_2026_09_22.md).
 
-**Status:** Slices 1-5 are landed. Slice 6's closed offline composition root, recording sinks, exact import-closure proof, runtime tripwire, and reviewed operational Windows Sandbox/AppContainer backend are now accepted. The real-host acceptance E2E on 2026-10-02 passed (`1 passed, 44 deselected in 31.57s`, pytest exit `0`, clean post-test Sandbox inventory), so the **ISOLATION_GATED** blocker is resolved and Slice 7 may proceed. The first real fixture remains separately **EVIDENCE_GATED** because no retained historical input stream/checkpoint is complete enough to claim deterministic reproduction of the July incident.
+**Status:** The bounded navigation-v1 implementation is complete through deterministic trace/forensics, privacy-preserving capture/export, and fixed-evidence semantic diff. Slice 6 operational isolation is accepted: the real-host E2E on 2026-10-02 passed (`1 passed, 44 deselected in 31.57s`, pytest exit `0`, clean post-test Sandbox inventory). Slice 9's diff machinery is implemented, but its real-fixture half remains **EVIDENCE_GATED** because no eligible bounded natural capture has been obtained and no retained July input stream/checkpoint is complete enough to claim historical reproduction.
 
 Supported v1 profile:
 
@@ -183,10 +184,10 @@ Implementation order:
 4. **COMPLETE** - narrow Activity/Working composition extraction with production-equivalence tests (`f83d771`). Passive shared policy/composition helpers now preserve strict expiry boundaries, property short-circuits, learner-await/read ordering, lux hysteresis continuity, and normal ScreenSync/application ownership. Independent Sol Medium review found no blockers.
 5. **COMPLETE** - deterministic scheduler + checkpoint model. Replay now has an offline virtual UTC/monotonic clock, stable deadline/enqueue ordering, same-time append semantics, cancellation and exception behavior, recorded-input delivery without synthesized cadence, and typed quiescent checkpoint continuation. Non-empty wall-clock adjustments are rejected until their capture semantics are explicitly defined. Sol High implementation plus independent review found no blockers; 32 replay scheduler/bundle tests, Ruff, and diff-check are green.
 6. **COMPLETE / OPERATIONAL ISOLATION ACCEPTED (Sol High)** - offline composition root wires the bounded production decision participants to data-only recording light/event sinks, restores exact checkpoint state, preserves mode/per-light expiry and Working restoration ordering, rejects unmapped acknowledgement timing, and locks the reviewed project/external import closure. The operational runner now uses a fresh transient Windows Sandbox plus a broker-created zero-capability AppContainer child; the stage is read-only, networking/device-facing channels are disabled, no production/Home/credential/database mapping is exposed, and no writable host export path exists while the replay child runs. Guest completion is positively proven before a fresh writable export mapping is added. The controlled real-host E2E passed on 2026-10-02 with pytest exit `0` and clean post-test Sandbox inventory; focused validation is `44 passed, 1 skipped` and the broader replay suite is `90 passed, 1 skipped`.
-7. **EXECUTION_READY** - trace/forensics + synthetic contract replay (Luna Medium). The Slice 6 isolation blocker is resolved; preserve the separate evidence gate and do not fabricate historical July evidence.
-8. **Sol Medium** - bounded privacy-preserving capture/exporter.
-9. **Sol Medium** - first real fixture + fixed-evidence semantic diff.
-10. **Luna Low** - accepted handoff/status docs.
+7. **COMPLETE** - deterministic trace/forensics + synthetic contract replay (`8b5b9d4`), with explicit certainty classes, causal/evidence links, reason codes, and gate states.
+8. **COMPLETE** - bounded privacy-preserving capture/exporter (`e0da717`), opt-in only, quiescent-cut guarded, field-allowlisted, and bounded to 15 minutes / 16 MiB by default.
+9. **DIFF COMPLETE / REAL FIXTURE EVIDENCE_GATED** - `backend/replay/diff.py` performs deterministic FIXED-EVIDENCE COUNTERFACTUAL alignment and rejects changed FACT streams; one eligible real capture is still required for evidence-backed golden assertions.
+10. **COMPLETE** - accepted handoff/status and usage documentation. Residual work is an evidence acquisition gate, not another implementation slice.
 
 Important findings to preserve during implementation:
 - Transit internal `active` state is not proof that a write succeeded; the manager may suppress or receive zero successful acknowledgements.

@@ -282,3 +282,42 @@ claim reproduction of the July 2026 incident.
 
 No real fixture has been captured by this implementation work. Historical
 fixture readiness therefore remains **EVIDENCE_GATED**.
+
+## Slice 9 fixed-evidence semantic diff
+
+`backend/replay/diff.py` implements the deterministic
+**FIXED-EVIDENCE COUNTERFACTUAL** comparison layer. The diff requires explicit
+shared evidence and recording-adapter response-policy identities and refuses to
+compare traces with different certainty classes or different captured `FACT`
+streams.
+
+Alignment is causal rather than positional: dispatch identity (or a stable
+cause/evidence anchor when no dispatch sequence exists), participant, trace
+kind, semantic action/input kind, owner, light IDs, and deterministic occurrence
+number. Raw `record_id` and request sequence are explanation fields, not the
+alignment key. Inserted, deleted, changed, and unchanged semantic records remain
+distinct.
+
+Changed records expose differences in virtual time, causes/evidence, prior-state
+digest, relevant state delta, decision, reason codes, gates, ownership, light
+targets, payload, and simulated result. A deterministic Markdown renderer
+provides the human-readable form. See
+[`COUNTERFACTUAL_DIFF.md`](COUNTERFACTUAL_DIFF.md) for usage and claim limits.
+
+Synthetic tests prove the diff mechanics and causal alignment only. No eligible
+real fixture was created by Slice 9, so evidence-backed golden assertions remain
+**EVIDENCE_GATED**.
+
+## Slice 10 handoff status
+
+The accepted bounded implementation is complete through manifest/schema,
+clock/policy extraction, deterministic scheduling, closed-root operational
+isolation, trace/forensics, bounded capture/export, and fixed-evidence diff.
+
+The residual #240 gate is evidence acquisition: obtain one eligible bounded
+natural daytime capture, validate it without gaps, and only then add real-fixture
+golden assertions and a baseline/candidate counterfactual result. The missing
+July 2026 evidence must not be reconstructed from narrative or synthetic tests.
+
+This residual gate is not another implementation slice. Until a valid capture
+exists, status is **IMPLEMENTATION COMPLETE / REAL-FIXTURE EVIDENCE_GATED**.
