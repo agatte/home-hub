@@ -2,7 +2,6 @@
 param()
 
 $ErrorActionPreference = "Stop"
-
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 $ProjectRoot = Split-Path -Parent $RepoRoot
@@ -11,233 +10,170 @@ $SnapshotsDir = Join-Path $ProjectRoot "snapshots"
 function Invoke-Git {
     param([Parameter(Mandatory=$true)][string[]]$Args)
     $output = & git -C $RepoRoot @Args 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "git $($Args -join ' ') failed:`n$($output -join [Environment]::NewLine)"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Git operation failed." }
     return @($output)
 }
 
-function Should-ExcludeSnapshotPath {
+# This is the single eligibility gate used for both source candidates and ZIP
+# members. Keep the allowlist deliberately limited to useful source/context.
+function Test-SnapshotPath {
     param([Parameter(Mandatory=$true)][string]$RelativePath)
-
+    if ([string]::IsNullOrWhiteSpace($RelativePath)) { return $false }
     $p = $RelativePath.Replace("\", "/")
-
-    # Long-standing unrelated machine-local file in Anthony's checkout.
-    if ($p -eq "=") { return $true }
-
-    # Secrets: keep .env.example, exclude actual/local env files and key material.
+    if ($p.StartsWith("/") -or $p -match "^[A-Za-z]:" -or $p -match "(^|/)\.\.?(/|$)" -or $p.Contains(":") -or $p -match "//|/$|[. ](/|$)") { return $false }
+    if ($p -eq "=" -or $p -match '(?i)(^|/)\.mcp\.json$' -or $p -match '(?i)(^|/)\.env($|\.)') {
+        if ($p -match '(?i)(^|/)\.env\.example$') { } else { return $false }
+    }
     $leaf = [IO.Path]::GetFileName($p)
-    if ($leaf -ne ".env.example" -and $leaf -match "^\.env($|\.)") { return $true }
-    if ($p -match "(^|/)(id_rsa|id_ed25519)(\.pub)?$") { return $true }
-    if ($p -match "\.(pem|key|p12|pfx)$") { return $true }
+    # Reject machine-local credential/configuration locations even when they sit
+    # underneath an otherwise safe source/docs prefix.
+    if ($p -match '(?i)(^|/)(secrets?|credentials?|\.ssh|\.aws|\.azure|\.kube|\.docker|\.vscode|\.idea|\.claude|\.codex)(/|$)') { return $false }
+    if ($leaf -match '(?i)(^|[-_.])(credentials?|secrets?)([-_.]|$)' -or
+        $leaf -match '(?i)^(id_rsa|id_ed25519|authorized_keys|known_hosts|\.npmrc|\.pypirc|\.netrc|\.ssh_config)(\.|$)' -or
+        $leaf -match '(?i)\.(pem|key|p12|pfx|keystore|jks|sqlite|sqlite3|db|log|zip|rar|7z|pyc|pyo)$') { return $false }
+    if ($leaf -match '(?i)(^|[-_.])(config|settings)([-_.])(local|machine|user)([-_.]|$)' -or
+        $leaf -match '(?i)(^|[-_.])(local|machine|user)([-_.])(config|settings)([-_.]|$)') { return $false }
+    if ($p -match '(?i)(^|/)(node_modules|venv|\.venv|\.git|\.svelte-kit|logs|data|build|dist|htmlcov|playwright-report|test-results|coverage|\.pytest_cache|\.ruff_cache|\.mypy_cache|\.cache|__pycache__)(/|$)') { return $false }
+    if ($p -match '^(?i:backend/static/ambient/|frontend-svelte/static/3d/)') { return $false }
 
-    # Runtime, dependency, build, cache, log, database, and generated-output trees.
-    if ($p -match "^(node_modules|venv|\.venv|logs|data|build|dist|htmlcov|playwright-report|test-results|coverage)(/|$)") { return $true }
-    if ($p -match "^frontend-svelte/(node_modules|build|\.svelte-kit|playwright-report|test-results)(/|$)") { return $true }
-    if ($p -match "(^|/)(\.pytest_cache|\.ruff_cache|\.mypy_cache|\.cache|__pycache__)(/|$)") { return $true }
+    # Only export text/source/config formats from explicit project source trees.
+    # Tracked status does not widen this allowlist.
+    $safePrefixes = @('backend/','frontend-svelte/','tests/','docs/','scripts/','deployment/','docker/','alexa_skill/','mcp_server/','static/','.github/')
+    $safeExtensions = @(
+        '.md','.txt','.py','.pyi','.ps1','.psm1','.psd1','.cmd','.bat','.sh','.vbs',
+        '.js','.mjs','.cjs','.ts','.tsx','.jsx','.svelte','.css','.scss','.html',
+        '.json','.jsonc','.toml','.yaml','.yml','.sql','.service','.timer','.desktop',
+        '.ini','.cfg','.conf','.xml','.csv','.lock'
+    )
+    $rootSafeNames = @('.gitattributes','.gitignore','Dockerfile','Makefile','Procfile')
+    $extension = [IO.Path]::GetExtension($leaf).ToLowerInvariant()
+    $allowedType = ($safeExtensions -contains $extension) -or ($rootSafeNames -contains $leaf) -or
+        ($p -match '(?i)(^|/)\.env\.example$')
+    if (-not $allowedType) { return $false }
 
-    # Large tracked presentation/media assets are not useful in a source-context
-    # snapshot. Keep the code that references them, but omit the binary payloads.
-    if ($p -match "^backend/static/ambient/") { return $true }
-    if ($p -match "^frontend-svelte/static/3d/") { return $true }
-
-    # Generated/runtime file types and nested archives.
-    if ($p -match "\.(pyc|pyo|log|db|sqlite|sqlite3|zip|rar|7z)$") { return $true }
-
-    return $false
+    $allowedLocation = ($p -notmatch '/')
+    foreach ($prefix in $safePrefixes) {
+        if ($p.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) { $allowedLocation = $true; break }
+    }
+    if (-not $allowedLocation) { return $false }
+    return $true
 }
 
-$inside = Invoke-Git @("rev-parse", "--is-inside-work-tree")
-if (($inside | Select-Object -First 1).Trim() -ne "true") {
-    throw "Expected a Git worktree at $RepoRoot"
+function Test-SafeRepositoryFile {
+    param([Parameter(Mandatory=$true)][string]$RelativePath)
+    if (-not (Test-SnapshotPath $RelativePath)) { return $false }
+    $candidate = Join-Path $RepoRoot ($RelativePath.Replace('/', '\'))
+    try { $full = [IO.Path]::GetFullPath($candidate) } catch { return $false }
+    $rootFull = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\') + '\'
+    if (-not $full.StartsWith($rootFull,[StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $current = $RepoRoot
+    foreach ($part in $RelativePath.Replace('\','/').Split('/')) {
+        $current = Join-Path $current $part
+        if (-not (Test-Path -LiteralPath $current)) { return $false }
+        try { $item = Get-Item -LiteralPath $current -Force } catch { return $false }
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+    }
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return $false }
+    try { $resolved = (Resolve-Path -LiteralPath $full -ErrorAction Stop).ProviderPath } catch { return $false }
+    return $resolved.StartsWith($rootFull,[StringComparison]::OrdinalIgnoreCase)
 }
 
+function Assert-SnapshotArchiveSafe {
+    param([Parameter(Mandatory=$true)][string]$ArchivePath)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $manifestSeen = $false
+        foreach ($entry in $archive.Entries) {
+            $member = $entry.FullName.Replace('\','/')
+            if ($member -eq 'SNAPSHOT_MANIFEST.txt') {
+                if ($manifestSeen) { throw 'Archive validation failed: duplicate manifest.' }
+                $manifestSeen = $true
+                $reader = New-Object IO.StreamReader($entry.Open())
+                try { $manifestText = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                if ($manifestText -notmatch '(?m)^Home Hub - ChatGPT Snapshot Manifest$' -or
+                    $manifestText -match '(?im)^(Repository|Origin)\s*:' -or
+                    $manifestText -match '(?i)(https?://|git@|\.git/config)') {
+                    throw 'Archive validation failed: unsafe manifest.'
+                }
+                continue
+            }
+            if (-not (Test-SnapshotPath $member)) {
+                throw 'Archive validation failed: disallowed member.'
+            }
+        }
+        if (-not $manifestSeen) { throw 'Archive validation failed: missing manifest.' }
+    } finally {
+        $archive.Dispose()
+    }
+}
+
+# Dot-sourcing loads the policy functions for focused synthetic tests.
+if ($MyInvocation.InvocationName -eq '.') { return }
+
+$inside = Invoke-Git @('rev-parse','--is-inside-work-tree')
+if (($inside | Select-Object -First 1).Trim() -ne 'true') { throw 'Expected a Git worktree.' }
 New-Item -ItemType Directory -Force -Path $SnapshotsDir | Out-Null
-
-$branch = ((Invoke-Git @("branch", "--show-current")) | Select-Object -First 1).Trim()
-if (-not $branch) { $branch = "detached" }
-
-$sha = ((Invoke-Git @("rev-parse", "--short=12", "HEAD")) | Select-Object -First 1).Trim()
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$branch = ((Invoke-Git @('branch','--show-current')) | Select-Object -First 1).Trim()
+if (-not $branch) { $branch = 'detached' }
+$sha = ((Invoke-Git @('rev-parse','--short=12','HEAD')) | Select-Object -First 1).Trim()
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $zipName = "home-hub-chatgpt-$timestamp-$sha.zip"
 $zipPath = Join-Path $SnapshotsDir $zipName
-
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) "home-hub-chatgpt-$timestamp-$PID"
-$stageRoot = Join-Path $tempRoot "home-hub"
+$stageRoot = Join-Path $tempRoot 'home-hub'
 New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
-
-function Is-SafeUntrackedSnapshotPath {
-    param([Parameter(Mandatory=$true)][string]$RelativePath)
-
-    $p = $RelativePath.Replace("\", "/")
-    $safePrefixes = @(
-        "backend/",
-        "frontend-svelte/src/",
-        "frontend-svelte/static/",
-        "tests/",
-        "docs/",
-        "scripts/",
-        "deployment/",
-        "docker/",
-        "alexa_skill/",
-        "mcp_server/",
-        "static/",
-        ".github/"
-    )
-    foreach ($prefix in $safePrefixes) {
-        if ($p.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-            return $true
-        }
-    }
-
-    # Safe root-level source/docs/config additions. Secrets/runtime files are
-    # still rejected by Should-ExcludeSnapshotPath.
-    if ($p -notmatch "/" -and $p -match "\.(md|py|ps1|cmd|toml|ya?ml|json|js|ts|txt)$") {
-        return $true
-    }
-    return $false
-}
-
-$included = New-Object System.Collections.Generic.List[string]
-$skipped = New-Object System.Collections.Generic.List[string]
+$included = New-Object 'System.Collections.Generic.List[string]'
+$skippedCount = 0
 $maxFileBytes = 25MB
 
 try {
-    # Always include tracked files. Include untracked files only from
-    # source/docs/config locations that are useful to ChatGPT, so arbitrary
-    # machine-local debris does not get swept into an upload.
-    $tracked = @(Invoke-Git @("ls-files", "--cached"))
-    $untracked = @(Invoke-Git @("ls-files", "--others", "--exclude-standard"))
-
-    $files = New-Object System.Collections.Generic.List[string]
-    foreach ($relative in $tracked) {
-        if (-not [string]::IsNullOrWhiteSpace($relative)) {
-            $files.Add($relative) | Out-Null
-        }
-    }
-    foreach ($relative in $untracked) {
-        if ([string]::IsNullOrWhiteSpace($relative)) { continue }
-        if (-not (Is-SafeUntrackedSnapshotPath $relative)) {
-            $skipped.Add("$relative [untracked-not-allowlisted]") | Out-Null
-            continue
-        }
-        $files.Add($relative) | Out-Null
-    }
-
-    foreach ($relative in ($files | Sort-Object -Unique)) {
-        if (Should-ExcludeSnapshotPath $relative) {
-            $skipped.Add("$relative [policy]") | Out-Null
-            continue
-        }
-
-        $source = Join-Path $RepoRoot $relative
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            $skipped.Add("$relative [missing/non-file]") | Out-Null
-            continue
-        }
-
-        $length = (Get-Item -LiteralPath $source).Length
-        if ($length -gt $maxFileBytes) {
-            $skipped.Add("$relative [larger than 25 MB]") | Out-Null
-            continue
-        }
-
+    $tracked = @(Invoke-Git @('ls-files','--cached'))
+    $untracked = @(Invoke-Git @('ls-files','--others','--exclude-standard'))
+    foreach ($relative in @($tracked + $untracked | Sort-Object -Unique)) {
+        if (-not (Test-SnapshotPath $relative) -or -not (Test-SafeRepositoryFile $relative)) { $skippedCount++; continue }
+        try { $item = Get-Item -LiteralPath (Join-Path $RepoRoot $relative) -Force } catch { $skippedCount++; continue }
+        if ($item.Length -gt $maxFileBytes) { $skippedCount++; continue }
         $dest = Join-Path $stageRoot $relative
-        $destDir = Split-Path -Parent $dest
-        if ($destDir) {
-            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-        }
-        Copy-Item -LiteralPath $source -Destination $dest -Force
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+        Copy-Item -LiteralPath $item.FullName -Destination $dest -Force
         $included.Add($relative) | Out-Null
     }
-
-    $status = (Invoke-Git @("status", "--short", "--branch")) -join [Environment]::NewLine
-
-    # Snapshot creation is read-only. A working tree with LF files can make Git
-    # emit advisory LF->CRLF warnings on stderr during diff inspection. Under
-    # Windows PowerShell 5.1 + ErrorActionPreference=Stop those warnings become
-    # terminating NativeCommandError records even though Git exits 0. Disable
-    # safecrlf for these two read-only diff-stat calls only; do not change repo
-    # or global Git configuration.
-    $diffStat = (& git -c core.safecrlf=false -C $RepoRoot diff --stat 2>&1) -join [Environment]::NewLine
-    $cachedDiffStat = (& git -c core.safecrlf=false -C $RepoRoot diff --cached --stat 2>&1) -join [Environment]::NewLine
-    $remote = (& git -C $RepoRoot remote get-url origin 2>&1 | Select-Object -First 1)
 
     $manifest = @"
 Home Hub - ChatGPT Snapshot Manifest
 ====================================
 
-Created:       $(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
-Repository:    $RepoRoot
-Origin:        $remote
-Branch:        $branch
-HEAD:          $sha
+Created:        $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
+Branch:         $branch
+HEAD:           $sha
 Files included: $($included.Count)
-Files skipped:  $($skipped.Count)
-
-Git status
-----------
-$status
-
-Working-tree diff stat
-----------------------
-$diffStat
-
-Staged diff stat
-----------------
-$cachedDiffStat
+Files skipped:  $skippedCount
 
 Snapshot policy
 ---------------
-- Includes Git-tracked files plus allowlisted untracked source/docs/config.
-- Excludes .env/local secret files, private keys, runtime databases, logs,
-  caches, dependency/build trees, large tracked ambient/3D binary assets,
-  nested archives, and files over 25 MB.
-- Explicitly excludes the unrelated root file named "=".
-- Does not include .git metadata.
-- Does not modify repository files.
-
-Skipped paths
--------------
-$($skipped -join [Environment]::NewLine)
+- Includes allowlisted source, documentation, and safe examples only.
+- Excludes local credentials/configuration, runtime and generated files, and unsafe paths.
+- Does not include Git metadata or remote configuration.
 "@
-
-    Set-Content -LiteralPath (Join-Path $stageRoot "SNAPSHOT_MANIFEST.txt") `
-        -Value $manifest -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $stageRoot 'SNAPSHOT_MANIFEST.txt') -Value $manifest -Encoding UTF8
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    if (Test-Path -LiteralPath $zipPath) {
-        Remove-Item -LiteralPath $zipPath -Force
-    }
-    [System.IO.Compression.ZipFile]::CreateFromDirectory(
-        $stageRoot,
-        $zipPath,
-        [System.IO.Compression.CompressionLevel]::Optimal,
-        $false
-    )
+    if (Test-Path -LiteralPath $zipPath) { throw 'Snapshot archive path already exists.' }
+    [IO.Compression.ZipFile]::CreateFromDirectory($stageRoot,$zipPath,[IO.Compression.CompressionLevel]::Optimal,$false)
 
-    $zipInfo = Get-Item -LiteralPath $zipPath
-    $sizeMB = [math]::Round($zipInfo.Length / 1MB, 2)
-
-    try {
-        Set-Clipboard -Value $zipPath
-        $clipboardNote = "ZIP path copied to clipboard."
-    }
-    catch {
-        $clipboardNote = "Could not copy ZIP path to clipboard."
-    }
-
-    Write-Host ""
+    # Independently apply the same policy to every final archive member.
+    Assert-SnapshotArchiveSafe -ArchivePath $zipPath
     Write-Host "Snapshot created successfully."
-    Write-Host "Path:   $zipPath"
-    Write-Host "Size:   $sizeMB MB"
-    Write-Host "Files:  $($included.Count)"
+    Write-Host "Path: $zipPath"
+    Write-Host "Files: $($included.Count)"
     Write-Host "Branch: $branch"
-    Write-Host "HEAD:   $sha"
-    Write-Host $clipboardNote
+    Write-Host "HEAD: $sha"
+}
+catch {
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
+    throw
 }
 finally {
-    if (Test-Path -LiteralPath $tempRoot) {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
