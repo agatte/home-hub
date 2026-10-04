@@ -32,22 +32,20 @@ their subject is actually involved.
 
 ## Model routing and delegation
 
-- HomeHub escalation is ChatGPT -> GPT-6 Luna -> GPT-6 Sol -> GPT-6 Astra.
-  Do not select Terra for HomeHub; if Luna is insufficient, escalate to Sol. Use
-  the cheapest credible model and effort after narrowing the task with
-  repo/runtime evidence.
-- Luna Low: scouting, extraction, inventory, classification, deterministic checks,
-  docs, tests, and tiny/mechanical edits. Luna Medium: clear bounded
-  implementation, including ordinary multi-file work when the contract is precise.
-- Sol Medium: implementation, debugging, research, or independent review that
-  needs meaningful engineering judgment. Sol High/xhigh: difficult
-  concurrency/lifecycle/ownership/cross-service work, deep verification, or
-  meaningful runtime/security/data risk.
-- Astra is exceptional only. Before any Astra use, tell Anthony why it is
-  justified, that it uses materially more Codex/Work allowance than Sol, the
-  cheapest credible alternative, and the bounded Astra task; wait for explicit
-  Astra approval. Broad approval such as "continue", "investigate", "fix", or
-  "use the best model" is not Astra approval.
+- Use the cheapest credible current model likely to finish correctly after narrowing
+  the task with repo/runtime evidence.
+- Luna-class: scouting, extraction, inventory, classification, deterministic checks,
+  docs/tests, and mechanical or tightly specified bounded implementation.
+- Sol-class is the substantive default for implementation, debugging, research,
+  review, and multi-file engineering judgment.
+- Use higher Sol effort for genuinely difficult concurrency, lifecycle, ownership,
+  architecture, performance, security/data-integrity, deep verification, or failed
+  normal-effort work.
+- Astra-class is exceptional: use it only when its specific strengths or genuinely
+  independent/high-end review materially justify the extra cost. Do not stop merely
+  to ask Anthony for separate Astra permission when the current task authorization
+  already covers the work and Astra is the cheapest credible way to finish it.
+- Terra/legacy-class is fallback only.
 - Keep Codex model choice task-driven rather than pinning a repo/global default.
   Delegation prompts should name the recommended model/effort and why delegation
   helps, then give Goal, Context, Constraints, and Done When. Match review depth
