@@ -1186,15 +1186,13 @@ async def lifespan(app: FastAPI):
     )
 
     # Late-bind brightness-suggestion collaborators on rule_engine. Built
-    # in this order because rule_engine is constructed early (line ~274)
-    # but the notifier comes online here. Public base url defaults to the
-    # Latitude's LAN address — ntfy.sh action buttons hit it directly from
-    # the iPhone on Wi-Fi (no auth needed via require_api_key's RFC1918
-    # bypass) and the `X-API-Key` header travels for cellular round-trips.
+    # in this order because rule_engine is constructed early but the notifier
+    # comes online here. Public base URL defaults to the Latitude LAN address.
+    # Suggestion actions deliberately carry no reusable API credential; LAN
+    # taps may use the existing LAN policy, while cellular taps fail closed.
     rule_engine.set_brightness_suggestion_deps(
         lighting_learner=lighting_learner,
         notifier_service=notifier,
-        api_key=settings.HOME_HUB_API_KEY,
         public_base_url=(
             f"http://{settings.LOCAL_IP}:8000"
             if getattr(settings, "LOCAL_IP", None)

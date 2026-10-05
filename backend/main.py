@@ -11,9 +11,11 @@ import ipaddress
 import json
 import logging
 import re
+from pathlib import Path, PurePosixPath
 from typing import Optional
+from urllib.parse import unquote
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,7 +51,6 @@ from backend.api.routes.notification import router as notification_router
 from backend.api.routes.remediation import router as remediation_router
 from backend.api.routes.personality import router as personality_router
 from backend.api.routes.presence import router as presence_router
-from backend.api.routes.pihole_proxy import router as pihole_proxy_router
 from backend.bootstrap import lifespan
 from backend.config import DATA_DIR, PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
@@ -218,9 +219,6 @@ _CSP = (
     "frame-ancestors 'none'"
 )
 
-_PIHOLE_EMBED_CSP = _CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
-
-
 _BAR_CSP_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
 
 
@@ -293,11 +291,7 @@ async def security_headers_middleware(request, call_next):
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    is_pihole_admin = request.url.path == "/admin" or request.url.path.startswith("/admin/")
-    if is_pihole_admin:
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
-    else:
-        response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault(
         "Referrer-Policy", "strict-origin-when-cross-origin"
     )
@@ -306,10 +300,7 @@ async def security_headers_middleware(request, call_next):
         "camera=(), microphone=(), geolocation=()",
     )
     response.headers.setdefault(
-        "Content-Security-Policy",
-        _PIHOLE_EMBED_CSP
-        if is_pihole_admin
-        else _home_csp_for_request(request),
+        "Content-Security-Policy", _home_csp_for_request(request)
     )
     is_tunnel = (
         request.headers.get("X-Tunnel-Origin", "").strip().lower()
@@ -369,23 +360,75 @@ app.include_router(remediation_router)
 app.include_router(personality_router)
 app.include_router(presence_router)
 
-# Pi-hole reverse proxy — must come AFTER all API routers so our own
-# /api/* routes match first.  Only unmatched /api/* paths (Pi-hole's
-# own endpoints) and /admin/* fall through to this proxy.
-app.include_router(pihole_proxy_router)
+# Unknown API/admin paths are terminal misses. Historically these fell through
+# to the Pi-hole wildcard proxy (and then the SPA), which widened HomeHub into
+# an unintended localhost routing surface. Typed /api/pihole/* routes above
+# remain the only Pi-hole HTTP integration exposed by this app.
+_API_MISS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
-# Serve the SvelteKit static build (must come after API routes).
+
+@app.api_route("/api", methods=_API_MISS_METHODS, include_in_schema=False)
+@app.api_route("/api/{path:path}", methods=_API_MISS_METHODS, include_in_schema=False)
+@app.api_route("/admin", methods=_API_MISS_METHODS, include_in_schema=False)
+@app.api_route("/admin/{path:path}", methods=_API_MISS_METHODS, include_in_schema=False)
+async def reject_unmatched_backend_path() -> None:
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _resolve_frontend_candidate(path: str, root: Path = FRONTEND_DIST) -> Path:
+    """Resolve an SPA path only when its canonical target stays under *root*.
+
+    Starlette decodes the URL path before route dispatch, but a double-encoded
+    traversal can still leave a percent-encoded segment behind. Decode a few
+    bounded rounds, reject Windows/alternate-separator absolute forms, then use
+    Path.resolve() + relative_to() so prefix siblings and existing symlink
+    escapes cannot pass a string-prefix check. Missing *safe* paths are allowed
+    through so the caller can serve index.html for client-side SPA routes.
+    """
+    decoded = path
+    for _ in range(4):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+
+    if "\x00" in decoded or "\\" in decoded or ":" in decoded:
+        raise ValueError("unsafe frontend path")
+
+    pure = PurePosixPath(decoded)
+    if pure.is_absolute() or any(part == ".." for part in pure.parts):
+        raise ValueError("unsafe frontend path")
+
+    root_resolved = root.resolve()
+    candidate = root_resolved.joinpath(
+        *(part for part in pure.parts if part not in ("", "."))
+    ).resolve(strict=False)
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("frontend path escaped build root") from exc
+    return candidate
+
+
+async def serve_frontend(path: str) -> FileResponse:
+    """Serve safe packaged files; safe misses fall through to index.html."""
+    try:
+        file_path = _resolve_frontend_candidate(path, FRONTEND_DIST)
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        index_path = _resolve_frontend_candidate("index.html", FRONTEND_DIST)
+        if index_path.is_file():
+            return FileResponse(str(index_path))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+# Serve the SvelteKit static build (must come after API terminal-miss routes).
 # Path is controlled by settings.FRONTEND_BUILD (default frontend-svelte/build).
 if FRONTEND_DIST.exists():
     app.mount("/_app", StaticFiles(directory=str(FRONTEND_DIST / "_app")), name="frontend-app")
-
-    @app.get("/{path:path}")
-    async def serve_frontend(path: str) -> FileResponse:
-        """Serve the SvelteKit SPA — non-API routes fall through to index.html."""
-        file_path = FRONTEND_DIST / path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        return FileResponse(str(FRONTEND_DIST / "index.html"))
+    app.add_api_route("/{path:path}", serve_frontend, methods=["GET"])
 
 
 @app.websocket("/ws")

@@ -157,7 +157,6 @@ class RuleEngineService:
         ml_logger=None,
         lighting_learner=None,
         notifier_service=None,
-        api_key: Optional[str] = None,
         public_base_url: Optional[str] = None,
         automation=None,
         presence=None,
@@ -170,16 +169,15 @@ class RuleEngineService:
         self._fusion = confidence_fusion
         self._ml_logger = ml_logger
         # Brightness-suggestion plumbing — lighting_learner produces the
-        # candidates, notifier_service is the surface. api_key + public
-        # base url are baked into the action URLs ntfy.sh callbacks hit.
+        # candidates and notifier_service is the surface. The public base URL
+        # is baked into action URLs; reusable credentials are never embedded.
         self._lighting_learner = lighting_learner
         self._notifier = notifier_service
         self._automation = automation
         self._presence = presence
-        self._api_key = api_key
         self._public_base_url = (
             (public_base_url or "").rstrip("/")
-            or "http://192.168.86.210:8000"  # LAN bypass for require_api_key
+            or "http://192.168.86.210:8000"
         )
         self._last_brightness_scan: dict[str, Any] = {
             "scanned_at": None,
@@ -199,7 +197,6 @@ class RuleEngineService:
         *,
         lighting_learner=None,
         notifier_service=None,
-        api_key: Optional[str] = None,
         public_base_url: Optional[str] = None,
         automation=None,
         presence=None,
@@ -214,8 +211,6 @@ class RuleEngineService:
             self._lighting_learner = lighting_learner
         if notifier_service is not None:
             self._notifier = notifier_service
-        if api_key is not None:
-            self._api_key = api_key
         if public_base_url is not None:
             self._public_base_url = public_base_url.rstrip("/")
         if automation is not None:
@@ -515,7 +510,6 @@ class RuleEngineService:
                     body=suggestion["message"],
                     accept_url=accept_url,
                     dismiss_url=dismiss_url,
-                    api_key=self._api_key,
                     extra={
                         "kind": "suggestion",
                         "suggestion_kind": "mode",
@@ -914,7 +908,6 @@ class RuleEngineService:
                         body=body,
                         accept_url=accept_url,
                         dismiss_url=dismiss_url,
-                        api_key=self._api_key,
                         extra={"payload": candidate},
                     )
                 except Exception:

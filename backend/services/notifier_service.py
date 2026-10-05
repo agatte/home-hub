@@ -383,10 +383,9 @@ class NotifierService:
 
         When ``payload["actions"]`` is non-empty, ntfy.sh's ``Actions``
         header carries http-action buttons that POST to the supplied URLs
-        when the user taps them in the iOS app. Per-action headers (e.g.
-        ``X-API-Key``) get sent verbatim and ARE visible to the ntfy.sh
-        server in cleartext — single-user system, NTFY_TOPIC already
-        treated as a shared secret, but worth knowing the trade-off.
+        when the user taps them in the iOS app. HomeHub suggestion actions
+        intentionally carry no reusable authentication credential; cellular
+        callbacks may therefore be rejected until scoped actions land later.
         """
         if not self._ntfy_topic or self._http is None:
             return
@@ -506,7 +505,16 @@ class NotifierService:
                 continue
             method = action.get("method", "POST")
             piece = f"http, {label}, {url}, method={method}"
+            blocked_headers = {
+                "authorization",
+                "proxy-authorization",
+                "x-api-key",
+                "x-skill-token",
+                "cookie",
+            }
             for hk, hv in (action.get("headers") or {}).items():
+                if str(hk).strip().lower() in blocked_headers:
+                    continue
                 value = str(hv)
                 if any(c in value for c in (",", ";", "=", '"')):
                     value = '"' + value.replace('"', '\\"') + '"'
@@ -522,7 +530,6 @@ class NotifierService:
         body: str,
         accept_url: str,
         dismiss_url: str,
-        api_key: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
     ) -> None:
         """Fire a notification with Accept / Dismiss action buttons.
@@ -533,10 +540,6 @@ class NotifierService:
         ntfy.sh fan-out as the auto path so the desktop notifier + iOS
         app render identical action-button rows.
         """
-        action_headers: dict[str, str] = {}
-        if api_key:
-            action_headers["X-API-Key"] = api_key
-
         payload: dict[str, Any] = {
             "title": title,
             "subtitle": body,
@@ -544,10 +547,8 @@ class NotifierService:
             "factors": [],
             "output_delta": None,
             "actions": [
-                {"label": "Accept", "url": accept_url, "method": "POST",
-                 "headers": action_headers},
-                {"label": "Dismiss", "url": dismiss_url, "method": "POST",
-                 "headers": action_headers},
+                {"label": "Accept", "url": accept_url, "method": "POST"},
+                {"label": "Dismiss", "url": dismiss_url, "method": "POST"},
             ],
             "suggestion_id": suggestion_id,
             "kind": "suggestion",

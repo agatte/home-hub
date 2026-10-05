@@ -3,7 +3,8 @@
 Powers the MCP `query_db` and `get_event_summary` tools. Lives behind
 ``/api/debug/`` so it's grouped with other operational utilities.
 
-LAN-only by deployment. Two independent layers gate writes:
+Arbitrary SQL requires strict authentication (direct localhost remains trusted).
+Two independent layers gate writes:
 
 1. **Engine-level read-only**: the connection is opened with the
    SQLite URI ``file:...?mode=ro``. Every mutation attempt fails at
@@ -19,8 +20,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from backend.api.auth import require_api_key_strict
 from backend.config import DATA_DIR
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
@@ -60,9 +62,13 @@ def _is_read_only_query(sql: str) -> bool:
     return first_token in _ALLOWED_LEADING_TOKENS
 
 
-@router.get("/query")
+@router.get("/query", dependencies=[Depends(require_api_key_strict)])
 async def query(sql: str) -> dict[str, Any]:
     """Run a SELECT-only SQL query against the live SQLite DB.
+
+    This arbitrary-query compatibility endpoint is strict-auth only during the
+    security migration: localhost still works, but ordinary/private LAN callers
+    no longer inherit the broad RFC1918 bypass used by routine HomeHub writes.
 
     Args:
         sql: A SELECT statement (CTEs starting with WITH are also

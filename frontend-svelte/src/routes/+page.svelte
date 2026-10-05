@@ -24,7 +24,6 @@
   let plantWidget
   let barWidget
   let guestWifiWidget
-  let piholeCard
 </script>
 
 <main class="home-page">
@@ -69,10 +68,10 @@
       <GuestWifiWidget cardClickable bind:this={guestWifiWidget} />
     </ActionableWidget>
 
-    <ActionableWidget className="widget-pihole" ariaLabel="Open Network Admin" onActivate={() => piholeCard?.openModal()}>
+    <section class="widget widget-pihole">
       <h2 class="widget-title">Network</h2>
-      <PiholeCard cardClickable bind:this={piholeCard} />
-    </ActionableWidget>
+      <PiholeCard />
+    </section>
 
     <section class="widget widget-apartment widget-routines-full">
       <h2 class="widget-title">Apartment</h2>

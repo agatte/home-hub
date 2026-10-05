@@ -31,6 +31,13 @@ DESKTOP_SNAPSHOT_DIR = DATA_DIR / "diagnostics"
 DESKTOP_SNAPSHOT_MAX_BYTES = 2_000_000
 
 
+# GH #285 containment: the raw desktop snapshot job handlers below are
+# intentionally *not registered* as HTTP routes. The current Windows agent
+# cannot authenticate those privacy-sensitive calls without the broad LAN
+# bypass. #294 owns their replacement with scoped, ephemeral diagnostic jobs.
+# Continuous presence and bedroom-lux endpoints remain registered.
+
+
 class CameraToggle(BaseModel):
     """Request body for enabling/disabling the camera."""
 
@@ -344,7 +351,6 @@ def _expire_pending_if_stale(state: dict) -> None:
         state["requested_at"] = None
 
 
-@router.post("/desktop/snapshot/request", dependencies=[Depends(require_api_key)])
 async def request_desktop_snapshot(request: Request) -> dict:
     """Mark a desktop-camera snapshot as pending.
 
@@ -369,7 +375,6 @@ async def request_desktop_snapshot(request: Request) -> dict:
     }
 
 
-@router.get("/desktop/snapshot/pending", dependencies=[Depends(require_api_key)])
 async def get_desktop_snapshot_pending(request: Request) -> dict:
     """Polled by the desktop pc_agent to check whether to capture.
 
@@ -389,7 +394,6 @@ async def get_desktop_snapshot_pending(request: Request) -> dict:
     }
 
 
-@router.post("/desktop/snapshot/upload", dependencies=[Depends(require_api_key)])
 async def upload_desktop_snapshot(
     request: Request,
     image: UploadFile = File(...),
@@ -471,7 +475,6 @@ async def upload_desktop_snapshot(
     }
 
 
-@router.get("/desktop/snapshot/latest", dependencies=[Depends(require_api_key)])
 async def get_desktop_snapshot_latest(request: Request) -> Response:
     """Return the most recently uploaded desktop snapshot."""
     state = _snapshot_state(request.app)
