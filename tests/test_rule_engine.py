@@ -259,7 +259,6 @@ class TestRuleChecking:
         notifier = MockNotifier()
         service.set_brightness_suggestion_deps(
             notifier_service=notifier,
-            api_key="test-key",
             public_base_url="http://homehub.test",
         )
 
@@ -291,7 +290,7 @@ class TestRuleChecking:
         assert payload["dismiss_url"].endswith(
             f"/api/rules/suggestion/dismiss/{result['suggestion_id']}"
         )
-        assert payload["api_key"] == "test-key"
+        assert "api_key" not in payload
         assert payload["extra"]["suggestion_kind"] == "mode"
         assert payload["extra"]["predicted_mode"] == "working"
 

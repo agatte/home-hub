@@ -24,12 +24,11 @@ describe('dashboard modal availability', () => {
     expect(screen.getByTitle('Plant Care App')).toBeInTheDocument()
   })
 
-  it('opens Network even when its stats refresh fails', async () => {
-    vi.mocked(apiGet).mockRejectedValue(new Error('pihole stats unavailable'))
-    const { component } = render(PiholeCard, { cardClickable: true })
+  it('does not expose the retired Pi-hole admin proxy', () => {
+    const { container } = render(PiholeCard)
 
-    await component.openModal()
-
-    expect(screen.getByTitle('Pi-hole Admin')).toBeInTheDocument()
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    expect(screen.queryByText('Open Admin')).not.toBeInTheDocument()
+    expect(container.querySelector('iframe')).toBeNull()
   })
 })

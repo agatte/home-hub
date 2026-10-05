@@ -1,10 +1,11 @@
 """
 Tests for the hardened /api/debug/query endpoint.
 
-Covers two independent gates:
+Covers three independent gates:
 
-1. Statement validator — rejects non-SELECT/WITH queries with 400.
-2. Engine-level read-only — even if validator is bypassed, the
+1. Strict authentication — network callers need a key, even on the LAN.
+2. Statement validator — rejects non-SELECT/WITH queries with 400.
+3. Engine-level read-only — even if validator is bypassed, the
    underlying SQLite connection refuses every mutation.
 
 Plus the row cap and a regression check that /api/debug/event-summary
@@ -16,19 +17,40 @@ import sqlite3
 
 import aiosqlite
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.api.routes import debug
 from backend.api.routes.debug import (
     MAX_QUERY_ROWS,
-    _RO_URI,
     _is_read_only_query,
 )
-from backend.main import app
+from backend.config import settings
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(autouse=True)
+def diagnostic_db(tmp_path, monkeypatch):
+    """Every query, including engine checks, uses only a disposable database."""
+    path = tmp_path / "diagnostics.db"
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+            CREATE TABLE mode_playlists (mode TEXT);
+            CREATE TABLE activity_events (mode TEXT, timestamp TEXT);
+            CREATE TABLE light_adjustments (light_name TEXT, light_id TEXT, timestamp TEXT);
+            CREATE TABLE sonos_playback_events (
+                favorite_title TEXT, event_type TEXT, timestamp TEXT
+            );
+        """)
+    monkeypatch.setattr(debug, "_RO_URI", f"{path.as_uri()}?mode=ro")
+    monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "synthetic-test-key")
+    monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "synthetic-skill-token")
+
+
+@pytest.fixture
 def client():
-    with TestClient(app, raise_server_exceptions=False) as c:
+    test_app = FastAPI()
+    test_app.include_router(debug.router)
+    with TestClient(test_app) as c:
         yield c
 
 
@@ -91,7 +113,41 @@ class TestIsReadOnlyQueryValidator:
 
 
 class TestQueryRouteValidator:
-    """End-to-end: validator rejection comes back as 400."""
+    """End-to-end: strict auth + validator behavior for arbitrary SQL."""
+
+    @pytest.mark.parametrize("host", ["192.168.86.30", "10.0.0.2", "203.0.113.9"])
+    @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong-key"}])
+    def test_query_denies_uncredentialed_network_callers(self, client, monkeypatch, host, headers):
+        def unexpected_connection(*args, **kwargs):
+            raise AssertionError("unauthorized query reached SQLite")
+
+        monkeypatch.setattr(debug.aiosqlite, "connect", unexpected_connection)
+        with TestClient(client.app, client=(host, 12345)) as remote:
+            resp = remote.get("/api/debug/query", params={"sql": "SELECT 1"}, headers=headers)
+        assert resp.status_code == 401
+
+    def test_keyed_lan_mcp_caller_still_works(self, client):
+        with TestClient(client.app, client=("192.168.86.30", 12345)) as remote:
+            response = remote.get(
+                "/api/debug/query", params={"sql": "SELECT 1 AS one"},
+                headers={"X-API-Key": "synthetic-test-key"},
+            )
+        assert response.status_code == 200
+        assert response.json()["result"] == [{"one": 1}]
+
+    def test_missing_configured_key_fails_closed_for_lan(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", None)
+        with TestClient(client.app, client=("192.168.86.30", 12345)) as remote:
+            response = remote.get("/api/debug/query", params={"sql": "SELECT 1"})
+        assert response.status_code == 503
+
+    def test_tunnel_origin_cannot_use_loopback_bypass(self, client):
+        with TestClient(client.app, client=("127.0.0.1", 12345)) as tunnel:
+            response = tunnel.get(
+                "/api/debug/query", params={"sql": "SELECT 1"},
+                headers={"X-Tunnel-Origin": "cloudflare", "X-API-Key": "synthetic-test-key"},
+            )
+        assert response.status_code == 401
 
     def test_select_returns_200(self, client):
         # `SELECT 1` doesn't need a real table, runs against any RO conn.
@@ -163,7 +219,7 @@ class TestEngineLevelReadOnly:
 
     @pytest.mark.asyncio
     async def test_engine_refuses_create_table(self):
-        async with aiosqlite.connect(_RO_URI, uri=True) as db:
+        async with aiosqlite.connect(debug._RO_URI, uri=True) as db:
             with pytest.raises(sqlite3.OperationalError) as exc_info:
                 await db.execute(
                     "CREATE TABLE _hacker (id INTEGER PRIMARY KEY)"
@@ -176,14 +232,14 @@ class TestEngineLevelReadOnly:
         # against a real table — INSERT/UPDATE would parse columns first
         # and fail with a schema error in environments whose dev DB lags
         # the canonical schema, masking the readonly-engine assertion.
-        async with aiosqlite.connect(_RO_URI, uri=True) as db:
+        async with aiosqlite.connect(debug._RO_URI, uri=True) as db:
             with pytest.raises(sqlite3.OperationalError) as exc_info:
                 await db.execute("DELETE FROM mode_playlists WHERE 1=0")
             assert "readonly" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_engine_refuses_drop(self):
-        async with aiosqlite.connect(_RO_URI, uri=True) as db:
+        async with aiosqlite.connect(debug._RO_URI, uri=True) as db:
             with pytest.raises(sqlite3.OperationalError) as exc_info:
                 await db.execute("DROP TABLE mode_playlists")
             assert "readonly" in str(exc_info.value).lower()
@@ -230,7 +286,7 @@ class TestEventSummaryStillWorks:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["days"] == 7
-        # Shape only — actual counts depend on whatever is in the dev DB.
+        # Shape only — the disposable diagnostic DB is intentionally empty.
         assert "mode_transitions" in body
         assert "light_adjustments" in body
         assert "sonos_events" in body

@@ -21,10 +21,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from fastapi import Response
 from fastapi.testclient import TestClient
-
-import backend.api.routes.pihole_proxy as pihole_proxy
 
 from backend.main import _ws_rate_limit_check, _WS_RATE_LIMIT_MAX, app
 
@@ -88,32 +85,26 @@ def test_security_headers_present_on_api_route(client):
     assert "Content-Security-Policy" in resp.headers
 
 
-def test_pihole_admin_iframe_allows_same_origin_framing(client, monkeypatch):
-    """The Pi-hole proxy is intentionally frameable only by HomeHub itself."""
-
-    async def fake_proxy(request, target_url):
-        return Response(content=b"Pi-hole admin", media_type="text/html")
-
-    monkeypatch.setattr(pihole_proxy, "_proxy", fake_proxy)
+def test_retired_pihole_admin_iframe_is_terminal_404(client):
+    """The retired Pi-hole proxy must not be frameable through HomeHub."""
     resp = client.get("/admin/", headers={"Sec-Fetch-Dest": "iframe"})
 
-    assert resp.status_code == 200
-    assert resp.headers["X-Frame-Options"] == "SAMEORIGIN"
+    assert resp.status_code == 404
+    assert resp.headers["X-Frame-Options"] == "DENY"
     csp = resp.headers["Content-Security-Policy"]
-    assert "frame-ancestors 'self'" in csp
-    assert "frame-ancestors 'none'" not in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "frame-ancestors 'self'" not in csp
     assert "default-src 'self'" in csp
 
 
-def test_pihole_admin_direct_navigation_still_redirects(client):
-    """The kiosk cannot navigate away from HomeHub into Pi-hole directly."""
+def test_retired_pihole_admin_navigation_is_terminal_404(client):
+    """Direct navigation must not resurrect the removed localhost proxy."""
     resp = client.get(
-        "/admin/",
+        "/admin/api.php",
         headers={"Sec-Fetch-Dest": "document"},
         follow_redirects=False,
     )
-    assert resp.status_code in {302, 303, 307, 308}
-    assert resp.headers["location"] == "/"
+    assert resp.status_code == 404
 
 
 def test_hsts_only_on_tunnel_origin(client):

@@ -1,9 +1,11 @@
 """Unit tests for NotifierService — threshold logic + dispatch path."""
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -337,3 +339,41 @@ async def test_brightness_threshold_constant_sanity():
     assert BRIGHTNESS_DELTA_THRESHOLD == 0.15
     assert COALESCE_WINDOW_S == 10.0
     assert BOOT_SUPPRESS_S == 30.0
+
+@pytest.mark.asyncio
+async def test_suggestion_actions_never_carry_reusable_api_credentials(notifier, ws, monkeypatch):
+    secret = "synthetic-homehub-secret-never-export"
+    monkeypatch.setenv("HOME_HUB_API_KEY", secret)
+    sent_event = asyncio.Event()
+
+    async def capture_post(*args, **kwargs):
+        sent_event.set()
+        return MagicMock(status_code=200)
+
+    notifier._ntfy_topic = "synthetic-topic"
+    notifier._http = MagicMock()
+    notifier._http.post = AsyncMock(side_effect=capture_post)
+    notifier._http.aclose = AsyncMock()
+    await notifier.emit_suggestion(
+        suggestion_id=42,
+        title="Mode suggestion",
+        body="Try working mode",
+        accept_url="http://homehub.test/api/rules/suggestion/accept/42",
+        dismiss_url="http://homehub.test/api/rules/suggestion/dismiss/42",
+    )
+
+    assert len(ws.calls) == 1
+    payload = ws.calls[0][1]
+    assert payload["kind"] == "suggestion"
+    assert all("headers" not in action for action in payload["actions"])
+    assert secret not in json.dumps(ws.calls)
+    actions_header = NotifierService._format_actions_header(payload["actions"])
+    assert actions_header is not None
+    assert "X-API-Key" not in actions_header
+    assert "Authorization" not in actions_header
+    assert "headers." not in actions_header
+    await asyncio.wait_for(sent_event.wait(), timeout=1)
+    notifier._http.post.assert_awaited_once()
+    sent = notifier._http.post.call_args.kwargs
+    assert sent["headers"]["Actions"] == actions_header
+    assert secret not in str(sent)
