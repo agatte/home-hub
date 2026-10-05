@@ -9,8 +9,22 @@ $SnapshotsDir = Join-Path $ProjectRoot "snapshots"
 
 function Invoke-Git {
     param([Parameter(Mandatory=$true)][string[]]$Args)
-    $output = & git -C $RepoRoot @Args 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Git operation failed." }
+
+    # Windows PowerShell 5.1 promotes native stderr to NativeCommandError when
+    # ErrorActionPreference=Stop, even if Git exits successfully. Git can emit
+    # benign scan warnings (for example an unreadable ignored cache directory),
+    # so capture stdout only and decide success from Git's exit code.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & git -C $RepoRoot @Args 2>$null
+        $gitExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($gitExitCode -ne 0) { throw "Git operation failed." }
     return @($output)
 }
 

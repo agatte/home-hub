@@ -42,6 +42,7 @@ def _write_fake_git(fakebin, tracked, untracked):
         "elif command == ('ls-files', '--cached'):\n"
         "    print('\\n'.join(TRACKED))\n"
         "elif command == ('ls-files', '--others', '--exclude-standard'):\n"
+        "    print(\"warning: could not open directory '.pytest_cache/': Permission denied\", file=sys.stderr)\n"
         "    print('\\n'.join(UNTRACKED))\n"
         "else:\n"
         "    print('unexpected git invocation', file=sys.stderr)\n"
