@@ -24,25 +24,10 @@ describe('dashboard modal availability', () => {
     expect(screen.getByTitle('Plant Care App')).toBeInTheDocument()
   })
 
-  it('keeps Network errors visible without offering the retired admin proxy', async () => {
-    vi.mocked(apiGet).mockRejectedValue(new Error('pihole stats unavailable'))
+  it('does not expose the retired Pi-hole admin proxy', () => {
     const { container } = render(PiholeCard)
 
-    expect(await screen.findByText('Pi-hole unavailable')).toBeInTheDocument()
-    expect(screen.queryByText('Open Admin')).not.toBeInTheDocument()
-    expect(container.querySelector('iframe')).toBeNull()
-  })
-
-  it('still shows typed Pi-hole stats without an admin launcher', async () => {
-    vi.mocked(apiGet).mockResolvedValue({ pihole: {
-      percent_blocked: 25, total_queries: 1200, blocked: 300,
-      domains_on_blocklist: 1000000, active_clients: 4,
-    } })
-    const { container } = render(PiholeCard)
-
-    expect(await screen.findByText('25%')).toBeInTheDocument()
-    expect(screen.getByText('1.2K')).toBeInTheDocument()
-    expect(apiGet).toHaveBeenCalledWith('/api/pihole/stats')
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
     expect(screen.queryByText('Open Admin')).not.toBeInTheDocument()
     expect(container.querySelector('iframe')).toBeNull()
   })
