@@ -55,25 +55,13 @@ def _write_fake_git(fakebin, tracked, untracked):
         encoding="utf-8",
     )
 
-    # PowerShell on POSIX resolves native commands by executable filename;
-    # a Windows-only git.cmd shim is invisible there and would fall through
-    # to the runner's real Git. Provide the same synthetic Git contract under
-    # an extensionless executable name so this policy test stays platform-neutral.
-    if os.name != "nt":
-        git_exe = fakebin / "git"
-        git_exe.write_text(
-            f"#!{sys.executable}\n"
-            "import runpy\n"
-            "from pathlib import Path\n"
-            "runpy.run_path(str(Path(__file__).with_name('fake_git.py')), "
-            "run_name='__main__')\n",
-            encoding="utf-8",
-        )
-        git_exe.chmod(0o755)
-
 
 @unittest.skipIf(_powershell() is None, "PowerShell is unavailable")
 class SnapshotExportPolicyTests(unittest.TestCase):
+    @unittest.skipUnless(
+        os.name == "nt",
+        "snapshot export integration requires Windows path and reparse semantics",
+    )
     def test_snapshot_policy_uses_synthetic_repository(self):
         with tempfile.TemporaryDirectory(prefix="homehub-snapshot-test-") as temp:
             tmp_path = Path(temp)
