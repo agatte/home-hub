@@ -5126,6 +5126,42 @@ class AutomationEngine:
             return f"protected light {normalized}"
         return None
 
+    async def apply_sunrise_light_step(
+        self, light_id: str, state: dict[str, Any],
+        transitiontime: int | None = None,
+    ) -> LightApplyResult:
+        """Apply one sunrise step without acquiring or changing house authority.
+
+        Sunrise is a delayed writer, so eligibility is decided only after it
+        owns the shared Hue transition boundary and is retained through the
+        canonical LightApplicator bridge write.
+        """
+        light_id = str(light_id)
+        async with self._transition_boundary.serialized():
+            # Avoid a false veto from an expired transit lease. The applicator
+            # performs the same prune before its own protected-light check.
+            self._overrides.prune_expired_transit()
+
+            effect_scope = self._active_effect_lights
+            if (
+                self.is_dnd_active()
+                or self._away_hold
+                or self._gaming_scene_transition_pending
+                or not self._effect_manager.authority_known
+                or self.transient_light_write_block_reason(light_id) is not None
+                or (
+                    self._active_effect_name is not None
+                    and (
+                        effect_scope is None
+                        or light_id in {str(x) for x in effect_scope}
+                    )
+                )
+            ):
+                return LightApplyResult(skipped={light_id})
+            if not self._hue or not self._hue.connected:
+                return LightApplyResult(failed={light_id})
+            return await self._apply_per_light({light_id: state}, transitiontime)
+
     def register_external_light_owner(self, owner: Any) -> None:
         """Register a direct bridge writer for final-apply protection."""
         if owner not in self._external_light_owners:
