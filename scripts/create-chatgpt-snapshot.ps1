@@ -76,9 +76,11 @@ function Test-SnapshotPath {
 function Test-SafeRepositoryFile {
     param([Parameter(Mandatory=$true)][string]$RelativePath)
     if (-not (Test-SnapshotPath $RelativePath)) { return $false }
-    $candidate = Join-Path $RepoRoot ($RelativePath.Replace('/', '\'))
+    $separator = [IO.Path]::DirectorySeparatorChar
+    $candidate = Join-Path $RepoRoot ($RelativePath.Replace([char]'/', $separator))
     try { $full = [IO.Path]::GetFullPath($candidate) } catch { return $false }
-    $rootFull = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\') + '\'
+    $rootSeparators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $rootFull = [IO.Path]::GetFullPath($RepoRoot).TrimEnd($rootSeparators) + $separator
     if (-not $full.StartsWith($rootFull,[StringComparison]::OrdinalIgnoreCase)) { return $false }
     $current = $RepoRoot
     foreach ($part in $RelativePath.Replace('\','/').Split('/')) {
