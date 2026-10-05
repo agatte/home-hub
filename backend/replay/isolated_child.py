@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import msvcrt
 import os
 import socket
 import subprocess
@@ -26,6 +25,12 @@ FORBIDDEN_PRODUCTION_PATHS = (
 
 
 def _write_result(handle_value: int, payload: dict[str, Any]) -> None:
+    # This child entrypoint executes only inside the enforced Windows replay
+    # sandbox, but the module is also imported by platform-neutral replay tests.
+    # Keep the Windows-only dependency at the actual handle-conversion boundary
+    # so Linux CI can import and exercise the deterministic replay core.
+    import msvcrt
+
     fd = msvcrt.open_osfhandle(handle_value, os.O_WRONLY)
     with os.fdopen(fd, "w", encoding="utf-8", closefd=True) as stream:
         json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
