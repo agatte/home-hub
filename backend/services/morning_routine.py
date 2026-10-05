@@ -46,6 +46,7 @@ class MorningRoutineService:
         self._home_address = home_address
         self._work_address = work_address
         self._morning_volume = morning_volume
+        self._sunrise_active = False
 
     async def execute(self) -> bool:
         """
@@ -136,40 +137,40 @@ class MorningRoutineService:
 
         Only controls light "2" (bedroom lamp). Other lights stay off.
         """
-        if self._automation is not None and self._automation.is_dnd_active():
-            logger.info("Sunrise ramp skipped — DND active")
+        # No await before claiming the guard: concurrent invocations must
+        # return promptly, rather than queue a second thirty-minute ramp.
+        if self._sunrise_active or self._automation is None:
             return False
-
-        if not self._automation or not self._automation._hue:
-            logger.warning("Sunrise ramp skipped — no Hue service available")
+        self._sunrise_active = True
+        try:
+            for step in range(16):
+                progress = step / 15
+                state = {
+                    "on": True,
+                    "ct": int(500 + (250 - 500) * progress),
+                    "bri": int(1 + (150 - 1) * progress),
+                }
+                result = await self._automation.apply_sunrise_light_step(
+                    "2", state, transitiontime=120,
+                )
+                if (
+                    "2" in result.skipped or "2" in result.failed
+                    or "2" not in (result.successful | result.deduplicated)
+                ):
+                    logger.info("Sunrise ramp stopped - target not accepted")
+                    return False
+                if step < 15:
+                    await asyncio.sleep(120)
+            logger.info("Sunrise ramp complete - bedroom lamp at daylight brightness")
+            return True
+        except asyncio.CancelledError:
+            logger.info("Sunrise ramp cancelled")
+            raise
+        except Exception:
+            logger.exception("Sunrise ramp failed")
             return False
-
-        hue = self._automation._hue
-        LIGHT_ID = "2"  # Bedroom lamp
-        STEPS = 15
-        INTERVAL_SECONDS = 120  # 2 minutes between steps
-        CT_START, CT_END = 500, 250  # Warm → daylight (mirek)
-        BRI_START, BRI_END = 1, 150
-
-        logger.info("Sunrise ramp starting — 30 min bedroom lamp warm-up")
-
-        for step in range(STEPS + 1):
-            progress = step / STEPS
-            ct = int(CT_START + (CT_END - CT_START) * progress)
-            bri = int(BRI_START + (BRI_END - BRI_START) * progress)
-
-            await hue.set_light(LIGHT_ID, {
-                "on": True,
-                "ct": ct,
-                "bri": bri,
-                "transitiontime": 120,  # 12 seconds
-            })
-
-            if step < STEPS:
-                await asyncio.sleep(INTERVAL_SECONDS)
-
-        logger.info("Sunrise ramp complete — bedroom lamp at daylight brightness")
-        return True
+        finally:
+            self._sunrise_active = False
 
     async def _fetch_traffic(self) -> Optional[str]:
         """

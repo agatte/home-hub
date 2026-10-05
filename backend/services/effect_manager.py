@@ -72,6 +72,11 @@ class EffectManager:
         return self._active_lights
 
     @property
+    def authority_known(self) -> bool:
+        """Whether local effect ownership has been reconciled with the bridge."""
+        return self._tracker_known
+
+    @property
     def transition_boundary(self) -> LightingTransitionBoundary:
         """Shared Hue serialization boundary used by all overlapping writers."""
         return self._transition_boundary
