@@ -21,6 +21,6 @@ echo Opening the snapshots folder...
 start "" "%~dp0..\snapshots"
 
 echo.
-echo Snapshot complete. The ZIP path is also on your clipboard.
+echo Snapshot complete. Select the newest ZIP in the snapshots folder and upload it to ChatGPT.
 pause
 exit /b 0
