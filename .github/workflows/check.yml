@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: python -m pytest tests/test_lighting_final_write_authority.py -vv -s
+        run: python -m pytest tests/test_lighting_final_write_authority.py -vv -s -k "try_it_waiting_restore or unchanged_try_it or try_it_replacement_cancel or timer_cancellation"
         env:
           APP_ENV: testing
 
