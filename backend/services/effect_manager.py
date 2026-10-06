@@ -179,7 +179,8 @@ class EffectManager:
         checkpoint = self._publish_transition_checkpoint("effect_reconcile")
         authority = self._transition_boundary.authority
         async with self._transition_boundary.serialized():
-            current = lambda: authority.valid(checkpoint)
+            def current():
+                return authority.valid(checkpoint)
             if not current():
                 return False
 
@@ -267,7 +268,8 @@ class EffectManager:
         authority = self._transition_boundary.authority
 
         async with self._transition_boundary.serialized():
-            current = lambda: authority.valid(checkpoint)
+            def current():
+                return authority.valid(checkpoint)
             if not current():
                 return False
             if before_transition is not None:
@@ -351,7 +353,8 @@ class EffectManager:
         checkpoint = self._publish_transition_checkpoint("effect_reconcile_light")
         authority = self._transition_boundary.authority
         async with self._transition_boundary.serialized():
-            current = lambda: authority.valid(checkpoint)
+            def current():
+                return authority.valid(checkpoint)
             if not current():
                 return False
             safety_result = await establish_safety(required)
@@ -378,7 +381,8 @@ class EffectManager:
         checkpoint = self._publish_transition_checkpoint("effect_stop_all")
         authority = self._transition_boundary.authority
         async with self._transition_boundary.serialized():
-            current = lambda: authority.valid(checkpoint)
+            def current():
+                return authority.valid(checkpoint)
             if not current():
                 return False
             stopped = await self._mutate(
