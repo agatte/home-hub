@@ -64,7 +64,7 @@ def lighting(mock_hue, mock_hue_v2, mock_ws, monkeypatch):
     monkeypatch.setattr(scenes, "_try_it_state", {"trial": None})
     monkeypatch.setattr(scenes, "_try_control_lock", asyncio.Lock())
     monkeypatch.setattr(scenes, "_log_scene_activation", AsyncMock())
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+    request = SimpleNamespace(headers={}, app=SimpleNamespace(state=SimpleNamespace(
         hue=mock_hue, hue_v2=mock_hue_v2, automation=engine,
         effect_manager=engine._effect_manager, ws_manager=mock_ws,
     )))
@@ -367,8 +367,13 @@ async def test_trial_cannot_adopt_new_intent_during_scene_safety(lighting, monke
     await writing.wait()
     engine.mark_light_manual("2", {"bri": 20})
     resume.set()
-    with pytest.raises(HTTPException, match="Scene trial authority changed"):
+    with pytest.raises(HTTPException) as exc_info:
         await task
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail in {
+        "Scene trial authority changed",
+        "Scene transition aborted: safe effect release not established",
+    }
     assert scenes._try_it_state["trial"] is None
     assert engine._state.manual_light_targets["2"]["bri"] == 20
 
