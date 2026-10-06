@@ -321,14 +321,17 @@ async def test_sleeping_release_blocks_screen_sync_through_no_effect():
     assert "no_effect" not in events
 
     allow_settle.set()
-    await asyncio.wait_for(asyncio.gather(sleeping, screen), timeout=1.0)
+    _sleeping_result, screen_result = await asyncio.wait_for(
+        asyncio.gather(sleeping, screen),
+        timeout=1.0,
+    )
     await engine._sleep_fade_task
 
-    screen_index = next(
-        index for index, event in enumerate(events)
-        if event.startswith("screen_write:")
-    )
-    assert events.index("settled") < events.index("no_effect") < screen_index
+    assert screen_result is False
+    assert not any(event.startswith("screen_write:") for event in events)
+    assert events.index("settled") < events.index("no_effect")
+    assert sync.last_color_at is None
+    assert sync._last_sent_state == {}
 
 
 @pytest.mark.asyncio
@@ -622,12 +625,16 @@ async def test_transition_lock_blocks_periodic_and_screen_writers_without_deadlo
     assert events == ["mode_write", "settle"]
 
     allow_settle.set()
-    await asyncio.wait_for(
+    transition_result, _periodic_result, screen_result = await asyncio.wait_for(
         asyncio.gather(transition, periodic, screen),
         timeout=1.0,
     )
+    assert transition_result is True
+    assert screen_result is False
     assert events[2] == "no_effect"
-    assert len([event for event in events if event.startswith("hue_write:")]) == 2
+    assert len([event for event in events if event.startswith("hue_write:")]) == 1
+    assert sync.last_color_at is None
+    assert sync._last_sent_state == {}
 
 
 @pytest.mark.asyncio
