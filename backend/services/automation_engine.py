@@ -66,6 +66,7 @@ from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
 from backend.services.light_applicator import LightApplicator, LightApplyResult
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+from backend.services.lighting_authority import LightingLease, LightingSemanticField
 from backend.services.light_override_manager import LightOverrideManager
 from backend.services.living_room_atmosphere import (
     ATMOSPHERE_TRANSITION_TIME,
@@ -400,6 +401,23 @@ class AutomationEngine:
     the dashboard take highest priority.
     """
 
+    # Publish semantic authority immediately, even when physical targets dedup.
+    _current_mode = LightingSemanticField()
+    _current_game = LightingSemanticField()
+    _manual_override = LightingSemanticField()
+    _override_mode = LightingSemanticField()
+    _override_source = LightingSemanticField()
+    _external_off_detected = LightingSemanticField()
+    _away_hold = LightingSemanticField()
+    _host_return_hold = LightingSemanticField()
+    _enabled = LightingSemanticField()
+    _active_scene_override_key = LightingSemanticField()
+    _gaming_scene_override = LightingSemanticField()
+    _gaming_scene_transition_pending = LightingSemanticField()
+    _mode_source_key = LightingSemanticField()
+    _home_awake_confirmed = LightingSemanticField()
+    _override_time = LightingSemanticField()
+
     def __init__(
         self,
         hue,
@@ -447,6 +465,9 @@ class AutomationEngine:
         else:
             self._effect_manager = effect_manager
         self._transition_boundary = self._effect_manager.transition_boundary
+        bind_authority = getattr(screen_sync, "set_lighting_authority_validator", None)
+        if callable(bind_authority):
+            bind_authority(self._transition_boundary, self.validate_screen_sync_lease)
 
         # Weather condition tracking for music suggestions
         self._last_weather_condition: Optional[str] = None
@@ -548,6 +569,7 @@ class AutomationEngine:
             reapply_mode=lambda mode: self._apply_mode(mode),
             suppressed_getter=lambda: self._external_off_detected,
             transition_boundary=self._transition_boundary,
+            cancelled_write_notifier=self.forget_ambiguous_light_write,
         )
 
         # Bridge-write layer (away-gate, dedup compare/record, protected-light
@@ -2569,6 +2591,7 @@ class AutomationEngine:
 
     async def close(self) -> None:
         """Cancel bounded auxiliary automation tasks before service shutdown."""
+        self._transition_boundary.authority.close()
         task = self._fixture_comfort_expiry_task
         self._fixture_comfort_expiry_task = None
         if task is None or task.done():
@@ -5126,6 +5149,104 @@ class AutomationEngine:
             return f"protected light {normalized}"
         return None
 
+    def validate_lighting_lease(
+        self, lease: LightingLease | None, *, allow_manual: bool = False,
+        allow_screen_sync: bool = False, allow_scene: bool = False,
+        expected_mode: str | None = None,
+        screen_sync_kind: str | None = None,
+        scene_ack: bool = False,
+    ) -> bool:
+        """Shared final-boundary currency and stronger-owner validator.
+
+        Trial/scene leases may recognize their own unchanged manual/effect
+        stamps. Rust may borrow ScreenSync's baseline, but any later frame
+        changes the generation and revokes its delayed restore.
+        """
+        if not self._transition_boundary.authority.valid(lease):
+            return False
+        if lease.intent_only:
+            return False  # A setup checkpoint is never physical write authority.
+        # Legacy registered owners still protect the compositor. Delayed work
+        # cannot prove monotonic currency without their publication contract.
+        if any(not callable(getattr(owner, "set_lighting_authority_notifier", None)) for owner in self._active_external_light_owners()):
+            return False
+        if (
+            (not self._enabled and not scene_ack)
+            or self._external_off_detected or self._away_hold or self._host_return_hold
+            or (self.current_mode == "sleeping" and not scene_ack)
+            or (expected_mode is not None and self.current_mode != expected_mode)
+            or self._gaming_scene_transition_pending
+        ):
+            return False
+        if not allow_scene and (
+            self._active_scene_override_key is not None
+            or self._gaming_scene_override is not None
+            or not self._effect_manager.authority_known
+        ):
+            return False
+        targets = {lid for lid, _ in lease.light_generations}
+        if lease.whole_generation is not None:
+            targets = set(ALL_LIGHT_IDS)
+        blocked = set(self._transit_light_overrides)
+        if not allow_manual:
+            blocked |= set(self.manual_light_overrides)
+        blocked |= self._applicator.external_owned_light_ids()
+        protected = self._protected_light_ids()
+        if allow_manual:
+            protected -= set(self.manual_light_overrides)
+        if allow_screen_sync and self._screen_sync is not None:
+            protected -= self._screen_sync.fresh_owned_light_ids()
+        blocked |= protected
+        if not allow_screen_sync and self._screen_sync is not None:
+            blocked |= self._screen_sync.fresh_owned_light_ids()
+        if screen_sync_kind == "rust" and self._screen_sync is not None:
+            blocked |= self._screen_sync.fresh_owned_light_ids() - self._screen_sync.rust_owned_light_ids()
+        if not allow_scene and self._active_effect_name is not None:
+            blocked |= set(self._active_effect_lights or ALL_LIGHT_IDS)
+        # Owner getters may synchronously publish releases: recheck currency.
+        return not (targets & blocked) and self._transition_boundary.authority.valid(lease)
+
+    def validate_screen_sync_lease(self, lease, light_id, mode, source) -> bool:
+        return (
+            mode in SCREEN_SYNC_MODES
+            and not (mode == "gaming" and source == "laptop")
+            and self.validate_lighting_lease(
+                lease, allow_screen_sync=True, expected_mode=mode,
+            )
+        )
+
+    def record_leased_light_write(
+        self, light_id: str, state: dict, *, supersede_screen_sync: bool = True,
+    ) -> None:
+        """Fence an acknowledged transient write; normal dedup becomes unknown.
+
+        Rust borrows the current ScreenSync source without transferring its
+        ownership. Scene/manual replacements explicitly supersede that source.
+        """
+        if not self._transition_boundary.held_by_current_task:
+            raise RuntimeError("Leased light acknowledgement requires the final boundary")
+        self._transition_boundary.authority.invalidate([light_id], intent=False)
+        self._last_applied_per_light.pop(light_id, None)
+        if not supersede_screen_sync:
+            invalidate = getattr(self._screen_sync, "invalidate_sent_state", None)
+            if callable(invalidate):
+                invalidate([light_id])
+        else:
+            self.supersede_screen_sync_lights({light_id})
+
+    def forget_ambiguous_light_write(self, light_ids, *, preserve_screen_sync=False) -> None:
+        """A cancelled acknowledgement cannot prove physical cache/ownership."""
+        if not self._transition_boundary.held_by_current_task:
+            raise RuntimeError("Ambiguous write cleanup requires the lighting boundary")
+        for light_id in light_ids:
+            self._last_applied_per_light.pop(str(light_id), None)
+        if preserve_screen_sync:
+            invalidate = getattr(self._screen_sync, "invalidate_sent_state", None)
+            if callable(invalidate):
+                invalidate(list(map(str, light_ids)))
+        else:
+            self.supersede_screen_sync_lights(set(map(str, light_ids)))
+
     async def apply_sunrise_light_step(
         self, light_id: str, state: dict[str, Any],
         transitiontime: int | None = None,
@@ -5166,6 +5287,12 @@ class AutomationEngine:
         """Register a direct bridge writer for final-apply protection."""
         if owner not in self._external_light_owners:
             self._external_light_owners.append(owner)
+            notifier = getattr(owner, "set_lighting_authority_notifier", None)
+            if callable(notifier):
+                notifier(self._transition_boundary.authority.invalidate)
+            getter = getattr(owner, "owned_light_targets", None)
+            if callable(getter):
+                self._transition_boundary.authority.invalidate(getter())
 
     def _active_external_light_owners(self) -> list[Any]:
         return [

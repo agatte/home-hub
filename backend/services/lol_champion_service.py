@@ -110,6 +110,16 @@ class LoLChampionService:
         self._desired_rgb: Optional[tuple[int, int, int]] = None
         self._owned: set[str] = set()
         self._owned_targets: dict[str, dict] = {}
+        self._authority_notifier = None
+
+    def set_lighting_authority_notifier(self, notifier) -> None:
+        """Optional generic publication contract for registered Hue owners."""
+        self._authority_notifier = notifier
+
+    def _notify_authority(self, light_ids) -> None:
+        light_ids = set(map(str, light_ids))
+        if light_ids and self._authority_notifier is not None:
+            self._authority_notifier(light_ids)
 
     # ------------------------------------------------------------------
     # Public query API — consulted by the screen-sync route handler
@@ -270,13 +280,19 @@ class LoLChampionService:
                 for light_id, target in pending.items()
                 if light_id not in stronger
             }
-            results = await asyncio.gather(
-                *(
-                    self._hue.set_light(light_id, target)
-                    for light_id, target in write_pending.items()
-                ),
-                return_exceptions=True,
-            )
+            writes = [
+                lambda lid=light_id, payload=target: self._hue.set_light(lid, payload)
+                for light_id, target in write_pending.items()
+            ]
+            if boundary is not None:
+                try:
+                    results = await boundary.write_many(writes, light_ids=write_pending)
+                except asyncio.CancelledError:
+                    self._engine.forget_ambiguous_light_write(write_pending)
+                    self.invalidate_ownership("cancelled_write")
+                    raise
+            else:
+                results = await asyncio.gather(*(write() for write in writes), return_exceptions=True)
             # Engine/game/scene state can change while the bridge request itself
             # is awaiting.  A successful physical write does not grant ownership
             # if the authority that authorized it has since expired; the stronger
@@ -290,6 +306,8 @@ class LoLChampionService:
                 None,
             )
             for light_id, result in zip(write_pending, results):
+                if result is True:
+                    self._notify_authority([light_id])
                 if result is True and light_id not in stronger_after_write:
                     self._owned.add(light_id)
                     self._owned_targets[light_id] = write_pending[light_id].copy()
@@ -333,6 +351,7 @@ class LoLChampionService:
         if reapply and released and self._engine.current_mode == "gaming":
             result = await self._engine.reclaim_external_light_release(self, released)
             for light_id in result.successful:
+                self._notify_authority([light_id])
                 self._owned.discard(light_id)
                 self._owned_targets.pop(light_id, None)
         elif not reapply or self._engine.current_mode != "gaming":
@@ -355,6 +374,7 @@ class LoLChampionService:
 
     def invalidate_ownership(self, reason: str) -> None:
         """Drop stamps without writes after a stronger physical lifecycle event."""
+        self._notify_authority(self._owned)
         sync = getattr(self._engine, "_screen_sync", None)
         supersede = getattr(sync, "supersede_light", None)
         if callable(supersede):
@@ -395,6 +415,7 @@ class LoLChampionService:
 
     def _release_stronger_owner_lights(self) -> None:
         protected = self._stronger_owner_light_ids()
+        self._notify_authority(self._owned & protected)
         self._owned -= protected
         for light_id in protected:
             self._owned_targets.pop(light_id, None)

@@ -49,6 +49,7 @@ class LightOverrideManager:
         reapply_mode: Callable[[str], Awaitable[None]],
         suppressed_getter: Optional[Callable[[], bool]] = None,
         transition_boundary=None,
+        cancelled_write_notifier=None,
         clock: Optional[DecisionClock] = None,
     ) -> None:
         self._st = state
@@ -64,6 +65,7 @@ class LightOverrideManager:
         # suppressed they would churn path-lighting for an empty room.
         self._suppressed_getter = suppressed_getter or (lambda: False)
         self._transition_boundary = transition_boundary
+        self._cancelled_write_notifier = cancelled_write_notifier
         self._incident_capture: object | None = None
 
     def set_navigation_incident_capture(self, capture: object | None) -> None:
@@ -91,6 +93,7 @@ class LightOverrideManager:
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
+        self._notify_authority([light_id])
         self._st.manual_light_overrides[light_id] = self._clock.utc_now().astimezone(TZ)
         if target is not None:
             normalized = {
@@ -106,6 +109,7 @@ class LightOverrideManager:
     def clear_manual_stamps(self) -> None:
         """Clear all per-light manual overrides."""
         if self._st.manual_light_overrides:
+            self._notify_authority(self._st.manual_light_overrides)
             logger.info(
                 f"Clearing per-light overrides: {list(self._st.manual_light_overrides)}"
             )
@@ -125,6 +129,7 @@ class LightOverrideManager:
             if now - ts > cutoff
         ]
         for lid in expired:
+            self._notify_authority([lid])
             del self._st.manual_light_overrides[lid]
             self._st.manual_light_targets.pop(lid, None)
             logger.info(
@@ -155,6 +160,10 @@ class LightOverrideManager:
         """
         self._st.last_applied_per_light.pop(light_id, None)
 
+    def _notify_authority(self, light_ids) -> None:
+        if self._transition_boundary is not None:
+            self._transition_boundary.authority.invalidate(light_ids)
+
     # ── Transit / desk-exit / corridor lifecycle ────────────────────────
 
     def prune_expired_transit(self) -> None:
@@ -171,6 +180,7 @@ class LightOverrideManager:
             if deadline <= now
         ]
         for lid in expired:
+            self._notify_authority([lid])
             del self._st.transit_light_overrides[lid]
             self._st.transit_light_targets.pop(lid, None)
             # Mirrors clear_transit_override's pop. Without it, the dedup
@@ -305,11 +315,21 @@ class LightOverrideManager:
                 self._st.last_applied_per_light.get(light_id) or {}
             ).copy()
             cmd = {**state, "transitiontime": transition_time}
-            tasks.append(hue.set_light(light_id, cmd))
+            tasks.append(lambda lid=light_id, payload=cmd: hue.set_light(lid, payload))
             changed_ids.append(light_id)
         results = []
         if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            if self._transition_boundary is not None:
+                try:
+                    results = await self._transition_boundary.write_many(tasks, light_ids=changed_ids)
+                except asyncio.CancelledError:
+                    for light_id in changed_ids:
+                        self._st.last_applied_per_light.pop(light_id, None)
+                    if self._cancelled_write_notifier is not None:
+                        self._cancelled_write_notifier(changed_ids)
+                    raise
+            else:
+                results = await asyncio.gather(*(write() for write in tasks), return_exceptions=True)
         successful = [
             light_id
             for light_id, result in zip(changed_ids, results)
@@ -321,6 +341,7 @@ class LightOverrideManager:
             if result is not True
         ]
         for light_id in successful:
+            self._notify_authority([light_id])
             state = states[light_id]
             self._st.transit_light_overrides[light_id] = deadline
             self._st.transit_light_targets[light_id] = {
@@ -381,6 +402,7 @@ class LightOverrideManager:
         cleared = []
         for lid in light_ids:
             if lid in self._st.transit_light_overrides:
+                self._notify_authority([lid])
                 del self._st.transit_light_overrides[lid]
                 self._st.transit_light_targets.pop(lid, None)
                 cleared.append(lid)

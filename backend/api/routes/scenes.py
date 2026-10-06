@@ -431,8 +431,12 @@ async def _activate_per_light(hue, light_states: dict, transitiontime: int = 10)
     tasks = []
     for lid, lstate in light_states.items():
         state_with_transition = {**lstate, "transitiontime": transitiontime}
-        tasks.append(hue.set_light(lid, state_with_transition))
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks.append(lambda target=lid, payload=state_with_transition: hue.set_light(target, payload))
+    boundary = getattr(hue, "_transition_boundary", None)
+    if boundary is not None and boundary.held_by_current_task:
+        results = await boundary.write_many(tasks)
+    else:
+        results = await asyncio.gather(*(write() for write in tasks), return_exceptions=True)
     return all(result is True for result in results)
 
 
@@ -444,6 +448,8 @@ async def _activate_scene_safely(
     *,
     transitiontime: int = 10,
     action=None,
+    on_complete=None,
+    before_transition=None,
 ) -> bool:
     """Run a preset/native scene replacement through the effect boundary."""
     if automation is None or effect_manager is None:
@@ -465,6 +471,8 @@ async def _activate_scene_safely(
             release_ids,
         ),
         desired=effect,
+        **({"on_complete": on_complete} if on_complete is not None else {}),
+        **({"before_transition": before_transition} if before_transition is not None else {}),
     )
 
 
@@ -543,6 +551,13 @@ async def _log_scene_activation(
 
 @router.post("/{scene_id}/activate", dependencies=[Depends(require_api_key)])
 async def activate_scene(scene_id: str, request: Request) -> dict:
+    return await _activate_scene(scene_id, request)
+
+
+async def _activate_scene(
+    scene_id: str, request: Request, lease_sink=None, before_transition=None,
+    acknowledgement_guard=None,
+) -> dict:
     """
     Activate a scene by ID.
 
@@ -561,6 +576,27 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
     # user explicitly hands control back (tap "auto", change mode, etc.).
     automation = getattr(request.app.state, "automation", None)
 
+    def acknowledge_targets(
+        targets, *, direct_readback=False, check_acknowledgement_guard=True,
+    ):
+        if not targets:
+            return  # Unknown readback cannot grant a trial restore lease.
+        if (
+            check_acknowledgement_guard
+            and acknowledgement_guard is not None
+            and not acknowledgement_guard()
+        ):
+            return
+        for lid, state in targets.items():
+            # Preset safety writes are already acknowledged by LightApplicator,
+            # which may retain a stronger protected target. Never replace that
+            # physical cache with a merely requested preset target.
+            if direct_readback:
+                automation.record_leased_light_write(str(lid), state, supersede_screen_sync=True)
+            automation.mark_light_manual(str(lid), state)
+        if lease_sink is not None:
+            lease_sink(automation.lighting_transition_boundary.authority.issue("try_it", None))
+
     # Check curated preset
     if scene_id in SCENE_PRESETS:
         _check_hue_available(hue)
@@ -576,16 +612,14 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
             effect_manager,
             preset["lights"],
             _curated_effect_target(preset.get("effect")),
+            on_complete=lambda: acknowledge_targets(preset["lights"]),
+            before_transition=before_transition,
         )
         if not success:
             raise HTTPException(
                 status_code=409,
                 detail="Scene transition aborted: safe effect release not established",
             )
-
-        if automation:
-            for lid in preset["lights"]:
-                automation.mark_light_manual(str(lid), preset["lights"][lid])
 
         await asyncio.sleep(0.3)
         lights = await hue.get_all_lights()
@@ -623,6 +657,8 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                     effect_manager,
                     safety_targets,
                     _custom_effect_target(effect, light_states),
+                    on_complete=lambda: acknowledge_targets(light_states),
+                    before_transition=before_transition,
                 )
                 if not success:
                     raise HTTPException(
@@ -632,10 +668,6 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                             "not established"
                         ),
                     )
-
-                if automation:
-                    for lid in light_states:
-                        automation.mark_light_manual(str(lid), light_states[lid])
 
                 await asyncio.sleep(0.3)
                 lights = await hue.get_all_lights()
@@ -663,12 +695,26 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
     async def activate_native() -> bool:
         return await hue_v2.activate_scene(scene_id)
 
+    acknowledgement = None
+
+    def capture_acknowledgement():
+        nonlocal acknowledgement
+        if acknowledgement_guard is not None and not acknowledgement_guard():
+            return
+        # This callback runs before replace_with_action releases its boundary.
+        automation._invalidate_external_light_owners("native_scene")
+        automation.supersede_screen_sync_lights(effect_manager.release_light_ids())
+        automation._invalidate_dedup_cache()  # Native manifests are unknown until readback.
+        acknowledgement = automation.lighting_transition_boundary.authority.issue("native_scene_ack", None)
+
     success = await _activate_scene_safely(
         automation,
         effect_manager,
         {},
         None,
         action=activate_native,
+        on_complete=capture_acknowledgement,
+        before_transition=before_transition,
     )
     if not success:
         raise HTTPException(
@@ -677,17 +723,24 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
         )
 
     await asyncio.sleep(0.5)
-    lights = await hue.get_all_lights()
     # Bridge scenes don't expose a per-light manifest through our path, so
     # stamp every light the bridge currently reports — over-marking is
     # acceptable here (bridge scenes are whole-apartment vibes; a user tap
     # on "auto" releases). Lights that the scene didn't touch already
     # have whatever state automation set; reconcile would only no-op them.
-    if automation:
-        for light in lights:
-            lid = light.get("light_id") if isinstance(light, dict) else None
-            if lid is not None:
-                automation.mark_light_manual(str(lid), light)
+    async with automation.lighting_transition_boundary.serialized():
+        lights = await hue.get_all_lights()
+        if automation.validate_lighting_lease(
+            acknowledgement, allow_manual=True, allow_scene=True, scene_ack=True,
+        ):
+            acknowledge_targets(
+                {
+                    str(light["light_id"]): _snapshot_target(light, 0)
+                    for light in lights if light.get("light_id") is not None
+                },
+                direct_readback=True,
+                check_acknowledgement_guard=False,
+            )
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
@@ -898,121 +951,152 @@ async def activate_effect_on_light(
 # "Try It" — activate a scene temporarily and auto-revert
 # ------------------------------------------------------------------
 
-# Single-slot: only one trial can be active at a time.
-_try_it_state: dict[str, Any] = {
-    "task": None,
-    "snapshot": None,
-    "snapshot_id": None,
-}
+# Trials are process-local; no restore authority is recovered after restart.
+_try_it_state: dict[str, Any] = {"trial": None}
+_try_control_lock = asyncio.Lock()
 
 
-async def _revert_after_delay(
-    hue: Any, ws_manager: Any, snapshot: list[dict], delay: int
-) -> None:
-    """Wait *delay* seconds, then restore the snapshot light states."""
+def _snapshot_target(light: dict, transitiontime: int) -> dict:
+    state = {key: light[key] for key in ("on", "bri") if light.get(key) is not None}
+    if light.get("colormode") == "ct" and light.get("ct"):
+        state["ct"] = light["ct"]
+    elif light.get("hue") is not None and light.get("sat") is not None:
+        state.update(hue=light["hue"], sat=light["sat"])
+    return {**state, "transitiontime": transitiontime}
+
+
+async def _restore_trial(trial: dict, transitiontime: int) -> bool:
+    engine = trial["engine"]
+    boundary = engine.lighting_transition_boundary
+    async with boundary.serialized():
+        for light in trial["snapshot"]:
+            if _try_it_state["trial"] is not trial or not engine.validate_lighting_lease(
+                trial["lease"], allow_manual=True, allow_scene=True,
+            ):
+                return False
+            lid = str(light["light_id"])
+            state = _snapshot_target(light, transitiontime)
+            try:
+                success = await boundary.run_write(
+                    lambda: trial["hue"].set_light(lid, state),
+                    validator=lambda: (
+                        _try_it_state["trial"] is trial
+                        and engine.validate_lighting_lease(
+                            trial["lease"], allow_manual=True, allow_scene=True,
+                        )
+                    ),
+                    light_ids=[lid],
+                )
+            except asyncio.CancelledError:
+                trial["lease"] = None
+                engine.forget_ambiguous_light_write([lid])
+                raise
+            if success is not True:
+                return False
+            # Intent may change during adapter I/O. Never adopt it as our lease.
+            if not engine.validate_lighting_lease(trial["lease"], allow_manual=True, allow_scene=True):
+                engine.record_leased_light_write(lid, state, supersede_screen_sync=True)
+                return False
+            engine.record_leased_light_write(lid, state, supersede_screen_sync=True)
+            engine.mark_light_manual(lid, state)
+            trial["lease"] = boundary.authority.issue("try_it", None)
+        engine._effect_manager.acknowledge_static_replacement(
+            {str(light["light_id"]) for light in trial["snapshot"]},
+        )
+    lights = await trial["hue"].get_all_lights()
+    for light in lights:
+        await trial["ws"].broadcast("light_update", light)
+    return True
+
+
+async def _revert_after_delay(trial: dict, delay: int) -> None:
     try:
         await asyncio.sleep(delay)
-        for light in snapshot:
-            state: dict[str, Any] = {}
-            if light.get("on") is not None:
-                state["on"] = light["on"]
-            if light.get("bri") is not None:
-                state["bri"] = light["bri"]
-            if light.get("colormode") == "ct" and light.get("ct"):
-                state["ct"] = light["ct"]
-            elif light.get("hue") is not None and light.get("sat") is not None:
-                state["hue"] = light["hue"]
-                state["sat"] = light["sat"]
-            state["transitiontime"] = 10  # 1s smooth revert
-            await hue.set_light(light["light_id"], state)
-        await asyncio.sleep(0.3)
-        lights = await hue.get_all_lights()
-        for light in lights:
-            await ws_manager.broadcast("light_update", light)
+        await _restore_trial(trial, 10)
     except asyncio.CancelledError:
-        pass  # cancelled by a new trial or explicit cancel
-    except Exception as e:
-        logger.error("Try-it revert failed: %s", e, exc_info=True)
+        raise  # Cancellation never attempts a physical restore.
+    except Exception:
+        logger.exception("Try-it revert failed")
     finally:
-        _try_it_state["task"] = None
-        _try_it_state["snapshot"] = None
-        _try_it_state["snapshot_id"] = None
+        # An old task cannot clear a replacement's state.
+        if _try_it_state["trial"] is trial:
+            _try_it_state["trial"] = None
+
+
+async def _cancel_trial_task(trial: dict) -> None:
+    task = trial.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def close_scene_trials() -> None:
+    """Discard process-local timers on shutdown; never replay snapshots."""
+    async with _try_control_lock:
+        trial = _try_it_state["trial"]
+        _try_it_state["trial"] = None
+        if trial is not None:
+            await _cancel_trial_task(trial)
 
 
 @router.post("/try/cancel", dependencies=[Depends(require_api_key)])
 async def cancel_try(request: Request) -> dict:
-    """
-    Cancel an active scene trial and immediately revert to the snapshot.
-    """
-    hue = request.app.state.hue
-    ws_manager = request.app.state.ws_manager
-
-    if not _try_it_state["task"] or _try_it_state["task"].done():
-        return {"status": "ok", "detail": "No active trial"}
-
-    # Cancel the delayed revert
-    _try_it_state["task"].cancel()
-    snapshot = _try_it_state["snapshot"]
-
-    if snapshot:
-        # Immediately revert
-        for light in snapshot:
-            state: dict[str, Any] = {}
-            if light.get("on") is not None:
-                state["on"] = light["on"]
-            if light.get("bri") is not None:
-                state["bri"] = light["bri"]
-            if light.get("colormode") == "ct" and light.get("ct"):
-                state["ct"] = light["ct"]
-            elif light.get("hue") is not None and light.get("sat") is not None:
-                state["hue"] = light["hue"]
-                state["sat"] = light["sat"]
-            state["transitiontime"] = 5  # 0.5s quick revert
-            await hue.set_light(light["light_id"], state)
-        await asyncio.sleep(0.3)
-        lights = await hue.get_all_lights()
-        for light in lights:
-            await ws_manager.broadcast("light_update", light)
-
-    _try_it_state["task"] = None
-    _try_it_state["snapshot"] = None
-    _try_it_state["snapshot_id"] = None
-
-    return {"status": "reverted"}
+    """Cancel the timer; restore only while the trial still owns authority."""
+    async with _try_control_lock:
+        trial = _try_it_state["trial"]
+        if trial is None:
+            return {"status": "ok", "detail": "No active trial"}
+        # Detach before cancellation so the timer's finally cannot clear us.
+        _try_it_state["trial"] = None
+        await _cancel_trial_task(trial)
+        _try_it_state["trial"] = trial
+        try:
+            reverted = await _restore_trial(trial, 5)
+        finally:
+            if _try_it_state["trial"] is trial:
+                _try_it_state["trial"] = None
+        return {"status": "reverted" if reverted else "discarded"}
 
 
 @router.post("/{scene_id}/try", dependencies=[Depends(require_api_key)])
 async def try_scene(scene_id: str, request: Request) -> dict:
-    """
-    Activate a scene temporarily for 30 seconds, then auto-revert.
-
-    Snapshots the current light states, activates the requested scene,
-    and schedules a revert task. Only one trial can be active at a time.
-    """
+    """Snapshot and establish one trial inside the serialized scene operation."""
     hue = request.app.state.hue
-    ws_manager = request.app.state.ws_manager
-
+    engine = getattr(request.app.state, "automation", None)
     _check_hue_available(hue)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Lighting authority unavailable")
+    async with _try_control_lock:
+        old = _try_it_state["trial"]
+        _try_it_state["trial"] = None
+        if old is not None:
+            await _cancel_trial_task(old)
+        trial = {
+            "engine": engine, "hue": hue, "ws": request.app.state.ws_manager,
+            "snapshot": [], "lease": None, "task": None,
+            "snapshot_id": str(uuid.uuid4())[:8],
+        }
 
-    # Cancel any existing trial
-    if _try_it_state["task"] and not _try_it_state["task"].done():
-        _try_it_state["task"].cancel()
+        async def snapshot_inside_boundary():
+            authority = engine.lighting_transition_boundary.authority
+            lease = authority.issue("try_snapshot", None)
+            trial["snapshot"] = await hue.get_all_lights()
+            if not authority.valid(lease):
+                raise HTTPException(status_code=409, detail="Lighting changed during trial snapshot")
+            # Safety writes are our own acknowledged phase, not new intent.
+            # Manual/transit/source/lifecycle publication during activation must
+            # still prevent the trial from adopting a fresh restore lease.
+            trial["setup_lease"] = authority.issue("try_setup", None, intent_only=True)
 
-    # Snapshot current light states
-    snapshot = await hue.get_all_lights()
-
-    # Activate the scene using the existing activate logic
-    result = await activate_scene(scene_id, request)
-    if result.get("status") != "ok":
-        raise HTTPException(status_code=400, detail="Scene activation failed")
-
-    # Schedule revert
-    sid = str(uuid.uuid4())[:8]
-    task = asyncio.create_task(
-        _revert_after_delay(hue, ws_manager, snapshot, 30)
-    )
-    _try_it_state["task"] = task
-    _try_it_state["snapshot"] = snapshot
-    _try_it_state["snapshot_id"] = sid
-
-    return {"status": "ok", "revert_after": 30, "snapshot_id": sid}
+        result = await _activate_scene(
+            scene_id, request, lease_sink=lambda lease: trial.update(lease=lease),
+            before_transition=snapshot_inside_boundary,
+            acknowledgement_guard=lambda: engine.lighting_transition_boundary.authority.valid(
+                trial.get("setup_lease"),
+            ),
+        )
+        if result.get("status") != "ok" or trial["lease"] is None:
+            raise HTTPException(status_code=409, detail="Scene trial authority changed")
+        _try_it_state["trial"] = trial
+        trial["task"] = asyncio.create_task(_revert_after_delay(trial, 30))
+        return {"status": "ok", "revert_after": 30, "snapshot_id": trial["snapshot_id"]}

@@ -28,12 +28,18 @@ import colorsys
 import json
 import logging
 import os
+import inspect
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 import httpx
+
+from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 
 from backend.services.automation_constants import SCREEN_SYNC_FRESH_SECONDS
 from backend.services.color_utils import (
@@ -413,6 +419,56 @@ RUST_LUMA_DARK = 12
 RUST_LUMA_BRIGHT = 135
 
 
+def _leased_frame(method):
+    """Retain the boundary through write acknowledgement and ownership publish."""
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    async def guarded(self, *args, **kwargs):
+        final_guard = kwargs.pop("final_guard", None)
+        incoming_lease = kwargs.pop("authority_lease", None)
+        bound = signature.bind(self, *args, **kwargs)
+        bound.apply_defaults()
+        light_id = bound.arguments["light_id"]
+        if light_id not in self._targets:
+            return False
+        self.invalidate_pending_frames([light_id])
+        sequence = self._frame_sequence_by_light[light_id]
+        mode = bound.arguments.get("mode", "watching" if method.__name__ == "apply_watching_daylight" else "gaming")
+        source = bound.arguments.get("source", "desktop")
+        authority = self._transition_boundary.authority
+        lease = incoming_lease or authority.issue("screen_sync", [light_id])
+        accepted_at = self._frame_clock()
+
+        async def apply_locked():
+            def eligible():
+                return (
+                    not lease.intent_only and authority.valid(lease)
+                    and self._frame_sequence_by_light.get(light_id) == sequence
+                    and 0 <= self._frame_clock() - accepted_at < SCREEN_SYNC_FRESH_SECONDS
+                    and (self._authority_validator is None or self._authority_validator(lease, light_id, mode, source))
+                    and (final_guard is None or final_guard())
+                )
+            if not eligible():
+                return False
+
+            def refresh_lease():
+                nonlocal lease
+                lease = authority.issue("screen_sync_ack", [light_id])
+
+            token = self._frame_guard.set((eligible, refresh_lease, method.__name__))
+            try:
+                return await method(self, *args, **kwargs)
+            finally:
+                self._frame_guard.reset(token)
+
+        if self._transition_boundary.held_by_current_task:
+            return await apply_locked()
+        async with self._transition_boundary.serialized():
+            return await apply_locked()
+    return guarded
+
+
 class ScreenSyncService:
     """
     Receives RGB colors from any source and applies them to one or more Hue lights.
@@ -431,7 +487,12 @@ class ScreenSyncService:
         transition_boundary=None,
     ) -> None:
         self._hue = hue_service
-        self._transition_boundary = transition_boundary
+        self._transition_boundary = transition_boundary or LightingTransitionBoundary(hue_service)
+        self._authority_validator = None
+        self._cancelled_write_notifier = None
+        self._frame_clock = time.monotonic
+        self._frame_sequence_by_light: dict[str, int] = {}
+        self._frame_guard: ContextVar = ContextVar("screen_sync_final_guard", default=None)
         targets = list(target_light_ids) if target_light_ids else ["2"]
         if not targets:
             targets = ["2"]
@@ -466,6 +527,7 @@ class ScreenSyncService:
         self._last_source: Optional[str] = None
         self._last_color_at_by_source: dict[str, datetime] = {}
         self._last_color_at_by_light: dict[str, datetime] = {}
+        self._last_frame_kind_by_light: dict[str, tuple[str, str | None]] = {}
         # Rejected non-media foreground frames refresh a short ownership hold.
         # This lets sticky Watching preserve the last valid media color without
         # pretending a rejected webpage frame was an accepted screen color.
@@ -728,12 +790,25 @@ class ScreenSyncService:
         """Most recent accepted screen-sync frame for each managed light."""
         return dict(self._last_color_at_by_light)
 
-    def _record_source_write(self, source: str, light_id: str) -> None:
+    def _record_source_write(self, source: str, light_id: str) -> bool:
+        frame = self._frame_guard.get()
+        if frame is not None and not frame[0]():
+            return False
+        self._transition_boundary.authority.invalidate([light_id])
         observed_at = datetime.now(timezone.utc)
         self._last_color_at = observed_at
         self._last_source = source
         self._last_color_at_by_source[source] = observed_at
         self._last_color_at_by_light[light_id] = observed_at
+        self._last_frame_kind_by_light[light_id] = (source, frame[2] if frame is not None else None)
+        return True
+
+    def rust_owned_light_ids(self) -> set[str]:
+        """Only fresh desktop Rust luma frames may lend a flinch baseline."""
+        return {
+            lid for lid in self.fresh_owned_light_ids()
+            if self._last_frame_kind_by_light.get(lid) == ("desktop", "apply_rust_brightness")
+        }
 
     @property
     def target_light(self) -> str:
@@ -757,10 +832,19 @@ class ScreenSyncService:
         if the desktop agent disappears, the ordinary freshness timeout releases
         ownership automatically.
         """
+        # A newer non-media frame revokes queued color work even before a lamp
+        # has any acknowledged target to hold. This does not acquire ownership.
+        self.invalidate_pending_frames(light_ids)
         now = datetime.now(timezone.utc)
         for light_id in light_ids:
             if light_id in self._targets and light_id in self._last_sent_state:
+                self._transition_boundary.authority.invalidate([light_id])
                 self._hold_refreshed_at[(source, light_id)] = now
+
+    def invalidate_pending_frames(self, light_ids: list[str]) -> None:
+        """Replace/cancel producer work without acquiring physical ownership."""
+        for light_id in light_ids:
+            self._frame_sequence_by_light[light_id] = self._frame_sequence_by_light.get(light_id, 0) + 1
 
     def clear_watching_hold(
         self, source: str, light_ids: Optional[list[str]] = None,
@@ -770,6 +854,7 @@ class ScreenSyncService:
         for key in list(self._hold_refreshed_at):
             held_source, light_id = key
             if held_source == source and (selected is None or light_id in selected):
+                self._transition_boundary.authority.invalidate([light_id])
                 self._hold_refreshed_at.pop(key, None)
 
     def held_owned_light_ids(self) -> set[str]:
@@ -779,6 +864,7 @@ class ScreenSyncService:
         for key, refreshed_at in list(self._hold_refreshed_at.items()):
             age = (now - refreshed_at).total_seconds()
             if age < -2.0 or age >= SCREEN_SYNC_FRESH_SECONDS:
+                self._transition_boundary.authority.invalidate([key[1]])
                 self._hold_refreshed_at.pop(key, None)
                 continue
             _source, light_id = key
@@ -790,6 +876,12 @@ class ScreenSyncService:
         """Lights actively owned by fresh frames or refreshed media holds."""
         now = datetime.now(timezone.utc)
         fresh: set[str] = set()
+        for light_id, observed_at in list(self._last_color_at_by_light.items()):
+            age = (now - observed_at).total_seconds()
+            if age < -2.0 or age >= SCREEN_SYNC_FRESH_SECONDS:
+                self._transition_boundary.authority.invalidate([light_id])
+                self._last_color_at_by_light.pop(light_id, None)
+                self._last_frame_kind_by_light.pop(light_id, None)
 
         # Preserve per-light freshness without letting a desktop L2/L5 frame
         # refresh laptop-capable L1/L3/L4 ownership.
@@ -821,6 +913,16 @@ class ScreenSyncService:
                 self._last_sent_state.pop(light_id, None)
                 self._last_daylight_state.pop(light_id, None)
 
+    def _drop_physical_claim(self, light_id: str) -> None:
+        """Forget ScreenSync cache/ownership after bridge state becomes unknown."""
+        self._last_sent_state.pop(light_id, None)
+        self._last_daylight_state.pop(light_id, None)
+        self._last_color_at_by_light.pop(light_id, None)
+        self._last_frame_kind_by_light.pop(light_id, None)
+        for key in list(self._hold_refreshed_at):
+            if key[1] == light_id:
+                self._hold_refreshed_at.pop(key, None)
+
     def supersede_light(self, light_id: str) -> None:
         """Forget every physical-authority claim after another writer succeeds.
 
@@ -832,12 +934,10 @@ class ScreenSyncService:
         light_id = str(light_id)
         if light_id not in self._targets:
             return
-        self._last_sent_state.pop(light_id, None)
-        self._last_daylight_state.pop(light_id, None)
-        self._last_color_at_by_light.pop(light_id, None)
-        for key in list(self._hold_refreshed_at):
-            if key[1] == light_id:
-                self._hold_refreshed_at.pop(key, None)
+        had_owner = light_id in self.fresh_owned_light_ids()
+        if had_owner:
+            self._transition_boundary.authority.invalidate([light_id])
+        self._drop_physical_claim(light_id)
 
     def synchronize_physical_state(
         self, light_id: str, state: dict[str, Any],
@@ -884,14 +984,44 @@ class ScreenSyncService:
         return self.authoritative_state(light_id)
 
     async def _set_light_serialized(self, light_id: str, state: dict) -> bool:
-        """Serialize screen writes only while an effect transition is active."""
-        if (
-            self._transition_boundary is None
-            or self._transition_boundary.held_by_current_task
-        ):
-            return await self._hue.set_light(light_id, state)
-        async with self._transition_boundary.serialized():
-            return await self._hue.set_light(light_id, state)
+        """Validate immediately before mutation; publish inside the same lock."""
+        if not self._transition_boundary.held_by_current_task:
+            raise RuntimeError("ScreenSync write requires a leased frame boundary")
+        frame = self._frame_guard.get()
+        if frame is None or not frame[0]():
+            return False
+        try:
+            success = await self._transition_boundary.run_write(
+                lambda: self._hue.set_light(light_id, state), validator=frame[0],
+                light_ids=[light_id],
+            )
+        except asyncio.CancelledError:
+            self.supersede_light(light_id)
+            if self._cancelled_write_notifier is not None:
+                self._cancelled_write_notifier([light_id])
+            raise
+        # Stronger synchronous intent can be published while bridge I/O awaits.
+        # The physical write may already have happened, but it earns no freshness.
+        if success is not True:
+            return False
+        current = frame[0]()
+        # The bridge mutation itself is an acknowledgement, not new semantic
+        # ownership. Accepted frames publish ownership in _record_source_write.
+        self._transition_boundary.authority.invalidate([light_id], intent=False)
+        if not current:
+            # The stale command may nevertheless have reached the bridge. Old
+            # dedup/freshness caches can no longer prove physical state.
+            self._drop_physical_claim(str(light_id))
+            return False
+        frame[1]()  # Continue acknowledgement under our own successful write.
+        return True
+
+    def set_lighting_authority_validator(self, boundary, validator) -> None:
+        self._transition_boundary = boundary
+        self._authority_validator = validator
+        self._cancelled_write_notifier = getattr(
+            getattr(validator, "__self__", None), "forget_ambiguous_light_write", None,
+        )
 
     def prime_from_mode_state(
         self,
@@ -933,10 +1063,14 @@ class ScreenSyncService:
             target = states.get(light_id)
             if isinstance(target, dict):
                 accepted[light_id] = target.copy()
+        if self._accepted_gaming_targets != accepted:
+            self._transition_boundary.authority.invalidate()
         self._accepted_gaming_targets = accepted
 
     def clear_accepted_gaming_state(self) -> None:
         """Suspend composed Gaming authority outside an accepted static plan."""
+        if self._accepted_gaming_targets:
+            self._transition_boundary.authority.invalidate()
         self._accepted_gaming_targets.clear()
 
     @staticmethod
@@ -984,6 +1118,7 @@ class ScreenSyncService:
             and abs(bri - previous.get("bri", bri)) < 2
         )
 
+    @_leased_frame
     async def apply_watching_daylight(
         self,
         light_id: str,
@@ -1041,8 +1176,7 @@ class ScreenSyncService:
             and previous.get("ct") == ct
             and abs(previous.get("bri", bri) - bri) < 2
         ):
-            self._record_source_write(source, light_id)
-            return True
+            return self._record_source_write(source, light_id)
 
         success = await self._set_light_serialized(light_id, {
             "on": True,
@@ -1056,13 +1190,15 @@ class ScreenSyncService:
         # The next evening/night HSB frame must make a physical color write.
         self._last_sent_state.pop(light_id, None)
         self._last_bri[light_id] = float(bri)
-        self._record_source_write(source, light_id)
+        if not self._record_source_write(source, light_id):
+            return False
         await self._maybe_log_adjustment(
             light_id, None, None, bri, "watching",
             trigger="screen_sync_daylight", ct=ct,
         )
         return True
 
+    @_leased_frame
     async def apply_color(
         self,
         light_id: str,
@@ -1150,8 +1286,7 @@ class ScreenSyncService:
             and abs(last_sent.get("bri", ibri) - int(br)) < 2
             and self._within_deadband(last_sent, ih, isat, ibri, mode, period)
         ):
-            self._record_source_write(source, light_id)
-            return True
+            return self._record_source_write(source, light_id)
         success = await self._set_light_serialized(light_id, {
             "on": True,
             "hue": ih,
@@ -1162,7 +1297,8 @@ class ScreenSyncService:
         if success is not True:
             return False
         self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
-        self._record_source_write(source, light_id)
+        if not self._record_source_write(source, light_id):
+            return False
         await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
         return True
 
@@ -1215,8 +1351,7 @@ class ScreenSyncService:
             self._last_sat[light_id] = float(stable["sat"])
         self._last_bri[light_id] = float(stable["bri"])
         if self._last_sent_state.get(light_id) == stable:
-            self._record_source_write(source, light_id)
-            return True
+            return self._record_source_write(source, light_id)
 
         success = await self._set_light_serialized(
             light_id,
@@ -1229,7 +1364,8 @@ class ScreenSyncService:
         if success is not True:
             return False
         self._last_sent_state[light_id] = stable
-        self._record_source_write(source, light_id)
+        if not self._record_source_write(source, light_id):
+            return False
         await self._maybe_log_adjustment(
             light_id,
             stable.get("hue"),
@@ -1320,6 +1456,7 @@ class ScreenSyncService:
         flinch borrows this as its dip baseline). Mid-value before first frame."""
         return self._last_bri.get(light_id, 100.0)
 
+    @_leased_frame
     async def apply_rust_brightness(
         self,
         light_id: str,
@@ -1327,7 +1464,7 @@ class ScreenSyncService:
         period: Optional[str] = None,
         source: str = "desktop",
         tint: Optional[tuple[int, int, float]] = None,
-    ) -> None:
+    ) -> bool:
         """Drive a lamp's BRIGHTNESS from screen luma, holding a fixed ember color.
 
         The Rust profile's L2 path. Instead of mirroring the (chaotic)
@@ -1353,7 +1490,7 @@ class ScreenSyncService:
                 glow tracks scene brightness, just red-shifted). None = ember.
         """
         if light_id not in self._targets:
-            return
+            return False
         light_env = self._rust_envelope.get(light_id, self._rust_envelope["2"])
         floor, cap = light_env.get(period or "night", light_env["night"])
         span = max(1, self._rust_luma_bright - self._rust_luma_dark)
@@ -1374,15 +1511,17 @@ class ScreenSyncService:
         }
         success = await self._set_light_serialized(light_id, sent)
         if success is not True:
-            return
+            return False
         self._last_sent_state[light_id] = {
             "hue": int(sh), "sat": int(ss), "bri": int(sb),
         }
-        self._record_source_write(source, light_id)
+        if not self._record_source_write(source, light_id):
+            return False
         await self._maybe_log_adjustment(
             light_id, int(sh), int(ss), int(sb), "gaming",
             trigger="rust_brightness_sync",
         )
+        return True
 
     # ------------------------------------------------------------------
     # Runtime Rust-profile tuning (no-redeploy knob)

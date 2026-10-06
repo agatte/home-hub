@@ -7,14 +7,16 @@ import pytest
 
 from backend.services.pc_agent.screen_sync_agent import compute_vignette_score
 from backend.services.rust_event_service import RustEventService
+from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 
 
 class _FakeHue:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    async def set_light(self, light_id: str, state: dict) -> None:
+    async def set_light(self, light_id: str, state: dict) -> bool:
         self.calls.append((light_id, state))
+        return True
 
 
 class _FakeSync:
@@ -27,6 +29,19 @@ class _FakeSync:
 class _FakeEngine:
     def __init__(self, held=()) -> None:
         self._held = set(held)
+        self.lighting_transition_boundary = LightingTransitionBoundary(None)
+        self.current_game = "rust"
+
+    def validate_lighting_lease(self, lease, **kwargs):
+        return self.lighting_transition_boundary.authority.valid(lease) and not (
+            {lid for lid, _ in lease.light_generations} & self._held
+        )
+
+    def record_leased_light_write(self, light_id, state, **kwargs):
+        self.lighting_transition_boundary.authority.invalidate([light_id])
+
+    def forget_ambiguous_light_write(self, light_ids, **kwargs):
+        pass  # This fixture has no automation deduplication cache.
 
     @property
     def manual_light_overrides(self):
@@ -34,7 +49,9 @@ class _FakeEngine:
 
 
 def _svc() -> RustEventService:
-    return RustEventService(hue_service=_FakeHue(), screen_sync=_FakeSync())
+    return RustEventService(
+        hue_service=_FakeHue(), screen_sync=_FakeSync(), automation_engine=_FakeEngine(),
+    )
 
 
 # --- vignette detection -----------------------------------------------------
@@ -74,8 +91,7 @@ async def test_first_hit_flinches_and_sets_under_fire():
     out = await svc.report_damage(score=120)
     assert out["reaction"] == "flinch"
     assert svc.under_fire is True
-    import asyncio
-    await asyncio.sleep(0)  # let the flinch task run
+    await svc._flinch_task
     # Flinch wrote both reacting lamps (dip + restore = ≥2 writes each).
     hue = svc._hue
     assert any(lid == "2" for lid, _ in hue.calls)

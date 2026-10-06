@@ -39,6 +39,7 @@ from backend.services.automation_constants import (
     # Canonical home is automation_constants (engine re-exports for back-compat).
     DND_STATE_KEY as DND_STATE_KEY,
     SCREEN_SYNC_MODES,
+    SCREEN_SYNC_FRESH_SECONDS,
     SOURCE_STALE_SECONDS,
     DaySchedule,
     ScheduleConfig,
@@ -730,6 +731,22 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if not engine or not sync:
         raise HTTPException(status_code=503, detail="Screen sync not initialized")
 
+    frame_mode = engine.current_mode
+    frame_game = getattr(engine, "current_game", None)
+    frame_accepted_at = time.monotonic()
+    boundary = getattr(engine, "lighting_transition_boundary", None)
+    frame_leases = {}
+
+    def final_frame_guard(light_id):
+        def eligible():
+            if not 0 <= time.monotonic() - frame_accepted_at < SCREEN_SYNC_FRESH_SECONDS:
+                return False
+            if engine.current_mode != frame_mode or getattr(engine, "current_game", None) != frame_game:
+                return False
+            current = _watching_screen_sync_authority(engine, getattr(request.app.state, "presence", None))
+            return not current["enforced"] or current["source"] == report.source
+        return eligible
+
     clear_watching_hold = getattr(sync, "clear_watching_hold", None)
     if (
         report.source == "desktop"
@@ -799,6 +816,12 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
         if report.foreground_media is True and callable(clear_watching_hold):
             clear_watching_hold(report.source, targets)
 
+    # Capture after this frame's synchronous hold release, before any wait.
+    frame_leases = {
+        lid: boundary.authority.issue("screen_frame", [lid])
+        for lid in sync.target_lights
+    } if boundary is not None else {}
+
     # Pull zone + posture so the sync cap can differ between watching-at-desk
     # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source
     # from PresenceFusion, NOT the raw Latitude camera: since the 2026-05-27
@@ -857,10 +880,13 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             if target in engine.manual_light_overrides:
                 skipped_rust[target] = "manual_override"
                 continue
-            await sync.apply_rust_brightness(
+            accepted = await sync.apply_rust_brightness(
                 target, luma, period=period, source=report.source, tint=tint,
+                final_guard=final_frame_guard(target),
+                authority_lease=frame_leases.get(target),
             )
-            applied_rust.append(target)
+            if accepted is not False:
+                applied_rust.append(target)
         resp: dict = {
             "status": "ok", "applied": bool(applied_rust),
             "lights": applied_rust, "profile": "rust",
@@ -914,6 +940,8 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 posture=posture,
                 lux_multiplier=lux_mult,
                 weather_condition=weather_condition,
+                final_guard=final_frame_guard(light_id),
+                authority_lease=frame_leases.get(light_id),
             )
         else:
             accepted = await sync.apply_color(
@@ -921,13 +949,15 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 report.r,
                 report.g,
                 report.b,
-                mode=engine.current_mode,
+                mode=frame_mode,
                 source=report.source,
                 zone=zone,
                 posture=posture,
                 period=period,
                 lux_multiplier=lux_mult,
                 weather_condition=weather_condition,
+                final_guard=final_frame_guard(light_id),
+                authority_lease=frame_leases.get(light_id),
             )
         if accepted is not False:
             applied.append(light_id)
