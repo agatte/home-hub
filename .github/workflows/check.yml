@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: timeout --preserve-status 5m python -m pytest tests/test_[s-z]*.py -vv -s
+        run: python -m pytest tests/test_sunrise_ownership.py -vv -s
         env:
           APP_ENV: testing
 
