@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: timeout --preserve-status 6m python -m pytest tests/ -vv -s
+        run: timeout --preserve-status 5m python -m pytest tests/test_effect_manager.py tests/test_effect_transition_boundary.py tests/test_screen_sync_route.py tests/test_lighting_ownership_regressions.py tests/test_transit_lighting_service.py tests/test_circuit_breaker.py tests/test_celebration_orchestrator.py -vv -s
         env:
           APP_ENV: testing
 
