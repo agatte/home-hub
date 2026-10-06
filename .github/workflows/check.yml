@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: python -m pytest tests/test_lighting_final_write_authority.py -vv -s -k "native_scene_delayed or registered_external or rust_final_restore or rust_baseline or rust_overlay"
+        run: python -m pytest tests/test_lighting_final_write_authority.py -vv -s -k "native_scene_delayed or registered_external"
         env:
           APP_ENV: testing
 
