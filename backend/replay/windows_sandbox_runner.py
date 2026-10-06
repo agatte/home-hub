@@ -66,6 +66,7 @@ PROJECT_FILES = (
     "backend/services/light_applicator.py",
     "backend/services/light_override_manager.py",
     "backend/services/light_state_calculator.py",
+    "backend/services/lighting_authority.py",
     "backend/services/lighting_transition_boundary.py",
     "backend/services/navigation_activity_policy.py",
     "backend/services/presence_fusion.py",
