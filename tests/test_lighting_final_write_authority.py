@@ -195,11 +195,11 @@ async def test_native_scene_delayed_acknowledgement(lighting, monkeypatch, kind)
     issue = boundary.authority.issue
     captures = []
 
-    def capture(producer, targets):
+    def capture(producer, targets, **kwargs):
         if producer == "native_scene_ack":
             assert boundary.held_by_current_task
             captures.append(True)
-        return issue(producer, targets)
+        return issue(producer, targets, **kwargs)
 
     monkeypatch.setattr(boundary.authority, "issue", capture)
 
