@@ -37,6 +37,7 @@ def lighting(mock_hue, mock_hue_v2, mock_ws, monkeypatch):
         light["colormode"] = "hs"
     original_write = mock_hue.set_light
     original_read = mock_hue.get_all_lights
+    monkeypatch.setattr(mock_hue, "breaker_open", False, raising=False)
 
     async def detached_readback():
         return deepcopy(await original_read())
@@ -202,10 +203,14 @@ async def test_native_scene_delayed_acknowledgement(lighting, monkeypatch, kind)
 
     monkeypatch.setattr(boundary.authority, "issue", capture)
 
+    real_sleep = asyncio.sleep
+
     async def delay(seconds):
-        if seconds == 0.5:
+        if seconds == 0.5 and not boundary.held_by_current_task:
             acknowledged.set()
             await resume.wait()
+            return
+        await real_sleep(0)
 
     monkeypatch.setattr(scenes.asyncio, "sleep", delay)
     with patch.object(engine, "mark_light_manual", wraps=engine.mark_light_manual) as mark:
