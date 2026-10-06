@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: python -m pytest tests/test_lighting_final_write_authority.py -vv -s -k "registered_external_owner_notifier_and_disjoint_light"
+        run: python -m pytest tests/test_lighting_final_write_authority.py -vv -s
         env:
           APP_ENV: testing
 
