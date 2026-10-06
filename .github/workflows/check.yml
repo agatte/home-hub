@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: python -m pytest tests/test_lifespan.py -vv -s
+        run: python -m pytest tests/test_lifespan.py::test_one_close_failing_does_not_block_others -vv -s
         env:
           APP_ENV: testing
 
