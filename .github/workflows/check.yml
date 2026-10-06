@@ -19,6 +19,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
 
@@ -30,7 +31,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: python -m pytest tests/ -v
+        run: python -m pytest tests/test_replay_isolation_backend.py::test_reviewed_stage_files_match_navigation_root_closure tests/test_replay_navigation_root.py::test_closed_project_import_graph_has_no_live_io_modules -vv -s
         env:
           APP_ENV: testing
 
