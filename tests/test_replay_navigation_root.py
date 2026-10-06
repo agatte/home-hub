@@ -475,6 +475,7 @@ def test_closed_project_import_graph_has_no_live_io_modules():
         "backend.services.light_applicator",
         "backend.services.light_override_manager",
         "backend.services.light_state_calculator",
+        "backend.services.lighting_authority",
         "backend.services.lighting_transition_boundary",
         "backend.services.navigation_activity_policy",
         "backend.services.presence_fusion",
