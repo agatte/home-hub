@@ -116,13 +116,13 @@ class LightOverrideManager:
             self._st.manual_light_overrides.clear()
             self._st.manual_light_targets.clear()
 
-    def expire_manual_stamps(self, now: datetime, timeout_hours: int) -> None:
+    def expire_manual_stamps(self, now: datetime, timeout_hours: int) -> bool:
         """Expire stale per-light overrides (same window as the mode-level
         override, tracked per-entry via the datetime stamped in
         ``mark_manual``). Called once per run_loop tick.
         """
         if not self._st.manual_light_overrides:
-            return
+            return False
         cutoff = timedelta(hours=timeout_hours)
         expired = [
             lid for lid, ts in self._st.manual_light_overrides.items()
@@ -136,6 +136,8 @@ class LightOverrideManager:
                 f"Per-light override on light {lid} expired "
                 f"after {timeout_hours}h"
             )
+
+        return bool(expired)
 
     # ── Dedup-cache discipline ──────────────────────────────────────────
 

@@ -90,6 +90,7 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     automation = getattr(request.app.state, "automation", None)
     if automation:
         automation.mark_light_manual(str(light_id), state_dict)
+        await automation.persist_manual_light_ownership()
 
     # No post-write broadcast — the bridge is mid-transition and a fresh
     # read returns an intermediate value. Polling broadcasts after the
@@ -143,6 +144,7 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
             continue
         if automation:
             automation.mark_light_manual(str(light_id), {"bri": new_bri})
+            await automation.persist_manual_light_ownership()
         updated.append({"id": light_id, "bri": new_bri})
         # Per-light row in light_adjustments so Alexa "brighter"/"dimmer"
         # is visible in the same place as dashboard slider drags.

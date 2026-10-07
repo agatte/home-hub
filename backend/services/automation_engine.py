@@ -550,6 +550,7 @@ class AutomationEngine:
         # deadline. Reconciliation skips these lights the same way
         # _manual_light_overrides does.
         self._state = EngineState()
+        self._override_persist_lock = asyncio.Lock()
         self._external_light_owners: list[Any] = []
         self._suspended_external_owner_ids: set[int] = set()
 
@@ -3873,60 +3874,62 @@ class AutomationEngine:
         """Clear DND immediately."""
         return await self._dnd.clear(source=source)
 
-    async def _persist_override_state(self, *, raise_on_error: bool = False) -> None:
-        """Write current manual-override state to app_settings.
+    async def persist_manual_light_ownership(self) -> None:
+        """Await durability after an async owner has acknowledged manual writes.
 
-        Persists `_manual_override`, `_override_mode`, `_override_time`,
-        the restart-durable `_home_awake_confirmed` lifecycle latch,
-        and both autonomous-rule refractory stamps
-        (`_zone_posture_last_fired_at`, `_watching_sleep_guard_last_fired_at`)
-        so a backend restart (deploys, crashes) doesn't drop the user's
-        active mode and re-derive it from raw sensors. Without this,
-        deploying while in `relax` would briefly flip to whatever the PC
-        agent is reporting until the rule re-fires after its dwell, and
-        a deploy mid-watching-sleep window would risk a double-fire on
-        the same night.
+        Synchronous marking/callbacks only establish in-memory ownership.
+        Scene owners call this once after their acknowledgement batch.
         """
-        from backend.api.routes.automation import OVERRIDE_STATE_KEY
-        from backend.api.routes.routines import save_setting
+        await self._persist_override_state()
 
-        payload: dict[str, Any] = {
-            "manual_override": self._manual_override,
-            "home_awake_confirmed": self._home_awake_confirmed,
-            "override_mode": self._override_mode,
-            "override_source": self._override_source,
-            "override_time_utc": (
-                self._override_time.astimezone(timezone.utc).isoformat()
-                if self._override_time is not None else None
-            ),
-            "zone_posture_last_fired_utc": (
-                self._zone_posture_last_fired_at.astimezone(timezone.utc).isoformat()
-                if self._zone_posture_last_fired_at is not None else None
-            ),
-            "watching_sleep_guard_last_fired_utc": (
-                self._watching_sleep_guard_last_fired_at
-                .astimezone(timezone.utc).isoformat()
-                if self._watching_sleep_guard_last_fired_at is not None else None
-            ),
-            "user_cleared_override_at_utc": (
-                self._user_cleared_override_at.astimezone(timezone.utc).isoformat()
-                if self._user_cleared_override_at is not None else None
-            ),
-            "user_clear_allows_physical_context_relax": (
-                self._user_clear_allows_physical_context_relax
-            ),
-            "last_bed_reclined_during_watching_utc": (
-                self._last_bed_reclined_during_watching_at
-                .astimezone(timezone.utc).isoformat()
-                if self._last_bed_reclined_during_watching_at is not None else None
-            ),
-        }
-        try:
-            await save_setting(OVERRIDE_STATE_KEY, payload)
-        except Exception as e:
-            logger.error("Failed to persist override state: %s", e, exc_info=True)
-            if raise_on_error:
-                raise
+    async def _persist_override_state(self, *, raise_on_error: bool = False) -> None:
+        # Snapshot and commit share one lock: a queued clear cannot be overtaken
+        # by an older save, and queued callers snapshot current ownership.
+        async with self._override_persist_lock:
+            from backend.api.routes.automation import OVERRIDE_STATE_KEY
+            from backend.api.routes.routines import save_setting
+
+            payload: dict[str, Any] = {
+                "manual_light_stamps_utc": {
+                    lid: stamp.astimezone(timezone.utc).isoformat()
+                    for lid, stamp in self._manual_light_overrides.items()
+                },
+                "manual_override": self._manual_override,
+                "home_awake_confirmed": self._home_awake_confirmed,
+                "override_mode": self._override_mode,
+                "override_source": self._override_source,
+                "override_time_utc": (
+                    self._override_time.astimezone(timezone.utc).isoformat()
+                    if self._override_time is not None else None
+                ),
+                "zone_posture_last_fired_utc": (
+                    self._zone_posture_last_fired_at.astimezone(timezone.utc).isoformat()
+                    if self._zone_posture_last_fired_at is not None else None
+                ),
+                "watching_sleep_guard_last_fired_utc": (
+                    self._watching_sleep_guard_last_fired_at
+                    .astimezone(timezone.utc).isoformat()
+                    if self._watching_sleep_guard_last_fired_at is not None else None
+                ),
+                "user_cleared_override_at_utc": (
+                    self._user_cleared_override_at.astimezone(timezone.utc).isoformat()
+                    if self._user_cleared_override_at is not None else None
+                ),
+                "user_clear_allows_physical_context_relax": (
+                    self._user_clear_allows_physical_context_relax
+                ),
+                "last_bed_reclined_during_watching_utc": (
+                    self._last_bed_reclined_during_watching_at
+                    .astimezone(timezone.utc).isoformat()
+                    if self._last_bed_reclined_during_watching_at is not None else None
+                ),
+            }
+            try:
+                await save_setting(OVERRIDE_STATE_KEY, payload)
+            except Exception as e:
+                logger.error("Failed to persist override state: %s", e, exc_info=True)
+                if raise_on_error:
+                    raise
 
     async def load_override_state(self) -> None:
         """Restore manual-override state from app_settings on startup.
@@ -3946,9 +3949,27 @@ class AutomationEngine:
         except Exception as e:
             logger.error("Failed to load override state: %s", e, exc_info=True)
             return
-        if not saved:
+        if not isinstance(saved, dict) or not saved:
             return
 
+        # Metadata only: do not restore targets or replay bridge state.
+        now = datetime.now(tz=TZ)
+        stamps = saved.get("manual_light_stamps_utc", {})
+        restored = {}
+        if isinstance(stamps, dict):
+            for lid, value in stamps.items():
+                try:
+                    if not isinstance(lid, str) or lid not in ALL_LIGHT_IDS:
+                        continue
+                    stamp = datetime.fromisoformat(value)
+                    if stamp.tzinfo is None or stamp.utcoffset() is None:
+                        continue
+                    age = now - stamp
+                    if timedelta(0) <= age <= timedelta(hours=self._override_timeout_hours):
+                        restored[lid] = stamp.astimezone(TZ)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        self._manual_light_overrides.update(restored)
         # Restore zone+posture stamp first — independent of the override
         # itself, and needed even when the override has expired so the
         # gate 2 refractory window is honored across restarts.
@@ -5763,9 +5784,10 @@ class AutomationEngine:
                 # Expire stale per-light overrides (same 4h window as the
                 # mode-level override, tracked per-entry via the datetime
                 # stamped in mark_light_manual).
-                self._overrides.expire_manual_stamps(
+                if self._overrides.expire_manual_stamps(
                     now, self._override_timeout_hours,
-                )
+                ):
+                    await self._persist_override_state()
 
                 # Shadow-only living-room decision context. This runs after
                 # policy/ownership expiry cleanup but before early returns

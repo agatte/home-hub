@@ -58,6 +58,7 @@ async def _apply_brightness_targets_now(
             continue
         if automation:
             automation.mark_light_manual(str(light_id))
+            await automation.persist_manual_light_ownership()
         applied.append({"light_id": light_id, "bri": state["bri"]})
         if event_logger:
             before = before_lights.get(light_id) or {}
