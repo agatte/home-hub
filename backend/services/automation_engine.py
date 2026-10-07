@@ -6540,7 +6540,7 @@ class AutomationEngine:
         Returns True if we should skip this cycle.
         """
         if not self._hue or not self._hue.connected:
-            return False
+            return self._external_off_detected
 
         lights = await self._hue.get_all_lights()
         # HueService returns [] when a bridge read is unavailable (including

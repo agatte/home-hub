@@ -397,3 +397,57 @@ async def test_native_try_it_survives_its_own_screen_sync_release(lighting, monk
     trial = scenes._try_it_state["trial"]
     assert trial is not None and trial["lease"] is not None
     await scenes.close_scene_trials()
+
+
+@pytest.mark.asyncio
+async def test_away_convergence_rejects_queued_screensync_and_keeps_failed_off_suppressed(
+    lighting, monkeypatch,
+):
+    from backend.services.away_manager import AwayManager
+    engine, sync, request = lighting
+    hue = request.app.state.hue
+    monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", (0,))
+    manager = AwayManager(
+        engine=engine, hue_getter=lambda: hue, sonos_getter=lambda: None,
+        tts_getter=lambda: None, notifier_getter=lambda: None,
+        save_setting=AsyncMock(), load_setting=AsyncMock(return_value=None),
+    )
+    original = hue.set_light
+    writes = []
+    fail_once = True
+
+    async def write(lid, state):
+        nonlocal fail_once
+        writes.append((lid, dict(state)))
+        if lid == "2" and fail_once and state.get("on") is False:
+            fail_once = False
+            return False
+        return await original(lid, state)
+
+    monkeypatch.setattr(hue, "set_light", write)
+    async with independent_blocker(engine.lighting_transition_boundary):
+        queued_on = asyncio.create_task(sync.apply_rust_brightness("2", 150))
+        await asyncio.sleep(0)
+        leave = asyncio.create_task(manager.handle_event("leave", "test"))
+        # Leave arms suppression synchronously before waiting for Hue boundary.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert engine._away_hold
+    assert await queued_on is False
+    await leave
+    await manager._off_task
+    assert manager.status()["off_convergence"]["outcome"] == "converged"
+    assert all(state.get("on") is False for _, state in writes)
+    assert [lid for lid, _ in writes].count("2") == 2
+    assert engine._away_hold and engine._external_off_detected
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_bridge_loss_preserves_external_off_and_hard_hold(lighting):
+    engine, _, request = lighting
+    engine.arm_away_suppression("test")
+    # Fixture Hue exposes connected as a normal attribute.
+    request.app.state.hue.connected = False
+    assert await engine._check_external_off() is True
+    assert engine._away_hold and engine._external_off_detected

@@ -1592,6 +1592,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
     # Cancel AutomationEngine-owned delayed fixture-comfort work in the same
     # lifecycle phase so it cannot outlive managed background writers.
+    await _safe_shutdown("away_manager", away_manager.close)
     await _safe_shutdown("automation", automation.close)
     try:
         await asyncio.wait_for(

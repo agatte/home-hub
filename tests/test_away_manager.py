@@ -110,7 +110,11 @@ def _make_manager(
 
     hue = MagicMock()
     hue.connected = hue_connected
-    hue.set_all_lights = AsyncMock(return_value=True)
+    hue.breaker_open = False
+    hue.known_light_ids = set()
+    hue._transition_boundary = None
+    hue.get_all_lights = AsyncMock(return_value=[{"light_id": "1"}])
+    hue.set_light = AsyncMock(return_value=True)
 
     sonos = MagicMock()
     sonos.connected = sonos_connected
@@ -151,8 +155,8 @@ class TestLeave:
         assert mgr.away is True
         assert engine._external_off_detected is True
         assert engine.armed_by == ["geofence:ios_shortcut"]
-        hue.set_all_lights.assert_awaited_once_with(
-            {"on": False, "transitiontime": LEAVE_FADE_TRANSITIONTIME}
+        hue.set_light.assert_awaited_once_with(
+            "1", {"on": False, "transitiontime": LEAVE_FADE_TRANSITIONTIME}
         )
 
     async def test_leave_pauses_sonos_only_when_playing(self):
@@ -185,14 +189,14 @@ class TestLeave:
         result = await mgr.handle_event("leave", "ios_shortcut")
         assert result["changed"] is False
         # Actuation happened exactly once.
-        hue.set_all_lights.assert_awaited_once()
+        hue.set_light.assert_awaited_once()
         notifier.emit_alert.assert_awaited_once()
 
     async def test_sonos_failure_does_not_abort_lights_off(self):
         mgr, _engine, _settings, hue, sonos, *_ = _make_manager(sonos_state="PLAYING")
         sonos.pause.side_effect = RuntimeError("boom")
         await mgr.handle_event("leave", "ios_shortcut")
-        hue.set_all_lights.assert_awaited_once()
+        hue.set_light.assert_awaited_once()
         assert mgr.away is True
 
 
@@ -1023,3 +1027,165 @@ class TestEngineHooks:
         await engine.reapply_current_mode(force_resend=True)
 
         engine._apply_mode.assert_awaited_once_with("relax", force_resend=True)
+
+
+class TestOffConvergence:
+    async def test_partial_failure_retries_only_unresolved(self, monkeypatch):
+        monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", (0, 0, 0))
+        mgr, engine, _, hue, *_ = _make_manager()
+        hue.get_all_lights.return_value = [{"light_id": "1"}, {"light_id": "2"}]
+        outcomes = iter([True, False, False, True])
+
+        async def write(lid, state):
+            assert engine._away_hold and engine._external_off_detected
+            assert state == {"on": False, "transitiontime": LEAVE_FADE_TRANSITIONTIME}
+            return next(outcomes)
+
+        hue.set_light.side_effect = write
+        await mgr.handle_event("leave", "test")
+        assert mgr.status()["off_convergence"]["unresolved_ids"] == ["2"]
+        assert mgr.status()["off_convergence"]["failed_ids"] == ["2"]
+        await mgr._off_task
+        assert [c.args[0] for c in hue.set_light.await_args_list] == ["1", "2", "2", "2"]
+        status = mgr.status()["off_convergence"]
+        assert status["outcome"] == "converged"
+        assert status["unresolved_count"] == 0
+        assert status["attempts"] == 3
+        assert engine._away_hold
+        await mgr.close()
+
+    @pytest.mark.parametrize("inventory", [[], None])
+    async def test_unknown_inventory_exhausts_without_success(self, monkeypatch, inventory):
+        monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", (0, 0))
+        mgr, engine, _, hue, *_ = _make_manager()
+        if inventory is None:
+            hue.connected = False
+        else:
+            hue.get_all_lights.return_value = inventory
+        await mgr.handle_event("leave", "test")
+        await mgr._off_task
+        status = mgr.status()["off_convergence"]
+        assert status["outcome"] == "exhausted"
+        assert status["inventory_known"] is False
+        assert status["attempts"] == 3
+        hue.set_light.assert_not_awaited()
+        assert engine._away_hold and engine._external_off_detected
+        await mgr.close()
+
+    async def test_reconnect_discovers_current_ids_and_off_only(self, monkeypatch):
+        monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", (0, 0))
+        mgr, engine, _, hue, *_ = _make_manager(hue_connected=False)
+        hue.known_light_ids = {"1"}
+        await mgr.handle_event("leave", "test")
+        assert mgr.status()["off_convergence"]["unresolved_ids"] == ["1"]
+        hue.connected = True
+        hue.get_all_lights.return_value = [{"light_id": "1"}, {"light_id": "7"}]
+        await mgr._off_task
+        assert [c.args[0] for c in hue.set_light.await_args_list] == ["1", "7"]
+        assert mgr.status()["off_convergence"]["outcome"] == "converged"
+        assert engine._away_hold
+        await mgr.close()
+
+    async def test_breaker_open_skips_writes_then_recovers(self, monkeypatch):
+        monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", (0,))
+        mgr, _, _, hue, *_ = _make_manager()
+        hue.breaker_open = True
+        await mgr.handle_event("leave", "test")
+        hue.get_all_lights.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
+        hue.breaker_open = False
+        await mgr._off_task
+        assert mgr.status()["off_convergence"]["outcome"] == "converged"
+        await mgr.close()
+
+    async def test_restart_rearms_before_inventory_and_never_replays_on(self):
+        settings = FakeSettings({AWAY_STATE_KEY: {"away": True}})
+        mgr, engine, _, hue, *_ = _make_manager(settings=settings)
+
+        async def inventory():
+            assert engine._away_hold and engine._external_off_detected
+            return [{"light_id": "9", "on": True, "bri": 200}]
+
+        hue.get_all_lights.side_effect = inventory
+        await mgr.load_state()
+        hue.set_light.assert_awaited_once_with(
+            "9", {"on": False, "transitiontime": LEAVE_FADE_TRANSITIONTIME})
+        assert mgr.status()["off_convergence"]["outcome"] == "converged"
+        await mgr.close()
+
+    async def test_home_cancels_pending_retry_and_fences_old_generation(self):
+        mgr, engine, _, hue, *_ = _make_manager()
+        hue.set_light.return_value = False
+        await mgr.handle_event("leave", "test")
+        generation = mgr._off_generation
+        task = mgr._off_task
+        await mgr.handle_event("arrive", "test")
+        await asyncio.gather(task, return_exceptions=True)
+        hue.set_light.reset_mock()
+        await mgr._attempt_off(generation)
+        hue.set_light.assert_not_awaited()
+        assert not engine._away_hold
+        assert mgr.status()["off_convergence"]["outcome"] == "superseded"
+        await mgr.close()
+
+    async def test_duplicate_leave_does_not_spawn_task_and_close_drains(self):
+        mgr, engine, _, hue, *_ = _make_manager()
+        hue.set_light.return_value = False
+        await mgr.handle_event("leave", "test")
+        task = mgr._off_task
+        await mgr.handle_event("leave", "duplicate")
+        assert mgr._off_task is task
+        await mgr.close()
+        assert task.done() and mgr._off_task is None
+        assert engine._away_hold
+
+    async def test_count_and_time_bounds(self, monkeypatch):
+        monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", (0, 0))
+        mgr, _, _, hue, *_ = _make_manager()
+        hue.set_light.return_value = False
+        await mgr.handle_event("leave", "test")
+        await mgr._off_task
+        assert hue.set_light.await_count == 3
+        assert mgr.status()["off_convergence"]["outcome"] == "exhausted"
+        await mgr.close()
+
+        mgr, _, _, hue, *_ = _make_manager()
+        hue.set_light.return_value = False
+        await mgr.handle_event("leave", "test")
+        mgr._off_deadline = 0
+        await mgr._off_task
+        assert hue.set_light.await_count == 1
+        assert mgr.status()["off_convergence"]["outcome"] == "exhausted"
+        await mgr.close()
+
+    async def test_one_light_exception_does_not_skip_other_targets(self, monkeypatch):
+        monkeypatch.setattr("backend.services.away_manager.OFF_RETRY_DELAYS", ())
+        mgr, _, _, hue, *_ = _make_manager()
+        hue.get_all_lights.return_value = [{"light_id": "1"}, {"light_id": "2"}]
+        hue.set_light.side_effect = [RuntimeError("fake failure"), True]
+        await mgr.handle_event("leave", "test")
+        await mgr._off_task
+        status = mgr.status()["off_convergence"]
+        assert status["acknowledged_ids"] == ["2"]
+        assert status["failed_ids"] == ["1"]
+        await mgr.close()
+
+
+    async def test_delayed_off_revalidates_inside_final_boundary(self):
+        from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+        mgr, _, _, hue, *_ = _make_manager()
+        boundary = LightingTransitionBoundary(hue)
+        hue._transition_boundary = boundary
+        mgr._away = True
+        mgr._engine.arm_away_suppression("test")
+        generation = mgr._off_generation
+        async with boundary.serialized():
+            delayed = asyncio.create_task(mgr._attempt_off(generation))
+            # Inventory completion proves the attempt has reached lock contention.
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert hue.get_all_lights.await_count == 1
+            await mgr.handle_event("arrive", "test")
+        await delayed
+        hue.set_light.assert_not_awaited()
+        await mgr.close()

@@ -33,6 +33,7 @@ region jitter; a duplicate leave/arrive is a no-op (changed=False).
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -43,6 +44,9 @@ AWAY_CONFIG_KEY = "away_config"
 
 # Lights-off fade on leave (deciseconds): 3s — unhurried, not abrupt.
 LEAVE_FADE_TRANSITIONTIME = 30
+
+OFF_RETRY_DELAYS = (2, 4, 8, 16, 30)
+OFF_RETRY_WINDOW_S = 120
 
 DEFAULT_CONFIG: dict[str, Any] = {
     # Welcome TTS on arrive. Suppressed during DND, sleeping mode, and
@@ -103,6 +107,15 @@ class AwayManager:
         self._pending_home_effects: dict[str, tuple[bool, Optional[int]]] = {}
         self._arrival_effect_tasks: set[asyncio.Task] = set()
         self._event_lock = asyncio.Lock()
+        self._off_generation = 0
+        self._off_task: Optional[asyncio.Task] = None
+        self._off_deadline = float("inf")
+        self._off_targets: set[str] = set()
+        self._off_acknowledged: set[str] = set()
+        self._off_inventory_known = False
+        self._off_failed: set[str] = set()
+        self._off_attempts = 0
+        self._off_outcome = "inactive"
 
     # ── State surface ───────────────────────────────────────────────────
 
@@ -113,6 +126,16 @@ class AwayManager:
     def status(self) -> dict[str, Any]:
         """JSON-serializable away state for API responses."""
         return {
+            "off_convergence": {
+                "target_ids": sorted(self._off_targets),
+                "acknowledged_ids": sorted(self._off_acknowledged),
+                "failed_ids": sorted(self._off_failed),
+                "unresolved_ids": sorted(self._off_targets - self._off_acknowledged),
+                "unresolved_count": len(self._off_targets - self._off_acknowledged),
+                "inventory_known": self._off_inventory_known,
+                "attempts": self._off_attempts,
+                "outcome": self._off_outcome,
+            },
             "away": self._away,
             "since_utc": (
                 self._since.astimezone(timezone.utc).isoformat()
@@ -158,6 +181,8 @@ class AwayManager:
             except (TypeError, ValueError):
                 self._since = None
         self._engine.arm_away_suppression("away_manager:restore")
+        async with self._event_lock:
+            await self._start_off_convergence()
         logger.info(
             "Away state restored from app_settings (since=%s) — "
             "suppression re-armed", since_str,
@@ -252,6 +277,7 @@ class AwayManager:
             await self._persist_occupancy_strict(
                 payload, transition=f"HOME ({state_source})",
             )
+            self._cancel_off_convergence()
             self._away = False
             self._since = None
             self._last_event_source = state_source
@@ -431,6 +457,7 @@ class AwayManager:
             ):
                 if saved.get("away") is True:
                     return await self.reconciliation_status(reconciliation_id)
+                self._cancel_off_convergence()
                 self._away = False
                 self._since = None
                 self._last_event_source = saved.get("source") or source
@@ -458,6 +485,7 @@ class AwayManager:
                     f"home_reconciliation_failed:{source}"
                 )
                 raise
+            self._cancel_off_convergence()
             self._away = False
             self._since = None
             self._last_event_source = source
@@ -726,15 +754,7 @@ class AwayManager:
             except Exception as e:
                 logger.warning("LEAVE — Sonos pause failed: %s", e)
 
-        # 3. All lights off, gentle fade.
-        try:
-            hue = self._hue_getter()
-            if hue and hue.connected:
-                await hue.set_all_lights(
-                    {"on": False, "transitiontime": LEAVE_FADE_TRANSITIONTIME}
-                )
-        except Exception as e:
-            logger.error("LEAVE — lights-off failed: %s", e, exc_info=True)
+        await self._start_off_convergence()
 
         # 4. Exactly ONE notification. DND-respecting (force=False) — the
         #    point of away mode is LESS noise, and the away state itself
@@ -858,3 +878,115 @@ class AwayManager:
                 )
         except Exception as e:
             logger.warning("Away notification (%s) failed: %s", kind, e)
+
+    def _cancel_off_convergence(self) -> None:
+        self._off_generation += 1
+        if self._off_task is not None and not self._off_task.done():
+            self._off_task.cancel()
+        if self._off_outcome == "pending":
+            self._off_outcome = "superseded"
+
+    async def close(self) -> None:
+        """Drain the sole retry task without releasing suppression."""
+        self._cancel_off_convergence()
+        if self._off_task is not None:
+            await asyncio.gather(self._off_task, return_exceptions=True)
+            self._off_task = None
+
+    def _off_current(self, generation: int) -> bool:
+        return bool(generation == self._off_generation and self._away
+                    and self._engine._away_hold and self._engine._external_off_detected)
+
+    async def _start_off_convergence(self) -> None:
+        # Caller holds occupancy lock; only current OFF intent is retained.
+        self._cancel_off_convergence()
+        generation = self._off_generation
+        self._off_targets = set()
+        self._off_acknowledged = set()
+        self._off_inventory_known = False
+        self._off_failed = set()
+        self._off_attempts = 0
+        self._off_outcome = "pending"
+        started = time.monotonic()
+        self._off_deadline = started + OFF_RETRY_WINDOW_S
+        await self._attempt_off(generation)
+        if self._off_outcome == "pending":
+            self._off_task = asyncio.create_task(
+                self._retry_off(generation), name="away-off-convergence")
+
+    async def _attempt_off(self, generation: int) -> None:
+        if not self._off_current(generation):
+            return
+        self._off_attempts += 1
+        hue = self._hue_getter()
+        if hue is None:
+            return
+        self._off_targets.update(getattr(hue, "known_light_ids", ()))
+        if not hue.connected or hue.breaker_open:
+            return
+        try:
+            if not self._off_inventory_known:
+                lights = await hue.get_all_lights()
+                ids = {str(light["light_id"]) for light in lights}
+                self._off_targets.update(ids)
+                self._off_inventory_known = bool(ids)
+
+            async def write_unresolved():
+                for light_id in sorted(self._off_targets - self._off_acknowledged):
+                    if not self._off_current(generation):
+                        return
+                    # Do not begin more bridge I/O beyond the retry window.
+                    # In-flight canonical writes still settle under #323.
+                    if time.monotonic() >= self._off_deadline:
+                        return
+                    if not hue.connected or hue.breaker_open:
+                        return
+                    try:
+                        result = await hue.set_light(light_id, {
+                            "on": False, "transitiontime": LEAVE_FADE_TRANSITIONTIME})
+                    except Exception:
+                        result = False
+                        logger.warning("Away OFF failed for light %s", light_id, exc_info=True)
+                    if result is True:
+                        self._off_acknowledged.add(light_id)
+                        self._off_failed.discard(light_id)
+                    else:
+                        self._off_failed.add(light_id)
+
+            boundary = getattr(hue, "_transition_boundary", None)
+            if boundary is not None:
+                async with boundary.serialized():
+                    await write_unresolved()
+            else:
+                await write_unresolved()
+        except Exception:
+            logger.warning("Away OFF attempt failed", exc_info=True)
+        if self._off_inventory_known and self._off_targets <= self._off_acknowledged:
+            self._off_outcome = "converged"
+        logger.info("Away OFF attempt=%s outcome=%s unresolved=%s inventory_known=%s",
+                    self._off_attempts, self._off_outcome,
+                    sorted(self._off_targets - self._off_acknowledged),
+                    self._off_inventory_known)
+
+    async def _retry_off(self, generation: int) -> None:
+        try:
+            # Bounds sleeps, inventory reads, and lock contention. Canonical
+            # Hue mutation cancellation still retains the physical I/O fence.
+            async with asyncio.timeout(max(0, self._off_deadline - time.monotonic())):
+                for delay in OFF_RETRY_DELAYS:
+                    await asyncio.sleep(delay)
+                    async with self._event_lock:
+                        if not self._off_current(generation):
+                            return
+                        if time.monotonic() >= self._off_deadline:
+                            break
+                        await self._attempt_off(generation)
+                        if self._off_outcome == "converged":
+                            return
+        except TimeoutError:
+            pass
+        except asyncio.CancelledError:
+            return
+        if self._off_current(generation):
+            self._off_outcome = "exhausted"
+            logger.warning("Away OFF exhausted: %s", self.status()["off_convergence"])
