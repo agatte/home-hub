@@ -33,6 +33,7 @@ class HueService:
         self._username = username
         self._bridge = None
         self._connected = False
+        self.known_light_ids: set[str] = set()
         self._last_states: dict[str, dict] = {}
         # light_id -> monotonic deadline. While now() < deadline, the polling
         # loop skips that light so mid-transition bridge reads don't bounce
@@ -171,6 +172,7 @@ class HueService:
                     "reachable": state.get("reachable", False),
                 })
 
+            self.known_light_ids.update(light["light_id"] for light in lights)
             return lights
         except CircuitBreakerOpen:
             # Breaker is fast-failing while the bridge is unreachable. It
