@@ -1,11 +1,11 @@
 # HomeHub Execution Map
 
 > **Status:** Living execution/orchestration guidance; not product authority.
-> **Last reconciled:** 2026-10-04 through the security-architecture and lighting-authority audits.
+> **Last reconciled:** 2026-10-07 through #324/#329 integration and the bounded Project Admin status reconciliation.
 > **Evidence baselines:** [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) and [`audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md`](audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md). Security remediation is tracked under #284 and canonical children #285-#296.
 > **Product authority:** [`PROJECT_SPEC.md`](PROJECT_SPEC.md).
 >
-> **2026-10-06 Project Admin checkpoint:** #285 containment is merged but awaits separately authorized production deployment. #322 sunrise ownership and #323 shared Hue final-write authority are merged (#323: `6b221ac9304340afc1e2eda445afac8db3ab2dc1`, closed). #324 Away/off convergence is published as isolated candidate `1b1443242d2aeb9b77ed2d450c6ca912b1729690` on `away-off-convergence-324` (tree-equivalent to locally tested `6ed79abc5205865649a177e86d9cfbac042e9779`); merge/deploy remain pending. Sandbox Codex durable orchestration passed detached-worker, duplicate-Write, and exact-thread in-guest-restart recovery acceptance for PR #329; full Sandbox close/relaunch is explicitly not an exact-thread guarantee. No production/device action followed. Refer to `docs/LOCAL_WORKSPACE.md` for the recovery workflow; do not accidentally start #324 or deploy #285 during tooling work.
+> **2026-10-07 Project Admin checkpoint:** Remote `master` is `0f4b2c2326d082d434678de937088a3641b4d7f8`. #286 source-export hardening, #285 containment, #322 sunrise ownership (`c251c18560fcbe2eb9843f2bbd1e73437d88b68b`), #323 shared Hue final-write authority (`6b221ac9304340afc1e2eda445afac8db3ab2dc1`), #324 Away/off convergence (merged via PR #330 at `0f4b2c2326d082d434678de937088a3641b4d7f8`), and Project Admin Codex recovery PR #329 (`cd9eaf88e6595f7110a3329a17bcc1f477cd9acd`) are merged/closed. Current repository/issue evidence and this session record no supported production deployment for the accumulated runtime-affecting merged work; treat `master` through `0f4b2c2` as **merged but not deployed** until a separately authorized live release verifies otherwise. #329 is the accepted Sandbox development recovery path: detached-worker recovery, duplicate-Write refusal, and exact-thread resume across an in-guest Sandbox restart passed; a full Sandbox close/relaunch remains explicitly non-guaranteed for exact-thread recovery. No open PRs existed at reconciliation start. Next substantive bounded order is #246 -> #283 -> #276; #240 remains implementation-complete/evidence-gated. Do not reimplement #322-#324 or redesign Codex recovery absent new failure evidence.
 
 This file exists so a future ChatGPT/Codex session can answer **what should we do next, what is actually ready, and what model/depth is appropriate** without rediscovering the whole architecture.
 
@@ -45,15 +45,12 @@ Important current facts:
 
 | Order | Work | Classification | Next action | Cheapest credible model |
 |---|---|---|---|---|
-| 1 | #286 safe source exports | EXECUTION_READY | Make source snapshots safe by construction before another archive is created/shared | **Luna Medium** |
-| 2 | #285 immediate security containment | EXECUTION_READY | Close SPA/API routing disclosure paths, remove Pi-hole wildcard forwarding and immediate shared-credential propagation without waiting for full identity migration | **Sol High** |
-| 3 | #322 sunrise final-write ownership | EXECUTION_READY | Route every delayed ramp step through current lighting authority and cancel/recheck at the final write boundary | **Sol High** |
-| 4 | #323 delayed/transient final-write authority | EXECUTION_READY | Add one Hue-specific generation/lease revalidation seam and migrate Try-It, ScreenSync, Rust restore and native-scene acknowledgement | **Sol High** |
-| 5 | #324 Away/off convergence | EXECUTION_READY | Track per-light OFF acknowledgement and bounded retry/reconnect while Away remains authoritative | **Sol High** |
-| 6 | #246 per-light manual ownership persistence | EXECUTION_READY | Persist narrowly scoped manual-owner metadata; restore before automatic reconciliation | **Sol Medium** |
-| 7 | #283 Blue Yeti stream recovery / capability health | EXECUTION_READY | Add bounded resource recovery and separate worker-liveness from usable sensing health | **Sol Medium** |
-| 8 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
-| 9 | #240 deterministic navigation replay | IMPLEMENTATION_COMPLETE / EVIDENCE_GATED | Obtain one eligible natural daytime capture before claiming real-fixture acceptance | **Luna Low** for capture/status handling; **Sol Medium** only for unexpected divergence |
+| 1 | #246 per-light manual ownership persistence | EXECUTION_READY | Persist narrowly scoped manual-owner metadata; restore before automatic reconciliation | **Sol Medium** |
+| 2 | #283 Blue Yeti stream recovery / capability health | EXECUTION_READY | Add bounded resource recovery and separate worker-liveness from usable sensing health | **Sol Medium** |
+| 3 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
+| 4 | #240 deterministic navigation replay | IMPLEMENTATION_COMPLETE / EVIDENCE_GATED | Obtain one eligible natural daytime capture before claiming real-fixture acceptance | **Luna Low** for capture/status handling; **Sol Medium** only for unexpected divergence |
+
+#286, #285, #322, #323, and #324 are complete on `master`; do not leave them in the actionable queue merely because production rollout is still pending. The remaining #287-#296 security program remains valid and dependency-ordered, but current repo/issue evidence does not introduce a new blocker that displaces the bounded #246 -> #283 -> #276 sequence. Re-evaluate that only if new live security evidence changes the risk boundary.
 
 These correctness/security items do not require #240. Do not use replay or the larger auth migration as a reason to postpone bounded fixes with already-resolved contracts.
 
@@ -63,34 +60,37 @@ Detailed implementation packets live in the owning GitHub issues and dated audit
 
 ### Security program — #284 / canonical children #285-#296
 
-- #285 immediate containment and #286 safe source exports are independent of the full identity migration and can proceed offline.
+- #285 immediate containment and #286 safe source exports are merged/closed. #285 remains inside the merged-but-not-deployed production boundary; #286 is Project Admin export tooling and does not itself require a Latitude rollout.
 - #287-#293 define the staged identity/browser/native/gateway/WebSocket migration. Preserve additive support before enforcement; retire private-IP/loopback/shared-key trust only after legitimate clients are ready.
 - #294-#296 own camera lifecycle, constrained media/SSRF surfaces, and evidence-backed Hue identity verification.
 - Duplicate planning issues #297-#321 are closed as duplicates; do not reopen them unless new evidence invalidates the canonical split.
-- **Workers:** Luna Medium for #286; Sol Medium/High per owning issue. Use Astra only for a genuinely unresolved architecture/review need, not routine implementation.
+- **Workers:** Sol Medium/High per remaining #287-#296 owning issue. Use Astra only for a genuinely unresolved architecture/review need, not routine implementation.
 
 ### #322 — sunrise final-write ownership
 
+- **Status:** MERGED/CLOSED at `c251c18560fcbe2eb9843f2bbd1e73437d88b68b`; production rollout/physical acceptance remain within the current merged-but-not-deployed release boundary.
 - Every delayed ramp step must re-check DND, Away/external-off, manual, scene/effect, transit, ScreenSync/protected-light and lifecycle authority at the final write boundary.
 - No catch-up/replay after cancellation or restart; do not create new wake/occupancy authority.
-- **Worker:** Sol High.
-- **Escalate if:** the existing owned lighting paths cannot express the accepted Morning behavior without changing product semantics.
+- **Historical implementation model:** Sol High.
+- **Reopen only if:** new evidence shows the existing owned lighting paths cannot express the accepted Morning behavior without changing product semantics.
 
 ### #323 — delayed/transient final-write authority
 
+- **Status:** MERGED/CLOSED at `6b221ac9304340afc1e2eda445afac8db3ab2dc1`; production rollout/physical acceptance remain within the current merged-but-not-deployed release boundary.
 - Extend the existing Hue transition/ownership architecture with one semantic generation/lease revalidation seam; do not create a universal device lease manager.
 - First migrations: scene Try-It reversion, ScreenSync write-after-wait, Rust flinch restore, native-scene acknowledgement.
 - A stale writer that loses authority must not mutate Hue or refresh its ownership/freshness.
-- **Worker:** Sol High.
-- **Escalate if:** producers require contradictory ownership precedence or the seam would weaken Game Day/manual/Away/ScreenSync/external-owner behavior.
+- **Historical implementation model:** Sol High.
+- **Reopen only if:** new evidence shows contradictory ownership precedence or that the seam weakens Game Day/manual/Away/ScreenSync/external-owner behavior.
 
 ### #324 — Away/off convergence
 
+- **Status:** MERGED/CLOSED via PR #330 at `0f4b2c2326d082d434678de937088a3641b4d7f8`; production rollout/real-Hue acceptance remain within the current merged-but-not-deployed release boundary.
 - Preserve Away suppression while tracking per-light OFF acknowledgements and bounded unresolved-light retry/reconnect behavior.
 - A stale Away retry must not survive a newer Home lifecycle generation.
 - Reuse structured per-light success/failure discipline rather than another boolean-only whole-home API.
-- **Worker:** Sol High.
-- **Escalate if:** safe convergence requires weakening Away suppression or replaying historical lighting state.
+- **Historical implementation model:** Sol High.
+- **Reopen only if:** new evidence shows safe convergence would require weakening Away suppression or replaying historical lighting state.
 
 ### #246 — durable per-light manual ownership
 

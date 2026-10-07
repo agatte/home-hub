@@ -347,6 +347,17 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ## Worktrees
 
+### Current registered-worktree checkpoint — 2026-10-07
+
+The 2026-09-20 recovery-era statement below that `main` was the only registered worktree is historical, not current. The bounded Project Admin reconciliation found multiple registered task/diagnostic worktrees in the writable Sandbox project root.
+
+Do **not** bulk-clean them. Completed-task worktrees such as `away-off-convergence-324`, `lighting-final-write-authority-323`, and `project-admin-codex-recovery-20261007` were clean at this checkpoint, but their branch tips are not necessarily ancestors of `master` because accepted work was integrated through different PR commits; any later retirement still requires exact registration, cleanliness, tree/ancestry or unique-state proof, and the guarded `Safe-RemoveGitWorktree.ps1` path. `security-containment-285-v2` was also clean with its remote branch already gone and is a likely later cleanup candidate after the same proof.
+
+Several other worktrees are explicitly **not cleanup candidates** at this checkpoint because they contain local state: `lighting-sunrise-ownership-322` has modified backend files plus an untracked ownership test; `control-plane` has substantial untracked Project Admin/control-plane material; `publication-readiness-20261002`, `replay-capture-operator`, `replay-capture-operator-v2`, `replay-isolation`, and `security-containment-285` also contain modified/deleted/untracked evidence or diagnostics. Preserve them. Clean replay slice worktrees may be assessed later, but no worktree or branch was deleted during this reconciliation.
+
+Canonical `main` itself was at local `dae3cd5a818ee03d8bc368f0b5cf04cbc4745774` and diverged from `origin/master` by one local commit versus five remote commits after fetch; do not reset it casually. The reconciliation therefore uses a fresh `project-admin-status-20261007` worktree based on remote `master` instead of rewriting that checkout.
+
+
 Create useful worktrees as siblings of `main`, for example:
 
 ```text
@@ -356,7 +367,7 @@ C:\Users\Anthony\Documents\home-hub-project\worktrees\<worktree-name>
 Before creating one, inspect `git worktree list` and the intended branch.
 Preserve active work and never overwrite or clean unrelated work.
 
-As of the 2026-09-20 recovery closeout, `main` is the **only registered
+At the 2026-09-20 recovery closeout, `main` was the **only registered
 worktree**. Four recovery-time checkouts were safely retired after verification
 that they were clean, 7-12 commits behind `master`, and had zero unique commits:
 
