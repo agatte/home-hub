@@ -242,6 +242,11 @@ try {
     # Native Codex warning lines on stderr must be logged, not escalated to
     # PowerShell 5.1 NativeCommandError by the outer Stop preference.
     $ErrorActionPreference='Continue'
+    # Live Codex SQLite/session state must stay on the Sandbox guest filesystem.
+    # Host-mapped folders persist across Sandbox instances but are not a safe
+    # SQLite runtime surface. In-guest Windows Sandbox restart preserves this
+    # profile state; full close/relaunch intentionally does not.
+    $env:CODEX_HOME=Join-Path $env:USERPROFILE '.codex-homehub-rdc'
     $env:CODEX_TASK_WORKDIR=[string]$task.workdir
     $argsList=@('exec','--dangerously-bypass-approvals-and-sandbox','--json','-C',[string]$task.workdir,'-o',$last)
     if(-not [string]::IsNullOrWhiteSpace([string]$task.model)){ $argsList+=@('-m',[string]$task.model) }

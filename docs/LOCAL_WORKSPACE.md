@@ -38,9 +38,12 @@ Codex may run inside the protected Sandbox and work normally within the writable
 The established Sandbox launcher is
 C:\Work\PC-Performance-Audit\.rdc-sandbox-state\Invoke-CodexProjectTask.ps1.
 It forwards to the repo-owned scripts\CodexSandboxTask.ps1. The matching
-run-codex.cmd uses persistent .rdc-sandbox-state\codex-home with established
-separate codex-auth synchronization, sets Git safe.directory to the validated
-task worktree only, and does not require codex on ordinary PATH. It deliberately
+run-codex.cmd uses guest-local %USERPROFILE%\.codex-homehub-rdc for live Codex
+SQLite/session state and keeps only auth synchronization plus task registry/
+evidence on the host-backed .rdc-sandbox-state mapping. Windows Sandbox preserves
+the guest profile across an in-guest restart; a full close/relaunch is disposable
+and is not claimed as exact-thread-resumable. The runner sets Git safe.directory
+to the validated task worktree only and does not require codex on ordinary PATH. It deliberately
 uses native C:\Tools\Git\cmd instead of the historical git-shim, which changes
 Sandbox SAC policy temporarily; that shim must not be invoked by Codex. This remains
 Sandbox-only; real-host RDC is never a fallback.
@@ -60,7 +63,7 @@ state.json (PID/start, thread, state), per-attempt JSONL events, stderr, result
 and Git postflight, and last-message.txt when produced. Stored prompts/logs
 are local task data; never include secrets or archive them publicly.
 
-Recovery after chat, RDC or Sandbox loss:
+Recovery after chat/RDC loss or an in-guest Windows Sandbox restart:
 
 1. Enumerate live RDC devices and identify Sandbox from WDAGUtilityAccount
    plus C:\Work. Never reuse a stale device UUID or use the real-host controller.
@@ -74,9 +77,10 @@ Recovery after chat, RDC or Sandbox loss:
    and a non-ephemeral exact thread ID exists, use -Action Resume -TaskId <id>
    -VerifiedNoCodexProcess. Resume uses the saved thread, not --last, and
    checks returned identity. Only affirm this flag after process-tree checks.
-5. If exact resume is impossible, preserve partial edits and logs, explicitly
-   supersede the old task with -Action Supersede -TaskId <id>
-   -VerifiedNoCodexProcess -Reason <specific-reason>, and only then consider
+5. If exact resume is impossible, including after a full Sandbox close/relaunch
+   that discarded the guest-local Codex home, preserve partial edits and registry
+   logs, explicitly supersede the old task with -Action Supersede -TaskId <id>
+   -VerifiedNoCodexProcess -Reason <specific-reason>, and only then consider a
    replacement. Uncertain liveness is a stop condition, not a second worker.
 
 The engine guards against two unresolved Write tasks on one workdir. Sandbox
@@ -102,10 +106,9 @@ warning escalation and an invalid atomic JSON replacement backup path.
 The final Codex agent could not get its *internal* git branch commands to
 return quickly and reported the branch unavailable; the independent Git
 snapshots confirmed master. Treat slow/internal Codex shell execution as a
-separate future diagnostic, not as a missing task/thread/result. A full
-Sandbox-restart and forcibly interrupted-thread resume were NOT performed;
-the recovery design is ready for those conditions but that branch remains
-unexercised in this acceptance test.
+separate future diagnostic, not as a missing task/thread/result. At this earlier checkpoint, a full Sandbox restart and forcibly interrupted-
+thread resume had not yet been performed. The PR #329 acceptance exercise below
+supersedes that gap.
 
 **Follow-up Codex native-Git validation — 2026-10-06:** Inspection of the
 legacy git-sac-wrapper.ps1 showed it temporarily changes Sandbox SAC policy.
@@ -116,8 +119,41 @@ with the selected worktree-specific safe.directory. A new no-edit Read task
 master, and saved GIT_NATIVE_PROBE_OK in last-message.txt. This also resolves
 the earlier Codex-internal git-command timeout in the tested case. The repo
 engine additionally records per-attempt launcher stdout/stderr and holds
-exclusive task/workdir file locks while Write workers run. PowerShell parsing
-passed; intentional forced termination and Sandbox restart were not tested.
+exclusive task/workdir file locks while Write workers run. PowerShell parsing passed. At this earlier checkpoint, intentional forced
+termination and Sandbox restart were not yet tested.
+
+**PR #329 recovery acceptance — 2026-10-07:** The lost-RDC-handle path was
+retested with durable no-edit task `e687a0f04fbb4d129d8bcaa6f1e74f2a`.
+After ignoring its launcher handle, a fresh control step rediscovered it only
+from `codex-runs`, recovered thread
+`01a1149c-98fa-7ec1-a6db-d98c2bfa789c`, and consumed the completed
+`RECOVERY_HANDLE_PROBE_OK` result with exit code 0.
+
+A first restart probe exposed a real design failure: putting live Codex SQLite
+state under the host-mapped `.rdc-sandbox-state\codex-home` left the persisted
+thread ID intact but exact resume failed with `list_turns is not supported yet`,
+and `migrate-rollouts` then hit SQLite disk-I/O error 8714 on the mapped
+`state_5.sqlite`. That failed task (`6ed9407ad6be4b0eb4442897b3e19f95`)
+and all attempt evidence remain preserved; no cleanup was used to hide it.
+
+The accepted fix keeps live Codex SQLite/session state in guest-local
+`%USERPROFILE%\.codex-homehub-rdc` while task registry/evidence and auth remain
+host-backed. Final restart task `5b2b00e094f646a9bdd4c765510afea8`
+was rediscovered from the registry with worker PID 2096 and thread
+`01a114a6-230c-78e3-9254-32dbb38d24a0`; a second Write launch in the same
+worktree exited 1 and the original worker/thread remained unchanged. While that
+worker was deliberately sleeping, `Restart-Computer -Force` rebooted the
+Sandbox. A newly booted `WDAGUtilityAccount` Sandbox retained the guest-local
+Codex home, reported the saved task as `interrupted-or-unverified` with no live
+worker, and a process inspection found no Codex/task process. `-Action Resume
+-VerifiedNoCodexProcess` launched attempt 2 with the exact persisted thread ID.
+The resumed event stream began with the same `thread.started` UUID, exited 0,
+and saved `SANDBOX_RESTART_RECOVERY_OK`, the expected branch, and
+`NO_EDITS=TRUE`. Git postflight retained HEAD
+`d47defc517c4250c21e420aace3fb60a4661eb09` and only the two candidate edits
+that already existed before the probe. This proves in-guest restart recovery;
+a full Windows Sandbox close/relaunch remains intentionally outside the exact-
+thread contract because that lifecycle discards guest-local state.
 
 For destructive operations, prove the exact path first; for Git/worktrees, also prove registration, cleanliness, ancestry/unique-state as applicable. Prefer the narrowest native operation over recursive/broad deletion and retain before/after or rollback evidence sufficient to show what changed and what was preserved. Worktree removal remains subject to the stricter `Safe-RemoveGitWorktree.ps1` rule below.
 
