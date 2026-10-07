@@ -1362,6 +1362,11 @@ class CelebrationOrchestrator:
                 )
                 continue
             successful_lights.add(str(step.light_id))
+            # Preserve existing per-step gates; fence older delayed Hue work
+            # when this acknowledged transient step changes the lamp.
+            authority = getattr(self._transition_boundary, "authority", None)
+            if authority is not None:
+                authority.invalidate([str(step.light_id)])
 
             # Emit the EventLogger row. Wrapped defensively even though
             # log_light_adjustment is fire-and-forget by contract; a

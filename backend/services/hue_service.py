@@ -7,6 +7,7 @@ import time
 from typing import Any, Optional
 
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from backend.services.lighting_transition_boundary import settle_lighting_io
 
 logger = logging.getLogger("home_hub.hue")
 
@@ -101,8 +102,18 @@ class HueService:
         """
         return self._breaker.state == CircuitBreaker.OPEN
 
-    async def _safe_call(self, fn, *args, **kwargs):
+    async def _safe_call(self, fn, *args, settle_mutation=False, **kwargs):
         """Run a sync bridge call in a thread under the circuit breaker."""
+        if settle_mutation:
+            async def settled_call():
+                # CircuitBreaker.wait_for may cancel on timeout. Keep its local
+                # worker inside the lighting fence until the thread really ends.
+                return await settle_lighting_io(asyncio.to_thread(fn, *args, **kwargs))
+
+            # Caller cancellation can arrive while wait_for is itself waiting
+            # for settled_call's timeout cleanup. Keep that outer breaker task
+            # fenced too so the serialized Hue boundary cannot unwind early.
+            return await settle_lighting_io(self._breaker.call(settled_call))
         return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
 
     @property
@@ -236,7 +247,7 @@ class HueService:
             if not command:
                 return False
 
-            await self._safe_call(self._bridge.set_light, lid, command)
+            await self._safe_call(self._bridge.set_light, lid, command, settle_mutation=True)
             logger.info(f"Set light {light_id}: {command}")
 
             # Mark light in-flight so the polling loop doesn't broadcast
@@ -264,9 +275,14 @@ class HueService:
     async def set_all_lights(self, state: dict[str, Any]) -> bool:
         """Set the same state on all lights (used for scenes)."""
         lights = await self.get_all_lights()
-        results = await asyncio.gather(
-            *(self.set_light(light["light_id"], state) for light in lights)
-        )
+        if self._transition_boundary is not None and self._transition_boundary.held_by_current_task:
+            results = await self._transition_boundary.write_many([
+                lambda lid=light["light_id"]: self.set_light(lid, state) for light in lights
+            ])
+        else:
+            results = await asyncio.gather(
+                *(self.set_light(light["light_id"], state) for light in lights)
+            )
         return all(results)
 
     async def wait_for_transition_settle(self, light_ids) -> None:

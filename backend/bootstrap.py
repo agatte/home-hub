@@ -1571,6 +1571,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     app_logger.info("Shutting down Home Hub...")
+    # Revoke delayed/transient Hue work before the first shutdown await.
+    lighting_transition_boundary.authority.close()
+    from backend.api.routes.scenes import close_scene_trials
+    await _safe_shutdown("scene_trials", close_scene_trials)
+    await _safe_shutdown("rust_event", rust_event.close)
 
     # 1. Stop producers that feed the background loops. If any one raises, the
     #    others still run because _safe_shutdown swallows per-step errors.

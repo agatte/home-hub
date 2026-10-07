@@ -81,10 +81,50 @@ class EffectManager:
         """Shared Hue serialization boundary used by all overlapping writers."""
         return self._transition_boundary
 
+    async def _mutate(self, write, validator=None):
+        try:
+            return await self._transition_boundary.run_write(write, validator=validator)
+        except asyncio.CancelledError:
+            self._tracker_known = False
+            raise
+
+    async def _mutate_many(self, writes, validator=None):
+        try:
+            return await self._transition_boundary.write_many(
+                writes, validator=validator,
+            )
+        except asyncio.CancelledError:
+            self._tracker_known = False
+            raise
+
+    def _publish_transition_checkpoint(self, producer: str, light_ids=None):
+        authority = self._transition_boundary.authority
+        authority.invalidate(light_ids)
+        return authority.issue(producer, light_ids, intent_only=True)
+
     def release_light_ids(self) -> set[str]:
         """All mapped lamps touched by the bridge-wide no-effect release."""
         mapped = getattr(self._hue_v2, "mapped_light_ids", None)
         return set(mapped or ALL_LIGHT_IDS)
+
+    def acknowledge_static_replacement(self, light_ids: set[str]) -> None:
+        """Reconcile tracker after a leased snapshot's acknowledged Hue writes.
+
+        Explicit CT/HSB targets cancel each fixture's bridge effect. Partial
+        coverage cannot prove a bridge-wide release and therefore fails closed.
+        """
+        if not self._transition_boundary.held_by_current_task:
+            raise RuntimeError("Static replacement acknowledgement requires boundary")
+        self._transition_boundary.authority.invalidate()
+        if self._tracker_known and self._active_name is None:
+            return
+        scope = set(self._active_lights or self.release_light_ids())
+        if scope <= light_ids:
+            self._active_name = None
+            self._active_lights = None
+            self._tracker_known = True
+        else:
+            self._tracker_known = False
 
     def needs_reconcile(self, desired: Optional[str | dict[str, Any]]) -> bool:
         """Whether this desired target requires an effect lifecycle change."""
@@ -120,37 +160,11 @@ class EffectManager:
             Callable[[set[str]], Awaitable[Any]]
         ] = None,
     ) -> bool:
-        """
-        Transition from the currently-active v2 effect to the desired one.
-
-        The supplied safety callback runs inside the shared transition
-        boundary. It must establish an acknowledged static target for every
-        mapped lamp; this manager then waits for those transitions to settle
-        before sending no_effect. Missing or partial safety aborts the release.
-
-        `desired` accepts three shapes:
-          - None:                 no effect should be active
-          - str (e.g., "candle"): apply effect to all lights (legacy shape for
-                                  callers that explicitly need bridge-wide scope)
-          - dict {"effect": name, "lights": list[str] | None}:
-              explicit — `lights=None` means all mapped lights; a list scopes
-              the effect to specific v1 light IDs (e.g., candle on living-room
-              lamps while kitchen pendants stay static in relax mode).
-
-        The same-effect short-circuit kicks in only when BOTH the effect name
-        and the target light set match — repeated candle/glisten cycles with
-        the same scope preserve the brightness base on the bridge. Unknown
-        tracker state always calls stop_effect_all after safety establishment.
-        Once a successful release makes the tracker certain, repeated static
-        reapplies short-circuit and avoid a transition-duration wait.
-
-        A 0.5s guard separates stop and start so the two commands don't race.
-        """
+        """Transition effects only while the original semantic intent survives."""
         if not self._hue_v2 or not self._hue_v2.connected:
             return False
 
         desired_effect, desired_lights = self._normalize_desired(desired)
-
         if not self.needs_reconcile(desired):
             return True
 
@@ -162,46 +176,73 @@ class EffectManager:
             )
             return False
 
+        checkpoint = self._publish_transition_checkpoint("effect_reconcile")
+        authority = self._transition_boundary.authority
         async with self._transition_boundary.serialized():
+            def current():
+                return authority.valid(checkpoint)
+            if not current():
+                return False
+
             safety_result = await establish_safety(required)
-            if not self._safety_covers(safety_result, required):
+            if not self._safety_covers(safety_result, required) or not current():
                 logger.warning(
-                    "Effect transition aborted: safety incomplete desired=%s required=%s",
+                    "Effect transition aborted: safety incomplete/stale desired=%s required=%s",
                     desired_effect, sorted(required),
                 )
                 return False
 
             await self._transition_boundary.wait_for_settle(required)
-            stopped = await self._hue_v2.stop_effect_all()
+            if not current():
+                return False
+            stopped = await self._mutate(
+                self._hue_v2.stop_effect_all, validator=current,
+            )
             if stopped is not True:
                 logger.warning(
                     "Effect transition aborted: no_effect release failed desired=%s",
                     desired_effect,
                 )
                 return False
+            if not current():
+                self._tracker_known = False
+                return False
+
             self._active_name = None
             self._active_lights = None
             self._tracker_known = True
-
             if not desired_effect:
                 logger.info("Effect transition complete: released to static")
                 return True
 
             await asyncio.sleep(self.STOP_START_GUARD_SECONDS)
+            if not current():
+                self._tracker_known = False
+                return False
             if desired_lights is None:
-                started = await self._hue_v2.set_effect_all(desired_effect)
+                started = await self._mutate(
+                    lambda: self._hue_v2.set_effect_all(desired_effect),
+                    validator=current,
+                )
             else:
-                results = await asyncio.gather(*(
-                    self._hue_v2.set_effect(lid, desired_effect)
-                    for lid in desired_lights
-                ))
+                results = await self._mutate_many(
+                    [
+                        lambda target=lid: self._hue_v2.set_effect(
+                            target, desired_effect,
+                        )
+                        for lid in desired_lights
+                    ],
+                    validator=current,
+                )
                 started = all(result is True for result in results)
-            if started is not True:
+            if started is not True or not current():
+                self._tracker_known = False
                 logger.warning(
-                    "Effect start failed after safe release: effect=%s lights=%s",
+                    "Effect start failed/stale after safe release: effect=%s lights=%s",
                     desired_effect, desired_lights,
                 )
                 return False
+
             self._active_name = desired_effect
             self._active_lights = desired_lights
             self._tracker_known = True
@@ -216,42 +257,88 @@ class EffectManager:
         action: Callable[[], Awaitable[bool]],
         establish_safety: Callable[[set[str]], Awaitable[Any]],
         desired: Optional[str | dict[str, Any]] = None,
+        on_complete: Callable[[], None] | None = None,
+        before_transition: Callable[[], Awaitable[None]] | None = None,
     ) -> bool:
-        """Safely release any effect, then run a serialized scene action."""
+        """Run a scene replacement only while its original intent is current."""
         if not self._hue_v2 or not self._hue_v2.connected:
             return False
         required = self.release_light_ids()
+        checkpoint = self._publish_transition_checkpoint("scene_transition")
+        authority = self._transition_boundary.authority
+
         async with self._transition_boundary.serialized():
+            def current():
+                return authority.valid(checkpoint)
+            if not current():
+                return False
+            if before_transition is not None:
+                await before_transition()
+                if not current():
+                    return False
+
             safety_result = await establish_safety(required)
-            if not self._safety_covers(safety_result, required):
-                logger.warning("Scene transition aborted: safety incomplete")
+            if not self._safety_covers(safety_result, required) or not current():
+                logger.warning("Scene transition aborted: safety incomplete/stale")
                 return False
             await self._transition_boundary.wait_for_settle(required)
-            if await self._hue_v2.stop_effect_all() is not True:
+            if not current():
+                return False
+
+            if await self._mutate(
+                self._hue_v2.stop_effect_all, validator=current,
+            ) is not True:
                 logger.warning("Scene transition aborted: no_effect release failed")
                 return False
+            if not current():
+                self._tracker_known = False
+                return False
+
             self._active_name = None
             self._active_lights = None
             self._tracker_known = True
-            if await action() is not True:
+
+            if await self._mutate(action, validator=current) is not True:
+                return False
+            if not current():
+                self._tracker_known = False
                 return False
 
             desired_effect, desired_lights = self._normalize_desired(desired)
             if not desired_effect:
+                if on_complete is not None:
+                    on_complete()
                 return True
+
             await asyncio.sleep(self.STOP_START_GUARD_SECONDS)
+            if not current():
+                self._tracker_known = False
+                return False
             if desired_lights is None:
-                started = await self._hue_v2.set_effect_all(desired_effect)
+                started = await self._mutate(
+                    lambda: self._hue_v2.set_effect_all(desired_effect),
+                    validator=current,
+                )
             else:
-                results = await asyncio.gather(*(
-                    self._hue_v2.set_effect(light_id, desired_effect)
-                    for light_id in desired_lights
-                ))
+                results = await self._mutate_many(
+                    [
+                        lambda target=light_id: self._hue_v2.set_effect(
+                            target, desired_effect,
+                        )
+                        for light_id in desired_lights
+                    ],
+                    validator=current,
+                )
                 started = all(result is True for result in results)
-            if started is True:
-                self._active_name = desired_effect
-                self._active_lights = desired_lights
-            return started is True
+            if started is not True or not current():
+                self._tracker_known = False
+                return False
+
+            self._active_name = desired_effect
+            self._active_lights = desired_lights
+            if on_complete is not None:
+                on_complete()
+            return True
 
     async def reconcile_light(
         self,
@@ -263,34 +350,53 @@ class EffectManager:
         if not self._hue_v2 or not self._hue_v2.connected:
             return False
         required = {str(light_id)}
+        checkpoint = self._publish_transition_checkpoint("effect_reconcile_light")
+        authority = self._transition_boundary.authority
         async with self._transition_boundary.serialized():
+            def current():
+                return authority.valid(checkpoint)
+            if not current():
+                return False
             safety_result = await establish_safety(required)
-            if not self._safety_covers(safety_result, required):
+            if not self._safety_covers(safety_result, required) or not current():
                 return False
             await self._transition_boundary.wait_for_settle(required)
+            if not current():
+                return False
             effect = desired_effect or "no_effect"
-            success = await self._hue_v2.set_effect(str(light_id), effect)
+            success = await self._mutate(
+                lambda: self._hue_v2.set_effect(str(light_id), effect),
+                validator=current,
+            )
             # A per-light action cannot prove the bridge-wide tracker shape.
             self._tracker_known = False
-            return success is True
+            return success is True and current()
 
     async def stop_all(self) -> bool:
-        """Direct stop_effect_all + clear tracker.
-
-        Bypasses the safe-release establishment in `reconcile`; callers that
-        can expose a bridge effect's raw state must use `reconcile` instead.
-        """
+        """Direct stop_effect_all under one semantic authority checkpoint."""
         if not self._hue_v2 or not self._hue_v2.connected:
             return False
         if self._active_name is None:
             return True
+        checkpoint = self._publish_transition_checkpoint("effect_stop_all")
+        authority = self._transition_boundary.authority
         async with self._transition_boundary.serialized():
-            stopped = await self._hue_v2.stop_effect_all()
-            if stopped is True:
+            def current():
+                return authority.valid(checkpoint)
+            if not current():
+                return False
+            stopped = await self._mutate(
+                self._hue_v2.stop_effect_all,
+                validator=current,
+            )
+            if stopped is True and current():
                 self._active_name = None
                 self._active_lights = None
                 self._tracker_known = True
-            return stopped is True
+                return True
+            if stopped is True:
+                self._tracker_known = False
+            return False
 
     def get_desired_effect(
         self, mode: str, period: str,

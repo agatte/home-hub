@@ -200,9 +200,23 @@ class LightApplicator:
     def _invalidate_screen_sync_cache(self, light_ids: list[str]) -> None:
         """Mark normal-automation bridge writes unknown to screen sync."""
         sync = self._screen_sync_getter()
-        invalidate = getattr(sync, "invalidate_sent_state", None)
-        if invalidate is not None:
-            invalidate(light_ids)
+        supersede = getattr(sync, "supersede_light", None)
+        if callable(supersede):
+            for light_id in light_ids:
+                supersede(light_id)
+        else:
+            invalidate = getattr(sync, "invalidate_sent_state", None)
+            if invalidate is not None:
+                invalidate(light_ids)
+
+    async def _write_many(self, writes, light_ids):
+        try:
+            return await self._transition_boundary.write_many(writes, light_ids=light_ids)
+        except asyncio.CancelledError:
+            for light_id in light_ids:
+                self._st.last_applied_per_light.pop(light_id, None)
+            self._invalidate_screen_sync_cache(list(light_ids))
+            raise
 
     async def apply_state(
         self, state: dict[str, Any], transitiontime: int | None = None,
@@ -318,7 +332,7 @@ class LightApplicator:
                 cmd = {**state}
                 if transitiontime is not None:
                     cmd["transitiontime"] = transitiontime
-                tasks.append(hue.set_light(light_id, cmd))
+                tasks.append(lambda lid=light_id, payload=cmd: hue.set_light(lid, payload))
                 changed_ids.append(light_id)
             else:
                 deduplicated.add(light_id)
@@ -326,7 +340,7 @@ class LightApplicator:
         successful_ids: list[str] = []
         failed_ids: list[str] = []
         if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await self._write_many(tasks, changed_ids)
             successful_ids = [
                 light_id
                 for light_id, result in zip(changed_ids, results)
@@ -338,6 +352,7 @@ class LightApplicator:
                 if result is not True
             ]
             for light_id in successful_ids:
+                self._transition_boundary.authority.invalidate([light_id], intent=False)
                 self._st.last_applied_per_light[light_id] = states[light_id].copy()
             if successful_ids:
                 self._invalidate_screen_sync_cache(successful_ids)
@@ -449,8 +464,8 @@ class LightApplicator:
             cmd = targets[light_id].copy()
             if transitiontime is not None:
                 cmd["transitiontime"] = transitiontime
-            tasks.append(hue.set_light(light_id, cmd))
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+            tasks.append(lambda lid=light_id, payload=cmd: hue.set_light(lid, payload))
+        results = await self._write_many(tasks, changed_ids)
         successful = {
             light_id
             for light_id, result in zip(changed_ids, results)
@@ -458,6 +473,7 @@ class LightApplicator:
         }
         failed = release_light_ids - successful
         for light_id in successful:
+            self._transition_boundary.authority.invalidate([light_id], intent=False)
             self._st.last_applied_per_light[light_id] = targets[light_id].copy()
         invalidated = successful - sync_authoritative
         if invalidated:

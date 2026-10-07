@@ -98,6 +98,7 @@ class RustEventService:
         # mid-restore (RUF006 — every other task in this app is held too).
         self._flinch_task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._closed = False
 
     # ------------------------------------------------------------------
     # Public query API — read by the screen-color route
@@ -134,6 +135,8 @@ class RustEventService:
         holds while damage continues; the release loop clears it on quiet."""
         if not self._cfg["enabled"]:
             return {"reaction": "disabled"}
+        if self._closed:
+            return {"reaction": "disabled"}
         if score < self._cfg["damage_threshold"]:
             return {"reaction": "below_threshold", "score": score}
 
@@ -144,7 +147,13 @@ class RustEventService:
         fired = False
         if now >= self._flinch_cooldown_until and not self._flinching:
             self._flinch_cooldown_until = now + float(self._cfg["flinch_cooldown_s"])
-            self._flinch_task = asyncio.create_task(self._do_flinch())
+            self._flinching = True
+            boundary = getattr(self._engine, "lighting_transition_boundary", None)
+            leases = {
+                lid: boundary.authority.issue("rust_flinch", [lid])
+                for lid in REACT_LIGHT_IDS
+            } if boundary is not None else {}
+            self._flinch_task = asyncio.create_task(self._do_flinch(leases))
             fired = True
 
         return {"reaction": "flinch" if fired else "under_fire", "score": score}
@@ -153,7 +162,7 @@ class RustEventService:
     # Flinch + release
     # ------------------------------------------------------------------
 
-    async def _do_flinch(self) -> None:
+    async def _do_flinch(self, leases=None) -> None:
         """Quick red brightness dip on L2/L5, then ease back to baseline.
 
         Baseline is each lamp's last applied brightness (borrowed from
@@ -162,6 +171,48 @@ class RustEventService:
         ends (avoids an ember flicker mid-firefight), else plain ember."""
         self._flinching = True
         try:
+            boundary = getattr(self._engine, "lighting_transition_boundary", None)
+            validator = getattr(self._engine, "validate_lighting_lease", None)
+            if boundary is None or not callable(validator):
+                return  # Missing authority wiring must never grant a device write.
+            if leases is None:
+                leases = {lid: boundary.authority.issue("rust_flinch", [lid]) for lid in REACT_LIGHT_IDS}
+
+            def eligible(lease):
+                return (
+                    not self._closed and self._cfg["enabled"]
+                    and self._engine.current_game == "rust"
+                    and validator(
+                        lease, allow_screen_sync=True, expected_mode="gaming", screen_sync_kind="rust",
+                    )
+                )
+
+            async def write(lid, state, lease):
+                async with boundary.serialized():
+                    if not eligible(lease):
+                        return None
+                    try:
+                        success = await boundary.run_write(
+                            lambda: self._hue.set_light(lid, state),
+                            validator=lambda: eligible(lease),
+                            light_ids=[lid],
+                        )
+                    except asyncio.CancelledError:
+                        self._engine.forget_ambiguous_light_write([lid], preserve_screen_sync=True)
+                        raise
+                    if success is not True:
+                        return None
+                    if not eligible(lease):
+                        self._engine.record_leased_light_write(
+                            lid, state, supersede_screen_sync=False,
+                        )
+                        return None
+                    self._engine.record_leased_light_write(
+                        lid, state, supersede_screen_sync=False,
+                    )
+                    # The next phase is authorized by our own acknowledged dip.
+                    return boundary.authority.issue("rust_restore", [lid])
+
             dip_factor = float(self._cfg["flinch_dip_factor"])
             flinch_hue = int(self._cfg["flinch_hue"])
             flinch_sat = int(self._cfg["flinch_sat"])
@@ -174,16 +225,19 @@ class RustEventService:
             )
             targets = [lid for lid in REACT_LIGHT_IDS if lid not in held]
             baselines: dict[str, int] = {}
+            restores = {}
             for lid in targets:
                 base = int(self._screen_sync.last_applied_bri(lid))
                 baselines[lid] = base
-                await self._hue.set_light(lid, {
+                restore_lease = await write(lid, {
                     "on": True,
                     "hue": flinch_hue,
                     "sat": flinch_sat,
                     "bri": max(1, int(base * dip_factor)),
                     "transitiontime": 2,  # 0.2s snap down — a flinch, not a fade
-                })
+                }, leases.get(lid))
+                if restore_lease is not None:
+                    restores[lid] = restore_lease
 
             await asyncio.sleep(float(self._cfg["flinch_hold_s"]))
 
@@ -195,18 +249,20 @@ class RustEventService:
                     RUST_EMBER_HUE, RUST_EMBER_SAT,
                 )
                 hue, sat, bri_factor = RUST_EMBER_HUE, RUST_EMBER_SAT, 1.0
-            for lid in targets:
-                await self._hue.set_light(lid, {
+            for lid, lease in restores.items():
+                await write(lid, {
                     "on": True,
                     "hue": int(hue),
                     "sat": int(sat),
                     "bri": max(1, int(baselines[lid] * bri_factor)),
                     "transitiontime": 5,  # 0.5s ease back
-                })
+                }, lease)
         except Exception:
             logger.warning("rust flinch failed (recovers on next frame)", exc_info=True)
         finally:
             self._flinching = False
+            if self._flinch_task is asyncio.current_task():
+                self._flinch_task = None
 
     async def release_loop(self) -> None:
         """Clear ``under_fire`` once damage has been quiet for ``release_s``.
@@ -235,7 +291,15 @@ class RustEventService:
                 logger.debug("rust under-fire released (quiet %.1fs)", quiet)
 
     async def close(self) -> None:
+        self._closed = True
         self._stop.set()
+        task = self._flinch_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._flinch_task = None
+        self._flinching = False
+        self._under_fire = False
 
     # ------------------------------------------------------------------
     # Runtime config (no-redeploy knob)

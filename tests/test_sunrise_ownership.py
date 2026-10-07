@@ -164,6 +164,14 @@ async def test_overlap_and_cancellation_restart(engine, morning, monkeypatch, lo
         await entered.wait()
         assert await asyncio.wait_for(morning.sunrise_ramp(), 0.5) is False
         task.cancel()
+        if location == "write":
+            # #323 retains the final Hue fence until an acknowledged local
+            # mutation actually settles; cancellation must not release the
+            # boundary while the fake bridge write is still in flight.
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert engine._transition_boundary._lock.locked()
+            wait.set()
         with pytest.raises(asyncio.CancelledError):
             await task
     assert not morning._sunrise_active
