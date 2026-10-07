@@ -33,6 +33,92 @@ Unrestricted RDC to real host `C:` is prohibited. The real-host endpoint is the 
 
 Codex may run inside the protected Sandbox and work normally within the writable Home Hub or OSRS project roots, using the documented externally-sandboxed invocation. It gains no extra host authority by delegation and must preserve unrelated work, avoid secret-bearing files, and leave commit/push/merge/deploy/restart and other consequential actions behind their normal authorization gates.
 
+### Durable Sandbox Codex task recovery (Project Admin, 2026-10-06)
+
+The established Sandbox launcher is
+C:\Work\PC-Performance-Audit\.rdc-sandbox-state\Invoke-CodexProjectTask.ps1.
+It forwards to the repo-owned scripts\CodexSandboxTask.ps1. The matching
+run-codex.cmd uses persistent .rdc-sandbox-state\codex-home with established
+separate codex-auth synchronization, sets Git safe.directory to the validated
+task worktree only, and does not require codex on ordinary PATH. It deliberately
+uses native C:\Tools\Git\cmd instead of the historical git-shim, which changes
+Sandbox SAC policy temporarily; that shim must not be invoked by Codex. This remains
+Sandbox-only; real-host RDC is never a fallback.
+
+To start a task, place the prompt under Sandbox $env:TEMP. Run from the live
+Sandbox (replace angle-bracket placeholders):
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Work\PC-Performance-Audit\.rdc-sandbox-state\Invoke-CodexProjectTask.ps1" -WorkDir "C:\Work\home-hub-project\main" -PromptFile "<Sandbox TEMP prompt>" -Mode Write
+
+Read mode is ephemeral for scouting; Write mode persists the thread.
+Optional -Model overrides the default. The starter returns task_id after
+detaching its worker. Do not use the RDC output-process PID as a completion
+signal. The task registry is under:
+C:\Work\PC-Performance-Audit\.rdc-sandbox-state\codex-runs\<task-id>\.
+It stores task.json (prompt hash, workdir, starting HEAD/status), prompt copies,
+state.json (PID/start, thread, state), per-attempt JSONL events, stderr, result
+and Git postflight, and last-message.txt when produced. Stored prompts/logs
+are local task data; never include secrets or archive them publicly.
+
+Recovery after chat, RDC or Sandbox loss:
+
+1. Enumerate live RDC devices and identify Sandbox from WDAGUtilityAccount
+   plus C:\Work. Never reuse a stale device UUID or use the real-host controller.
+2. From that Sandbox invoke repo scripts\CodexSandboxTask.ps1 with
+   -Action List, or -Action Status -TaskId <32-hex-task-id>, with the same
+   PowerShell -NoProfile -ExecutionPolicy Bypass -File invocation form.
+   Inspect registry state and logs, not the original RDC output handle.
+3. If worker_alive is true, observe it; never spawn a duplicate. If completed,
+   consume last-message.txt and verify saved Git postflight against live Git.
+4. If the worker and possible Codex child/orphan processes are proven dead,
+   and a non-ephemeral exact thread ID exists, use -Action Resume -TaskId <id>
+   -VerifiedNoCodexProcess. Resume uses the saved thread, not --last, and
+   checks returned identity. Only affirm this flag after process-tree checks.
+5. If exact resume is impossible, preserve partial edits and logs, explicitly
+   supersede the old task with -Action Supersede -TaskId <id>
+   -VerifiedNoCodexProcess -Reason <specific-reason>, and only then consider
+   replacement. Uncertain liveness is a stop condition, not a second worker.
+
+The engine guards against two unresolved Write tasks on one workdir. Sandbox
+ExecutionPolicy Bypass here does not change real-host policy or grant additional
+machine, service, production, or credential authority.
+
+**Acceptance exercise — 2026-10-06:** Live Sandbox was rediscovered as
+WDAGUtilityAccount with C:\Work, not a remembered device UUID. A non-ephemeral
+no-edit Codex task was detached from its original RDC output handle, then a
+separate control step recovered the same worker (PID 8160; no duplicate),
+persistent thread 01a11477-de7b-7903-884f-f357eb531744, and ultimately the
+saved last-message.txt marker PROBE_RECOVERY_OK. Task ID:
+cbc28c4c562f477d90a3f7a029742dcb. The one attempt exited zero, with
+identical Git HEAD/status before and after (aac2dc638635c628560e68d883a068a072da7ad6).
+At the time of the recovery probe the repo source and runner changes were
+uncommitted; no production or device operation occurred.
+
+Two earlier startup test artifacts remain preserved: a partial staging
+failure under codex-runs\_startup-failures and a failed pre-thread task
+df29b8b83ebe47fb95006983670b93d4 explicitly marked superseded after
+process inspection. Those exposed and fixed PowerShell 5.1 native stderr
+warning escalation and an invalid atomic JSON replacement backup path.
+The final Codex agent could not get its *internal* git branch commands to
+return quickly and reported the branch unavailable; the independent Git
+snapshots confirmed master. Treat slow/internal Codex shell execution as a
+separate future diagnostic, not as a missing task/thread/result. A full
+Sandbox-restart and forcibly interrupted-thread resume were NOT performed;
+the recovery design is ready for those conditions but that branch remains
+unexercised in this acceptance test.
+
+**Follow-up Codex native-Git validation — 2026-10-06:** Inspection of the
+legacy git-sac-wrapper.ps1 showed it temporarily changes Sandbox SAC policy.
+It has **not** been edited or invoked for this fix. The current run-codex.cmd
+removes git-shim from its PATH prefix and uses C:\Tools\Git\cmd directly,
+with the selected worktree-specific safe.directory. A new no-edit Read task
+(2c6fea68aa4e441aa0082c378f806f1c) exited zero, reported Git branch
+master, and saved GIT_NATIVE_PROBE_OK in last-message.txt. This also resolves
+the earlier Codex-internal git-command timeout in the tested case. The repo
+engine additionally records per-attempt launcher stdout/stderr and holds
+exclusive task/workdir file locks while Write workers run. PowerShell parsing
+passed; intentional forced termination and Sandbox restart were not tested.
+
 For destructive operations, prove the exact path first; for Git/worktrees, also prove registration, cleanliness, ancestry/unique-state as applicable. Prefer the narrowest native operation over recursive/broad deletion and retain before/after or rollback evidence sufficient to show what changed and what was preserved. Worktree removal remains subject to the stricter `Safe-RemoveGitWorktree.ps1` rule below.
 
 The canonical checkout moved from
