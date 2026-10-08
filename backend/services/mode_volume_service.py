@@ -70,16 +70,19 @@ class ModeVolumeService:
         """Mode-change callback. Single-arg contract per AutomationEngine."""
         self._request_generation += 1
         generation = self._request_generation
+        request_token = None
         if self._audio_ownership is not None:
             # Supersede every unfinished low-priority ramp before evaluating the
             # new mode. This does not disturb any durable TTS/Ambient ownership.
-            await self._audio_ownership.invalidate_opportunistic((VOLUME,))
+            request_token = await self._audio_ownership.invalidate_opportunistic((VOLUME,))
         try:
-            await self._apply(mode, generation)
+            await self._apply(mode, generation, request_token)
         except Exception as exc:  # noqa: BLE001 — callback never raises
             logger.error("ModeVolumeService failed for mode=%s: %s", mode, exc, exc_info=True)
 
-    async def _apply(self, mode: str, generation: int) -> None:
+    async def _apply(
+        self, mode: str, generation: int, request_token: dict[str, int] | None,
+    ) -> None:
         if not getattr(self._sonos, "connected", False):
             logger.debug("mode_volume: skipped (sonos disconnected) mode=%s", mode)
             return
@@ -162,6 +165,11 @@ class ModeVolumeService:
                     "mode_volume: skipped mode=%s reason=volume_owned_by_stronger_writer",
                     mode,
                 )
+                return
+            # Setup awaits must not adopt an epoch created by a manual action,
+            # stronger owner, or newer request after this mode was requested.
+            if token != request_token:
+                logger.info("mode_volume: superseded during setup mode=%s", mode)
                 return
             asyncio.create_task(
                 self._run_owned_ramp(
