@@ -408,6 +408,16 @@ def _merge_agent_health_reports(reports: dict[str, dict], *, now: float | None =
         key: value for key, value in desktop.items()
         if key not in {"agents", "origin"}
     }
+    classifier = merged.get("classifier")
+    if isinstance(classifier, dict) and isinstance(classifier.get("audio"), dict):
+        classifier = {**classifier, "audio": dict(classifier["audio"])}
+        age = classifier["audio"].get("sample_age_seconds")
+        origin_age = current_reports["desktop"][1] or 0.0
+        age = age + origin_age if isinstance(age, (int, float)) else None
+        classifier["audio"]["sample_age_seconds"] = age
+        if classifier["audio"].get("stream_state") == "healthy" and (age is None or age > 60):
+            classifier["audio"]["stream_state"] = "unavailable"
+        merged["classifier"] = classifier
     merged["agents"] = agents
     merged["origins"] = origins
     return merged
