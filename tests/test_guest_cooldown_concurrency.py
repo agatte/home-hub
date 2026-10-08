@@ -120,6 +120,9 @@ def _stub_request():
         def mark_light_manual(self, *_a, **_kw):
             return None
 
+        async def persist_manual_light_ownership(self):
+            return None
+
     class _AppState:
         hue = _Hue()
         hue_v2 = AsyncMock()
