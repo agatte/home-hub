@@ -89,7 +89,9 @@ class AwayManager:
         load_setting: Callable[..., Any],
         vibe_router_getter: Optional[Callable[[], Any]] = None,
         presence_getter: Optional[Callable[[], Any]] = None,
+        audio_ownership: Any = None,
     ) -> None:
+        self._audio_ownership = audio_ownership
         self._engine = engine
         self._hue_getter = hue_getter
         self._sonos_getter = sonos_getter
@@ -100,6 +102,13 @@ class AwayManager:
         self._vibe_router_getter = vibe_router_getter or (lambda: None)
         self._presence_getter = presence_getter or (lambda: None)
 
+        self._mode_audio_active = False
+        self._mode_audio_revision = 0
+        self._mode_audio_token: tuple[int, int] | None = None
+        self._mode_pause_attempted: tuple[int, int] | None = None
+        self._audio_away_active = False
+        self._audio_departure_token = (0, 0)
+        self._audio_pause_attempted: tuple[int, int] | None = None
         self._away: bool = False
         self._since: Optional[datetime] = None
         self._last_event_source: Optional[str] = None
@@ -181,6 +190,7 @@ class AwayManager:
             except (TypeError, ValueError):
                 self._since = None
         self._engine.arm_away_suppression("away_manager:restore")
+        self._audio_pause_attempted = await self._set_audio_away(True)
         async with self._event_lock:
             await self._start_off_convergence()
         logger.info(
@@ -279,6 +289,7 @@ class AwayManager:
             )
             self._cancel_off_convergence()
             self._away = False
+            await self._set_audio_away(False)
             self._since = None
             self._last_event_source = state_source
             # Generic occupancy reconciliation supersedes any old completed
@@ -459,6 +470,7 @@ class AwayManager:
                     return await self.reconciliation_status(reconciliation_id)
                 self._cancel_off_convergence()
                 self._away = False
+                await self._set_audio_away(False)
                 self._since = None
                 self._last_event_source = saved.get("source") or source
                 self._last_home_reconciliation_id = reconciliation_id
@@ -481,12 +493,14 @@ class AwayManager:
                 )
             except HomeReconciliationRejected:
                 self._away = True
+                await self._set_audio_away(True)
                 self._engine.arm_away_suppression(
                     f"home_reconciliation_failed:{source}"
                 )
                 raise
             self._cancel_off_convergence()
             self._away = False
+            await self._set_audio_away(False)
             self._since = None
             self._last_event_source = source
             self._last_home_reconciliation_id = reconciliation_id
@@ -558,19 +572,25 @@ class AwayManager:
 
     async def handle_event(self, event: str, source: str) -> dict[str, Any]:
         """Process a geofence event. ``event`` is ``leave`` or ``arrive``."""
+        manual_revision = (
+            self._audio_ownership.capture_manual_intent()
+            if self._audio_ownership is not None else 0
+        )
+        if event == "leave":
+            self._mode_audio_revision += 1
+            self._mode_audio_token = None
         arrival_minutes: Optional[int] = None
         changed = False
         async with self._event_lock:
             if event == "leave":
                 if self._away:
                     return {"status": "ok", "away": True, "changed": False}
-                await self._on_leave(source)
-                return {"status": "ok", "away": True, "changed": True}
+                pause_token = await self._on_leave(source, manual_revision)
 
-            if event != "arrive":
+            elif event != "arrive":
                 return {"status": "error", "detail": f"unknown event: {event!r}"}
 
-            if getattr(self._engine, "host_return_hold_active", False):
+            elif getattr(self._engine, "host_return_hold_active", False):
                 logger.info(
                     "Geofence arrive deferred while host is RETURNING_HOME (source=%s)",
                     source,
@@ -581,7 +601,7 @@ class AwayManager:
                     "changed": False,
                 }
 
-            if self._away:
+            elif self._away:
                 changed, arrival_minutes = await self._establish_home_locked(
                     state_source=source, engine_source=f"geofence:{source}",
                 )
@@ -591,6 +611,10 @@ class AwayManager:
                 # darkness. Explicit Auto or a bounded physical return edge
                 # owns soft-suppression reacquisition while already Home.
                 return {"status": "ok", "away": False, "changed": False}
+
+        if event == "leave":
+            await self._pause_departure(pause_token)
+            return {"status": "ok", "away": self._away, "changed": True}
 
         if changed:
             await self.run_arrival_effects(
@@ -709,7 +733,9 @@ class AwayManager:
 
     # ── Leave ───────────────────────────────────────────────────────────
 
-    async def _on_leave(self, source: str) -> None:
+    async def _on_leave(
+        self, source: str, manual_revision: int,
+    ) -> tuple[int, int] | None:
         since = datetime.now(timezone.utc)
         payload: dict[str, Any] = {
             "away": True,
@@ -739,20 +765,12 @@ class AwayManager:
         #    _check_external_off detection (up to 60s race otherwise).
         self._engine.arm_away_suppression(f"geofence:{source}")
 
+        departure_token = await self._set_audio_away(True, manual_revision)
         cfg = await self._config()
-
-        # 2. Pause music if something is actually playing. Best-effort —
-        #    a Sonos hiccup must not abort the lights-off.
-        if cfg.get("pause_music_on_leave", True):
-            try:
-                sonos = self._sonos_getter()
-                if sonos and sonos.connected:
-                    status = await sonos.get_status()
-                    if (status or {}).get("state") == "PLAYING":
-                        await sonos.pause()
-                        logger.info("LEAVE — paused Sonos playback")
-            except Exception as e:
-                logger.warning("LEAVE — Sonos pause failed: %s", e)
+        pause_token = (
+            departure_token
+            if cfg.get("pause_music_on_leave", True) else None
+        )
 
         await self._start_off_convergence()
 
@@ -765,6 +783,103 @@ class AwayManager:
                  "control suppressed until you're back.",
             kind="away",
         )
+
+        return pause_token
+
+    async def _set_audio_away(
+        self, away: bool, manual_revision: int | None = None,
+    ) -> tuple[int, int]:
+        if away == self._audio_away_active:
+            return self._audio_departure_token
+        self._audio_away_active = away
+        authority = self._audio_ownership
+        if manual_revision is None:
+            manual_revision = authority.capture_manual_intent() if authority else 0
+        revision = (
+            await authority.set_lifecycle_away(away) if authority
+            else self._audio_departure_token[1] + 1
+        )
+        self._audio_departure_token = (manual_revision, revision)
+        return self._audio_departure_token
+
+    async def on_audio_mode_change(self, mode: str) -> None:
+        """Semantic Away may pause once, but cannot establish physical absence."""
+        authority = self._audio_ownership
+        manual_revision = authority.capture_manual_intent() if authority else 0
+        token = None
+        async with self._event_lock:
+            if mode != "away":
+                self._mode_audio_active = False
+                self._mode_audio_revision += 1
+                self._mode_audio_token = None
+            elif not self._away and not self._mode_audio_active:
+                self._mode_audio_active = True
+                self._mode_audio_revision += 1
+                token = (manual_revision, -self._mode_audio_revision)
+                self._mode_audio_token = token
+                cfg = await self._config()
+                if not cfg.get("pause_music_on_leave", True):
+                    token = None
+        await self._pause_departure(token)
+
+    def _pause_is_current(self, token: tuple[int, int]) -> bool:
+        if token[1] < 0:
+            return (
+                not self._away and self._mode_audio_active
+                and token == self._mode_audio_token
+                and token[0] == (
+                    self._audio_ownership.capture_manual_intent()
+                    if self._audio_ownership else 0
+                )
+            )
+        return (
+            self._audio_away_active and token == self._audio_departure_token
+            and (self._audio_ownership is None
+                 or self._audio_ownership.departure_is_current(*token))
+        )
+
+    async def _pause_departure(self, token: tuple[int, int] | None) -> None:
+        """Best effort outside occupancy lock so newer Home can cancel reads."""
+        if token is None or not self._pause_is_current(token):
+            return
+        semantic = token[1] < 0
+        if token == (self._mode_pause_attempted if semantic else self._audio_pause_attempted):
+            return
+        if semantic:
+            self._mode_pause_attempted = token
+        else:
+            self._audio_pause_attempted = token
+        try:
+            sonos = self._sonos_getter()
+            if not sonos or not sonos.connected:
+                return
+            if self._audio_ownership is None:
+                # Standalone compatibility; production always injects authority.
+                status = await asyncio.wait_for(sonos.get_status(), timeout=5.0)
+                if (self._pause_is_current(token)
+                        and (status or {}).get("state") == "PLAYING"):
+                    await sonos.pause()
+                return
+            evidence = await asyncio.wait_for(
+                sonos.get_playback_ownership_evidence(), timeout=5.0,
+            )
+            if not evidence or evidence.get("transport_state") != "PLAYING":
+                return
+
+            async def pause() -> bool:
+                return await sonos.pause_if_playback_unchanged(
+                    evidence,
+                    still_allowed=lambda: self._pause_is_current(token),
+                )
+
+            if semantic:
+                await self._audio_ownership.run_mode_pause(
+                    token[0], lambda: self._pause_is_current(token), pause,
+                )
+            else:
+                await self._audio_ownership.run_departure_pause(*token, pause)
+        except Exception as exc:
+            logger.warning("LEAVE Sonos pause failed: %s", exc)
 
     # ── Arrive ──────────────────────────────────────────────────────────
 

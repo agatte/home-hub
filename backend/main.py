@@ -625,6 +625,8 @@ async def _handle_sonos_command(app, data: SonosCommandData) -> None:
     from backend.services.music_learning_provenance import (
         capture_owned_music_session,
     )
+    ownership = getattr(app.state, "audio_ownership", None)
+    intent_revision = ownership.record_manual_intent(dimensions) if ownership else None
     learning_session = (
         await capture_owned_music_session(
             getattr(app.state, "audio_ownership", None)
@@ -652,6 +654,8 @@ async def _handle_sonos_command(app, data: SonosCommandData) -> None:
             source="websocket",
             reason=f"manual_ws_{action}",
             operation=_manual_ws_operation,
+            intent_revision=intent_revision,
+            superseded_result=(False, None),
         )
     else:
         success, event_type = await _manual_ws_operation()

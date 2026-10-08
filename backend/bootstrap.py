@@ -1140,7 +1140,9 @@ async def lifespan(app: FastAPI):
         load_setting=_away_load_setting,
         vibe_router_getter=lambda: getattr(app.state, "vibe_router", None),
         presence_getter=lambda: presence,
+        audio_ownership=audio_ownership,
     )
+    music_mapper.set_away_manager(away_manager)
     await away_manager.load_state()
     returning_home_marker = (
         Path.home() / ".local" / "state" / "home-hub" / "returning-home"

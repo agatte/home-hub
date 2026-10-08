@@ -141,16 +141,22 @@ class MusicMapper:
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
         # Tracks the most recent mode requested — used to skip stale auto-plays
         self._last_requested_mode: Optional[str] = None
+        self._mode_request_revision = 0
         # Set post-construction by bootstrap once AutomationEngine exists
         # (chicken-and-egg — engine needs music_mapper, music_mapper needs
         # engine for is_dnd_active() in on_mode_change / on_weather_change).
         self._automation = None
+        self._away_manager = None
         # #275 passive learning timers are deliberately process-local. A
         # backend restart never reconstructs them from durable leases, so a
         # surviving playback cannot fabricate a positive reward after process
         # loss. The lease/event ids remain durable for audit.
         self._learning_tasks: dict[str, asyncio.Task] = {}
         self._rewarded_learning_sessions: set[str] = set()
+
+    def set_away_manager(self, manager) -> None:
+        """Share the lifecycle audio coordinator with durable occupancy departure."""
+        self._away_manager = manager
 
     def set_automation(self, automation) -> None:
         """Inject the automation engine reference (called from bootstrap)."""
@@ -995,7 +1001,22 @@ class MusicMapper:
         Returns:
             Dict describing the action taken, or None.
         """
+        self._mode_request_revision += 1
+        request_revision = self._mode_request_revision
+        self._last_requested_mode = mode
+        if mode == "away":
+            dnd = self._automation is not None and self._automation.is_dnd_active()
+            if self._away_manager is not None and not dnd:
+                await self._away_manager.on_audio_mode_change(mode)
+            return None
+
+        if self._away_manager is not None:
+            await self._away_manager.on_audio_mode_change(mode)
+        if request_revision != self._mode_request_revision:
+            return None
         await self._release_mode_audio_lease(mode)
+        if request_revision != self._mode_request_revision:
+            return None
 
         if self._automation is not None and self._automation.is_dnd_active():
             logger.debug("DND active — skipping music mode-change handling for %s", mode)
@@ -1008,29 +1029,6 @@ class MusicMapper:
         if mode == "pregameday":
             logger.debug("pregameday entry — silent build, no auto-play")
             return None
-
-        # Away: nobody home — pause Sonos if it's playing. Skip the rest of
-        # the auto-play flow regardless. Returning home clears the away
-        # override; the user's pre-departure mode resumes via the priority
-        # guard, which fires its own auto-play callback. Music doesn't
-        # auto-resume — that's a deliberate choice (the speaker shouldn't
-        # blast the second you walk in the door).
-        if mode == "away":
-            if self._sonos.connected:
-                try:
-                    status = await asyncio.wait_for(
-                        self._sonos.get_status(), timeout=5.0,
-                    )
-                    if status.get("state") == "PLAYING":
-                        await asyncio.wait_for(self._sonos.pause(), timeout=5.0)
-                        logger.info("Away mode: paused Sonos playback")
-                except asyncio.TimeoutError:
-                    logger.warning("Away mode: Sonos pause timed out")
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Away mode: Sonos pause failed: %s", exc)
-            return None
-
-        self._last_requested_mode = mode
 
         entry = self.pick_playlist(mode)
         if not entry or not entry.get("auto_play"):
@@ -1054,7 +1052,7 @@ class MusicMapper:
             sonos_state = status.get("state", "STOPPED")
 
             if sonos_state in ("STOPPED", "NO_MEDIA_PRESENT"):
-                if self._last_requested_mode != mode:
+                if request_revision != self._mode_request_revision:
                     logger.info(
                         "Mode changed during auto-play setup ('%s' → '%s'), skipping.",
                         mode, self._last_requested_mode,
@@ -1083,6 +1081,8 @@ class MusicMapper:
                             "vibe": vibe,
                         }
 
+                if request_revision != self._mode_request_revision:
+                    return None
                 lease = await self._reserve_mode_audio_lease(mode=mode, title=title)
                 if self._audio_ownership is not None and lease is None:
                     logger.info(
@@ -1099,9 +1099,12 @@ class MusicMapper:
                 try:
                     if lease is not None:
                         async def _owned_play():
+                            if request_revision != self._mode_request_revision:
+                                return False
                             return await self._sonos.play_favorite(
                                 title,
                                 expected_queue_evidence=preflight_evidence,
+                                still_allowed=lambda: request_revision == self._mode_request_revision,
                             )
 
                         executed, success = await asyncio.wait_for(

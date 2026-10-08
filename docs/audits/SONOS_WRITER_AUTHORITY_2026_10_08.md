@@ -194,3 +194,241 @@ Only the audit, focused new test module, ModeVolume setup epoch propagation/chec
 and preserved four-line settlement correction are candidate changes. No app lifespan,
 network/device call, production database,
 tool installation, commit/push/merge/deploy or restart was used.
+
+
+## #336 bounded departure adoption (uncommitted candidate)
+
+This section supersedes the two Away matrix gaps above for this candidate only;
+#337 assisted Apple Music central participation remains separate and unchanged.
+No live/device acceptance or deployment is claimed.
+
+Entry-path evidence: `/api/presence/geofence` and host Travel call
+`AwayManager.handle_event("leave", ...)`. House State is projected from the
+hard occupancy hold (`navigation_activity_policy.project_house_state`), rather
+than an independent departure writer. Sleeping has its own override/TTS path;
+weather music only suggests. Legacy `report_activity` and manual overrides can
+still deliver a raw `away` activity callback through AutomationEngine. That
+callback is not physical absence evidence: MusicMapper delegates **audio only**
+to `AwayManager.on_audio_mode_change`, without persisting occupancy, arming the
+lighting hold, issuing lights-off, or notifying. Its existing DND entry gate
+remains. Thus no software activity gains new occupancy authority.
+
+AwayManager uses independent process-local physical and semantic pause generations.
+A physical departure captures explicit Q/T intent before the event lock or durable
+write, commits Away, arms engine suppression, then asserts the full audio lifecycle
+fence. Duplicate physical LEAVE shares only that physical transition's attempt.
+Semantic Away retains a separate one-off conditional pause; it never establishes
+occupancy, retires leases, changes durable provenance, or asserts the lifecycle
+fence. A physical LEAVE invalidates pending semantic work and always creates its
+own physical attempt: semantic Away -> manual Play -> physical LEAVE pauses the
+music, because that Play predates departure. New explicit Q/T intent after physical
+LEAVE starts cancels pending physical pause. Semantic mode exit cancels only its
+own generation and cannot clear physical Away. Home ends the physical transition
+without Play. Restore with a fresh ownership instance re-arms full transport
+suppression and marks the physical attempt consumed without pause replay.
+MusicMapper preserves leases at semantic Away entry and marks its requested mode
+Away to cancel older auto-play setup. Bootstrap injects authority before tasks start.
+
+`AudioOwnershipService.set_lifecycle_away` serializes activation against admitted
+Sonos workers, retires only T from existing durable leases, and fences subsequent
+autonomous T operations. Q/V/I remain independent. There is no new departure
+lease, queue rewrite, Stop, Clear, retry, or elapsed-time/STOPPED ownership guess.
+Transport retirement prevents pre-departure TTS restore even if Home arrives
+before the clip finishes, including with `pause_music_on_leave=false`; volume
+restore remains subject to its existing V/device proof. A failed audio provenance
+save is logged while the in-memory fence stays active and lights-off continues;
+restart re-arms from durable occupancy. Existing TTS abandonment/release handles
+the interruption; no TTS architecture change is required.
+
+Only `run_manual` with Q or T increments the event-loop-local explicit intent
+revision before waiting for the shared lock, including before invalidation
+persistence. V/I-only intentional adjustments do not cancel transport pause.
+All current `invalidate_manual` callers are evidence-driven Sonos polling or TTS
+surrender; these still invalidate leases/learning provenance but do not claim
+explicit user intent. Ambiguous natural track advancement is not an explicit
+Play; fresh preflight and final live source/transport proof decide pause eligibility. Departure evidence reads run outside both occupancy and audio locks.
+`run_departure_pause` compares that original revision and the lifecycle revision
+under the authority lock, ahead of ordinary autonomous leases. The settled
+`pause_if_playback_unchanged` worker re-reads the full source/transport fingerprint
+and checks the current intent/lifecycle guard immediately before Pause. A Home
+transition cancels an old pending read; a subsequent Away cannot revive it.
+A manual request during final proof can veto Pause before its own device write
+is admitted. If Pause is already physically admitted, the worker settles before
+manual Play runs, so the later manual write wins. Only bounded Sonos proof/write
+work runs inside the departure authority operation; config, notifications, Hue,
+and initial evidence reads remain outside it. There is no reverse acquisition
+of the occupancy lock inside an authority operation.
+
+These are participating HomeHub ordering guarantees. External Sonos apps do not
+enter this lock or revision counter, and the final read/Pause is not device CAS.
+The standalone AwayManager compatibility path without injected authority retains
+its older best-effort behavior; production bootstrap always injects authority.
+
+Deterministic coverage in `tests/test_away_audio_ownership.py` uses the actual
+AudioOwnershipService and settled Sonos conditional helper with fake synchronous
+devices, plus the existing TTS fake. It covers playing/paused/stopped/unavailable,
+disabled setting, duplicate geofence/mode entries, manual Play during occupancy
+persistence/initial read/authority admission/final synchronous proof, manual Play
+while Away, Home and a newer Away while an old read waits, final transport
+mismatch, failed reads, real worker timeout/cancellation/failure settlement,
+provenance-store failure, restart no-replay, DND/Sleeping separation, independent
+Q/V ownership, opportunistic T fencing, and TTS overlap with/without departure
+pause and with Home before TTS completion. No app lifespan or production resources
+are used. Validation runs disable DotEnvSettingsSource file reads before importing
+application modules, so tests do not read `.env`.
+
+
+Prior candidate validation (historical; insufficient to resolve the four review blockers):
+
+- Related Away, authority/ingress, mapper, TTS, Sonos concurrency/serialization/
+  playback proof, Ambient, ModeVolume, presence reconciliation and host Travel
+  suites: **326 passed, 6 skipped**, 125.29 seconds. This run included 26 new
+  departure cases; the final focused run after the delayed-claim guard and three
+  additional cases: **29 passed**, 2.41 seconds.
+- Final focused departure plus host Travel rerun: **39 passed, 6 skipped**,
+  103.25 seconds. Five skips are existing Windows Git Bash teardown exclusions;
+  one is the unavailable Bash hostctl transaction harness. No tool was installed
+  or fetched. The shell harness needs the supported Linux/CI environment.
+- Ruff across all five changed Python files, in-memory compilation, native
+  `git diff --check`, and no-index whitespace check for the untracked test:
+  **passed**. The existing FastAPI/httpx deprecation warning remains unrelated.
+- HEAD remains `f64e295b0db670d97b7a5cbc0f1cccaa2fa96b40` on
+  `sonos-away-pause-336`. Only four runtime Python files, this audit, and the new
+  departure test module are changed; all remain uncommitted.
+
+
+## #336 corrective bounded write
+
+The earlier shared semantic/physical transition and global intent revision were
+review blockers. The corrected behavior above supersedes those earlier candidate
+claims. Added negative coverage proves independent semantic/physical cancellation,
+semantic idle lease/provenance preservation, semantic TTS source and volume restore,
+V/I-only adjustments at slow persistence/preflight, evidence-driven ambiguous track
+surrender with fresh proof, and fresh-instance restart fencing. Existing physical
+Home race, final proof takeover refusal, settlement and physical TTS tests remain.
+
+No external Sonos CAS is claimed: a device/app command can still win in the gap
+between final evidence read and Pause. No live/device validation was authorized.
+
+
+Independent corrective review also found setup gaps beyond the original four:
+REST/WebSocket Next/Previous now record explicit intent before learning-session
+capture, passing the recorded revision into `run_manual` without counting twice.
+MusicMapper publishes a per-callback revision at entry and rejects superseded
+setup after initial awaits, queue preflight and authority admission. The revision
+guard reaches the actual conditional Sonos playlist/cloud worker, after fresh
+fingerprint proof and before the first queue write. Gated regressions exercise
+learning capture, callback entry, queue/admission and real favorite lookup.
+Semantic pause skips active I leases: otherwise pausing the TTS clip would
+indirectly create external-paused evidence and invalidate transport restore.
+Physical Away continues to outrank those leases and retires T as before.
+
+The previous worker's "no remaining blockers" assessment was superseded by
+external independent review bdd87f54b2d84d9aa69474172a99fdf7, which demonstrated
+two P2 races still present after the prior write completed. The final bounded
+correction below addresses those findings. This is code/fake-device evidence,
+not commit or deployment authorization.
+The corrective changed-file set consists of the existing candidate files plus
+bounded Sonos REST/WebSocket ingress, the Sonos conditional favorite worker, and
+the corresponding ingress/mapper test fakes. All changes remain uncommitted.
+
+
+Corrective file audit (11 files total, including the preserved candidate):
+
+- `backend/bootstrap.py`
+- `backend/main.py`
+- `backend/api/routes/sonos.py`
+- `backend/services/audio_ownership.py`
+- `backend/services/away_manager.py`
+- `backend/services/music_mapper.py`
+- `backend/services/sonos_service.py`
+- `tests/test_away_audio_ownership.py` (untracked candidate test module)
+- `tests/test_audio_ownership_ingress.py` (fake supports recorded ingress revision)
+- `tests/test_music_mapper_ownership.py` (fake supports final worker guard)
+- `docs/audits/SONOS_WRITER_AUTHORITY_2026_10_08.md`
+
+
+Final corrective validation (existing main `.venv` interpreter; DotEnvSettingsSource
+file reads disabled before pytest imports):
+
+- Focused corrective Away/ingress/mapper run: **119 passed**, 23.16 seconds,
+  before the final service-worker guard. The final related run below includes
+  that guard and both new real-service favorite-lookup regressions.
+- Final related Away, audio authority/ingress, mapper, TTS, Sonos concurrency,
+  mutation serialization, playback proof, skip detection, favorite shuffle,
+  play-mode reset, Ambient, ModeVolume, presence reconciliation and host Travel:
+  **403 passed, 6 skipped**, 123.17 seconds. Includes all 49 focused departure
+  regression cases. Five skips are existing Windows Git Bash teardown exclusions;
+  one is the unavailable Bash hostctl transaction harness. No tool was installed.
+- Ruff on all 10 changed Python files, in-memory compilation of those files,
+  `git diff --check`, and the untracked test's no-index whitespace check: **passed**.
+  The no-index check returns Git's normal difference exit code 1 without whitespace
+  diagnostics. One existing FastAPI/Starlette httpx deprecation warning remains.
+- Final HEAD: `f64e295b0db670d97b7a5cbc0f1cccaa2fa96b40`; branch:
+  `sonos-away-pause-336`. The 11-file set above is the entire changed-file set.
+  All changes remain uncommitted. No secrets, network fetch, live device action,
+  commit/push/PR/merge/deploy, service/task restart, or cleanup was performed.
+
+## #336 final bounded correction after external review
+
+External review bdd87f54b2d84d9aa69474172a99fdf7 demonstrated two P2 races
+in the preceding completed candidate. The earlier 403-pass result is a baseline,
+not proof those races were absent.
+
+- `AudioOwnershipService.run_manual` now compares a supplied explicit Q/T
+  ingress revision to the current revision under the shared lock after loading,
+  before lease invalidation, and again after awaited invalidation persistence,
+  before calling the device operation. It never substitutes the current revision
+  for the caller's captured revision. Superseded REST skips return False (route
+  response `status=error`); WebSocket supplies `(False, None)` to preserve unpacking
+  and suppress event/skip-learning logging. The optional failure shape defaults
+  to False; generic callers without a supplied revision retain their behavior.
+  V/I-only writes and evidence invalidation revision semantics are unchanged.
+- The conditional favorite worker checks its guard immediately before
+  `play_from_queue`, after queue append, queue-size lookup, SHUFFLE write, and
+  random-index preparation. Both Sonos playlist and playable cloud-favorite
+  branches use this worker. Unsupported cloud shortcuts return False without
+  a Play URI fallback; the current implementation has no such fallback write.
+  Direct manual favorite playback still shuffles and plays normally. Accepted
+  queue contents remain retained on refusal; there is no rollback/delete.
+  Existing settled-thread cancellation behavior remains intact.
+- Twenty added deterministic, no-network fake-device cases cover REST/WS
+  Next/Previous against newer Play/Pause at learning capture and persisted
+  settings barriers (16), plus actual SonosService playlist/cloud workers blocked
+  inside queue append or play-mode preparation while semantic Away completes
+  with STOPPED evidence (4). They assert no old transport write, correct caller
+  response shape, no stale success/skip event, no stale auto-play learning tasks
+  or mode lease, and retained queue preparation. Capture-stage cases also prove
+  the stale caller does not advance lease invalidation generation.
+
+Final validation, using the existing main `.venv` interpreter and disabling
+DotEnvSettingsSource file reads before pytest import, with cacheprovider disabled:
+
+- Focused Away/ingress/favorite shuffle run: **89 passed**, 21.23 seconds.
+- Final rerun of all 20 new race cases after adding generation/learning-task
+  assertions: **20 passed, 49 deselected**, 18.35 seconds.
+- Same related suite as the prior 403-pass baseline: **423 passed, 6 skipped**,
+  128.28 seconds. Suites: Away, audio authority/ingress, MusicMapper, TTS
+  duck/resume, Sonos writer concurrency/mutation serialization/playback proof/
+  skip detection/favorite shuffle/play-mode reset, Ambient ownership/sound,
+  ModeVolume, presence reconciliation, and host Travel. Five existing Windows
+  Git Bash teardown exclusions and the unavailable Bash hostctl transaction
+  harness remain skipped. The existing Starlette/httpx deprecation warning
+  remains. The full repository suite was not run; this is the broad related run.
+- Final Ruff check of all 10 changed Python files and in-memory compilation:
+  **passed**. Tracked `git diff --check` and the untracked test's no-index
+  whitespace check: **passed**, without whitespace diagnostics.
+
+The final bounded diff inspection found no additional demonstrated P1/P2 blocker.
+This is the worker's source/fake-device assessment, not a new independent external
+review or live-health claim. An external app/device command may still race a
+final guard and UPnP Play; external Sonos atomic CAS is not claimed. Linux/CI shell
+harness validation remains a platform gate; no live-device validation was allowed.
+#337 assisted ShareLink authority work remains outside this correction.
+
+Final file audit remains exactly the same 11-file set listed above (10 tracked
+modifications plus the preserved untracked departure test). HEAD remains
+`f64e295b0db670d97b7a5cbc0f1cccaa2fa96b40`, branch `sonos-away-pause-336`.
+All candidate changes remain uncommitted. No secret reads, network fetches,
+tool installs, device APIs/physical actions, host administration, commit/push/PR/
+merge/deployment, service/task restarts, or destructive cleanup were performed.
