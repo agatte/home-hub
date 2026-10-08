@@ -759,6 +759,7 @@ async def guest_kitchen(body: KitchenRequest, request: Request) -> dict:
             raise HTTPException(status_code=502, detail="Kitchen light update failed")
         if automation:
             automation.mark_light_manual(light_id, state)
+            await automation.persist_manual_light_ownership()
     return {"status": "ok", "enabled": body.enabled}
 
 
@@ -897,6 +898,7 @@ async def _apply_brightness_steps(
         # specific bri value pinned.
         if automation:
             automation.mark_light_manual(light_id)
+            await automation.persist_manual_light_ownership()
         updated.append({"id": light_id, "bri": current})
 
     return updated, ceiling

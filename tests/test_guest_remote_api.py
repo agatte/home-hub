@@ -78,7 +78,10 @@ async def test_guest_kitchen_touches_only_kitchen_pair() -> None:
         breaker_open=False,
         set_light=AsyncMock(return_value=True),
     )
-    automation = SimpleNamespace(mark_light_manual=MagicMock())
+    automation = SimpleNamespace(
+        mark_light_manual=MagicMock(),
+        persist_manual_light_ownership=AsyncMock(),
+    )
     result = await guest.guest_kitchen(
         guest.KitchenRequest(enabled=False, scene="party"),
         _request(hue=hue, automation=automation),
@@ -88,6 +91,8 @@ async def test_guest_kitchen_touches_only_kitchen_pair() -> None:
     assert hue.set_light.await_count == 2
     calls = [(call.args[0], call.args[1]) for call in hue.set_light.await_args_list]
     assert calls == [("3", {"on": False}), ("4", {"on": False})]
+    assert automation.mark_light_manual.call_count == 2
+    assert automation.persist_manual_light_ownership.await_count == 2
 
 
 @pytest.mark.asyncio

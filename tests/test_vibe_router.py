@@ -38,6 +38,9 @@ class FakeAutomation:
         self.events = events if events is not None else []
         self.set_manual_override = AsyncMock(side_effect=self._set_manual_override)
         self.mark_light_manual = MagicMock(side_effect=self._mark_light_manual)
+        self.persist_manual_light_ownership = AsyncMock(
+            side_effect=self._persist_manual_light_ownership,
+        )
         self.establish_effect_release = AsyncMock(
             side_effect=self._establish_effect_release,
         )
@@ -47,6 +50,9 @@ class FakeAutomation:
 
     def _mark_light_manual(self, *_args, **_kwargs):
         self.events.append("manual_stamp")
+
+    async def _persist_manual_light_ownership(self):
+        self.events.append("persist_ownership")
 
     async def _establish_effect_release(
         self, _states, _transitiontime, release_light_ids,
@@ -164,6 +170,8 @@ async def test_apply_pending_arrival_applies_mode_then_scene_and_clears(db_engin
         for light_id, state in SCENE_PRESETS["house_party"]["lights"].items()
     ]
     assert automation.mark_light_manual.call_args_list == expected_stamps
+    automation.persist_manual_light_ownership.assert_awaited_once_with()
+    assert events[3:] == ["manual_stamp"] * len(expected_stamps) + ["persist_ownership"]
     event_logger.log_scene_activation.assert_awaited_once()
     assert settings.store[PENDING_ARRIVAL_VIBE_KEY] == {}
 
@@ -208,6 +216,7 @@ async def test_apply_pending_arrival_retains_pending_vibe_when_safe_release_fail
     )
     automation.establish_effect_release.assert_awaited_once()
     automation.mark_light_manual.assert_not_called()
+    automation.persist_manual_light_ownership.assert_not_awaited()
     event_logger.log_scene_activation.assert_not_awaited()
     assert settings.store[PENDING_ARRIVAL_VIBE_KEY] == pending
 
@@ -246,6 +255,11 @@ async def test_apply_plan_scopes_curated_effect_to_l1_through_l5(
         "1", "2", "3", "4", "5",
     ]
     mock_hue_v2.set_effect_all.assert_not_awaited()
+    automation.persist_manual_light_ownership.assert_awaited_once_with()
+    assert automation.events == (
+        ["mode", "safe_scene"]
+        + ["manual_stamp"] * automation.mark_light_manual.call_count + ["persist_ownership"]
+    )
 
 
 async def test_apply_plan_leaves_effect_free_curated_preset_without_starting_effect(
@@ -268,3 +282,8 @@ async def test_apply_plan_leaves_effect_free_curated_preset_without_starting_eff
 
     mock_hue_v2.set_effect.assert_not_awaited()
     mock_hue_v2.set_effect_all.assert_not_awaited()
+    automation.persist_manual_light_ownership.assert_awaited_once_with()
+    assert automation.events == (
+        ["mode", "safe_scene"]
+        + ["manual_stamp"] * automation.mark_light_manual.call_count + ["persist_ownership"]
+    )

@@ -576,9 +576,12 @@ async def _activate_scene(
     # user explicitly hands control back (tap "auto", change mode, etc.).
     automation = getattr(request.app.state, "automation", None)
 
+    ownership_changed = False
+
     def acknowledge_targets(
         targets, *, direct_readback=False, check_acknowledgement_guard=True,
     ):
+        nonlocal ownership_changed
         if not targets:
             return  # Unknown readback cannot grant a trial restore lease.
         if (
@@ -594,6 +597,7 @@ async def _activate_scene(
             if direct_readback:
                 automation.record_leased_light_write(str(lid), state, supersede_screen_sync=True)
             automation.mark_light_manual(str(lid), state)
+            ownership_changed = True
         if lease_sink is not None:
             lease_sink(automation.lighting_transition_boundary.authority.issue("try_it", None))
 
@@ -620,6 +624,9 @@ async def _activate_scene(
                 status_code=409,
                 detail="Scene transition aborted: safe effect release not established",
             )
+
+        if ownership_changed:
+            await automation.persist_manual_light_ownership()
 
         await asyncio.sleep(0.3)
         lights = await hue.get_all_lights()
@@ -668,6 +675,9 @@ async def _activate_scene(
                             "not established"
                         ),
                     )
+
+                if ownership_changed:
+                    await automation.persist_manual_light_ownership()
 
                 await asyncio.sleep(0.3)
                 lights = await hue.get_all_lights()
@@ -741,6 +751,8 @@ async def _activate_scene(
                 direct_readback=True,
                 check_acknowledgement_guard=False,
             )
+    if ownership_changed:
+        await automation.persist_manual_light_ownership()
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
@@ -968,41 +980,47 @@ def _snapshot_target(light: dict, transitiontime: int) -> dict:
 async def _restore_trial(trial: dict, transitiontime: int) -> bool:
     engine = trial["engine"]
     boundary = engine.lighting_transition_boundary
-    async with boundary.serialized():
-        for light in trial["snapshot"]:
-            if _try_it_state["trial"] is not trial or not engine.validate_lighting_lease(
-                trial["lease"], allow_manual=True, allow_scene=True,
-            ):
-                return False
-            lid = str(light["light_id"])
-            state = _snapshot_target(light, transitiontime)
-            try:
-                success = await boundary.run_write(
-                    lambda: trial["hue"].set_light(lid, state),
-                    validator=lambda: (
-                        _try_it_state["trial"] is trial
-                        and engine.validate_lighting_lease(
-                            trial["lease"], allow_manual=True, allow_scene=True,
-                        )
-                    ),
-                    light_ids=[lid],
-                )
-            except asyncio.CancelledError:
-                trial["lease"] = None
-                engine.forget_ambiguous_light_write([lid])
-                raise
-            if success is not True:
-                return False
-            # Intent may change during adapter I/O. Never adopt it as our lease.
-            if not engine.validate_lighting_lease(trial["lease"], allow_manual=True, allow_scene=True):
+    ownership_changed = False
+    try:
+        async with boundary.serialized():
+            for light in trial["snapshot"]:
+                if _try_it_state["trial"] is not trial or not engine.validate_lighting_lease(
+                    trial["lease"], allow_manual=True, allow_scene=True,
+                ):
+                    return False
+                lid = str(light["light_id"])
+                state = _snapshot_target(light, transitiontime)
+                try:
+                    success = await boundary.run_write(
+                        lambda: trial["hue"].set_light(lid, state),
+                        validator=lambda: (
+                            _try_it_state["trial"] is trial
+                            and engine.validate_lighting_lease(
+                                trial["lease"], allow_manual=True, allow_scene=True,
+                            )
+                        ),
+                        light_ids=[lid],
+                    )
+                except asyncio.CancelledError:
+                    trial["lease"] = None
+                    engine.forget_ambiguous_light_write([lid])
+                    raise
+                if success is not True:
+                    return False
+                # Intent may change during adapter I/O. Never adopt it as our lease.
+                if not engine.validate_lighting_lease(trial["lease"], allow_manual=True, allow_scene=True):
+                    engine.record_leased_light_write(lid, state, supersede_screen_sync=True)
+                    return False
                 engine.record_leased_light_write(lid, state, supersede_screen_sync=True)
-                return False
-            engine.record_leased_light_write(lid, state, supersede_screen_sync=True)
-            engine.mark_light_manual(lid, state)
-            trial["lease"] = boundary.authority.issue("try_it", None)
-        engine._effect_manager.acknowledge_static_replacement(
-            {str(light["light_id"]) for light in trial["snapshot"]},
-        )
+                engine.mark_light_manual(lid, state)
+                trial["lease"] = boundary.authority.issue("try_it", None)
+                ownership_changed = True
+            engine._effect_manager.acknowledge_static_replacement(
+                {str(light["light_id"]) for light in trial["snapshot"]},
+            )
+    finally:
+        if ownership_changed:
+            await engine.persist_manual_light_ownership()
     lights = await trial["hue"].get_all_lights()
     for light in lights:
         await trial["ws"].broadcast("light_update", light)

@@ -577,6 +577,7 @@ async def _handle_light_command(
     automation = getattr(app.state, "automation", None)
     if automation:
         automation.mark_light_manual(str(light_id), state)
+        await automation.persist_manual_light_ownership()
 
     # No post-write broadcast: the bridge is mid-transition right now and a
     # fresh get_light read returns an intermediate value that the slider

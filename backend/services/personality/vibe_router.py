@@ -233,6 +233,8 @@ class VibeRouter:
                 str(light_id), preset["lights"][light_id],
             )
 
+        await automation.persist_manual_light_ownership()
+
         if ws_manager is not None:
             lights = await hue.get_all_lights()
             for light in lights:
