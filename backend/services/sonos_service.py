@@ -242,6 +242,10 @@ class SonosService:
                 if task is not None and hasattr(task, "uncancel"):
                     task.uncancel()
                 continue
+            except Exception:
+                # The worker has settled with an error. Consume it below so
+                # deferred cancellation still wins over the device exception.
+                break
         try:
             result = worker.result()
         except BaseException:
