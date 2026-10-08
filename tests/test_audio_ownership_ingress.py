@@ -26,8 +26,12 @@ class RecorderOwnership:
         self.events.append(("capture", owner, purpose))
         return self.lease
 
+    def record_manual_intent(self, dimensions):
+        return 1
+
     async def run_manual(
-        self, dimensions, *, source: str, reason: str, operation,
+        self, dimensions, *, source: str, reason: str, operation, intent_revision=None,
+        superseded_result=False,
     ):
         self.events.append(
             ("invalidate", frozenset(dimensions), source, reason)

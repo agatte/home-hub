@@ -54,6 +54,7 @@ async def _run_manual_sonos(
     *,
     reason: str,
     operation,
+    intent_revision: int | None = None,
 ):
     """Serialize manual intent and its Sonos operation against automation."""
     ownership = getattr(request.app.state, "audio_ownership", None)
@@ -64,6 +65,7 @@ async def _run_manual_sonos(
         source=source_from_request(request, fallback="manual"),
         reason=reason,
         operation=operation,
+        **({"intent_revision": intent_revision} if intent_revision is not None else {}),
     )
 
 
@@ -162,6 +164,11 @@ async def sonos_next(request: Request) -> dict:
     """Skip to next track."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
+    ownership = getattr(request.app.state, "audio_ownership", None)
+    intent_revision = (
+        ownership.record_manual_intent(MANUAL_TRANSPORT_DIMENSIONS)
+        if ownership is not None else None
+    )
     session = await capture_owned_music_session(
         getattr(request.app.state, "audio_ownership", None)
     )
@@ -169,6 +176,7 @@ async def sonos_next(request: Request) -> dict:
         request,
         MANUAL_TRANSPORT_DIMENSIONS,
         reason="manual_next",
+        intent_revision=intent_revision,
         operation=sonos.next_track,
     )
     if success:
@@ -188,6 +196,11 @@ async def sonos_previous(request: Request) -> dict:
     """Go to previous track."""
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)
+    ownership = getattr(request.app.state, "audio_ownership", None)
+    intent_revision = (
+        ownership.record_manual_intent(MANUAL_TRANSPORT_DIMENSIONS)
+        if ownership is not None else None
+    )
     session = await capture_owned_music_session(
         getattr(request.app.state, "audio_ownership", None)
     )
@@ -195,6 +208,7 @@ async def sonos_previous(request: Request) -> dict:
         request,
         MANUAL_TRANSPORT_DIMENSIONS,
         reason="manual_previous",
+        intent_revision=intent_revision,
         operation=sonos.previous_track,
     )
     if success:

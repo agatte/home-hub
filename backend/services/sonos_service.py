@@ -1641,7 +1641,9 @@ class SonosService:
 
         return results
 
-    def _shuffle_and_play(self, device: "SoCo") -> None:
+    def _shuffle_and_play(
+        self, device: "SoCo", still_allowed: Callable[[], bool] | None = None,
+    ) -> bool:
         """Set SHUFFLE play mode and start at a random queue index.
 
         Belt-and-suspenders for "always shuffle on play": SoCo's ``SHUFFLE``
@@ -1665,10 +1667,16 @@ class SonosService:
             queue_size = 0
         device.play_mode = "SHUFFLE"
         start = random.randint(0, queue_size - 1) if queue_size > 1 else 0
+        # Queue add and play-mode writes can block while semantic Away wins.
+        # Retain the accepted queue contents, but never start stale playback.
+        if still_allowed is not None and not still_allowed():
+            return False
         device.play_from_queue(start)
+        return True
 
     def _replace_queue_if_unchanged_sync(
         self, item, expected: dict[str, Any],
+        still_allowed: Callable[[], bool] | None = None,
     ) -> bool:
         """Replace the queue only if the fresh Sonos fingerprint still matches."""
         current = self._queue_ownership_evidence_sync()
@@ -1677,16 +1685,18 @@ class SonosService:
             for key in _AUDIO_OWNERSHIP_PROOF_KEYS
         ):
             return False
+        if still_allowed is not None and not still_allowed():
+            return False
         self._device.clear_queue()
         self._device.add_to_queue(item)
-        self._shuffle_and_play(self._device)
-        return True
+        return self._shuffle_and_play(self._device, still_allowed)
 
     async def play_favorite(
         self,
         title: str,
         *,
         expected_queue_evidence: dict[str, Any] | None = None,
+        still_allowed: Callable[[], bool] | None = None,
     ) -> bool:
         """
         Play a Sonos favorite or playlist by title.
@@ -1723,6 +1733,7 @@ class SonosService:
                                 self._replace_queue_if_unchanged_sync,
                                 pl,
                                 dict(expected_queue_evidence),
+                                still_allowed,
                             )
                         except Exception as exc:
                             logger.warning(
@@ -1790,6 +1801,7 @@ class SonosService:
                             self._replace_queue_if_unchanged_sync,
                             ref,
                             dict(expected_queue_evidence),
+                            still_allowed,
                         )
                         if not replaced:
                             logger.info(

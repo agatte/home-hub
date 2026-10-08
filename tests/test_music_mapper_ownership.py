@@ -75,8 +75,10 @@ class Sonos:
         return {"state": self.state}
 
     async def play_favorite(
-        self, title: str, *, expected_queue_evidence: dict | None = None,
+        self, title: str, *, expected_queue_evidence: dict | None = None, still_allowed=None,
     ) -> bool:
+        if still_allowed is not None and not still_allowed():
+            return False
         if expected_queue_evidence is not None:
             for key, value in self.neutral_evidence.items():
                 assert expected_queue_evidence.get(key) == value
@@ -120,8 +122,10 @@ class SettlingSonos(Sonos):
         self.transition_reads = transition_reads
 
     async def play_favorite(
-        self, title: str, *, expected_queue_evidence: dict | None = None,
+        self, title: str, *, expected_queue_evidence: dict | None = None, still_allowed=None,
     ) -> bool:
+        if still_allowed is not None and not still_allowed():
+            return False
         if expected_queue_evidence is not None:
             for key, value in self.neutral_evidence.items():
                 assert expected_queue_evidence.get(key) == value

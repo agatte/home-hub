@@ -55,6 +55,9 @@ class AudioOwnershipService:
         self._load_setting = setting_loader
         self._save_setting = setting_saver
         self._lock = asyncio.Lock()
+        self._manual_intent_revision = 0
+        self._lifecycle_revision = 0
+        self._lifecycle_away = False
         self._loaded = False
         self._generation = 0
         self._leases: dict[str, dict[str, Any]] = {}
@@ -70,6 +73,75 @@ class AudioOwnershipService:
         for dimension in dimensions:
             self._opportunistic_epochs[dimension] += 1
 
+    def record_manual_intent(self, dimensions: Iterable[str]) -> int:
+        """Record explicit Q/T ingress before any learning/status/lock await."""
+        if _dimensions(dimensions).intersection((QUEUE_SOURCE, TRANSPORT)):
+            self._manual_intent_revision += 1
+        return self._manual_intent_revision
+
+    def capture_manual_intent(self) -> int:
+        """Capture before any departure await; intent entry is event-loop local."""
+        return self._manual_intent_revision
+
+    async def set_lifecycle_away(self, away: bool) -> int:
+        """Fence autonomous transport (including TTS restore), without a lease.
+
+        Durable occupancy departures persist first; legacy audio callbacks do
+        not establish occupancy. Q/V/I provenance survives; retiring T prevents
+        Home from reviving pre-departure transport authority. Restart re-arms
+        this fence rather than replaying a departure command.
+        The lock waits for any already admitted Sonos worker to settle.
+        """
+        async with self._lock:
+            self._lifecycle_revision += 1
+            self._lifecycle_away = away
+            if away:
+                try:
+                    await self._load_locked()
+                    await self._invalidate_manual_locked(
+                        frozenset((TRANSPORT,)), source="lifecycle", reason="away",
+                    )
+                except Exception:
+                    # Durable departure is already committed. Keep the fence even
+                    # when provenance storage fails; lights-off must continue.
+                    # Startup re-arms this fence before any departure replay.
+                    logger.exception("Away audio provenance retirement failed")
+            else:
+                self._touch_opportunistic_locked((TRANSPORT,))
+            return self._lifecycle_revision
+
+    def departure_is_current(self, manual_revision: int, lifecycle_revision: int) -> bool:
+        """Also checked by the settled worker after its final device proof."""
+        return (
+            self._lifecycle_away
+            and lifecycle_revision == self._lifecycle_revision
+            and manual_revision == self._manual_intent_revision
+        )
+
+    async def run_departure_pause(
+        self, manual_revision: int, lifecycle_revision: int,
+        operation: Callable[[], Awaitable[Any]],
+    ) -> tuple[bool, Any]:
+        """Lifecycle outranks leases; newer manual intent or Home cancels it."""
+        async with self._lock:
+            if not self.departure_is_current(manual_revision, lifecycle_revision):
+                return False, None
+            return True, await operation()
+
+    async def run_mode_pause(
+        self, manual_revision: int, still_allowed: Callable[[], bool],
+        operation: Callable[[], Awaitable[Any]],
+    ) -> tuple[bool, Any]:
+        """One-off semantic pause has no lease or physical lifecycle authority."""
+        async with self._lock:
+            if manual_revision != self._manual_intent_revision or not still_allowed():
+                return False, None
+            await self._load_locked()
+            # A semantic pause must not turn a TTS interruption into evidence
+            # of external transport takeover and thereby destroy its restore.
+            if any(INTERRUPTION in lease.get("dimensions", ()) for lease in self._leases.values()):
+                return False, None
+            return True, await operation()
 
     async def load(self) -> None:
         async with self._lock:
@@ -385,6 +457,8 @@ class AudioOwnershipService:
         expected = {dimension: int(token[dimension]) for dimension in requested}
         async with self._lock:
             await self._load_locked()
+            if self._lifecycle_away and TRANSPORT in requested:
+                return False, None
             for lease in self._leases.values():
                 if requested.intersection(lease.get("dimensions") or ()):
                     return False, None
@@ -411,6 +485,8 @@ class AudioOwnershipService:
         requested = _dimensions(dimensions)
         async with self._lock:
             await self._load_locked()
+            if self._lifecycle_away and TRANSPORT in requested:
+                return False, None
             lease = self._leases.get(str(lease_id))
             if lease is None:
                 return False, None
@@ -549,7 +625,7 @@ class AudioOwnershipService:
         await self._persist_locked()
         if invalidated:
             logger.info(
-                "manual audio invalidation source=%s reason=%s dims=%s leases=%s gen=%s",
+                "audio invalidation source=%s reason=%s dims=%s leases=%s gen=%s",
                 source, reason, ",".join(sorted(selected)),
                 ",".join(item["lease_id"] for item in invalidated),
                 self._generation,
@@ -564,6 +640,7 @@ class AudioOwnershipService:
         reason: str,
     ) -> dict[str, Any]:
         selected = _dimensions(dimensions)
+        # Evidence surrender is not proof of an explicit user command.
         async with self._lock:
             await self._load_locked()
             return await self._invalidate_manual_locked(
@@ -577,14 +654,36 @@ class AudioOwnershipService:
         source: str,
         reason: str,
         operation: Callable[[], Awaitable[Any]],
+        intent_revision: int | None = None,
+        superseded_result: Any = False,
     ) -> Any:
-        """Invalidate conflicting leases and serialize the manual write."""
+        """Serialize manual writes; explicit Q/T ingress may be superseded.
+
+        Callers supplying a revision also supply their normal failure shape
+        when it differs from False. V/I writes retain independent semantics.
+        """
         selected = _dimensions(dimensions)
+        if intent_revision is None:
+            self.record_manual_intent(selected)
         async with self._lock:
             await self._load_locked()
+
+            def superseded() -> bool:
+                return (
+                    intent_revision is not None
+                    and bool(selected & {QUEUE_SOURCE, TRANSPORT})
+                    and intent_revision != self._manual_intent_revision
+                )
+
+            if superseded():
+                return superseded_result
             await self._invalidate_manual_locked(
                 selected, source=source, reason=reason,
             )
+            # Intent ingress does not need this lock; persistence may have
+            # yielded to a newer command while we still held it.
+            if superseded():
+                return superseded_result
             return await operation()
 
     async def snapshot(self) -> dict[str, Any]:
