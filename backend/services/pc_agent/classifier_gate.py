@@ -16,6 +16,7 @@ class ClassifierGate:
     """Shared desired/actual state for the ambient classifier lifecycle."""
 
     def __init__(self, configured: bool) -> None:
+        self._audio_health = {"stream_state": "unavailable", "last_success_at": None}
         self._lock = threading.Lock()
         self._configured = configured
         self._desired_enabled = configured
@@ -79,9 +80,24 @@ class ClassifierGate:
             self._detail = detail
             self._updated_at = time.time()
 
+    def set_audio_health(self, state: str, last_success: float | None) -> None:
+        """Publish sensing state separately from worker/model liveness."""
+        with self._lock:
+            self._audio_health = {
+                "stream_state": state,
+                "last_success_at": last_success,
+            }
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            audio = dict(self._audio_health)
+            last_success = audio["last_success_at"]
+            audio["sample_age_seconds"] = (
+                max(0.0, time.time() - last_success)
+                if last_success is not None else None
+            )
             return {
+                "audio": audio,
                 "configured": self._configured,
                 "desired_enabled": self._desired_enabled,
                 "actual_enabled": self._actual_enabled,

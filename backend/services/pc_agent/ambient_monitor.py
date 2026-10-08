@@ -31,7 +31,6 @@ Usage:
 import argparse
 import gc
 import logging
-import sys
 import threading
 import time
 from collections import deque
@@ -167,6 +166,11 @@ class AmbientMonitor:
         self._last_avg_rms: Optional[float] = None
         self._stream = None
         self._audio = None
+        self._audio_retry_after = 0.0
+        self._audio_retry_delay = 1.0
+        self._last_audio_success = None
+        self._last_audio_monotonic = None
+        self._stream_state = "unavailable"
 
         # YAMNet classifier
         self._classifier_enabled = classifier_enabled
@@ -176,6 +180,8 @@ class AmbientMonitor:
         self._scene_state = None
         self._audio_buffer: deque = deque(maxlen=YAMNET_SAMPLES)
         self._classifier_retry_after = 0.0
+        self._audio_sample_sequence = 0
+        self._classified_sample_sequence = 0
 
         if classifier_enabled:
             self._reconcile_classifier_gate(force=True)
@@ -229,9 +235,11 @@ class AmbientMonitor:
     def _disable_classifier(self, detail: str = "disabled_by_authority") -> None:
         """Release YAMNet once without disturbing the microphone/RMS lane."""
         had_classifier = self._classifier is not None or self._scene_state is not None
+        # Dropping the classifier and scene also drops their historical state.
         self._classifier = None
         self._scene_state = None
         self._audio_buffer.clear()
+        self._audio_sample_sequence = self._classified_sample_sequence = 0
         self._classifier_retry_after = 0.0
         if had_classifier:
             logger.info("YAMNet classifier disabled (%s)", detail)
@@ -265,6 +273,8 @@ class AmbientMonitor:
         Returns:
             True if the mic was found and opened successfully.
         """
+        if self._stream is not None:
+            return True
         try:
             import pyaudio
 
@@ -296,13 +306,11 @@ class AmbientMonitor:
                 input_device_index=device_index,
                 frames_per_buffer=CHUNK_SIZE,
             )
+            self._publish_audio_health("recovering")
             return True
 
-        except ImportError:
-            logger.error("pyaudio not installed — run: pip install pyaudio")
-            return False
-        except Exception as e:
-            logger.error(f"Failed to initialize microphone: {e}")
+        except Exception as exc:
+            self._audio_failed(exc)
             return False
 
     def _read_rms(self) -> Optional[tuple[float, bytes]]:
@@ -312,17 +320,50 @@ class AmbientMonitor:
         Returns:
             Tuple of (RMS value, raw audio bytes), or None if the read failed.
         """
-        if not self._stream:
-            return None
+        if self._stream is None:
+            if time.monotonic() < self._audio_retry_after or not self._init_audio():
+                return None
 
         try:
             data = self._stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            if len(data) != CHUNK_SIZE * FORMAT_WIDTH:
+                raise ValueError("incomplete microphone sample")
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float64)
             rms = float(np.sqrt(np.mean(samples ** 2)))
+            self._last_audio_success = time.time()
+            self._last_audio_monotonic = time.monotonic()
+            self._audio_retry_delay = 1.0
+            self._publish_audio_health("healthy")
             return rms, data
-        except Exception as e:
-            logger.error(f"Error reading mic: {e}")
+        except Exception as exc:
+            self._audio_failed(exc)
             return None
+
+    def _publish_audio_health(self, state: str) -> None:
+        self._stream_state = state
+        if self._classifier_gate is not None:
+            self._classifier_gate.set_audio_health(state, self._last_audio_success)
+
+    def _audio_failed(self, exc: Exception) -> None:
+        self.close()
+        delay = self._audio_retry_delay
+        self._audio_retry_after = time.monotonic() + delay
+        self._audio_retry_delay = min(60.0, delay * 2)
+        self._publish_audio_health("recovering")
+        logger.warning("Microphone unavailable (%s); retry in %.0fs", exc, delay)
+
+    def _reset_observations(self) -> None:
+        self._rms_history.clear()
+        self._quiet_start = None
+        self._was_quiet = False
+        self._last_avg_rms = None
+        self._audio_buffer.clear()
+        self._audio_sample_sequence = self._classified_sample_sequence = 0
+        self._last_audio_monotonic = None
+        if self._classifier is not None:
+            self._classifier.reset_history()
+        if self._scene_state is not None:
+            self._scene_state = type(self._scene_state)()
 
     def check(self) -> Optional[str]:
         """
@@ -338,6 +379,7 @@ class AmbientMonitor:
             "quiet" if sustained low-noise detected (edge-triggered once
             per quiet session), None otherwise.
         """
+        self._reconcile_classifier_gate()
         read_result = self._read_rms()
         if read_result is None:
             return None
@@ -348,6 +390,7 @@ class AmbientMonitor:
         if self._classifier is not None:
             samples = np.frombuffer(raw_bytes, dtype=np.int16)
             self._audio_buffer.extend(samples.tolist())
+            self._audio_sample_sequence += 1
 
         self._rms_history.append(rms)
 
@@ -382,6 +425,12 @@ class AmbientMonitor:
             Dict with classification result and mode signal, or None
             if the buffer isn't full or classification failed.
         """
+        self._reconcile_classifier_gate()
+        if (self._stream_state != "healthy"
+            or self._last_audio_monotonic is None
+            or time.monotonic() - self._last_audio_monotonic > 5.0):
+            self._reset_observations()
+            return None
         if self._classifier is None or self._scene_state is None:
             return None
 
@@ -392,6 +441,11 @@ class AmbientMonitor:
         audio = np.array(list(self._audio_buffer), dtype=np.float32)
         audio = audio / 32768.0
 
+        if self._audio_sample_sequence == self._classified_sample_sequence:
+            return None
+        # Consume this sample generation even when inference fails. Keep the
+        # rolling window for the next successful capture, not another warmup.
+        self._classified_sample_sequence = self._audio_sample_sequence
         result = self._classifier.classify(audio)
         if result is None:
             return None
@@ -453,17 +507,24 @@ class AmbientMonitor:
 
     def close(self) -> None:
         """Clean up audio resources."""
-        try:
-            if self._stream:
-                self._stream.stop_stream()
-                self._stream.close()
-        except Exception:
-            pass
-        try:
-            if self._audio:
-                self._audio.terminate()
-        except Exception:
-            pass
+        stream, audio = self._stream, self._audio
+        self._stream = self._audio = None
+        if stream is not None:
+            try:
+                stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+        if audio is not None:
+            try:
+                audio.terminate()
+            except Exception:
+                pass
+        self._reset_observations()
+        self._publish_audio_health("unavailable")
 
 
 def run_monitor(
@@ -496,15 +557,9 @@ def run_monitor(
     activity_endpoint = f"{base_url}/api/automation/activity"
     ml_endpoint = f"{base_url}/api/learning/audio-decision"
 
-    if not monitor._init_audio():
-        msg = "Cannot start ambient monitor — mic not available"
-        if stop_event is not None:
-            raise RuntimeError(msg)
-        logger.error(msg)
-        sys.exit(1)
-
-    # Auto-calibrate on startup
-    monitor.calibrate(duration=5)
+    if monitor._init_audio():
+        # Calibration reads share the same disposal/backoff path.
+        monitor.calibrate(duration=5)
 
     _stop = stop_event or threading.Event()
     client = httpx.Client(timeout=5.0)

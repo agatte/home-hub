@@ -178,6 +178,39 @@ async def health_check(request: Request) -> dict:
                 "consecutive_failures": 0,
                 "last_failure": f"health() raised: {exc}"[:200],
             }
+    from backend.api.routes.automation import get_agent_health
+    desktop_health = await get_agent_health(request)
+    watchdog = desktop_health.get("watchdog") or {}
+    desktop = desktop_health.get("origins", {}).get("desktop", {})
+    classifier = desktop_health.get("classifier")
+    current = isinstance(classifier, dict)
+    if not current:
+        # Historical evidence is diagnostic only; never restore it as current.
+        classifier = desktop.get("classifier")
+    engine = getattr(app.state, "automation", None)
+    expected_offline = (
+        watchdog.get("expected_offline", False)
+        or getattr(engine, "current_mode", None) == "sleeping"
+        or getattr(engine, "_external_off_detected", False)
+    )
+    if isinstance(classifier, dict) and isinstance(classifier.get("audio"), dict):
+        disabled = not classifier.get("configured") or not classifier.get("desired_enabled")
+        reporter_offline = not current or (
+            watchdog.get("ever_reported", False) and not watchdog.get("online", False)
+        )
+        if expected_offline:
+            audio_status = "idle"
+        elif reporter_offline or classifier["audio"].get("stream_state") != "healthy":
+            audio_status = "unhealthy"
+        elif disabled:
+            audio_status = "idle"
+        else:
+            audio_status = "healthy" if classifier.get("actual_enabled") else "unhealthy"
+        ml["audio_classifier"] = {
+            **classifier, "status": audio_status, "report_current": current,
+        }
+        if reporter_offline:
+            details["audio_classifier"] = "Desktop audio report is historical; sensing is unverified"
     if any(p.get("status") == "unhealthy" for p in ml.values()):
         status = "degraded"
 
