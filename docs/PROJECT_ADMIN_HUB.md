@@ -78,4 +78,10 @@ At each meaningful change of a decision or gate, update **only the owning author
 
 For a weekly or post-merge Project Admin reconciliation, compare live open/closed issues, PRs, the map's *dated* status references, and pending release/physical gates. Flag stale links, closed items presented as upcoming, duplicated owners, and missing gate follow-ups. Any future automation should initially be **read-only and report-only**; never auto-close issues, rewrite policy, or claim live deployment from a merged SHA.
 
+### Read-only status drift check (pilot)
+
+Run `python scripts/check_project_admin_drift.py --live` from the repository root for an **advisory** current-issue report. It reads only GitHub issue metadata via HTTPS; `GH_TOKEN` or `GITHUB_TOKEN` may be supplied by an authorized runner when the repository is private. No credential values are printed. For offline tests or disconnected operation, use `--snapshot path/to/issues.json` (a JSON list or `{"issues": [...]}` of issue number, state, and title). Add `--strict` only when the report should exit nonzero on drift.
+
+This pilot checks open issue owners in the **current** execution-map routing table, historical packet headings explicitly marked `(closed implementation)`, and open issue titles beginning `Post-deploy physical acceptance:` that are missing from current hub/map navigation. Old reconciliation dates are advisory. This is **not** a whole-backlog completeness audit or a GitHub Projects configuration check; it never edits issues, assumes deployment, or claims a physical test passed. Keep scheduled delivery and any future CI enforcement as separately reviewed follow-ups.
+
 **Optional knowledge browsing:** Obsidian or a private local docs site may read the same repo Markdown. Do not introduce a second editable backlog, enable automatic vault Git operations, or publish internal household/security/operations docs to a public site.
