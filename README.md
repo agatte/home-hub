@@ -126,6 +126,7 @@ unless a live-device check is explicitly intended.
 
 ## Documentation
 
+- [Project Admin Hub](docs/PROJECT_ADMIN_HUB.md) — start here for current work, authoritative decisions, acceptance gates, and GitHub planning views.
 - [Project specification](docs/PROJECT_SPEC.md) — authoritative cross-system
   product direction, current architecture, status boundaries, and roadmap.
 - [Documentation index](docs/README.md) — subsystem specs, design notes,
