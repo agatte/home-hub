@@ -2,7 +2,7 @@
 
 > **Purpose:** Find the right source quickly. This is a navigation and workflow guide, **not** a product specification, live health report, or second backlog.
 > **Established:** 2026-10-08. Implementation tracker: [#339](https://github.com/agatte/home-hub/issues/339).
-> **Important:** GitHub Projects board existence/configuration has **not** been verified through the connected GitHub tools. Proposed board fields and views below are a design, not a claim that they are configured.
+> **Verified dashboard:** [Private HomeHub GitHub Project #1](https://github.com/users/agatte/projects/1), created and linked to `agatte/home-hub` on 2026-10-08 after authenticated owner/repository inventory found no existing Project. See [#339](https://github.com/agatte/home-hub/issues/339) for setup and remaining follow-up gates.
 
 ## Start with the question
 
@@ -28,27 +28,39 @@ These are navigation routes, not a rewrite of existing issue ownership:
 | House State & Automation | [PROJECT_SPEC.md](PROJECT_SPEC.md), [PRESENCE_LIGHTING_SCENARIOS.md](PRESENCE_LIGHTING_SCENARIOS.md) |
 | Lighting & Atmosphere | [LIGHTING_EXPANSION.md](LIGHTING_EXPANSION.md), [#244](https://github.com/agatte/home-hub/issues/244) |
 | Sensing & Intelligence | [ML_SPEC.md](ML_SPEC.md), [CONFIDENCE_FUSION.md](CONFIDENCE_FUSION.md), [#240](https://github.com/agatte/home-hub/issues/240) |
-| Devices & Integrations | [PROJECT_SPEC.md](PROJECT_SPEC.md), [audio ownership #276](https://github.com/agatte/home-hub/issues/276), [security #296](https://github.com/agatte/home-hub/issues/296) |
+| Devices & Integrations | [PROJECT_SPEC.md](PROJECT_SPEC.md), [audio ownership #276](https://github.com/agatte/home-hub/issues/276), [Blue Yeti acceptance #334](https://github.com/agatte/home-hub/issues/334) |
 | Dashboard UI | [DASHBOARD_REDESIGN_VISION.md](DASHBOARD_REDESIGN_VISION.md), [#157](https://github.com/agatte/home-hub/issues/157) |
 | Game Day & Sports | [GAMEDAY_SPEC.md](GAMEDAY_SPEC.md), [GAMING_EXPERIENCE_SPEC.md](GAMING_EXPERIENCE_SPEC.md) |
 | Runtime & Infrastructure | [LOCAL_WORKSPACE.md](LOCAL_WORKSPACE.md), [security program #284](https://github.com/agatte/home-hub/issues/284) |
 
-## Operational dashboard: GitHub Projects design
+## Operational dashboard: private GitHub Projects board
 
-Before creating a Project, inspect existing owner/repository Projects in the GitHub UI; reuse a suitable HomeHub board. **Do not create a duplicate board merely because the connector cannot list Projects.** This inventory is the remaining external configuration gate in [#339](https://github.com/agatte/home-hub/issues/339).
+[**Open HomeHub Project #1**](https://github.com/users/agatte/projects/1). Authenticated GitHub CLI/GraphQL inventory confirmed no personal or repository-linked Projects before creation. The board is **private**, explicitly linked to `agatte/home-hub`, and initially contains all **89 open issues** inventoried on 2026-10-08. This is a dated coverage snapshot, not a promise that future issues will automatically appear. Do not create a second HomeHub board.
 
-Use a **single project across workstreams** and the existing issues as the source. Keep fields minimal:
+Keep **one project across workstreams** using existing GitHub issues, with these verified minimal fields:
 
 - **Status:** Backlog, Ready, In Progress, In Review, Waiting, Done. Closing an implementation issue means its implementation is done, **not** that physical or production verification happened.
 - **Workstream:** exactly one of the eight workstreams above; record cross-boundary dependencies in linked issues, not two owners.
 - **Next Gate:** None, Decision, Evidence, CI/Review, Approval, Deployment, Physical Acceptance, Dependency. This is the *next* gate, not a substitute for full acceptance criteria.
 - Reuse existing issue labels for priority, horizon, type and effort. Do not create a second priority/effort taxonomy in project fields.
 
-Recommended saved views: **Ready to Start**, **Active & Review**, **Needs Approval**, **Release & Physical Acceptance**, **Evidence/Dependency Blocked**, and **Parked/Research**. Build each from Status, Next Gate and existing labels. A task may be implementation-complete while a **separate linked follow-up** remains open for a deployment or hands-on test; do not reopen implementation work merely to represent that external gate.
+The board has seven **saved views**, verified from GitHub's live Projects API:
 
-### Useful issue searches while the Project board is unconfigured
+- **All Work** — unfiltered table across the linked issues.
+- **Ready to Start** — `status:Ready`.
+- **Active & Review** — board view, `status:"In Progress","In Review"`.
+- **Needs Approval** — `next-gate:Approval`.
+- **Release & Physical Acceptance** — `next-gate:Deployment,"Physical Acceptance"`.
+- **Evidence/Dependency Blocked** — `status:Waiting next-gate:Evidence,Dependency`.
+- **Parked/Research** — `status:Backlog`.
 
-These are **live issue searches**, not accurate stand-ins for the proposed Project custom-field views:
+Initial conservative triage assigned a primary Workstream and Status to all 89 open issues (80 Backlog, 7 Waiting, 2 In Progress) and a specific Next Gate to 21. **No issue was marked Ready solely from horizon or priority labels.** Notable gates: [#334](https://github.com/agatte/home-hub/issues/334) Physical Acceptance, [#240](https://github.com/agatte/home-hub/issues/240) Evidence, and [#339](https://github.com/agatte/home-hub/issues/339) Approval for the remaining project-admin integration step. A merged PR is never itself proof of deployment or hands-on acceptance.
+
+Future issues are **not yet automatically enrolled**; review project coverage periodically until an explicitly approved native GitHub workflow is configured. Verify saved-view behavior in the browser as part of regular use; API verification confirms each saved layout/filter, not a human visual rendering of every view.
+
+### Direct GitHub issue searches (fallback and cross-check)
+
+These remain useful live cross-checks, not replacements for the saved Project views:
 
 - [All open issues](https://github.com/agatte/home-hub/issues?q=is%3Aissue%20is%3Aopen)
 - [Current-horizon candidates](https://github.com/agatte/home-hub/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22horizon%3Anow%22) — inspect actual readiness before starting
