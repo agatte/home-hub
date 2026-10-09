@@ -1250,6 +1250,7 @@ class MusicMapper:
 
     async def play_verified_candidate(
         self, candidate, *, expected_queue_size: int | None = None, before_play=None,
+        mutation_runner=None, verification_guard=None, verification_boundary_guard=None,
     ) -> bool:
         """Execute one already-authorized exact Music Intelligence candidate.
 
@@ -1268,9 +1269,16 @@ class MusicMapper:
         reference = str(getattr(candidate, "playback_reference", "") or "")
         if not provider_id or not reference:
             return False
+        authority_options = {}
+        if mutation_runner is not None:
+            authority_options["mutation_runner"] = mutation_runner
+        if verification_guard is not None:
+            authority_options["verification_guard"] = verification_guard
+        if verification_boundary_guard is not None:
+            authority_options["verification_boundary_guard"] = verification_boundary_guard
         return await self._sonos.play_apple_music_share_link(
             provider_id, reference, expected_queue_size=expected_queue_size,
-            before_play=before_play,
+            before_play=before_play, **authority_options,
         )
 
     async def dispatch_pregame_audio(

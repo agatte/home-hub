@@ -70,6 +70,8 @@ class AudioOwnershipService:
         }
 
     def _touch_opportunistic_locked(self, dimensions: Iterable[str]) -> None:
+        # Synchronous on the owning event loop. Interruption ingress also calls
+        # this before acquiring the lock so admitted writers can observe it.
         for dimension in dimensions:
             self._opportunistic_epochs[dimension] += 1
 
@@ -262,6 +264,14 @@ class AudioOwnershipService:
         if not owner or not purpose:
             raise ValueError("owner and purpose are required")
 
+        if manual_source is not None:
+            self.record_manual_intent(requested)
+
+        # Event-loop synchronous ingress fence, before waiting on a settled
+        # writer. This is neither manual intent nor a durable/pending lease:
+        # refusal/cancellation leaves only stale tokens invalidated.
+        self._touch_opportunistic_locked(requested)
+
         async with self._lock:
             await self._load_locked()
 
@@ -428,19 +438,35 @@ class AudioOwnershipService:
             }
 
     async def capture_opportunistic(
-        self, dimensions: Iterable[str],
+        self, dimensions: Iterable[str], *, claim: bool = False,
     ) -> dict[str, int] | None:
-        """Capture an epoch token only while the requested dimensions are free."""
+        """Capture only free dimensions; claim also fences older epoch tokens.
+
+        Claims are process-local bounded transaction authority, not durable
+        playback leases. Every phase must use run_if_opportunistic and fresh
+        device/policy proof; no restart reconstruction or manual privilege.
+        """
         requested = _dimensions(dimensions)
         async with self._lock:
             await self._load_locked()
             for lease in self._leases.values():
                 if requested.intersection(lease.get("dimensions") or ()):
                     return None
+            if claim:
+                # A bounded request supersedes older lease-free continuations.
+                # No durable lease: a restart can never replay this authority.
+                self._touch_opportunistic_locked(requested)
             return {
                 dimension: self._opportunistic_epochs[dimension]
                 for dimension in sorted(requested)
             }
+
+    def opportunistic_is_current(self, token: dict[str, int]) -> bool:
+        """Synchronous fence for an already admitted operation's final write."""
+        return all(
+            self._opportunistic_epochs[dimension] == epoch
+            for dimension, epoch in token.items()
+        )
 
     async def run_if_opportunistic(
         self,
