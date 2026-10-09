@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.database import async_session
 from backend.models import MusicAssistedPlaybackEvent, SonosPlaybackEvent
+from backend.services.audio_ownership import QUEUE_SOURCE, TRANSPORT
 from backend.services.mode_volume_policy import compute_mode_volume
 from backend.services.mode_volume_service import MODE_VOLUME_CURVES_KEY
 from backend.services.music_trust import MusicApprovalService, MusicTrustPolicy
@@ -93,6 +94,9 @@ class MusicAssistedPlaybackService:
         if not provider or not provider_id:
             raise ValueError("provider and provider_id are required")
 
+        authority = getattr(self._app_state, "audio_ownership", None)
+        manual_revision = authority.capture_manual_intent() if authority else None
+        mode_revision = getattr(getattr(self._app_state, "music_mapper", None), "_mode_request_revision", None)
         async with self._lock:
             existing = await self._load(client_event_id)
             if existing is not None:
@@ -276,6 +280,53 @@ class MusicAssistedPlaybackService:
                 )
                 return self._row_result(row)
 
+            if authority is None:
+                row = await self._complete(
+                    client_event_id, status="suppressed", reason="audio_ownership_unavailable",
+                )
+                return self._row_result(row)
+            # Shared Q/T admission, without a durable playback lease or V/I
+            # privilege. The token is never reconstructed/replayed on restart.
+            token = await authority.capture_opportunistic((QUEUE_SOURCE, TRANSPORT), claim=True)
+            if token is None:
+                row = await self._complete(
+                    client_event_id, status="suppressed", reason="audio_ownership_busy",
+                )
+                return self._row_result(row)
+
+            def still_current():
+                return (
+                    authority.opportunistic_is_current(token)
+                    and authority.capture_manual_intent() == manual_revision
+                    and getattr(mapper, "_mode_request_revision", None) == mode_revision
+                    and self._policy_reason(live["mode"]) is None
+                )
+
+            authority_rejected = False
+
+            async def mutation_runner(operation):
+                nonlocal authority_rejected
+                async def admitted():
+                    nonlocal authority_rejected
+                    fresh = await self._runtime_preflight(
+                        expected_queue_size=int(live["queue_size"]),
+                    )
+                    if fresh.get("reason") or not still_current():
+                        authority_rejected = not still_current()
+                        return None
+                    return await operation()
+                executed, proof = await authority.run_if_opportunistic(token, admitted)
+                authority_rejected |= not executed
+                return proof if executed else None
+
+            verified_under_authority = False
+
+            def verification_boundary_guard():
+                nonlocal authority_rejected, verified_under_authority
+                verified_under_authority = still_current()
+                authority_rejected |= not verified_under_authority
+                return verified_under_authority
+
             post_enqueue_guard: dict[str, Any] | None = None
 
             async def _before_play() -> dict[str, Any]:
@@ -292,6 +343,8 @@ class MusicAssistedPlaybackService:
                         **post_enqueue_guard,
                         "reason": "activity_changed_before_play",
                     }
+                if post_enqueue_guard.get("reason") is None and not still_current():
+                    post_enqueue_guard = {**post_enqueue_guard, "reason": "authority_changed"}
                 return post_enqueue_guard
 
             try:
@@ -299,12 +352,16 @@ class MusicAssistedPlaybackService:
                     candidate,
                     expected_queue_size=int(live["queue_size"]),
                     before_play=_before_play,
+                    mutation_runner=mutation_runner,
+                    verification_boundary_guard=verification_boundary_guard,
                 )
             except Exception:
                 success = False
             if not success:
                 failure_reason = "playback_failed"
-                if post_enqueue_guard and post_enqueue_guard.get("reason"):
+                if authority_rejected:
+                    failure_reason = "playback_authority_changed"
+                elif post_enqueue_guard and post_enqueue_guard.get("reason"):
                     failure_reason = f"preplay_{post_enqueue_guard['reason']}"
                 else:
                     try:
@@ -323,13 +380,20 @@ class MusicAssistedPlaybackService:
                 )
                 return self._row_result(row)
 
+            # Sonos froze authority synchronously at the stream proof boundary.
+            # Later intent controls transport without retracting that observation.
             final_context = post_enqueue_guard or live
-            row = await self._complete_played_with_learning(
-                client_event_id,
-                candidate_title=candidate.title,
-                mode=str(final_context["mode"]),
-                volume=int(final_context["volume_used"]),
-            )
+            if verified_under_authority:
+                row = await self._complete_played_with_learning(
+                    client_event_id,
+                    candidate_title=candidate.title,
+                    mode=str(final_context["mode"]),
+                    volume=int(final_context["volume_used"]),
+                )
+            else:
+                row = await self._complete(
+                    client_event_id, status="failed", reason="playback_authority_changed",
+                )
             result = self._row_result(row)
             result["candidate"] = candidate.to_dict()
             result["trust"] = trust.to_dict()
@@ -350,6 +414,29 @@ class MusicAssistedPlaybackService:
         return self._trust_policy.decide(
             candidate, match, approval_action=action,
         ), None
+
+    def _policy_reason(self, expected_mode: str) -> str | None:
+        """No await: fence lifecycle/manual intent after slow device setup."""
+        state = self._app_state
+        try:
+            lifecycle = self._lifecycle_state()
+            if lifecycle.get("travel") or lifecycle.get("returning_home"):
+                return "lifecycle_active"
+            if state.away_manager.away:
+                return "apartment_away"
+            mode = str(state.automation.current_mode or "").strip().casefold()
+            if mode != expected_mode or mode in {"away", "idle", "sleeping"}:
+                return "activity_changed"
+            if state.automation.is_dnd_active() or state.tts.is_speaking:
+                return "interruption_active"
+            ambient = state.ambient_sound.get_state()
+            if any(ambient.get(key) for key in (
+                "playing", "sonos_ambient_active", "sonos_ambient_pending",
+            )):
+                return "ambient_owned"
+        except Exception:
+            return "authority_unavailable"
+        return None
 
     async def _runtime_preflight(
         self, *, expected_queue_size: int | None = None,
@@ -582,6 +669,9 @@ class MusicAssistedPlaybackService:
                 row.volume_before = volume
                 row.volume_used = volume
                 row.completed_at = datetime.now(timezone.utc)
+                # The verified observation is immutable history. Ledger and
+                # canonical evidence become durable in this single transaction;
+                # SELECT/commit/refresh must not re-evaluate future ownership.
                 await session.commit()
                 await session.refresh(row)
             return row

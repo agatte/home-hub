@@ -1851,6 +1851,9 @@ class SonosService:
         *,
         expected_queue_size: int | None = None,
         before_play=None,
+        mutation_runner=None,
+        verification_guard=None,
+        verification_boundary_guard=None,
     ) -> bool:
         """Play one exact Apple Music share link through Sonos.
 
@@ -1859,7 +1862,13 @@ class SonosService:
         public Apple track ID must exactly match the share link identity; there
         is no title matching, provider credential, or URI fallback. The existing
         queue and play mode are preserved; #272 owns any later replace/ownership
-        semantics.
+        semantics. An assisted caller supplies mutation_runner to hold shared
+        Q/T authority through settled append and final Play. Stream verification
+        runs after that operation releases its lock. An opt-in synchronous
+        verification_boundary_guard freezes authority immediately on verifier
+        return, without waiting for the shared lock. Legacy verification_guard
+        remains available when no boundary callback is supplied. Callbacks inside setup must not reacquire
+        the shared authority lock.
         """
         provider_id = str(provider_id or "").strip()
         share_url = str(share_url or "").strip()
@@ -1877,80 +1886,94 @@ class SonosService:
 
         queue_number: int | None = None
         try:
-            queue_number = await self._safe_mutation_call(
-                self._add_apple_music_share_link_sync, share_url,
-            )
-            if not isinstance(queue_number, int) or queue_number < 1:
-                return False
-            if (
-                expected_queue_size is not None
-                and queue_number != int(expected_queue_size) + 1
-            ):
-                logger.warning(
-                    "Apple Music ShareLink queue changed during enqueue "
-                    "(expected new position=%s, actual=%s); refusing play",
-                    int(expected_queue_size) + 1, queue_number,
+            async def _setup():
+                queue_number = await self._safe_mutation_call(
+                    self._add_apple_music_share_link_sync, share_url,
                 )
-                return False
-            expected_snapshot = None
-            queue_uid = None
-            final_max_volume = None
-            if expected_queue_size is not None:
-                expected_snapshot = await self._safe_call(
-                    self._queue_item_snapshot_sync, queue_number - 1, 1.0,
-                )
-                if expected_snapshot is None:
+                if not isinstance(queue_number, int) or queue_number < 1:
+                    return None
+                if (
+                    expected_queue_size is not None
+                    and queue_number != int(expected_queue_size) + 1
+                ):
                     logger.warning(
-                        "Apple Music ShareLink appended item could not be fingerprinted; refusing play"
+                        "Apple Music ShareLink queue changed during enqueue "
+                        "(expected new position=%s, actual=%s); refusing play",
+                        int(expected_queue_size) + 1, queue_number,
                     )
-                    return False
-                queue_uid = await self._safe_call(lambda: str(self._device.uid))
-                if not queue_uid:
-                    return False
-            if before_play is not None:
-                guard_result = await before_play()
-                if isinstance(guard_result, dict):
-                    if guard_result.get("reason") is not None:
+                    return None
+                expected_snapshot = None
+                queue_uid = None
+                final_max_volume = None
+                if expected_queue_size is not None:
+                    expected_snapshot = await self._safe_call(
+                        self._queue_item_snapshot_sync, queue_number - 1, 1.0,
+                    )
+                    if expected_snapshot is None:
+                        logger.warning(
+                            "Apple Music ShareLink appended item could not be fingerprinted; refusing play"
+                        )
+                        return None
+                    queue_uid = await self._safe_call(lambda: str(self._device.uid))
+                    if not queue_uid:
+                        return None
+                if before_play is not None:
+                    guard_result = await before_play()
+                    if isinstance(guard_result, dict):
+                        if guard_result.get("reason") is not None:
+                            logger.warning(
+                                "Apple Music ShareLink pre-play authority changed; refusing play"
+                            )
+                            return None
+                        final_max_volume = int(guard_result.get("volume_used") or 0)
+                    elif not guard_result:
                         logger.warning(
                             "Apple Music ShareLink pre-play authority changed; refusing play"
                         )
-                        return False
-                    final_max_volume = int(guard_result.get("volume_used") or 0)
-                elif not guard_result:
-                    logger.warning(
-                        "Apple Music ShareLink pre-play authority changed; refusing play"
+                        return None
+                if expected_snapshot is not None:
+                    # No await after the policy/intent/epoch guard: the owning
+                    # event loop cannot announce newer intent before final Play.
+                    # This bounded final UPnP
+                    # transaction serializes in-process authority and rechecks
+                    # external Sonos queue/transport/volume/mute immediately before play.
+                    played = self._play_queue_item_if_unchanged_sync(
+                        queue_number - 1,
+                        int(expected_queue_size) + 1,
+                        expected_snapshot,
+                        queue_uid=str(queue_uid),
+                        max_volume=final_max_volume,
                     )
-                    return False
+                    if not played:
+                        logger.warning(
+                            "Apple Music ShareLink queue/transport changed at final play boundary; refusing play"
+                        )
+                        return None
+                else:
+                    await self._safe_mutation_call(self._device.play_from_queue, queue_number - 1)
+                return queue_number, expected_snapshot, queue_uid, final_max_volume
+
+            proof = await mutation_runner(_setup) if mutation_runner else await _setup()
+            if proof is None:
+                return False
+            queue_number, expected_snapshot, queue_uid, final_max_volume = proof
+            verified = True
             if expected_snapshot is not None:
-                # No await after the lifecycle guard: this bounded final UPnP
-                # transaction serializes in-process authority and rechecks
-                # external Sonos queue/transport/volume/mute immediately before play.
-                played = self._play_queue_item_if_unchanged_sync(
-                    queue_number - 1,
-                    int(expected_queue_size) + 1,
-                    expected_snapshot,
-                    queue_uid=str(queue_uid),
-                    max_volume=final_max_volume,
-                )
-                if not played:
-                    logger.warning(
-                        "Apple Music ShareLink queue/transport changed at final play boundary; refusing play"
-                    )
-                    return False
                 verified = await self._verify_queue_playback_started(
-                    queue_number - 1,
-                    int(expected_queue_size) + 1,
-                    expected_snapshot,
-                    queue_uid=str(queue_uid),
-                    max_volume=final_max_volume,
+                    queue_number - 1, int(expected_queue_size) + 1, expected_snapshot,
+                    queue_uid=str(queue_uid), max_volume=final_max_volume,
                 )
-                if not verified:
-                    logger.warning(
-                        "Apple Music ShareLink Play command did not produce a verified advancing stream"
-                    )
+            # Verification can fail because a newer manual Pause won. Always
+            # consult authority so callers report that takeover truthfully.
+            if verification_boundary_guard is not None:
+                # No suspension between real proof and historical authority capture.
+                # Also classify authority loss when the physical verifier fails.
+                if not verification_boundary_guard():
                     return False
-            else:
-                await self._safe_mutation_call(self._device.play_from_queue, queue_number - 1)
+            elif verification_guard is not None and not await verification_guard():
+                return False
+            if not verified:
+                return False
             logger.info(
                 "Playing verified Apple Music share-link item id=%s at queue=%s",
                 provider_id, queue_number,

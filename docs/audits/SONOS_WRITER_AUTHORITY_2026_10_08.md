@@ -432,3 +432,369 @@ modifications plus the preserved untracked departure test). HEAD remains
 All candidate changes remain uncommitted. No secret reads, network fetches,
 tool installs, device APIs/physical actions, host administration, commit/push/PR/
 merge/deployment, service/task restarts, or destructive cleanup were performed.
+
+
+## #337 bounded Sandbox candidate (uncommitted, 2026-10-08)
+
+Baseline: merged master `443f3ae0ee6d09b832605b248c93c81b0333b528`, branch
+`sonos-sharelink-authority-337`, initially clean. This section supersedes the
+ShareLink central-participation gap for this candidate only; it is not a deployed
+or physical-acceptance claim. #337 remains open, as do #276/#274/#273. Existing
+#272/#278 physical acceptance and the no-destructive-cleanup boundary remain.
+
+Assisted requests now capture the explicit manual Q/T revision and MusicMapper
+callback revision synchronously before their first await. After durable request
+claim, candidate/trust re-resolution and neutral device/volume preflight, they
+capture a shared lease-free Q/T epoch claim. Claiming advances only those epochs,
+fencing older opportunistic continuations, and refuses existing Q/T owners,
+including TTS overlays, Ambient, Game Day and MusicMapper. This is bounded
+process-local transaction authority, not a durable playback lease, a manual
+invalidation, or V/I authority. No claim is rehydrated on restart; the durable
+assisted ledger still terminalizes interrupted requests without replay.
+
+`MusicAssistedPlaybackService -> MusicMapper -> SonosService` remains the sole
+handoff. The assisted mutation runner uses `A.run_if_opportunistic` for one
+linearized setup operation: fresh admission preflight, settled ShareLink append,
+accepted-item fingerprint, post-enqueue device/mode/manual fence, and bounded
+synchronous source/track selection and final Play proof. The shared lock remains
+held until the append worker actually finishes, including timeout/cancellation.
+Post-enqueue callbacks do not reacquire A. Manual Q/T intent can still enter
+synchronously while that lock is held, so the pending assisted Play is vetoed
+before the later manual device operation obtains the lock. Explicit manual TTS
+interruption acquisition also records Q/T intent before waiting for A; autonomous
+TTS acquires normal interruption authority in lock order without manual privilege.
+
+After setup, the lock is released for advancing-stream verification. Subsequent
+manual intent, callback supersession, lease acquisition/release or Q/T invalidation
+prevents stale success even if device verification reports an advancing stream.
+Current physical Away, semantic inactive/Away, Sleeping, DND, Travel/Return,
+TTS and Ambient policy is rechecked. Canonical played completion/learning uses a
+separate short shared-authority operation and checks the original token/intent
+again. There is no long verification lock, durable assisted lease, cleanup,
+volume write, wake/resume, or software-derived physical occupancy. Autonomous
+MusicMapper retains its existing neutral-start and guarded-favorite authority.
+
+Side-effect recovery remains no-op: an accepted append, including append followed
+by exception, is retained. Neither refusal, timeout, cancellation, unverifiable
+Play nor takeover permits positional deletion, Clear, Stop or guessed restore.
+A command already physically admitted may settle before a newer manual write;
+that later participating write wins. External Sonos apps do not enter A or its
+revision counters: neutral/final/stream proof remains best-effort read-then-write,
+not atomic device CAS. Verification failure can leave already accepted Play
+running; the request reports failure without destructive rollback. Current policy
+checks do not introduce a general historical DND/event journal. TTS retains its
+existing cloud-source restore refusal and exact eligible snapshot restore rules.
+
+Deterministic device-free evidence uses actual A, MusicMapper dispatch, settled
+Sonos mutation workers and synchronous fake SoCo, with in-memory SQLite only.
+Added cases cover replacement/Play/Pause during enqueue, post-enqueue and stream
+verification; worker timeout/cancellation settlement; verification cancellation;
+queued autonomous/manual TTS admission and surviving interruption operations;
+physical/semantic Away, Sleeping, DND, TTS, Ambient and Game Day transitions;
+Away-to-Home callback supersession; accepted append plus exception; shared-owner
+admission priority; older autonomous token fencing with V preservation; missing
+authority; and idempotent retries with no replay or fabricated learning. Existing
+ShareLink suites retain exact-link, play-mode, mute/volume, external setup race and
+advancing-stream proof coverage. Existing TTS suites validate playback/restore.
+
+Validation uses the existing main `.venv` interpreter. DotEnvSettingsSource file
+reads are disabled before pytest import; cacheprovider is disabled. No app lifespan,
+network/device calls, tool installation, secret reads or environment changes:
+
+- Broad related run: **487 passed, 0 skipped**, 74.01 seconds. Includes assisted,
+  ShareLink, authority/ingress, Away, TTS, MusicMapper, Sonos writer concurrency,
+  mutation serialization, playback proof, favorite shuffle, play-mode reset,
+  skip detection, URI allowlist, Ambient and ModeVolume policy/service suites.
+- Two final added cases: **2 passed, 78 deselected**, 2.49 seconds. Thus all
+  **489 selected test cases** passed across these runs. One existing
+  Starlette/httpx deprecation warning remains in the broad run.
+- Ruff on all five changed Python files, UTF-8/BOM-aware in-memory compilation,
+  and `git diff --check`: passed. The full repository suite was not run.
+
+Exact candidate file set (six tracked modifications):
+`backend/services/audio_ownership.py`,
+`backend/services/music_assisted_playback.py`,
+`backend/services/music_mapper.py`, `backend/services/sonos_service.py`,
+`tests/test_music_assisted_playback.py`, and this audit. Source review checked
+manual precedence, lock/callback acquisition, verification separation, authority
+retirement/restart and no-cleanup paths. No commit, push, PR, merge, deployment,
+service/task restart, real device action, host administration, issue mutation or
+cleanup was performed. No external independent review or live-health claim.
+
+## #337 corrective follow-up (uncommitted, 2026-10-08 Sandbox)
+
+Fresh source reconfirmed all three reviewer findings. Prior writer
+`b532080b6728466bb30ecfffdd4e88ac` was verified `completed`, exit 0,
+`worker_alive=false`, including its saved attempt result. The registry's only
+active writer for this workspace is this corrective task
+`b684c5cfd43b41d6b2ec9b252ba4f979`; its thread matches `CODEX_THREAD_ID` and
+its worker PID is an ancestor of this shell. No duplicate worker was launched.
+HEAD remains base `443f3ae0ee6d09b832605b248c93c81b0333b528`; the existing six-file
+uncommitted candidate was preserved. This section supersedes the earlier
+candidate's claims about autonomous queued TTS and completion-await fencing.
+
+- P1 interruption ingress: `acquire_interruption` advances process-local
+  monotonic epochs for exactly its requested dimensions synchronously before
+  awaiting A. Autonomous TTS does not advance manual intent. No pending count,
+  reservation or durable lease is created by the announcement; refused/cancelled
+  acquisition invalidates old tokens but does not block future tokens. The
+  assisted `still_current` checks the original Q/T epochs after post-enqueue
+  preflight, immediately before the synchronous final setup/Play transaction.
+  There is no event-loop yield between this check and Play. Existing established
+  overlays, reserved-owner refusal/manual preemption and lifecycle semantics
+  remain intact. Epoch ingress does not itself invalidate durable owners.
+- P1 completion linearization: advancing-stream verification is the physical
+  history boundary. If authority changes during completion SELECT, a played
+  ledger row is retained with `played_learning_suppressed_authority_changed`
+  and no candidate learning event is staged. If intent changes during commit or
+  refresh, a narrow compensating transaction deletes only the newly inserted
+  canonical event by its retained ORM primary-key identity and updates this
+  exact assisted request's reason. Checks run directly after commit and again
+  after refresh. Unrelated events, including same-title/same-mode evidence,
+  survive. Uninterfered success still commits ledger and learning atomically;
+  verification failure never enters played completion. Duplicate retries return
+  the terminal result without replay or new learning.
+- P2 reporting: request-local admission/verification rejection takes precedence
+  over queue-size inference and reports `playback_authority_changed`. Manual
+  Pause can finish while stream verification is blocked; a verifier returning
+  success cannot fabricate preference learning or change this reason to
+  `playback_start_unverified`. Accepted append and idempotent retry are preserved.
+
+`claim=True` remains lease-free Q/T epoch supersession: it fences older autonomous
+tokens while preserving V authority, durable TTS/manual priority and restart
+behavior. Verification runs outside A. Existing worker cancellation/timeout tests
+prove A remains held until the append actually settles and later manual work can
+progress, without deadlock or positional queue cleanup. Physical and semantic
+Away, Sleeping/DND, lifecycle callbacks, Ambient/Game Day, startup volume/mute,
+external queue/source/transport proof and #336 regression suites remain selected.
+
+New deterministic tests use real `TTSService._speak_with_ownership` and central
+interruption acquisition with fake prepared speech while the real settled
+ShareLink append is blocked. They never set `is_speaking` manually, assert TTS
+is waiting before that flag changes, and cover snapshot refusal, reserved-owner
+acquisition refusal, cancellation, ordinary/Ambient/Game Day transitions, retained
+append, no assisted Play/learning, unchanged autonomous manual revision and no
+leaked claims. Completion SELECT/commit/refresh barriers assert one assisted row,
+no attributed learning, preservation of unrelated same-candidate evidence and
+stable repeat results. A successful-verifier/Pause test asserts the precise P2
+reason. Earlier queued-TTS tests now require zero assisted Play before verification
+for autonomous as well as explicit manual TTS.
+
+Accepted boundaries: this is event-loop-local HomeHub authority, not external
+Sonos CAS. A nonparticipating app may race final UPnP reads/Play. The learning
+compensation is bounded completion-time correction, not a crash-atomic second
+transaction: process death/cancellation or DB failure between first commit and
+compensation can leave the initial event, and an independent reader/cache could
+observe it transiently. Crash-proof attribution or downstream cache retraction
+would require a separately gated product/storage decision; no schema migration,
+generalized evidence deletion or stronger guarantee is claimed here. No speaker
+rollback, Clear/Stop, positional deletion, volume write or guessed restore was
+added. No physical acceptance, Linux/CI harness or independent follow-up review
+is claimed; those remain release gates where applicable.
+
+Final corrective validation uses the existing main `.venv`, with
+`DotEnvSettingsSource._read_env_files=lambda self:{}` installed before pytest
+import and cacheprovider disabled:
+
+- Focused assisted suite: **93 passed**, 11.07 seconds.
+- Final wide relevant suite: **502 passed, 0 skipped**, 53.26 seconds. The 19
+  modules cover assisted, Apple ShareLink, audio authority/ingress, Away audio,
+  TTS duck/resume, MusicMapper and ownership, Sonos writer concurrency, mutation
+  serialization, playback ownership, favorite shuffle, play-mode reset, skip
+  detection, URI allowlist, Ambient ownership/sound, ModeVolume policy/service.
+  One existing Starlette/httpx deprecation warning remains.
+- Ruff on all five candidate Python files, UTF-8/BOM-aware in-memory Python
+  compilation and `git diff --check`: **passed**. Full repository suite not run.
+
+Final tracked diff is exactly the existing six-file set:
+`backend/services/audio_ownership.py`,
+`backend/services/music_assisted_playback.py`,
+`backend/services/music_mapper.py`, `backend/services/sonos_service.py`,
+`tests/test_music_assisted_playback.py`, and this audit. The prior MusicMapper
+edit is preserved without additional corrective edits. No untracked project files
+were added. All changes remain uncommitted. No secrets/.env reads, network fetches,
+installs, host administration/Host Bridge mutation, service/task restarts, real
+speaker actions, commit/push/PR/merge/deploy or destructive cleanup occurred.
+
+### Bounded post-review corrective write: P2 resolved, P1 remains blocking
+
+This section supersedes the preceding completion-safety and readiness claims.
+Before editing, registry Status confirmed both former Write
+`b684c5cfd43b41d6b2ec9b252ba4f979` and independent Read
+`a5b73b2daf3241cabe972298787cdf41` completed, exit 0, worker_alive=false.
+The independent final review was read. HEAD remains
+`443f3ae0ee6d09b832605b248c93c81b0333b528`, with the same six-file candidate.
+
+P2 is corrected: SonosService now evaluates verification_guard after a false
+stream-verification result, before returning failure. New authority rejection
+therefore takes precedence over retained-append inference. Deterministic tests
+exercise the real `_verify_queue_playback_started` with a blocked fake physical
+sample, manual Pause while verification is outside the authority lock, and a
+PAUSED_PLAYBACK sample returning false. The accepted queue append remains,
+learning is absent, and duplicate retry does not enqueue again. A companion
+case without HomeHub manual ingress retains playback_start_unverified; the
+existing successful-verifier takeover case remains covered.
+
+P1 is **UNRESOLVED / BLOCKING**. Two strict expected-failure acceptance tests
+persist completion transaction 1, then inject (a) manual ingress during commit
+and a failed compensating commit, or (b) manual ingress plus failed refresh.
+Both check same-service and recreated-service duplicate retries, historical
+played status, one request row and exactly one enqueue before checking absence
+of false positive evidence. Running with --runxfail fails exactly the final
+no-positive-event assertion in both cases. These are known failures, not passes.
+The previous completion implementation is preserved; no durable safety fix is
+claimed. The candidate is **not ready for acceptance**.
+
+Storage gate: inspection of models.py, database.py migrations, async session
+handling, idempotency and MusicTaste's event aggregation shows the ledger has
+no learning-event link/attribution state; MusicTaste accepts every manual play
+event without consulting that ledger. The existing session_id/ownership_lease_id
+columns describe #275 owned playback, not assisted-request attribution. Merely
+adding an exact request identifier or first committing a neutral pending event
+does not close the promotion-commit race: synchronous ingress can still arrive
+during the awaited commit that makes the event positive. Retrying compensation
+also cannot prevent readers observing the original durable positive event when
+the database continues failing or the process dies.
+
+The exact next gate is approval of an attribution/linearization contract that
+keeps unresolved evidence ineligible for every learning consumer while preserving
+uninterrupted successful positive learning and historical played status. This
+may use explicitly specified new semantics in existing columns plus coordinated
+reader changes, or a request-scoped storage relation/migration; a pending marker
+alone is insufficient. A durable authority-ordering or serialized persistence
+boundary must define how promotion is made safe. This exceeds this six-file
+write's existing product/storage contract and is intentionally not invented here.
+No schema migration was added or executed, and no unrelated event deletion or
+Sonos rollback was introduced. External Sonos remains outside HomeHub CAS.
+
+Post-review validation: final focused assisted suite **95 passed, 2 xfailed**,
+14.68 seconds. The same 19 affected modules listed in the preceding
+corrective validation completed with **504 passed, 2 xfailed**, 60.73 seconds,
+and the existing Starlette/httpx deprecation warning. Explicit --runxfail on
+the two P1 acceptance cases yielded **2 failed**, both at durable positive
+evidence after retry, confirming the unresolved blocker. Ruff on all five
+candidate Python files, UTF-8/BOM-aware in-memory compilation and git diff
+--check passed. DotEnvSettingsSource._read_env_files was disabled before pytest
+import; bytecode writes and pytest cacheprovider were disabled. No full-suite,
+Linux CI, independent new review or physical acceptance is claimed.
+Only sonos_service.py, test_music_assisted_playback.py and this audit received
+additional post-review edits. Exact final status is the original six modified
+tracked files, with no untracked files. No commit, network fetch, install,
+device/service action, secrets/.env read or other prohibited action occurred.
+
+
+### Approved #337 verification boundary corrective write (2026-10-08)
+
+This section supersedes the preceding P1 storage blocker, strict-xfail acceptance
+claims, and completion-time learning compensation semantics. Anthony explicitly
+approved confirmed advancing-stream playback under current authority as the
+positive preference-learning boundary. A takeover before or during verification
+suppresses played success and learning; manual Play/Pause/queue replacement after
+verification controls future transport without erasing that historical choice.
+
+`play_exact` checks authority synchronously on successful verifier return, before
+any completion DB await. The positive observation is frozen there. Completion
+SELECT, commit and refresh no longer consult future authority. The played ledger
+and canonical manual `play` SonosPlaybackEvent persist in one SQLAlchemy commit;
+request-specific compensating deletion and second commit are removed. Completion
+does not hold the Q/T authority lock across DB awaits, so later manual transport
+can finish immediately. No persistent Q/T lease, resume, queue deletion, or
+provider/app rollback is introduced. MusicTaste event categories remain unchanged,
+including legacy manual play evidence without session_id.
+
+The two strict xfails are replaced by passing acceptance cases covering a single
+commit despite late manual ingress and durable positive history despite failed
+refresh. A first completion commit failure leaves the pre-existing pending claim
+and no partial positive event; duplicate recovery becomes indeterminate without
+device replay. Same-service and recreated-service retries are checked. Completion
+SELECT/commit/refresh barriers cover actual fake manual Pause, Play and queue
+replacement, unchanged unrelated evidence, exactly one append/event, no forced
+resume or positional deletion, and no leaked lease. Existing before/during-proof,
+false-verifier manual Pause, cancellation/settled worker and real pending TTS
+pre-lock fence coverage is retained.
+
+Residual boundary: DB/process crash after real verification but before commit may
+leave pending/no positive evidence. Recovery must not invent an event or replay
+the device operation. Sonos and the DB do not share a durable atomic transaction;
+external apps remain outside HomeHub CAS. No schema migration is needed or added.
+Linux CI, physical acceptance and the subsequent independent review remain
+separate gates; no production health or physical acceptance is claimed.
+
+Approved-boundary validation: final focused assisted module **104 passed**
+(14.30s). The 19 affected audio modules **513 passed, no xfails** (56.67s),
+with the existing Starlette/httpx deprecation warning. The final focused rerun
+strengthened first-commit failure by flushing ledger and evidence before injected
+failure, then checking durable pending/no-event state before retry. Ruff on all
+five modified Python files and BOM-aware in-memory compilation passed after that
+change; `git diff --check` passed. `.env` loading was disabled before pytest
+import; Python bytecode and pytest cacheprovider were disabled. Only assisted
+service, assisted tests and this audit received additional edits in this write;
+the other three preserved Python candidates remain unchanged. Final Git state
+is the same six modified tracked files, no untracked files, original branch/HEAD.
+Local self-review found no remaining blocker under the approved contract.
+All work remains uncommitted; no network, installs, secrets reads, production DB,
+physical devices, Host Bridge, restart, merge/rebase, publish or cleanup actions.
+
+
+### Review-blocker follow-up: synchronous proof freeze (2026-10-08)
+
+This section supersedes the preceding self-review claim: independent Read
+`a5cbea23614c49818f2298954a9e6b81` identified an awaited shared-lock guard
+between successful stream verification and authority acceptance. Registry Status
+confirmed that Read and Write `1b802783dad84d13b3c50722c8da4bf3` completed,
+exit 0, worker_alive=false. Git confirmed original HEAD and six modified files.
+
+P1: SonosService now accepts an opt-in synchronous verification_boundary_guard,
+forwarded by MusicMapper. Immediately after the production verifier returns,
+with zero intervening await/suspension, assisted playback captures Q/T epochs,
+manual ingress revision, mode request revision and synchronous lifecycle/mode/
+DND/TTS/Ambient policy predicates. The result is frozen there; successful
+completion never rereads future authority. A false verifier still invokes the
+synchronous callback to distinguish manual takeover from unverified playback,
+but cannot report played. Existing async verification_guard remains supported
+when the boundary callback is absent. The opt-in callback replaces that awaited
+gate; it never reacquires the shared lock. Append/final Play continue under the
+shared authority lock with settled enqueue and existing physical fingerprints,
+volume/mute checks and trust policy. No storage schema or authority privilege
+was expanded; played ledger and positive event remain one atomic DB commit.
+
+P2: completion SELECT/commit/refresh barriers and first-commit/refresh-failure
+cases now use the production _verify_queue_playback_started and production
+_playback_start_sample_sync on the existing fake SoCo device, rather than an
+unconditional successful verifier. Exact queue object/generation/count, selected
+queue source/track, NORMAL, guarded volume, mute, PLAYING and position advancement
+are read by production code. A new deterministic sample barrier holds a real
+volume-only V/I authority transaction while advancing proof completes. Pause
+ingress after synchronous acceptance but before volume-lock release preserves
+historical played and exactly one learning event; Pause remains effective after
+the lock releases. The mirror ingress during proof rejects success and learning
+even if physical advancing samples remain valid while Pause waits for the lock.
+Both retain the accepted append, issue only one Play, avoid Clear/deletion and
+check idempotent retry. Legacy async guard success and false-source verification
+are checked separately. Existing false-verifier Pause classification and
+physical nonadvancement/source/queue/volume rejection tests remain passing.
+
+The Sonos/DB crash gap remains: proof followed by a failed first commit leaves
+pending/no event; failed refresh after commit leaves durable played/evidence.
+Recovery never fabricates learning or replays playback. External controllers
+remain outside HomeHub conditional authority. Independent final read-only
+review and physical acceptance remain separate gates.
+
+
+Follow-up validation: focused assisted + exact ShareLink **130 passed** (23.60s);
+the same 19 related audio modules **517 passed** (79.63s), no xfails, with the
+existing Starlette/httpx deprecation warning. Ruff on the five candidate Python
+files, UTF-8/BOM-aware in-memory compilation and final git diff --check passed.
+Both pytest runs disabled DotEnvSettingsSource._read_env_files before importing
+pytest, disabled bytecode writes and disabled cacheprovider. Full repository
+suite, Linux CI, production health and physical acceptance are not claimed.
+
+Additional follow-up edits are limited to assisted service, MusicMapper,
+SonosService, assisted tests and this audit. The existing audio_ownership.py
+candidate is preserved. Final state is exactly the original six modified tracked
+files, no untracked additions, branch/HEAD unchanged. All changes remain
+uncommitted. No secrets/.env reads, network fetches, installs, production/device
+writes, host administration/Host Bridge mutation, restarts, reset/rebase,
+commit/push/PR/merge/deploy or destructive cleanup occurred. No remaining blocker
+was found in local validation under the approved contract; independent final
+read-only review follows.
