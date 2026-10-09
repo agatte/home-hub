@@ -106,6 +106,22 @@ time. Whole-database rollback remains possible in the current implementation.
 
 ## OS-local recovery and restore protection - DESIGN ONLY
 
+**Current phase-1 architecture proposal:** see
+[`SECURITY_RECOVERY_DECISION_287.md`](SECURITY_RECOVERY_DECISION_287.md).
+It narrows the first deployment boundary to an isolated system broker with
+protected registry and independent software journal, **not** immediate TPM
+installation. Root/whole-system rollback remains outside this first boundary.
+Every intentional identity-registry restore requires full credential
+invalidation and fresh operator enrollment; generic one-use pairing is deferred
+until recipient authentication exists. The more demanding hardware-backed
+option below remains a future alternative, **not** the selected first step.
+**The following older pairing/Windows-broker details, restore protocol and
+acceptance matrix apply only to the deferred higher-assurance alternative.
+The phase-1 restore and recipient-authentication rules in the linked decision
+take precedence.** In particular, no identity backup (even one labeled
+current) may resume using previously issued credentials after an intentional
+phase-1 identity-registry restore.
+
 Nothing in this section is implemented: no handler, privileged service/socket,
 pairing UI, anchor/key provisioning, migration, or live enforcement is supplied.
 The current store does **not** prevent restored revocations from resurrecting.
