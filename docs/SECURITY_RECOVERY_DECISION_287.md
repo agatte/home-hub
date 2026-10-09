@@ -204,3 +204,89 @@ resistance. Leave #287 open and preserve the separate authorization gates.
 
 Reference: `docs/SECURITY_IDENTITY_FOUNDATION.md`, #284, #287, #293,
 `deployment/home-hub.service`, `backend/database.py`, `scripts/backup-db.sh`.
+
+## Offline synthetic protocol evidence (#287)
+
+`tests/support/synthetic_broker.py` and
+`tests/test_identity_broker_protocol.py` model the selected two-store sequence
+using disposable SQLite and an independent JSON journal under pytest temporary
+directories. They have no production import path. All credentials, profiles,
+peer UIDs and approvals are fake fixture inputs. A supplied shared lock represents
+the single broker authority; it serializes verification, administration and
+diagnostics across fresh broker objects. This is not a cross-process lock or OS
+access control. Same-UID fixture peers are deliberately indistinguishable.
+
+The canonical digest includes the complete stored JSON security state, including
+instance, random generation, logical revision, protocol/code floor, every
+credential binding/verifier/expiry/revocation/delivery flag, and empty session and
+ticket inventories. No session issuance or pairing protocol is implemented.
+Rotation deliberately uses zero overlap. Tokens use clearly fake material and
+simple hash verifiers, not production credential cryptography. The journal's
+digest is an integrity comparison whose authenticity depends on trusted journal
+ownership; it is not a signature, MAC or hardware monotonic authority.
+
+Mutations validate COMMITTED state, durably persist a separate protected
+`deny.guard` target intent, persist PENDING, commit SQLite with FULL synchronous
+durability, replace the journal with COMMITTED, recheck the exact guard target,
+then remove the guard with a modeled deletion durability barrier before acknowledgment.
+Guard presence denies even when visible COMMITTED bytes and SQLite match.
+Failures never silently clear the guard; explicit approved recovery may re-finalize
+a matching PENDING or COMMITTED target, recommit SQLite with FULL synchronous
+durability, and clear it after durability rechecks. Tests inject exceptions at
+these boundaries and reopen fresh broker
+objects against disk; they do not simulate actual power loss or kill a process.
+Journal writes flush/fsync the file and use atomic replacement. A separate
+injected directory durability barrier models the required directory fsync;
+Windows has no real directory fsync in this harness. The injected barrier is an
+exception/visibility model, not a simulation of lost filesystem writes. On a
+guard-deletion barrier exception the model restores a file-fsynced guard before
+propagating failure; interruption or further filesystem failure during that repair,
+and power loss between unlink and its durability barrier, cannot be proven safe
+by ordinary fresh Python objects. Windows/Latitude filesystem guarantees,
+replacement semantics, SQLite recovery and actual power-loss behavior require
+platform-specific validation before any live readiness claim.
+
+PENDING or guard presence always denies ordinary authorization. Separately approved fixture admin
+recovery finalizes only an exact target state. Old/mismatched/corrupt evidence
+requires explicit fresh empty generation recovery, never rewinding a trusted
+journal to fit a backup. When the journal is lost or unreadable, the model cannot
+reconstruct its logical revision; separately approved recovery establishes a new
+random empty generation rather than claiming monotonic history. A corrupt SQLite
+file cannot be repaired by this bounded model: recovery can leave PENDING and
+remains quarantined, requiring a separately designed evidence-preserving repair
+procedure. No automatic file removal or schema repair is provided.
+
+Enrollment persists uncertain delivery before returning fake material. A fixture
+admin may confirm successful delivery; without durable confirmation, verification
+denies across restarts and replacement is blocked until the minted credential is revoked. Lost acknowledgments never
+replay secret material. A confirmation interrupted before final durability denies;
+a lost status acknowledgment after final durability does not undo confirmation.
+The synthetic command is named `restore_intent_invalidate`, accepts no backup
+argument, and establishes an empty new generation. It does not validate or install
+a backup; read-only backup validation remains deferred to a separately reviewed
+production restore design. No backup verifiers are ever imported.
+The precise accepted-command boundary is successful guard file fsync, replacement
+and directory barrier under the shared stop-serving/drain gate. Before that
+boundary the command is NOT ACCEPTED, no backup may be installed, and unchanged
+old state may continue serving. Intent initiation alone is not durable acceptance.
+A visible guard after an uncertain first barrier conservatively denies even if
+acceptance was not acknowledged. After durable intent acceptance all prior
+credentials deny across fresh instances until empty-generation finalization.
+A crash before the first guard replacement leaves unchanged files and cannot be
+detected without an external trigger. This limitation also applies to exact-current
+backups; no unconditional denial is claimed for a not-yet-accepted command. Ordinary
+application-DB restoration does not alter either broker store. An unannounced
+exact-current copy is indistinguishable from a clean restart: the intentional
+restore rule still depends on an independently owned restore entrypoint.
+
+The fixture-supplied startup floor models independent deployment enforcement; it
+does not stop an actual old executable from ignoring the protocol. Tests explicitly
+demonstrate that registry-only rollback denies with the intact journal, while
+restoring both stores to a matching old snapshot resurrects credentials. Root,
+whole-state rollback, clock integrity, authenticated recipient delivery, durable
+operator approval, process isolation, route/actuator enforcement and protection
+against arbitrary trusted Python code remain outside this prototype.
+
+**Next gate remains C (separately authorized read-only host-readiness inspection),
+then D (explicit installation/recovery authorization).** This harness is offline
+evidence only; #287 remains open and no live broker or enforcement is established.
