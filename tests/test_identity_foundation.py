@@ -1,5 +1,7 @@
 """Synthetic offline registry tests; never import runtime settings or devices."""
 import shutil
+import hashlib
+import threading
 import sqlite3
 
 import pytest
@@ -247,3 +249,219 @@ def test_reviewed_profile_grant_snapshot():
     assert set(PROFILES) == set(expected)
     for name, grants in expected.items():
         assert PROFILES[name].grants == frozenset(grants), name
+
+
+@pytest.mark.parametrize("mutation", [
+    "principal_revoke", "credential_revoke", "rotate_zero", "rotate_overlap",
+    "shorten_expiry", "profile", "source", "delete", "verifier", "salt",
+    "principal_binding", "policy_grants", "clock_expiry", "unchanged",
+])
+def test_hash_phase_releases_locks_and_rechecks(registry, monkeypatch, mutation):
+    store, cap, now, path = registry
+    enrolled = store.enroll("owner_browser", capability=cap, lifetime=100)
+    replacement = store.enroll("owner_browser", capability=cap)
+    hashing = threading.Event()
+    resume = threading.Event()
+    finished = threading.Event()
+    results, errors = [], []
+    original = hashlib.pbkdf2_hmac
+
+    def paused_hash(*args, **kwargs):
+        if threading.current_thread() is worker:
+            hashing.set()
+            assert resume.wait(10), "test did not release hash barrier"
+        return original(*args, **kwargs)
+
+    def authorize():
+        connection = None
+        try:
+            # SQLite connection is created, used and closed on its own thread.
+            connection = IdentityStore(path, local_capability=object(), clock=lambda: now[0])
+            results.append(connection.authorize(enrolled.token, STATUS, lane="browser"))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            try:
+                if connection is not None:
+                    connection.close()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+    worker = threading.Thread(target=authorize, daemon=True)
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", paused_hash)
+    worker.start()
+    try:
+        assert hashing.wait(10), "authorization did not reach hash barrier"
+        # A distinct connection must COMMIT while hashing remains paused. Zero
+        # busy timeout makes a retained read/write lock an immediate test failure.
+        store._db.execute("PRAGMA busy_timeout=0")
+        assert not store._db.in_transaction
+        if mutation == "principal_revoke":
+            store.revoke(enrolled.principal_id, capability=cap)
+        elif mutation == "credential_revoke":
+            store.revoke_credential(enrolled.credential_id, capability=cap)
+        elif mutation.startswith("rotate_"):
+            store.rotate(enrolled.principal_id, capability=cap,
+                         overlap=0 if mutation == "rotate_zero" else 10)
+        elif mutation == "shorten_expiry":
+            store._db.execute("UPDATE identity_credentials SET expires=1050 WHERE id=?", (enrolled.credential_id,))
+        elif mutation == "profile":
+            store._db.execute("UPDATE identity_principals SET profile='kiosk',source='kiosk' WHERE id=?", (enrolled.principal_id,))
+        elif mutation == "source":
+            store._db.execute("UPDATE identity_principals SET source='latitude' WHERE id=?", (enrolled.principal_id,))
+        elif mutation == "delete":
+            store._db.execute("DELETE FROM identity_credentials WHERE id=?", (enrolled.credential_id,))
+        elif mutation in ("verifier", "salt"):
+            store._db.execute(f"UPDATE identity_credentials SET {mutation}=? WHERE id=?", (b"x" * 32, enrolled.credential_id))
+        elif mutation == "principal_binding":
+            store._db.execute("UPDATE identity_credentials SET principal_id=? WHERE id=?", (replacement.principal_id, enrolled.credential_id))
+        elif mutation == "policy_grants":
+            from backend import identity_core
+            from backend.identity_policy import Profile
+            monkeypatch.setattr(identity_core, "PROFILES", {"owner_browser": Profile("owner", frozenset())})
+        elif mutation == "clock_expiry":
+            now[0] = 1100
+        else:
+            # Even an unrelated committed write must be possible during hashing.
+            store.revoke(replacement.principal_id, capability=cap)
+    finally:
+        resume.set()
+        worker.join(10)
+    assert not worker.is_alive(), "authorization worker must exit before fixture teardown"
+    assert finished.is_set(), "authorization failed to finish"
+    assert not errors, errors
+    assert len(results) == 1
+    if mutation == "unchanged":
+        assert results[0].principal_id == enrolled.principal_id
+        # Returned identity is not reused by subsequent authorize calls.
+        store.revoke(enrolled.principal_id, capability=cap)
+    else:
+        assert results == [None]
+    fresh = store.authorize(enrolled.token, STATUS, lane="browser")
+    if mutation in ("rotate_overlap", "shorten_expiry", "principal_binding"):
+        assert fresh is not None  # Changed snapshot denied only the in-flight attempt.
+        assert fresh.principal_id == (replacement.principal_id if mutation == "principal_binding" else enrolled.principal_id)
+    else:
+        assert fresh is None
+
+
+def test_cheap_denials_do_not_hash(registry, monkeypatch):
+    store, cap, now, _ = registry
+    enrolled = store.enroll("owner_browser", capability=cap, lifetime=10)
+    def unexpected_hash(*args, **kwargs):
+        pytest.fail("ineligible credential reached PBKDF2")
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", unexpected_hash)
+    assert store.authorize("0" * 32 + "." + "a" * 43, STATUS, lane="browser") is None
+    assert store.authorize(enrolled.token, "unknown", lane="browser") is None
+    assert store.authorize(enrolled.token, STATUS, lane="browser", claimed_source="latitude") is None
+    now[0] += 10
+    assert store.authorize(enrolled.token, STATUS, lane="browser") is None
+
+
+def test_authorize_refuses_caller_transaction(registry, monkeypatch):
+    store, cap, _, _ = registry
+    enrolled = store.enroll("owner_browser", capability=cap)
+    def unexpected_hash(*args, **kwargs):
+        pytest.fail("hash executed inside caller transaction")
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", unexpected_hash)
+    with store._transaction():
+        with pytest.raises(RuntimeError, match="idle connection"):
+            store.authorize(enrolled.token, STATUS, lane="browser")
+
+
+def test_revocation_commits_before_final_authorization_check(registry, monkeypatch):
+    """A competing writer wins while the verifier reaches its final lock."""
+    from contextlib import contextmanager
+
+    store, cap, now, path = registry
+    enrolled = store.enroll("owner_browser", capability=cap)
+    hashing = threading.Event()
+    release_hash = threading.Event()
+    entering_final = threading.Event()
+    completed = threading.Event()
+    outcomes = []
+    errors = []
+    original_hash = hashlib.pbkdf2_hmac
+
+    def paused_hash(*args, **kwargs):
+        if threading.current_thread() is worker:
+            hashing.set()
+            if not release_hash.wait(10):
+                raise AssertionError("hash barrier not released")
+        return original_hash(*args, **kwargs)
+
+    def attempt():
+        connection = None
+        try:
+            connection = IdentityStore(path, local_capability=object(), clock=lambda: now[0])
+            original_transaction = connection._transaction
+
+            @contextmanager
+            def marked_final_transaction():
+                entering_final.set()
+                with original_transaction():
+                    yield
+
+            connection._transaction = marked_final_transaction
+            outcomes.append(connection.authorize(enrolled.token, STATUS, lane="browser"))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            try:
+                if connection is not None:
+                    connection.close()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                completed.set()
+
+    worker = threading.Thread(target=attempt, daemon=True)
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", paused_hash)
+    worker.start()
+    try:
+        assert hashing.wait(10), "verification did not enter the hash phase"
+        with store._transaction():
+            release_hash.set()
+            assert entering_final.wait(5), "verification did not reach final phase"
+            assert not completed.is_set(), "final authorization skipped the writer lock"
+            store._db.execute(
+                "UPDATE identity_principals SET revoked=1 WHERE id=?",
+                (enrolled.principal_id,),
+            )
+        # The verifier may only resume against the newly committed revocation.
+    finally:
+        release_hash.set()
+        worker.join(10)
+    assert not worker.is_alive(), "verification worker remained after test"
+    assert completed.is_set()
+    assert not errors, errors
+    assert outcomes == [None]
+    assert store.authorize(enrolled.token, STATUS, lane="browser") is None
+
+
+@pytest.mark.parametrize("failure_point", ["snapshot", "eligibility"])
+def test_final_phase_failure_rolls_back_and_connection_remains_usable(
+    registry, monkeypatch, failure_point
+):
+    store, cap, _, _ = registry
+    enrolled = store.enroll("owner_browser", capability=cap)
+    method = "_credential_snapshot" if failure_point == "snapshot" else "_eligible"
+    original = getattr(store, method)
+    calls = [0]
+
+    def fail_on_second_call(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] == 2:
+            raise RuntimeError("synthetic final phase failure")
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as edits:
+        edits.setattr(store, method, fail_on_second_call)
+        with pytest.raises(RuntimeError, match="synthetic final phase failure"):
+            store.authorize(enrolled.token, STATUS, lane="browser")
+    assert calls[0] == 2
+    assert not store._db.in_transaction, "failed final check leaked a write reservation"
+    # The same connection must still authorize fresh decisions after rollback.
+    assert store.authorize(enrolled.token, STATUS, lane="browser")

@@ -13,6 +13,7 @@ import re
 import secrets
 import sqlite3
 import time
+from types import MappingProxyType
 
 from backend.identity_policy import PROFILES
 
@@ -141,20 +142,41 @@ class IdentityStore:
         """
         if not isinstance(token, str) or not _TOKEN.fullmatch(token):
             return None
-        # Serialize with revocation/rotation, including across store connections.
-        # A returned decision is point-in-time, never a reusable session grant.
-        with self._transaction():
-            return self._authorize(token, operation, lane, claimed_source)
-
-    def _authorize(self, token, operation, lane, claimed_source):
+        # Refuse caller-owned transactions: hashing must never retain their locks.
+        if self._db.in_transaction:
+            raise RuntimeError("Authorization requires an idle connection")
         credential_id, secret = token.split(".")
-        row = self._db.execute("""SELECT p.id AS principal_id, p.profile, p.source,
-            p.revoked AS principal_revoked, c.* FROM identity_credentials c
-            JOIN identity_principals p ON p.id=c.principal_id WHERE c.id=?""", (credential_id,)).fetchone()
-        if row is None:
+        snapshot = self._credential_snapshot(credential_id)
+        profile = self._eligible(snapshot, operation, lane, claimed_source)
+        if profile is None:
             return None
-        candidate = hashlib.pbkdf2_hmac("sha256", secret.encode("ascii"), row["salt"], ITERATIONS)
-        if not hmac.compare_digest(candidate, row["verifier"]):
+        candidate = hashlib.pbkdf2_hmac("sha256", secret.encode("ascii"), snapshot["salt"], ITERATIONS)
+        if not hmac.compare_digest(candidate, snapshot["verifier"]):
+            return None
+        # Only this short phase reserves the writer. Busy/locked errors propagate
+        # fail-closed; callers must never turn an exception into a grant.
+        with self._transaction():
+            current = self._credential_snapshot(credential_id)
+            if current != snapshot:
+                return None
+            if self._eligible(current, operation, lane, claimed_source) != profile:
+                return None
+            return Identity(current["principal_id"], current["profile"], current["source"], lane)
+
+    def _credential_snapshot(self, credential_id):
+        cursor = self._db.execute("""SELECT c.id, c.principal_id, c.salt, c.verifier,
+            c.expires, c.revoked, p.profile, p.source,
+            p.revoked AS principal_revoked FROM identity_credentials c
+            JOIN identity_principals p ON p.id=c.principal_id WHERE c.id=?""", (credential_id,))
+        try:
+            row = cursor.fetchone()
+            # Detached values only; finalize the statement before expensive work.
+            return MappingProxyType(dict(row)) if row is not None else None
+        finally:
+            cursor.close()
+
+    def _eligible(self, row, operation, lane, claimed_source):
+        if row is None:
             return None
         profile = PROFILES.get(row["profile"])
         if (profile is None or row["source"] != profile.source or row["principal_revoked"]
@@ -162,4 +184,4 @@ class IdentityStore:
                 or (operation, lane) not in profile.grants
                 or claimed_source is not None and claimed_source != row["source"]):
             return None
-        return Identity(row["principal_id"], row["profile"], row["source"], lane)
+        return profile
