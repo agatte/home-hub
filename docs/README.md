@@ -2,7 +2,9 @@
 
 Use this page as the entry point for repository documentation.
 
-**Last cross-issue architecture/execution reconciliation:** October 4, 2026. See [`EXECUTION_MAP.md`](EXECUTION_MAP.md) for the living execution view. Dated evidence baselines include [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) and [`audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md`](audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md). Earlier reconciliations remain historical evidence.
+**Looking for current work, decisions, or outstanding gates?** Start with the [Project Admin Hub](PROJECT_ADMIN_HUB.md), which routes to the authoritative specs, live GitHub issues/PRs, and operational evidence. It is a navigation guide, **not** another source of product or deployment truth. [Project Admin organization tracker: #339](https://github.com/agatte/home-hub/issues/339).
+
+**Last issue/gate routing reconciliation:** October 8, 2026 (documentation-only; live production status not verified). See [`EXECUTION_MAP.md`](EXECUTION_MAP.md) for the living execution view. Dated evidence baselines include [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) and [`audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md`](audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md). Earlier reconciliations remain historical evidence.
 
 ## Document ownership
 

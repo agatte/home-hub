@@ -1,11 +1,13 @@
 # HomeHub Execution Map
 
 > **Status:** Living execution/orchestration guidance; not product authority.
-> **Last reconciled:** 2026-10-07 through #324/#329 integration and the bounded Project Admin status reconciliation.
+> **Last reconciled:** 2026-10-08 (issue/gate routing update; deployment and physical state not reverified). See [PROJECT_ADMIN_HUB.md](PROJECT_ADMIN_HUB.md) and [#339](https://github.com/agatte/home-hub/issues/339) for navigation and the proposed Projects dashboard.
 > **Evidence baselines:** [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) and [`audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md`](audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md). Security remediation is tracked under #284 and canonical children #285-#296.
 > **Product authority:** [`PROJECT_SPEC.md`](PROJECT_SPEC.md).
 >
-> **2026-10-07 Project Admin checkpoint:** Remote `master` is `0f4b2c2326d082d434678de937088a3641b4d7f8`. #286 source-export hardening, #285 containment, #322 sunrise ownership (`c251c18560fcbe2eb9843f2bbd1e73437d88b68b`), #323 shared Hue final-write authority (`6b221ac9304340afc1e2eda445afac8db3ab2dc1`), #324 Away/off convergence (merged via PR #330 at `0f4b2c2326d082d434678de937088a3641b4d7f8`), and Project Admin Codex recovery PR #329 (`cd9eaf88e6595f7110a3329a17bcc1f477cd9acd`) are merged/closed. Current repository/issue evidence and this session record no supported production deployment for the accumulated runtime-affecting merged work; treat `master` through `0f4b2c2` as **merged but not deployed** until a separately authorized live release verifies otherwise. #329 is the accepted Sandbox development recovery path: detached-worker recovery, duplicate-Write refusal, and exact-thread resume across an in-guest Sandbox restart passed; a full Sandbox close/relaunch remains explicitly non-guaranteed for exact-thread recovery. No open PRs existed at reconciliation start. Next substantive bounded order is #246 -> #283 -> #276; #240 remains implementation-complete/evidence-gated. Do not reimplement #322-#324 or redesign Codex recovery absent new failure evidence.
+> **2026-10-08 issue/gate checkpoint:** #246 and #283 implementation issues are closed; #334 separately owns Blue Yeti post-deployment physical unplug/replug acceptance. #276's Sonos audit/concurrency PR #335 is merged; #336 Away pause implementation is closed and #337 assisted ShareLink authority remains open, with #276/#274 preserving broader acceptance. #240 is evidence-gated; #284's staged security program remains active. Project Admin navigation/board design is tracked in #339. These are issue/merge findings only: do **not** infer that the corresponding Windows/Latitude code has been deployed or physically verified. Consult live issues and the operating runtime before selecting work.
+>
+> **Historical 2026-10-07 release checkpoint (not a current queue or deploy claim):** #285/#286, #322–#324 and Project Admin recovery PR #329 had been merged through `0f4b2c2`; no supported production rollout was established at that checkpoint. The former #246 → #283 → #276 implementation order is superseded. Durable per-change proof remains in Git/PRs and the owning issues; current runtime evidence must still be checked.
 
 This file exists so a future ChatGPT/Codex session can answer **what should we do next, what is actually ready, and what model/depth is appropriate** without rediscovering the whole architecture.
 
@@ -41,22 +43,25 @@ Important current facts:
 - The 2026-10-04 lighting audit found a strong central transition/applicator architecture but several delayed/transient semantic-authority gaps. #323 owns shared final-write revalidation for Try-It/ScreenSync/Rust/native-scene waits; #324 separately owns per-light Away/off convergence after partial Hue failures.
 - Authentication/security identity must remain separate from lighting ownership: valid credentials never override DND, Away/Sleeping, manual, scene/effect, ScreenSync, transit, fixture-comfort or registered external-owner authority.
 
-## Recommended near-term order
+## Current gate-aware routing (2026-10-08)
 
-| Order | Work | Classification | Next action | Cheapest credible model |
-|---|---|---|---|---|
-| 1 | #246 per-light manual ownership persistence | EXECUTION_READY | Persist narrowly scoped manual-owner metadata; restore before automatic reconciliation | **Sol Medium** |
-| 2 | #283 Blue Yeti stream recovery / capability health | EXECUTION_READY | Add bounded resource recovery and separate worker-liveness from usable sensing health | **Sol Medium** |
-| 3 | #276 Sonos writer/concurrency audit | EXECUTION_READY | Complete mutation manifest + fake-device adversarial matrix; state external-race limits honestly | **Sol High** |
-| 4 | #240 deterministic navigation replay | IMPLEMENTATION_COMPLETE / EVIDENCE_GATED | Obtain one eligible natural daytime capture before claiming real-fixture acceptance | **Luna Low** for capture/status handling; **Sol Medium** only for unexpected divergence |
+This is **not a universal ranked backlog**. The owning issue and [Project Admin Hub](PROJECT_ADMIN_HUB.md) provide the live route; inspect dependencies, existing active work and authorization gates before selecting the next task.
 
-#286, #285, #322, #323, and #324 are complete on `master`; do not leave them in the actionable queue merely because production rollout is still pending. The remaining #287-#296 security program remains valid and dependency-ordered, but current repo/issue evidence does not introduce a new blocker that displaces the bounded #246 -> #283 -> #276 sequence. Re-evaluate that only if new live security evidence changes the risk boundary.
+| Work / owner | Current gate | Narrow next step / model |
+|---|---|---|
+| [#337](https://github.com/agatte/home-hub/issues/337) assisted Sonos ShareLink; [#276](https://github.com/agatte/home-hub/issues/276) sprint | Open implementation contract | Continue bounded queue/transport authority and concurrency validation, **Sol High**; later merge and device acceptance remain separate gates. |
+| [#334](https://github.com/agatte/home-hub/issues/334) Blue Yeti | Deployment/version proof **then physical evidence** | During a separately approved release and operator-present test, verify unplug/replug without made-up microphone health. No new #283 implementation. |
+| [#240](https://github.com/agatte/home-hub/issues/240) navigation replay | **EVIDENCE_GATED** | Obtain one eligible natural capture before historical-reproduction claims; Luna-class evidence bookkeeping, Sol only for a real divergence. |
+| [#284](https://github.com/agatte/home-hub/issues/284), [#287–#296](https://github.com/agatte/home-hub/issues/284) security | Dependency-ordered, task-specific approval/rollout gates | Recheck canonical child and current exposure; Sol Medium/High according to risk, without prematurely enforcing trust migration. |
+| [#339](https://github.com/agatte/home-hub/issues/339) Project Admin | Board inventory/configuration and reversible documentation | Reuse an existing GitHub Project if suitable; keep docs as links/authority map rather than a separate manually updated queue. |
 
-These correctness/security items do not require #240. Do not use replay or the larger auth migration as a reason to postpone bounded fixes with already-resolved contracts.
+[#246](https://github.com/agatte/home-hub/issues/246), [#283](https://github.com/agatte/home-hub/issues/283), and [#336](https://github.com/agatte/home-hub/issues/336) are closed implementation tasks. #286, #285, and #322–#324 are also merged/closed. Their release/physical state must be checked from live evidence and separate gates, **not** inferred from issue closure or the historical checkpoint below.
 
-## Execution-ready packet index
+These correctness/security tasks are not blocked by #240's real-world capture. Do not expand replay merely to unblock unrelated bounded work.
 
-Detailed implementation packets live in the owning GitHub issues and dated audits. Re-check current code before execution; this map preserves cross-issue sequencing, not every acceptance criterion.
+## Implementation packet references (historical and open)
+
+Detailed implementation contracts and current status belong to the owning GitHub issues and dated audits. **Some packets below are completed historical references, not permission to reimplement them.** Re-check current code, issue state and operational gates before execution.
 
 ### Security program — #284 / canonical children #285-#296
 
@@ -92,8 +97,9 @@ Detailed implementation packets live in the owning GitHub issues and dated audit
 - **Historical implementation model:** Sol High.
 - **Reopen only if:** new evidence shows safe convergence would require weakening Away suppression or replaying historical lighting state.
 
-### #246 — durable per-light manual ownership
+### #246 — durable per-light manual ownership (closed implementation)
 
+- **Status 2026-10-08:** Closed. The following is retained as historical implementation guidance, not an actionable task. Verify any release/physical claim separately.
 - Preserve still-valid manual light holds across ordinary backend reconstruction.
 - Restore metadata only; do not replay Hue state or persist the whole engine.
 - Authority surfaces: `EngineState`, `LightOverrideManager`, `AutomationEngine._persist_override_state()/load_override_state()`, `LightApplicator.protected_light_ids()`, bootstrap ordering.
@@ -101,16 +107,18 @@ Detailed implementation packets live in the owning GitHub issues and dated audit
 - **Worker:** Sol Medium.
 - **Escalate if:** safe persistence requires changing mode-level ownership semantics, writing physical targets on restore, or cannot serialize mark/clear/expiry durably.
 
-### #283 — microphone recovery and truthful capability health
+### #283 — microphone recovery and truthful capability health (closed implementation)
 
+- **Status 2026-10-08:** Closed after PR #333. Post-deployment physical unplug/replug acceptance belongs to [#334](https://github.com/agatte/home-hub/issues/334); the following is historical guidance.
 - Recover closed/unavailable PyAudio streams with bounded retry/backoff.
 - Distinguish worker alive, microphone usable, classifier permitted, and last successful observation.
 - Reset partial sensing evidence after capture loss; never fabricate observations or widen Social authority.
 - **Worker:** Sol Medium.
 - **Escalate if:** recovery requires process-wide supervisor redesign, forced cross-thread termination, or new sensing authority.
 
-### #276 — remaining Sonos writer/concurrency audit
+### #276 — Sonos writer audit (merged), remaining sprint gates
 
+- **Status 2026-10-08:** Writer audit and two concurrency fixes merged via PR #335. #336 is closed; [#337](https://github.com/agatte/home-hub/issues/337) remains the open bounded ShareLink task. #276/#274 retain wider physical and ownership acceptance. The bullets below describe the earlier audit packet, not remaining unimplemented audit work.
 - Inventory every Sonos mutation path and map owner, dimensions, guard, final mutation boundary, cancellation, restart behavior, and tests.
 - Add only missing fake-device concurrency cases; do not invent another ownership service.
 - Distinguish HomeHub-lock guarantees from external-controller races and worker-thread settlement.
