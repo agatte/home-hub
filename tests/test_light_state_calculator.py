@@ -969,16 +969,44 @@ class TestWeatherAdjust:
     def test_classify_clouds(self):
         assert classify_weather("overcast clouds", {}) == "clouds"
 
-    def test_classify_nws_cloudy_variants(self):
-        """NWS sends 'Partly Cloudy' / 'Mostly Cloudy' / 'Cloudy' (singular
-        adjective) — the substring match must be ``cloud`` not ``clouds`` or
-        these silently fall through to None. Regression catch for the
-        functional-weather brightness boost not engaging on real cloudy days.
-        """
-        assert classify_weather("partly cloudy", {}) == "clouds"
-        assert classify_weather("mostly cloudy", {}) == "clouds"
-        assert classify_weather("cloudy", {}) == "clouds"
-        assert classify_weather("overcast", {}) == "clouds"
+    @pytest.mark.parametrize("description", [
+        "few clouds", "a few clouds", "minimal cloud cover", "scattered clouds",
+        "partly cloudy", "partly cloudy and breezy", "clear sky",
+    ])
+    @pytest.mark.parametrize("weather", [{}, {"sky_cover": None}, {"sky_cover": {"value": 100}}])
+    def test_sparse_or_partial_clouds_are_neutral_without_coverage_authority(self, description, weather):
+        """Descriptions suffice; missing or raw grid context cannot invent a boost."""
+        assert classify_weather(description, weather) is None
+
+    @pytest.mark.parametrize("description", [
+        "mostly cloudy", "cloudy", "clouds", "broken clouds", "overcast", "overcast clouds",
+    ])
+    def test_classify_nws_cloudy_variants(self, description):
+        """Keep substantial cloud cover and legacy coarse cloudy descriptions compensated."""
+        assert classify_weather(description, {}) == "clouds"
+
+    @pytest.mark.parametrize(("description", "expected"), [
+        ("partly cloudy with thunderstorm and rain", "thunderstorm"),
+        ("few clouds with light rain", "rain"),
+        ("partly cloudy with drizzle", "rain"),
+        ("partly cloudy with snow", "snow"),
+    ])
+    def test_precipitation_still_precedes_cloud_taxonomy(self, description, expected):
+        assert classify_weather(description, {}) == expected
+
+    @pytest.mark.parametrize(("minutes_to_sunset", "expected"), [
+        (-31, None), (-30, "golden_hour"), (0, "golden_hour"),
+        (30, "golden_hour"), (31, None),
+    ])
+    def test_golden_hour_keeps_clear_description_window(self, minutes_to_sunset, expected):
+        now = datetime(2026, 10, 10, 18, 0, tzinfo=TZ)
+        weather = {"sunset": (now + timedelta(minutes=minutes_to_sunset)).timestamp()}
+        with patch("backend.services.light_state_calculator.datetime", wraps=datetime) as clock:
+            clock.now.return_value = now
+            assert classify_weather("clear sky", weather) == expected
+            assert classify_weather("partly cloudy", weather) is None
+            assert classify_weather("few clouds", weather) is None
+            assert classify_weather("mostly cloudy", weather) == "clouds"
 
     def test_classify_clear_outside_golden_hour(self):
         # No sunset payload → can't be golden hour, returns None.
@@ -994,6 +1022,23 @@ class TestWeatherAdjust:
 
 
 class TestFunctionalWeatherBrightness:
+
+    @pytest.mark.parametrize("description", ["few clouds", "partly cloudy", "clear sky"])
+    @pytest.mark.parametrize("mode", ["gaming", "working", "watching"])
+    def test_neutral_cloud_descriptions_do_not_boost_functional_lights(self, description, mode):
+        state = resolve_activity_state(mode, "day")
+        condition = classify_weather(description, {})
+        assert apply_functional_weather_brightness(state, mode, "day", condition) is state
+
+    @pytest.mark.parametrize("description", ["few clouds", "partly cloudy"])
+    def test_neutral_clouds_do_not_shift_lux_baseline(self, description):
+        state = {"1": {"on": True, "bri": 100, "ct": 350}}
+        kwargs = dict(lux_reading=60.0, baseline_lux=90.0, last_multiplier=0.0)
+        neutral = apply_lux_multiplier(state, "relax", weather_class=None, **kwargs)
+        actual = apply_lux_multiplier(
+            state, "relax", weather_class=classify_weather(description, {}), **kwargs,
+        )
+        assert actual == neutral
 
     def test_aesthetic_modes_pass_through(self):
         """relax/social/cooking never get the functional weather boost —
@@ -1151,6 +1196,19 @@ class TestFunctionalWeatherBrightness:
 
 
 class TestGamingDaySurroundBrightness:
+
+    @pytest.mark.parametrize(("description", "expected_l1", "expected_kitchen"), [
+        ("few clouds", 130, 30),
+        ("partly cloudy", 130, 30),
+        ("mostly cloudy", 155, 50),
+        ("overcast", 155, 50),
+    ])
+    def test_description_taxonomy_controls_surround_floors(self, description, expected_l1, expected_kitchen):
+        condition = classify_weather(description, {})
+        state = self._after_weather(self._state(), condition)
+        out = apply_gaming_day_surround_brightness(state, "gaming", "day", condition)
+        assert out["1"]["bri"] == expected_l1
+        assert out["3"]["bri"] == out["4"]["bri"] == expected_kitchen
 
     @staticmethod
     def _state(game=None):

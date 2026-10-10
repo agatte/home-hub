@@ -7543,6 +7543,46 @@ class TestWeatherPipelineObservability249:
         engine._get_time_period = lambda now=None: period
         return engine
 
+    @pytest.mark.parametrize(("description", "condition", "multiplier"), [
+        ("Few Clouds", None, 1.0),
+        ("Minimal Cloud Cover", None, 1.0),
+        ("Partly Cloudy", None, 1.0),
+        ("Mostly Cloudy", "clouds", 1.08),
+        ("Overcast", "clouds", 1.08),
+        ("Clear", None, 1.0),
+        ("Rain", "rain", 1.12),
+        ("Snow", "snow", 1.04),
+        ("Thunderstorm", "thunderstorm", 1.18),
+    ])
+    def test_cloud_taxonomy_reports_actual_functional_policy(
+        self, mock_hue, mock_hue_v2, mock_ws, description, condition, multiplier,
+    ):
+        engine = self._engine(mock_hue, mock_hue_v2, mock_ws, description, "working", "day")
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["condition"] == condition
+        assert weather["functional_multiplier"] == multiplier
+        assert weather["applies"] is (multiplier != 1.0)
+        assert weather["policies"] == (["functional_brightness"] if multiplier != 1.0 else [])
+        assert weather["functional_light_ids"] == (["2"] if multiplier != 1.0 else [])
+        # Existing rules/learner consumers keep their concrete clear fallback;
+        # no new class or migration is required for neutral cloud descriptions.
+        assert engine.current_weather_class == (condition or "clear")
+
+    def test_cached_only_description_fallback_keeps_partial_clouds_neutral(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        class CachedOnlyWeather:
+            @staticmethod
+            def get_cached():
+                return {"description": "Partly Cloudy"}
+
+        engine = self._engine(mock_hue, mock_hue_v2, mock_ws, "Clear", "working", "day")
+        engine._weather_service = CachedOnlyWeather()
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["condition"] is None
+        assert weather["functional_multiplier"] == 1.0
+        assert weather["applies"] is False
+
     def test_functional_pipeline_reports_policy_multiplier_and_fixture(self, mock_hue, mock_hue_v2, mock_ws):
         engine = self._engine(mock_hue, mock_hue_v2, mock_ws, "Heavy rain", "working", "evening")
         weather = engine._build_pipeline_state()["inputs"]["weather"]
