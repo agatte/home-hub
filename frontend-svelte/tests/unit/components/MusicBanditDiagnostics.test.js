@@ -25,7 +25,7 @@ describe('MusicBanditDiagnostics', () => {
     render(MusicBanditDiagnostics)
     expect(screen.getByText('Loading bandit diagnostics…')).toBeInTheDocument()
     expect(screen.getByRole('button')).toBeDisabled()
-    resolve(empty)
+    resolve?.(empty)
     expect(await screen.findByText(/No arm rankings reported/)).toBeInTheDocument()
   })
 
@@ -62,6 +62,6 @@ describe('MusicBanditDiagnostics', () => {
     expect(screen.queryByText('Evening playlist')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' }))
     await screen.findByText(/No arm rankings reported/)
-    expect(apiGet.mock.calls).toEqual(Array(3).fill(['/api/music/bandit-status']))
+    expect(vi.mocked(apiGet).mock.calls).toEqual(Array(3).fill(['/api/music/bandit-status']))
   })
 })
