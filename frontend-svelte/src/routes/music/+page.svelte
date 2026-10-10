@@ -3,6 +3,7 @@
   import ModePlaylistMapper from '$lib/components/ModePlaylistMapper.svelte'
   import ShadowDiscoveryPanel from '$lib/components/ShadowDiscoveryPanel.svelte'
   import ApprovedAppleMusicEntry from '$lib/components/ApprovedAppleMusicEntry.svelte'
+  import MusicBanditDiagnostics from '$lib/components/MusicBanditDiagnostics.svelte'
 
   /** @type {any} */
   export let data = undefined
@@ -37,6 +38,8 @@
       </section>
     </div>
   </details>
+
+  <MusicBanditDiagnostics />
 </main>
 
 <style>
