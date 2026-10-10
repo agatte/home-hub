@@ -1,0 +1,35 @@
+# DO NOT INSTALL / NOT PRODUCTION. Referenced root-controlled package is absent.
+# Descriptor order across socket units is unspecified; names map FD positions.
+# External systemd-analyze verify and real PID1 lifecycle proof remain gated.
+[Unit]
+Description=OFFLINE NON-DEPLOYABLE HomeHub identity prototype
+Requires=homehub-identity-verify.socket homehub-identity-admin.socket
+After=homehub-identity-verify.socket homehub-identity-admin.socket
+ConditionPathExists=/opt/homehub-identity-prototype/DO-NOT-INSTALL
+
+[Service]
+Type=simple
+User=homehub-identity
+Group=homehub-identity
+# Named accounts/groups are conceptual; none are created by this candidate.
+ExecStart=/opt/homehub-identity-prototype/bin/python -I -B /opt/homehub-identity-prototype/linux_broker_socket_prototype.py --trusted-root /run --backend-user homehub-backend --backend-group homehub-backend --custody-uid 0
+RuntimeDirectory=homehub-identity-prototype-private
+RuntimeDirectoryMode=0700
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+TimeoutStopSec=2
+KillMode=control-group
+Restart=no

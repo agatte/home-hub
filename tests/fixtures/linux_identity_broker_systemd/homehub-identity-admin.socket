@@ -1,0 +1,14 @@
+# DO NOT INSTALL / NOT PRODUCTION: root-only listener, all operations denied.
+[Unit]
+Description=OFFLINE HomeHub prototype admin socket
+
+[Socket]
+ListenStream=/run/homehub-identity-prototype-admin/admin.sock
+Service=homehub-identity-prototype.service
+FileDescriptorName=admin
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0700
+Accept=no
+RemoveOnStop=yes
