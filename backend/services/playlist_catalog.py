@@ -274,28 +274,32 @@ class AppleMusicShareCatalog:
 
     @property
     def playback_verified(self) -> bool:
-        device = getattr(self._sonos, "device", None)
-        household_id = str(getattr(device, "household_id", "") or "").strip()
-        return bool(
-            self._verified_household_id
-            and household_id
-            and household_id == self._verified_household_id
-        )
+        if not self._verified_household_id or not self.available:
+            return False
+        try:
+            device = getattr(self._sonos, "device", None)
+            # SoCo may fetch household_id over the network on first access.
+            # An unavailable speaker must not abort backend startup or status.
+            household_id = str(getattr(device, "household_id", "") or "").strip()
+        except Exception:
+            return False
+        return bool(household_id and household_id == self._verified_household_id)
 
     @property
     def available(self) -> bool:
         return bool(getattr(self._sonos, "connected", False))
 
     def status(self) -> dict[str, Any]:
+        playback_verified = self.playback_verified
         return {
             "provider": self.provider_name,
             "service": self.service_name,
             "sonos_available": self.available,
             "credentials_required": False,
             "playback_adapter": self.playback_adapter_name,
-            "playback_verified": self.playback_verified,
+            "playback_verified": playback_verified,
             "verification_state": (
-                "live_verified" if self.playback_verified else "queue_test_required"
+                "live_verified" if playback_verified else "queue_test_required"
             ),
             "actuation_allowed": False,
         }
