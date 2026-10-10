@@ -119,7 +119,8 @@ describe('AssistedPlayAction', () => {
     expect(calls[0][1]).toMatchObject({
       provider: 'itunes_search', provider_id: '1713833576',
     })
-    expect(calls[0][1].client_event_id).toMatch(/^music-assisted-/)
+    const playBody = /** @type {{ client_event_id: string }} */ (calls[0][1])
+    expect(playBody.client_event_id).toMatch(/^music-assisted-/)
     expect(calls[0][2]).toEqual({ timeout: 45000 })
     expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
   })
@@ -177,7 +178,8 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Start approved track' }))
     expect(await screen.findByText(/Playback outcome unknown/)).toBeInTheDocument()
-    const sentId = vi.mocked(apiPost).mock.calls[0][1].client_event_id
+    const sentBody = /** @type {{ client_event_id: string }} */ (vi.mocked(apiPost).mock.calls[0][1])
+    const sentId = sentBody.client_event_id
     first.unmount()
 
     render(AssistedPlayAction, { candidate, trust })
