@@ -9,6 +9,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 
@@ -20,6 +21,14 @@ HERE = Path(__file__).parent
 BROKER = HERE / "support/linux_broker_socket_prototype.py"
 UNITS = HERE / "fixtures/linux_identity_broker_systemd"
 linux = pytest.mark.skipif(sys.platform != "linux", reason="Linux kernel proof required")
+
+
+@pytest.fixture
+def socket_root():
+    """Unique short Linux anchor: AF_UNIX sun_path is limited to ~108 bytes."""
+    with tempfile.TemporaryDirectory(prefix="hb287-", dir="/tmp") as root:
+        assert len(os.fsencode(Path(root) / "homehub-identity-prototype-verify" / "verify.sock")) < 108
+        yield Path(root)
 
 
 @pytest.mark.parametrize("raw", [b"", b"x", b"[]", b"null", b"{}", b'{"operation":1}',
@@ -242,7 +251,8 @@ def request(tmp_path, endpoint, raw):
 
 @linux
 @pytest.mark.parametrize("reordered", [False, True])
-def test_kernel_e2e_restart(tmp_path, reordered):
+def test_kernel_e2e_restart(socket_root, reordered):
+    tmp_path = socket_root
     for _ in range(2):
         with launch(tmp_path, reordered=reordered) as process:
             result = request(tmp_path, "verify", b'{"operation":"verify"}')
@@ -262,7 +272,8 @@ def test_kernel_e2e_restart(tmp_path, reordered):
 
 
 @linux
-def test_wrong_kernel_uid(tmp_path):
+def test_wrong_kernel_uid(socket_root):
+    tmp_path = socket_root
     with launch(tmp_path, uid=os.getuid() + 1):
         assert request(tmp_path, "verify", b'{"operation":"verify"}')["status"] == "DENY"
 
@@ -271,14 +282,16 @@ def test_wrong_kernel_uid(tmp_path):
 @pytest.mark.parametrize("damage", ["order", "names", "missing", "extra", "pid", "nonsocket",
                                          "rogue", "roguepath", "mode", "duplicate", "notlistening",
                                          "missingfd", "symlink"])
-def test_startup_fail_closed(tmp_path, damage):
+def test_startup_fail_closed(socket_root, damage):
+    tmp_path = socket_root
     with launch(tmp_path, damage=damage) as process:
         assert process.wait(timeout=2) != 0
         assert process.stdout.read() == b""
 
 
 @linux
-def test_stalled_connection_termination(tmp_path):
+def test_stalled_connection_termination(socket_root):
+    tmp_path = socket_root
     with launch(tmp_path) as process:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(2)
@@ -291,7 +304,8 @@ def test_stalled_connection_termination(tmp_path):
 
 
 @linux
-def test_disposable_root_group_and_admin_fd(tmp_path):
+def test_disposable_root_group_and_admin_fd(socket_root):
+    tmp_path = socket_root
     if os.geteuid() != 0 or os.environ.get("HOMEHUB_DISPOSABLE_LINUX_BOUNDARY") != "1":
         pytest.skip("requires explicitly disposable root Linux environment")
     backend = 41001
@@ -322,7 +336,8 @@ with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
 
 
 @linux
-def test_admin_provisioner_preflight(tmp_path):
+def test_admin_provisioner_preflight(socket_root):
+    tmp_path = socket_root
     # Accessible synthetic fixture is sufficient for an OS provisioner snapshot;
     # ACL attestation and continuous custody are external gates, not this check.
     with launch(tmp_path):
@@ -341,7 +356,8 @@ def test_admin_provisioner_preflight(tmp_path):
 
 
 @linux
-def test_wrong_uid_denied_before_body(tmp_path):
+def test_wrong_uid_denied_before_body(socket_root):
+    tmp_path = socket_root
     with launch(tmp_path, uid=os.getuid() + 1):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(0.2)
@@ -350,7 +366,8 @@ def test_wrong_uid_denied_before_body(tmp_path):
 
 
 @linux
-def test_saturation_admin_and_termination(tmp_path):
+def test_saturation_admin_and_termination(socket_root):
+    tmp_path = socket_root
     with launch(tmp_path) as process:
         stalled = []
         try:
