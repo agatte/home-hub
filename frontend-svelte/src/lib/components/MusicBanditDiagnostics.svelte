@@ -8,7 +8,7 @@
   let loading = true
   let failed = false
 
-  async function refresh() {
+  export async function refresh() {
     loading = true
     failed = false
     status = null

@@ -20,18 +20,21 @@ beforeEach(() => vi.resetAllMocks())
 
 describe('MusicBanditDiagnostics', () => {
   it('shows loading before the read-only snapshot arrives', async () => {
-    let resolve
+    /** @type {(value: any) => void} */
+    let resolve = (_value) => {}
     vi.mocked(apiGet).mockReturnValue(new Promise(r => { resolve = r }))
-    render(MusicBanditDiagnostics)
+    const { component } = render(MusicBanditDiagnostics)
+    void component.refresh()
     expect(screen.getByText('Loading bandit diagnostics…')).toBeInTheDocument()
     expect(screen.getByRole('button')).toBeDisabled()
-    resolve?.(empty)
+    resolve(empty)
     expect(await screen.findByText(/No arm rankings reported/)).toBeInTheDocument()
   })
 
   it('preserves cross-period ranking and explains the evidence limits', async () => {
     vi.mocked(apiGet).mockResolvedValue(snapshot)
-    render(MusicBanditDiagnostics)
+    const { component } = render(MusicBanditDiagnostics)
+    await component.refresh()
     await screen.findByText(/stored arms/)
     await fireEvent.click(screen.getByText('Inspect rankings and model parameters'))
     const rows = within(screen.getByRole('list')).getAllByRole('listitem')
@@ -47,7 +50,8 @@ describe('MusicBanditDiagnostics', () => {
 
   it('does not interpret an empty response as cold start or availability', async () => {
     vi.mocked(apiGet).mockResolvedValue(empty)
-    render(MusicBanditDiagnostics)
+    const { component } = render(MusicBanditDiagnostics)
+    await component.refresh()
     expect(await screen.findByText(/cannot distinguish an unavailable bandit from an empty model/)).toBeInTheDocument()
     expect(screen.queryByText('Inspect rankings and model parameters')).not.toBeInTheDocument()
   })
@@ -55,7 +59,8 @@ describe('MusicBanditDiagnostics', () => {
   it('clears stale rankings on refresh failure and allows a read-only retry', async () => {
     vi.mocked(apiGet).mockResolvedValueOnce(snapshot)
       .mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(empty)
-    render(MusicBanditDiagnostics)
+    const { component } = render(MusicBanditDiagnostics)
+    await component.refresh()
     await screen.findByText('Evening playlist')
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' }))
     expect(await screen.findByText(/Bandit diagnostics unavailable/)).toBeInTheDocument()
