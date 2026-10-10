@@ -120,6 +120,15 @@ Latitude physical authority must be earned again from genuinely fresh post-retur
 observations. `home-hub-ambient.service` remains parked, and deploy/restart
 tooling refuses both `TRAVEL` and `RETURNING_HOME`.
 
+**OPT-IN Latitude power policy (authorized 2026-10-10).** The Latitude remains
+the HomeHub backend host, but Anthony may use it as a travel laptop. The reviewed
+[power policy](LATITUDE_POWER_POLICY.md) preserves HOME sleep/lid protection and
+restores normal laptop blanking, locking and suspend only after Travel stops the
+core services. Return Home restores the saved desktop policy and blocks system
+sleep before backend startup. Installation and real suspend/resume acceptance
+are separate from code publication; ordinary House State Away never arms this
+power switch. Docker services also pause while the whole laptop is suspended.
+
 **ACCEPTED #145 host-role direction (2026-09-04).** Solve the portability
 problem with current hardware by treating the Latitude as dedicated always-home
 HomeHub infrastructure. Routine laptop travel uses the older MacBook instead;

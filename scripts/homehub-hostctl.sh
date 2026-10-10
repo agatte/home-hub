@@ -25,6 +25,7 @@ AUTOSTART_DISABLED="${AUTOSTART}.disabled"
 RETURN_DESKTOP="$HOME/.local/share/applications/home-hub-return.desktop"
 
 CORE_SERVICE="home-hub.service"
+POWER_HELPER="/usr/local/libexec/homehub-system-power"
 RETURN_UNITS=(
     home-hub-tunnel.service
     home-hub-latitude-streaming.service
@@ -35,6 +36,14 @@ SUPPRESSED_UNITS=(
     home-hub-guest-gateway.service
     home-hub-ambient.service
 )
+
+apply_power_mode() {
+    # Opt-in installation: existing hosts keep their current policy until the
+    # reviewed root helper and its exact two-action sudo rule are installed.
+    if [[ -x "$POWER_HELPER" ]]; then
+        /usr/bin/python3 "$REPO/scripts/homehub-desktop-power.py" "$1"
+    fi
+}
 
 unit_known() {
     systemctl --user list-unit-files "$1" --no-pager 2>/dev/null | grep -q "^$1"
@@ -146,6 +155,7 @@ rollback_return_home() {
         write_marker
     fi
     stop_disable_if_known "$CORE_SERVICE" || true
+    apply_power_mode travel || echo "Travel power policy failed; check sleep settings." >&2
 }
 
 wait_for_backend() {
@@ -235,6 +245,8 @@ enter_travel() {
     suppress_kiosk
     if ! stop_disable_if_known "$CORE_SERVICE"; then
         degraded+=("$CORE_SERVICE")
+    elif ! apply_power_mode travel; then
+        degraded+=("power-policy")
     fi
     echo "HomeHub host mode: TRAVEL"
     echo "Google/Nest Wifi DNS failover is not changed by this command."
@@ -253,6 +265,12 @@ return_home() {
     fi
 
     begin_return_home
+    if ! apply_power_mode home; then
+        rollback_return_home
+        notify "Return Home failed to restore home power settings; Travel Mode remains armed."
+        echo "Home power policy failed; Travel Mode remains armed." >&2
+        exit 1
+    fi
     ensure_reconciliation_id
     if ! enable_start_if_known "$CORE_SERVICE" || ! wait_for_backend; then
         rollback_return_home
@@ -310,6 +328,9 @@ return_home() {
         fi
     fi
 
+    if ! apply_power_mode finish-home; then
+        degraded+=("power-baseline-cleanup")
+    fi
     restore_kiosk
     if [[ ${#degraded[@]} -gt 0 ]]; then
         notify "HomeHub is HOME; degraded: ${degraded[*]}"
