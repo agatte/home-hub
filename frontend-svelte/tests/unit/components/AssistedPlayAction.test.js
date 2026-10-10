@@ -42,9 +42,13 @@ afterEach(() => {
   globalThis.sessionStorage.clear()
 })
 
-async function revealPlayback() {
+async function checkAccess() {
   const access = screen.queryByRole('button', { name: 'Check playback access' })
   if (access) await fireEvent.click(access)
+}
+
+async function revealPlayback() {
+  await checkAccess()
   return screen.findByRole('button', { name: 'Play approved track' })
 }
 
@@ -190,6 +194,7 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
     first.unmount()
 
     render(AssistedPlayAction, { candidate, trust })
+    await checkAccess()
     expect(await screen.findByText(/Playback outcome unknown/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Play approved track' })).not.toBeInTheDocument()
     expect(apiPost).toHaveBeenCalledTimes(1)
@@ -204,6 +209,7 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
     first.unmount()
 
     render(AssistedPlayAction, { candidate, trust })
+    await checkAccess()
     expect(await screen.findByText(/Verified playing/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check before another attempt' })).toBeInTheDocument()
     expect(apiPost).toHaveBeenCalledTimes(1)

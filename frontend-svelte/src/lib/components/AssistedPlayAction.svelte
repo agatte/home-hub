@@ -31,17 +31,22 @@
       && ['approved', 'proven'].includes(trust?.state)))
   $: if (!eligible) confirming = false
 
-  onMount(() => {
+  function restoreSavedAttempt() {
     const prior = identity ? getAttempt(identity) : null
     if (prior) {
       eventId = prior.clientEventId
       if (prior.status === 'pending' || prior.status === 'unknown') uncertain = true
       else result = { status: prior.status, reason: prior.reason }
     }
+  }
+
+  onMount(() => {
+    restoreSavedAttempt()
     void checkPlaybackAccess()
   })
 
   async function checkPlaybackAccess() {
+    restoreSavedAttempt()
     // The strict endpoint accepts direct localhost without an API key.
     // Never weaken LAN authentication or send credentials from the browser.
     try {
