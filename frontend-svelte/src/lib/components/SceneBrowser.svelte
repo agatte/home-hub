@@ -48,7 +48,7 @@
     { id: 'bridge', label: 'Hue Scenes' },
   ]
 
-  async function loadScenes() {
+  export async function loadScenes() {
     scenesLoading = true
     scenesError = false
     try {
@@ -76,7 +76,7 @@
     }
   }
 
-  async function loadEffects() {
+  export async function loadEffects() {
     effectsLoading = true
     effectsError = false
     try {

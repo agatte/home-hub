@@ -34,7 +34,9 @@ describe('SceneBrowser provenance and fetch states', () => {
       { id: 'bridge-a', name: 'Dusk', source: 'bridge', status: 'active' },
       { id: 'bridge-b', name: 'Dusk', source: 'bridge', status: 'inactive' },
     ], effects: [] })
-    render(SceneBrowser)
+    const { component } = render(SceneBrowser)
+    await component.loadScenes()
+    await component.loadEffects()
     await screen.findByText('HomeHub preset')
     expect(screen.getByText('HomeHub custom')).toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
@@ -50,7 +52,8 @@ describe('SceneBrowser provenance and fetch states', () => {
 
   it('reports a scene request failure and recovers through a read-only retry', async () => {
     vi.mocked(apiGet).mockRejectedValueOnce(new Error('offline'))
-    render(SceneBrowser)
+    const { component } = render(SceneBrowser)
+    await component.loadScenes()
     await screen.findByRole('alert')
     expect(screen.queryByText(/No scenes returned/)).not.toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Retry scenes' }))
@@ -63,7 +66,8 @@ describe('SceneBrowser provenance and fetch states', () => {
     vi.mocked(apiGet).mockImplementation((url) => Promise.resolve(
       url === '/api/scenes' ? { scenes: [] } : {}
     ))
-    render(SceneBrowser)
+    const { component } = render(SceneBrowser)
+    await component.loadEffects()
     await fireEvent.click(screen.getByRole('button', { name: 'Effects' }))
     await screen.findByRole('alert')
     expect(screen.queryByText(/not connected/)).not.toBeInTheDocument()
