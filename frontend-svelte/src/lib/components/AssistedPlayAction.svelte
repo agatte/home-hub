@@ -173,10 +173,15 @@
         <button type="button" on:click={() => (confirming = false)}>Cancel</button>
       </div>
     {:else}
+      {#if guardMessage}
+        <div class="playback-guard" role="alert">
+          <strong>Playback not started</strong>
+          <p>{guardMessage}</p>
+        </div>
+      {/if}
       <button type="button" on:click={prepare} disabled={checking}>
-        {checking ? 'Checking Sonos…' : 'Play approved track'}
+        {checking ? 'Checking Sonos…' : guardMessage ? 'Recheck playback eligibility' : 'Play approved track'}
       </button>
-      {#if guardMessage}<small role="status">{guardMessage}</small>{/if}
     {/if}
   </div>
 {/if}
@@ -191,6 +196,15 @@
   }
   .assisted-play-action small { color: var(--text-muted); font-size: 11px; }
   .assisted-play-action p { margin: 0; color: var(--text-primary); font-size: 12px; }
+  .playback-guard {
+    max-width: 540px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    background: var(--bg-primary);
+  }
+  .playback-guard strong { display: block; color: var(--text-primary); font-size: 13px; }
+  .playback-guard p { margin-top: 5px; color: var(--text-primary); font-size: 13px; line-height: 1.45; }
   .assisted-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   button {
     padding: 7px 11px;
