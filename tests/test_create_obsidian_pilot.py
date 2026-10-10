@@ -1,5 +1,6 @@
 """Bounded, isolated tests for the HomeHub Obsidian read-only snapshot pilot."""
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -83,6 +84,26 @@ def test_preview_file_is_read_only(repo, tmp_path):
     create(repo, dest)
     mode = (dest / "docs/README.md").stat().st_mode
     assert mode & 0o222 == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
+def test_windows_preview_directory_inherits_user_acl(repo, tmp_path):
+    preview = tmp_path / "preview-acl"
+    account = subprocess.check_output(["whoami"], text=True).strip().casefold()
+    # pytest's Windows basetemp may itself use restrictive 0o700 ACLs.
+    # Emulate the ordinary user-accessible Documents parent directory.
+    subprocess.run(
+        ["icacls.exe", str(tmp_path), "/grant", f"{account}:(OI)(CI)(F)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    create(repo, preview)
+    acl = subprocess.check_output(
+        ["icacls.exe", str(preview)], text=True, encoding="utf-8", errors="replace"
+    ).casefold()
+    assert f"{account}:" in acl
+    assert "(i)" in acl
 
 
 def test_symlink_is_not_copied(repo, tmp_path):

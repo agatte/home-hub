@@ -149,7 +149,9 @@ def initialize(repo: Path, vault: Path, expected: str) -> str:
     head = current_head(repo, expected)
     if vault.exists() or vault.is_symlink():
         raise FileExistsError("Vault already exists; refusing to overwrite")
-    vault.mkdir(mode=0o700)
+    # Windows Python 3.13 gives mode=0o700 a restrictive ACL that can
+    # exclude normal unelevated Obsidian; inherit the parent's Windows ACL.
+    vault.mkdir(mode=0o777 if os.name == "nt" else 0o700)
     # If export fails, leave a visible partial directory for investigation.
     managed = vault / MANAGED
     exported, _ = create(repo, managed)
