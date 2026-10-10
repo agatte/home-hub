@@ -21,6 +21,10 @@
   let effects = []
   /** @type {Array<{id: string, name: string, ids: string[]}>} */
   let bridgeScenes = []
+  let scenesLoading = true
+  let scenesError = false
+  let effectsLoading = true
+  let effectsError = false
 
   let activeTab = 'all'
   let activatingId = ''
@@ -45,9 +49,12 @@
   ]
 
   async function loadScenes() {
+    scenesLoading = true
+    scenesError = false
     try {
       const resp = await apiGet('/api/scenes')
-      const all = resp.scenes || []
+      if (!Array.isArray(resp?.scenes)) throw new Error('Invalid scene list')
+      const all = resp.scenes
       scenes = all.filter((s) => s.source === 'preset' || s.source === 'custom')
 
       // Deduplicate bridge scenes by name
@@ -63,18 +70,29 @@
       }
       bridgeScenes = Array.from(grouped.values())
     } catch {
-      /* ignore */
+      scenesError = true
+    } finally {
+      scenesLoading = false
     }
   }
 
-  onMount(async () => {
-    await loadScenes()
+  async function loadEffects() {
+    effectsLoading = true
+    effectsError = false
     try {
       const data = await apiGet('/api/scenes/effects')
-      effects = data.effects || []
+      if (!Array.isArray(data?.effects)) throw new Error('Invalid effect list')
+      effects = data.effects
     } catch {
-      /* ignore */
+      effectsError = true
+    } finally {
+      effectsLoading = false
     }
+  }
+
+  onMount(() => {
+    loadScenes()
+    loadEffects()
   })
 
   function openNewEditor() {
@@ -160,6 +178,17 @@
   {/if}
 
   <!-- Curated + Custom scenes -->
+  {#if activeTab !== 'effects'}
+    {#if scenesLoading}
+      <div class="scene-empty" role="status">Loading scenes…</div>
+    {:else if scenesError}
+      <div class="scene-empty" role="alert">
+        Could not load scenes. Previously loaded scenes may be outdated.
+        <button class="new-scene-btn" on:click={loadScenes}>Retry scenes</button>
+      </div>
+    {/if}
+  {/if}
+
   {#if activeTab !== 'effects' && activeTab !== 'bridge'}
     <div class="scene-grid">
       {#each filtered as scene (scene.id)}
@@ -178,6 +207,7 @@
             title={scene.display_name}
           >
             <span class="scene-name">{scene.display_name}</span>
+            <span class="scene-source">{scene.source === 'custom' ? 'HomeHub custom' : 'HomeHub preset'}</span>
             {#if scene.effect}
               <span class="scene-effect-badge" style="color: {catMeta.color}">{scene.effect}</span>
             {/if}
@@ -203,14 +233,22 @@
           {/if}
         </div>
       {/each}
-      {#if filtered.length === 0}
-        <span class="scene-empty">No scenes in this category</span>
+      {#if !scenesLoading && !scenesError && filtered.length === 0}
+        <span class="scene-empty">No scenes returned for this category</span>
       {/if}
     </div>
   {/if}
 
   <!-- Effects tab -->
   {#if activeTab === 'effects'}
+    {#if effectsLoading}
+      <div class="scene-empty" role="status">Loading effects…</div>
+    {:else if effectsError}
+      <div class="scene-empty" role="alert">
+        Could not load effects.
+        <button class="new-scene-btn" on:click={loadEffects}>Retry effects</button>
+      </div>
+    {/if}
     <div class="scene-grid">
       {#each effects as effect}
         <button
@@ -222,14 +260,15 @@
           <span class="scene-name">{effect.display_name}</span>
         </button>
       {/each}
-      {#if effects.length === 0}
-        <span class="scene-empty">No effects available (Hue v2 not connected)</span>
+      {#if !effectsLoading && !effectsError && effects.length === 0}
+        <span class="scene-empty">No effects returned</span>
       {/if}
     </div>
   {/if}
 
   <!-- Bridge scenes tab -->
   {#if activeTab === 'bridge'}
+    <p class="scene-empty">Hue bridge scenes may be cached. Freshness and bridge reachability are unknown.</p>
     <div class="scene-grid">
       {#each bridgeScenes as scene}
         <div class="scene-wrap">
@@ -238,6 +277,7 @@
             on:click={() => activateBridge(scene)}
           >
             <span class="scene-name">{scene.name}</span>
+            <span class="scene-source">Hue bridge</span>
           </button>
           <button
             class="scene-try-btn"
@@ -250,8 +290,8 @@
           </button>
         </div>
       {/each}
-      {#if bridgeScenes.length === 0}
-        <span class="scene-empty">No bridge scenes found</span>
+      {#if !scenesLoading && !scenesError && bridgeScenes.length === 0}
+        <span class="scene-empty">No Hue bridge scenes returned</span>
       {/if}
     </div>
   {/if}
@@ -448,7 +488,13 @@
     opacity: 0.7;
   }
 
+  .scene-source {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
   .scene-empty {
+    margin: 0;
     font-size: 12px;
     color: var(--text-muted);
     padding: 4px 0;
