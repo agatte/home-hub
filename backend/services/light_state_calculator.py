@@ -1899,7 +1899,10 @@ def classify_weather(desc: str, weather: dict[str, Any]) -> Optional[str]:
     Returns one of "thunderstorm", "rain", "snow", "clouds",
     "golden_hour", or None. The golden-hour case reads the sunset
     timestamp from ``weather`` to decide if we're within the ±30
-    minute window.
+    minute window. Few/scattered/minimal and partly cloudy descriptions
+    are neutral: they do not establish the daylight loss assumed by the
+    full ``clouds`` compensation. Raw grid sky cover remains provider
+    context, not a lighting command or an inferred coverage threshold.
     """
     if "thunderstorm" in desc:
         return "thunderstorm"
@@ -1907,6 +1910,10 @@ def classify_weather(desc: str, weather: dict[str, Any]) -> Optional[str]:
         return "rain"
     if "snow" in desc:
         return "snow"
+    if any(term in desc for term in (
+        "few cloud", "scattered cloud", "minimal cloud", "partly cloud",
+    )):
+        return None
     if "overcast" in desc or "cloud" in desc:
         return "clouds"
     if "clear" in desc:
