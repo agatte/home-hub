@@ -42,10 +42,16 @@ afterEach(() => {
   globalThis.sessionStorage.clear()
 })
 
+async function revealPlayback() {
+  const access = screen.queryByRole('button', { name: 'Check playback access' })
+  if (access) await fireEvent.click(access)
+  return screen.findByRole('button', { name: 'Play approved track' })
+}
+
 describe('AssistedPlayAction', () => {
   it('never actuates on mount and only exposes an explicit first step', async () => {
     render(AssistedPlayAction, { candidate, trust })
-    expect(await screen.findByRole('button', { name: 'Play approved track' })).toBeInTheDocument()
+    expect(await revealPlayback()).toBeInTheDocument()
     expect(apiGet).toHaveBeenCalledWith('/api/host/status')
     expect(apiPost).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
@@ -56,6 +62,7 @@ describe('AssistedPlayAction', () => {
       Promise.resolve(url === '/api/host/status' ? { mode: 'HOME', can_control: false } : fixtures[url])
     )
     render(AssistedPlayAction, { candidate, trust })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Check playback access' }))
     expect(await screen.findByText(/only on the Latitude kiosk/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Play approved track' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
@@ -78,7 +85,7 @@ describe('AssistedPlayAction', () => {
         ? { ...fixtures[url], current_mode: 'idle' } : fixtures[url])
     )
     render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     expect(await screen.findByText(/unavailable in the current activity/)).toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
@@ -89,7 +96,7 @@ describe('AssistedPlayAction', () => {
         ? { ...fixtures[url], volume: 30 } : fixtures[url])
     )
     render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     expect(await screen.findByText(/already be at volume 25.*Current: 30/)).toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
@@ -100,14 +107,14 @@ describe('AssistedPlayAction', () => {
         ? { ...fixtures[url], state: 'PAUSED_PLAYBACK', track: 'Existing song' } : fixtures[url])
     )
     render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     expect(await screen.findByText(/Sonos must be stopped/)).toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
 
   it('requires confirmation, then sends one exact identity and durable event ID', async () => {
     render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     const start = await screen.findByRole('button', { name: 'Start approved track' })
     expect(apiPost).not.toHaveBeenCalled()
     expect(screen.getByText(/HomeHub will not change volume or clear the queue/)).toBeInTheDocument()
@@ -127,7 +134,7 @@ describe('AssistedPlayAction', () => {
 
   it('lets an operator cancel without sending an event', async () => {
     render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     await fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
@@ -136,7 +143,7 @@ describe('AssistedPlayAction', () => {
   it('treats a lost response as unknown and never retries with a new ID', async () => {
     vi.mocked(apiPost).mockRejectedValue(new Error('response lost'))
     render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     await fireEvent.click(await screen.findByRole('button', { name: 'Start approved track' }))
     expect(await screen.findByText(/Playback outcome unknown/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
@@ -161,7 +168,7 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
     await fireEvent.input(screen.getByLabelText('Apple Music song link or track ID'), {
       target: { value: 'https://music.apple.com/us/album/bang/1713833575?i=1713833576' },
     })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     expect(await screen.findByRole('button', { name: 'Start approved track' })).toBeInTheDocument()
     expect(screen.getByText(/HomeHub will verify approval/)).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Start approved track' }))
@@ -175,7 +182,7 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
   it('preserves a lost-response event fence across remounts and previews', async () => {
     vi.mocked(apiPost).mockRejectedValue(new Error('lost after accepted append'))
     const first = render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     await fireEvent.click(await screen.findByRole('button', { name: 'Start approved track' }))
     expect(await screen.findByText(/Playback outcome unknown/)).toBeInTheDocument()
     const sentBody = /** @type {{ client_event_id: string }} */ (vi.mocked(apiPost).mock.calls[0][1])
@@ -191,7 +198,7 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
 
   it('does not repeat a completed attempt across remounts without another explicit check', async () => {
     const first = render(AssistedPlayAction, { candidate, trust })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     await fireEvent.click(await screen.findByRole('button', { name: 'Start approved track' }))
     expect(await screen.findByText(/Verified playing/)).toBeInTheDocument()
     first.unmount()
@@ -210,7 +217,7 @@ describe('exact Apple Music kiosk entry and one-attempt fencing', () => {
     await fireEvent.input(screen.getByLabelText('Apple Music song link or track ID'), {
       target: { value: '1713833576' },
     })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     await fireEvent.click(await screen.findByRole('button', { name: 'Start approved track' }))
     expect(await screen.findByText(/trust_not_playback_eligible/)).toBeInTheDocument()
     expect(vi.mocked(apiPost).mock.calls[0][1]).not.toHaveProperty('trust')
@@ -228,6 +235,7 @@ describe('exact-identity approval action', () => {
     await fireEvent.input(screen.getByLabelText('Apple Music song link or track ID'), {
       target: { value: '1713833576' },
     })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Check approval access' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Approve this exact track' }))
     expect(await screen.findByText(/Exact track approval saved/)).toBeInTheDocument()
     expect(apiPost).toHaveBeenCalledTimes(1)
@@ -237,7 +245,7 @@ describe('exact-identity approval action', () => {
     })
     expect(vi.mocked(apiPost).mock.calls[0][1]).not.toHaveProperty('trust')
     expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play approved track' }))
+    await fireEvent.click(await revealPlayback())
     expect(await screen.findByRole('button', { name: 'Start approved track' })).toBeInTheDocument()
     expect(apiPost).toHaveBeenCalledTimes(1)
   })

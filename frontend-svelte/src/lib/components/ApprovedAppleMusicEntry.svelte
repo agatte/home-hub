@@ -12,11 +12,16 @@
   let approvalMessage = ''
   const approvalEventIds = new Map()
 
-  onMount(() => {
-    void apiGet('/api/host/status')
-      .then((status) => { kiosk = status?.can_control === true })
-      .catch(() => { kiosk = false })
-  })
+  onMount(() => { void checkApprovalAccess() })
+
+  async function checkApprovalAccess() {
+    try {
+      const status = await apiGet('/api/host/status')
+      kiosk = status?.can_control === true
+    } catch {
+      kiosk = false
+    }
+  }
 
   async function approveExact() {
     if (!trackId || kiosk !== true || approving || approvedId === trackId) return
@@ -77,6 +82,9 @@
     placeholder="https://music.apple.com/…?i=1713833576"
   />
   {#if trackId && candidate}
+    {#if kiosk === null}
+      <button type="button" on:click={checkApprovalAccess}>Check approval access</button>
+    {/if}
     {#if kiosk === true}
       <div class="approval-controls">
         <button type="button" on:click={approveExact} disabled={approving || approvedId === trackId}>

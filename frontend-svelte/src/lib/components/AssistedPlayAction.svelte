@@ -38,12 +38,19 @@
       if (prior.status === 'pending' || prior.status === 'unknown') uncertain = true
       else result = { status: prior.status, reason: prior.reason }
     }
-    // The existing strict playback endpoint accepts only direct localhost
-    // without an API key. Do not send a token or weaken LAN authentication.
-    void apiGet('/api/host/status')
-      .then((status) => { kiosk = status?.can_control === true })
-      .catch(() => { kiosk = false })
+    void checkPlaybackAccess()
   })
+
+  async function checkPlaybackAccess() {
+    // The strict endpoint accepts direct localhost without an API key.
+    // Never weaken LAN authentication or send credentials from the browser.
+    try {
+      const status = await apiGet('/api/host/status')
+      kiosk = status?.can_control === true
+    } catch {
+      kiosk = false
+    }
+  }
 
   function newEventId() {
     const id = globalThis.crypto?.randomUUID?.()
@@ -138,6 +145,7 @@
   <div class="assisted-play-action">
     {#if kiosk === null}
       <small>Checking playback control access…</small>
+      <button type="button" on:click={checkPlaybackAccess}>Check playback access</button>
     {:else if kiosk === false}
       <small>Explicit playback is available only on the Latitude kiosk. Other browsers need strict authentication.</small>
     {:else if eventId}
