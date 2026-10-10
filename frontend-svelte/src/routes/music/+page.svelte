@@ -2,6 +2,7 @@
   import TasteProfileCard from '$lib/components/TasteProfileCard.svelte'
   import ModePlaylistMapper from '$lib/components/ModePlaylistMapper.svelte'
   import ShadowDiscoveryPanel from '$lib/components/ShadowDiscoveryPanel.svelte'
+  import ApprovedAppleMusicEntry from '$lib/components/ApprovedAppleMusicEntry.svelte'
   import MusicBanditDiagnostics from '$lib/components/MusicBanditDiagnostics.svelte'
 
   /** @type {any} */
@@ -15,6 +16,8 @@
   <section class="music-primary">
     <ShadowDiscoveryPanel />
   </section>
+
+  <ApprovedAppleMusicEntry />
 
   <details class="music-manage">
     <summary>

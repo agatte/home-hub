@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { apiGet, apiPost } from '$lib/api.js'
+  import AssistedPlayAction from '$lib/components/AssistedPlayAction.svelte'
 
   const MODES = [
     { key: 'gaming', label: 'Gaming' },
@@ -356,7 +357,7 @@
                 <strong>{suggestion.trust.playback_eligible ? 'Approved for future playback' : 'Suggestion only'}</strong>
                 <span>
                   {suggestion.trust.playback_eligible
-                    ? 'This page still does not start audio'
+                    ? 'Approved track · explicit playback requires the Latitude kiosk'
                     : 'Approve this favorite if you want it eligible later'}
                 </span>
               </div>
@@ -374,6 +375,13 @@
                 >Approve for future playback</button>
               {/if}
             </div>
+            {#if suggestion.candidate?.provider === 'itunes_search'
+              && suggestion.candidate?.playback_adapter === 'sonos_apple_music_share_link'
+              && suggestion.candidate?.playback_capable
+              && suggestion.trust?.playback_eligible
+              && ['approved', 'proven'].includes(suggestion.trust?.state)}
+              <AssistedPlayAction candidate={suggestion.candidate} trust={suggestion.trust} />
+            {/if}
             {#if trustUpdates[trustKey(suggestion)]?.state === 'saving'}
               <small class="trust-status">Saving approval…</small>
             {:else if trustUpdates[trustKey(suggestion)]?.state === 'saved'}

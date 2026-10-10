@@ -51,12 +51,14 @@ The board has seven **saved views**, verified from GitHub's live Projects API:
 - **Active & Review** — board view, `status:"In Progress","In Review"`.
 - **Needs Approval** — `next-gate:Approval`.
 - **Release & Physical Acceptance** — `next-gate:Deployment,"Physical Acceptance"`.
-- **Evidence/Dependency Blocked** — `status:Waiting next-gate:Evidence,Dependency`.
+- **Waiting & Gates** — `status:Waiting` (all waiting items, including evidence, dependency, deployment, and physical acceptance).
 - **Parked/Research** — `status:Backlog`.
 
 Initial conservative triage assigned a primary Workstream and Status to all 89 open issues (80 Backlog, 7 Waiting, 2 In Progress) and a specific Next Gate to 21. **No issue was marked Ready solely from horizon or priority labels.** Notable gates: [#334](https://github.com/agatte/home-hub/issues/334) Physical Acceptance, [#240](https://github.com/agatte/home-hub/issues/240) Evidence, and [#339](https://github.com/agatte/home-hub/issues/339) Approval for the remaining project-admin integration step. A merged PR is never itself proof of deployment or hands-on acceptance.
 
 Future issues are **not yet automatically enrolled**; review project coverage periodically until an explicitly approved native GitHub workflow is configured. Verify saved-view behavior in the browser as part of regular use; API verification confirms each saved layout/filter, not a human visual rendering of every view.
+
+**Live Project Admin checkpoint — 2026-10-10:** The owner-authenticated Projects API confirmed **90 items**: all **88 open repository issues** and two historical closed issues (#337 and #339), both marked Done; zero open issues missing from the board. The current Status distribution is **80 Backlog, 8 Waiting, 2 Done** (none marked Ready, In Progress, or In Review without evidence). #287 was corrected from Done to Backlog/Decision after its offline-only prototype merge; #276 is Waiting/Deployment; #253 is Waiting/Physical Acceptance; #337 is Done/None. The existing saved view **Waiting & Gates** now shows every Waiting item. These are project-field/navigation changes, **not** product deployment or physical acceptance. Evidence: [#339 reconciliation](https://github.com/agatte/home-hub/issues/339#issuecomment-6101715547).
 
 ### Direct GitHub issue searches (fallback and cross-check)
 

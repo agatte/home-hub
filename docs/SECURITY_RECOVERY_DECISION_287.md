@@ -410,3 +410,118 @@ passing tier proves systemd hardening, real-account provisioning, single active
 broker enforcement, durability/fsync/power-loss recovery, external rollback
 resistance, or old backend/actuator bypass prevention. No production readiness
 claim follows. Those remain separately measured activation gates; #287 stays open.
+
+## Offline inherited-socket prototype appendix (2026-10-10)
+
+**NOT INSTALLABLE / NOT PRODUCTION / DO NOT INSTALL. #287 remains open.**
+`tests/support/linux_broker_socket_prototype.py` is a standalone test-only Linux
+process; it imports neither backend nor identity_core, creates no listener,
+credentials, registry, journal or storage, and exposes no executable commands,
+SQL, file paths or credential issuance. Trusted launcher configuration supplies
+the backend UID/group and rooted socket locations; wire claims cannot change it.
+Named system identities in the illustrative units are conceptual, not provisioned.
+No `/opt/homehub-identity-prototype` package is supplied or installed.
+
+The ABI requires exact current `LISTEN_PID`, `LISTEN_FDS=2`, and
+exactly two unique `LISTEN_FDNAMES` names `{verify,admin}`, mapped to fd 3/4
+by position, with distinct kernel socket identities. Both `verify:admin` and
+`admin:verify` are accepted when their concrete sockets match that permutation.
+Both must be AF_UNIX SOCK_STREAM with SO_ACCEPTCONN, at the exact named pathname
+under the injected trusted root. Names alone confer no authority. Mismatched permutations,
+missing, surplus, duplicated, non-socket or rogue listeners fail startup; there
+is no one-FD fallback. Activation environment is consumed and listener FDs made
+non-inheritable. The subprocess test launcher uses a fresh interpreter to dup
+and exec rather than forking inside threaded pytest, whitelists inherited FDs,
+closes aliases, and reaps/terminates children with deadlines.
+
+The root anchor and immediate socket parents are lstat-checked for trusted owner,
+directory type and absence of group/world writes. The exact admin parent is 0700;
+accessible nodes require root/custody-owner 0600 admin or owner/backend-group
+0660 verify. Fixture roots explicitly stop traversal: this does not audit their
+ancestors. Illustrative production paths use `/run` as root, with separate
+`/run/homehub-identity-prototype-verify` (0755) and
+`/run/homehub-identity-prototype-admin` (0700) parents. PID1 owns both listeners,
+verify uses group `homehub-backend`; admin remains root:root. SocketUser need not
+equal service User: a non-root process can accept through an inherited root-owned
+listener without directory traversal. The opt-in test measures this kernel
+property separately. An unprivileged broker cannot lstat the admin node inside
+0700; it checks the parent and exact kernel listener path, relying on
+an explicit **trusted-OS provisioner attestation requirement before launch and
+while serving** for the inaccessible root socket pathname inode, ownership/mode,
+parent custody and ACL. It does not claim to have verified that node. The offline
+`custody(..., provisioner_preflight=True)` snapshot fails closed on inaccessible
+or misprovisioned nodes; a synthetic accessible fixture exercises bad socket and
+parent modes. This helper does not implement ACL audit or continuous attestation.
+No broker privilege elevation, traversal relaxation or ACL bypass is introduced.
+Kernel FD inode identity is checked for uniqueness and owner/type; Linux socket
+FD and filesystem pathname inodes are different identities and are not equated.
+Snapshot checks do not prove pathname-to-FD
+binding against replacement races, ACL/MAC policy, mount integrity, or package
+custody. Socket mode cannot prevent FD delegation or distinguish same-UID clients.
+
+One tiny JSON object is framed by client write EOF, capped at 256 bytes and a
+0.3-second hard receive deadline, without extension for partial reads. A selector
+multiplexes at most eight active clients, reserves one slot for admin, accepts
+once per endpoint per cycle with admin first, and caps response writes at 0.1
+seconds. Excess connections close; malformed/oversized verify requests deny.
+Wrong verify UID is rejected using SO_PEERCRED before receiving a body. Admin
+always receives fixed `UNIMPLEMENTED/DENY` without waiting for any request body.
+For verify, duplicate, malformed and surplus fields deny;
+only `operation` is accepted. Kernel SO_PEERCRED supplies connect-time PID/UID/GID.
+Only exact `verify` from the trusted backend UID yields
+`TRANSPORT_ALLOWED_TRUE`, always accompanied by `CREDENTIALS_VERIFIED_FALSE` and
+`credentials_verified=false`. This is transport admission, never real auth.
+Every admin connection denies, including root mutation requests and incomplete
+or invalid requests. No operator authorization
+boolean or reusable approval exists. Each connection closes after its response;
+termination stops new decisions, closes pending clients, and
+listener cleanup runs on exit. A maximum ten-second process lifetime bounds the
+demo, with a shorter fixture lifetime. Restart retains no approvals or state.
+Only a fixed READY marker is logged, never requests or exception details.
+
+The three units in `tests/fixtures/linux_identity_broker_systemd/` have explicit
+Service links, FileDescriptorName, Accept=no, modes and named identities. The
+dedicated unprivileged service uses an absent root-controlled non-home package,
+ProtectSystem=strict, ProtectHome, NoNewPrivileges, empty capabilities and AF_UNIX
+restriction. Its private runtime directory does not own either socket. There is
+no StateDirectory: this transport-only illustration has no registry and must not
+cause state-directory ownership changes. ExecStart uses trusted named
+`--backend-user homehub-backend --backend-group homehub-backend`, alternatives to
+numeric test CLI UID/GID; no unknown groups or accounts are installed. No Install
+section is provided, and the deliberately absent DO-NOT-INSTALL condition remains.
+Descriptor order across multiple socket units is unspecified; name-position
+mapping accepts either order and rejects concrete socket mismatches.
+
+`tests/test_linux_broker_socket_prototype.py` runs parser negatives and static unit
+text assertions on Windows using ConfigParser. These checks do **not** establish
+systemd grammar or acceptance by a running manager. Linux-only tests launch the
+exact source with real
+inherited listeners, exercise kernel peer UID admission/denial, admin denial,
+payload limits, timeout, startup failures, termination and restart. The separate
+root tier requires `HOMEHUB_DISPOSABLE_LINUX_BOUNDARY=1`; only child processes drop
+UID/GID/groups in a dedicated launcher subprocess before exec, with no pytest
+preexec_fn. Only the unique disposable pytest tmp root is chmod 0755; ancestors
+remain untouched. The launcher enters that root before dropping UID, and broker
+custody snapshots relative to this explicit anchor avoid traversal of private
+pytest ancestors; admin remains behind its unchanged 0700 parent. Verify is provisioned root:GID41001 mode 0660 **before** startup
+and trusted CLI `--backend-gid=41001` is supplied. The full broker runs as distinct
+UID/GID41003 with no supplementary groups. A UID41001 backend accesses verify,
+receives credentials_verified=false and cannot traverse admin; the broker accepts
+the inherited root admin FD subject to the explicit provisioner trust dependency.
+It creates no accounts. A Linux saturation test holds twelve incomplete verify
+connections, checks prompt admin denial, bounded FD cleanup and prompt SIGTERM.
+These are subprocess/kernel ABI tests, **not an actual systemd launch**.
+
+Corrective Windows validation: 72 passed, 26 Linux-only tests skipped across the
+prototype and prior boundary suite; unique disposable TEMP basetemp, Python -B
+and no pytest cache. `git diff --check` passed. Linux exact-source
+and disposable root tests must run in the orchestrator's separate disposable
+container. External `systemd-analyze verify` is a separate grammar gate, followed
+by real PID1 systemd activation, restart/stop and hardening lifecycle gates. No
+manager is available here; neither ConfigParser nor subprocess/kernel tests prove
+manager acceptance. No systemd command, installation or live validation occurred.
+Remaining gates include genuine fresh operator authorization and recipient
+authentication, a real broker storage/journal/durability protocol, independent
+backend rollback floor and actuator enforcement, root-controlled package/dependency
+and ACL audit, an approved safe installer, recovery/restore invalidation gates,
+and measured manager activation. No production behavior or deployment changes.

@@ -1,0 +1,14 @@
+# DO NOT INSTALL / NOT PRODUCTION: illustrative only; no accounts are provisioned.
+[Unit]
+Description=OFFLINE HomeHub prototype verify socket
+
+[Socket]
+ListenStream=/run/homehub-identity-prototype-verify/verify.sock
+Service=homehub-identity-prototype.service
+FileDescriptorName=verify
+SocketUser=root
+SocketGroup=homehub-backend
+SocketMode=0660
+DirectoryMode=0755
+Accept=no
+RemoveOnStop=yes
