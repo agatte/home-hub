@@ -45,7 +45,7 @@ describe('SceneBrowser provenance and fetch states', () => {
     expect(screen.getByText(/Freshness and bridge reachability are unknown/)).toBeInTheDocument()
     expect(screen.getAllByText('Dusk')).toHaveLength(1)
     await fireEvent.click(screen.getByRole('button', { name: 'Dusk Hue bridge' }))
-    expect(activateScene.mock.calls).toEqual([['bridge-a'], ['bridge-b']])
+    expect(vi.mocked(activateScene).mock.calls).toEqual([['bridge-a'], ['bridge-b']])
   })
 
   it('reports a scene request failure and recovers through a read-only retry', async () => {
