@@ -287,6 +287,126 @@ whole-state rollback, clock integrity, authenticated recipient delivery, durable
 operator approval, process isolation, route/actuator enforcement and protection
 against arbitrary trusted Python code remain outside this prototype.
 
-**Next gate remains C (separately authorized read-only host-readiness inspection),
-then D (explicit installation/recovery authorization).** This harness is offline
-evidence only; #287 remains open and no live broker or enforcement is established.
+**Host-readiness gate C was partially verified read-only on 2026-10-10.**
+The Latitude is Ubuntu 24.04.4/systemd 255, with an active `anthony` user unit,
+04:30 user cron entry, and no identity broker account/service/state directories.
+The installed unit matches the GitHub source SHA-256. See #287 for the host
+inspection evidence. DB/backup file ACLs and actual backup success remain unchecked.
+**Next gate D requires separate authorization for any installation or recovery**,
+after resolving root-controlled code/socket custody, authenticated operators,
+and an independently enforced minimum backend version. This harness is offline
+evidence only; #287 remains open and no live broker or enforcement exists.
+
+## Appendix: Linux privilege boundary conformance candidate (OFFLINE ONLY)
+
+`tests/support/linux_broker_boundary.py` and `tests/test_linux_broker_boundary.py`
+are test-only contracts, not an operational broker. They neither import backend
+code nor issue credentials, execute SQL/shell, provision accounts, install units,
+or start/administer systemd. Production backend UID 1000 is contextual evidence;
+fixtures use distinct dummy numeric UIDs 41001–41004, never account lookups.
+
+The transport helper requires connected Linux AF_UNIX SOCK_STREAM and reads
+`SO_PEERCRED` using `getsockopt(SOL_SOCKET, SO_PEERCRED, calcsize('iII'))` and
+`unpack('iII')`: native signed pid_t and unsigned uid_t/gid_t. PID <= 0 and
+UID/GID 0xFFFFFFFF sentinels fail closed; valid IDs above signed INT_MAX are
+preserved, but confer no authority under the fixed low-UID fixture policy.
+Damaged connected-socket tests inject both sentinels and high 32-bit IDs;
+these are decoder tests, not measured kernel-issued high-ID identities.
+Request identity/source/profile/approval fields deny rather than
+confer authority. Backend UID admits only the exact `verify` operation on the
+verify endpoint. Fixed administrative operation IDs require a separate endpoint,
+root or configured distinct admin UID, and a simulated fresh interactive approval.
+This approval boolean is trusted fixture input, not a wire field or a real
+sudo/polkit implementation. Admission does not perform the named operation.
+Unknown operations and missing/mismatched peer identities deny. UID identity
+cannot distinguish two clients running as the same UID, authenticate a browser,
+or establish recipient/source or physical-presence authority.
+
+Linux peer credentials are captured at connect/listen/socketpair time, not
+necessarily those of the current descriptor holder after privilege drop or FD
+passing. A root-only, disposable-container opt-in test connects before the child
+clears supplementary groups and drops GID/UID, then sends its post-drop fixture
+identity; the parent must still observe the original connect-time UID/GID.
+This test does not enable an admin role. Future real authorization must close
+old admitted connections and invalidate authorizations after restart, downgrade,
+or privilege changes, and must never accept a delegated credential-less admin FD.
+Cached peercred alone cannot enable admin authority. These are lifecycle design
+requirements for a future service; no actual admin socket exists in this model.
+
+Linux non-root runs still measure forked same-UID peer PID/UID/GID and reject
+unsupported/unconnected transports. The multi-UID proof requires both root and
+`HOMEHUB_DISPOSABLE_LINUX_BOUNDARY=1`, set only by the orchestrator in an
+independent disposable container. It uses fork, clears supplementary groups, and
+sets GID/UID only in children; no account database changes occur. All sockets,
+synthetic registry/journal/guard files and permission changes stay below per-test
+tmp roots. Children enter that tmp root before dropping privileges to avoid
+pytest ancestor permissions obscuring the dedicated-directory measurement.
+The dedicated 0700 broker-owned directory and root-only admin directory remain
+actual traversal barriers. A temporarily widened verify socket measures third-UID
+policy denial separately from filesystem denial. Child waits are bounded and
+children are reaped on success or failure. Use a short unique `--basetemp` in the
+container to respect Linux AF_UNIX pathname limits; do not use real host paths.
+
+Path-custody tests use complete synthetic absolute metadata trees, including a
+virtual `/`; they never inspect host code/interpreter/config paths. Each executable,
+interpreter, dependency and configuration path must have a root-owned parent chain
+with no symlinks or group/world write access. Protected regular files require
+integer `nlink == 1`; hardlink aliases (`nlink > 1`) fail closed. Directories do
+not require one link: Linux directory link counts naturally reach two or more.
+Backend-owned code/venv fails closed.
+The private state directory instead requires the configured dedicated broker
+owner/group and exactly 0700, beneath trusted parents. This owner comes from
+trusted test configuration, never an apparent UID supplied by a request.
+Socket metadata contracts require a root-controlled run parent, explicit 0660
+broker/backend-group verify socket, and a separate root-only 0700 parent with
+0600 root-owned admin socket. That root-only example cannot serve a non-root
+admin UID: any distinct-admin variant needs separately approved ACL/ownership
+design and tests. Snapshot metadata checks alone cannot establish race-free
+custody, ACL denial, SELinux/AppArmor AVC policy, mount trust, or executable
+integrity. This is a metadata snapshot only: real lstat checks, symlink/TOCTOU
+races and filesystem aliases still require Linux installer/audit checks. Those
+require separate Linux installation evidence.
+
+### Non-deployable system-service illustration
+
+**Design text only. Do not copy/install/start this unit.** Referenced executable,
+accounts and directories do not exist as part of this candidate. The root-only
+admin listener would require a separately reviewed root-owned socket activation
+or equivalent arrangement; this unprivileged service template does not create it.
+
+```ini
+[Unit]
+Description=NON-DEPLOYABLE HomeHub identity boundary illustration
+
+[Service]
+User=homehub-identity
+Group=homehub-identity
+ExecStart=/opt/homehub-identity/bin/python /opt/homehub-identity/broker.py
+StateDirectory=homehub-identity
+StateDirectoryMode=0700
+RuntimeDirectory=homehub-identity
+RuntimeDirectoryMode=0700
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+PrivateIPC=yes
+```
+
+The entire `/opt` code/interpreter/dependency/config chain must be root-controlled;
+state under the proposed StateDirectory is dedicated-broker-owned. A private
+RuntimeDirectory alone cannot expose verify IPC to the backend. Separate
+root-controlled verify/admin socket parents, socket modes, backend group/ACL
+access and Linux SO_PEERCRED policy need an explicit installation design.
+systemd may recursively adjust StateDirectory ownership when existing ownership
+differs: inspect exact existing paths, contents, links, ownership and mount/ACL
+boundaries and obtain installation approval before using this mechanism. Never
+point it at an application checkout, shared database, or unrelated state.
+
+Passing this harness proves only the checks actually executed. Windows skips
+Linux kernel tests; non-root Linux skips the privileged multi-UID test. Neither
+passing tier proves systemd hardening, real-account provisioning, single active
+broker enforcement, durability/fsync/power-loss recovery, external rollback
+resistance, or old backend/actuator bypass prevention. No production readiness
+claim follows. Those remain separately measured activation gates; #287 stays open.
