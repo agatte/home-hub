@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { apiGet, apiPost } from '$lib/api.js'
-  let kiosk = false
+  let kiosk = null
   onMount(() => { void checkAccess() })
 
   async function checkAccess() {
@@ -64,7 +64,9 @@
   }
 </script>
 
-{#if kiosk === true}
+{#if kiosk === null}
+  <button type="button" on:click={checkAccess}>Check preparation access</button>
+{:else if kiosk === true}
 <section aria-label="Prepare Sonos for Playback">
   <h3>Prepare Sonos for Playback</h3>
   <p>For a paused loaded track with an empty queue. Preparation discards the current track; it does not play music or change volume.</p>

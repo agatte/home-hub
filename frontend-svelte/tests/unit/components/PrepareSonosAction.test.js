@@ -21,10 +21,16 @@ beforeEach(() => {
 
 afterEach(() => vi.clearAllMocks())
 
+async function revealPreview() {
+  const check = screen.queryByRole('button', { name: 'Check preparation access' })
+  if (check) await fireEvent.click(check)
+  return screen.findByRole('button', { name: 'Preview / manually recheck' })
+}
+
 describe('PrepareSonosAction', () => {
   it('does not preview or actuate on mount and requires two explicit clicks', async () => {
     render(PrepareSonosAction)
-    const preview = await screen.findByRole('button', { name: 'Preview / manually recheck' })
+    const preview = await revealPreview()
     expect(apiGet).toHaveBeenCalledWith('/api/host/status')
     expect(apiGet).not.toHaveBeenCalledWith('/api/music/prepare/preview')
     expect(apiPost).not.toHaveBeenCalled()
@@ -47,6 +53,8 @@ describe('PrepareSonosAction', () => {
   it('never exposes preparation in a browser without kiosk authority', async () => {
     vi.mocked(apiGet).mockResolvedValue({ mode: 'HOME', can_control: false })
     render(PrepareSonosAction)
+    const access = screen.queryByRole('button', { name: 'Check preparation access' })
+    if (access) await fireEvent.click(access)
     await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/host/status'))
     expect(screen.queryByRole('button', { name: 'Preview / manually recheck' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
@@ -59,7 +67,7 @@ describe('PrepareSonosAction', () => {
         : { status: 'refused', reason: 'source_not_eligible' },
     ))
     render(PrepareSonosAction)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Preview / manually recheck' }))
+    await fireEvent.click(await revealPreview())
     expect(await screen.findByText(/Preparation refused: source_not_eligible/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
@@ -67,7 +75,7 @@ describe('PrepareSonosAction', () => {
 
   it('can cancel a preview without sending a write', async () => {
     render(PrepareSonosAction)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Preview / manually recheck' }))
+    await fireEvent.click(await revealPreview())
     await fireEvent.click(await screen.findByRole('button', { name: 'Cancel preparation' }))
     expect(await screen.findByText(/Preparation canceled/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
@@ -77,7 +85,7 @@ describe('PrepareSonosAction', () => {
   it('consumes the token on an ambiguous response without automatic retry', async () => {
     vi.mocked(apiPost).mockRejectedValue(new Error('response lost'))
     render(PrepareSonosAction)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Preview / manually recheck' }))
+    await fireEvent.click(await revealPreview())
     await fireEvent.click(await screen.findByRole('button', { name: 'Confirm: discard current track' }))
     expect(await screen.findByText(/Preparation outcome unknown/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
