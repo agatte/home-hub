@@ -78,7 +78,7 @@ def setup():
     sonos._device, sonos._connected = device, True
     state = SimpleNamespace(
         sonos=sonos, audio_ownership=AudioOwnershipService(setting_loader=load, setting_saver=save),
-        automation=SimpleNamespace(current_mode='gaming', is_dnd_active=lambda: False),
+        automation=SimpleNamespace(current_mode='gaming', house_state='home', is_dnd_active=lambda: False),
         away_manager=SimpleNamespace(away=False), tts=SimpleNamespace(is_speaking=False),
         ambient_sound=SimpleNamespace(get_state=lambda: {}))
     # Use the real common policy with a disposable lifecycle fixture.
@@ -215,13 +215,76 @@ async def test_preview_busy_owner_no_writes(setup):
 
 
 @pytest.mark.asyncio
-async def test_mode_revision_changes_invalidate_preview(setup):
+async def test_idle_home_preview_confirm_keeps_activity_and_volume(setup):
+    service, state, device = setup
+    state.automation.current_mode = 'idle'
+    preview = await service.preview()
+    assert preview['status'] == 'preview'
+    assert device.writes == []
+    assert (await service.confirm(preview['token']))['status'] == 'ready'
+    assert state.automation.current_mode == 'idle'
+    assert device.volume == 22 and device.mute is False
+    assert device.writes == ['Stop', 'Unload']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change,reason', [
+    ('away', 'apartment_away'), ('house_away', 'apartment_away'),
+    ('sleeping', 'sleeping_active'), ('dnd', 'dnd_active'),
+    ('tts', 'tts_active'), ('ambient', 'ambient_playback_owned'),
+    ('disconnected', 'sonos_unavailable'), ('unknown_house', 'house_authority_unavailable'),
+    ('missing_house', 'authority_unavailable'), ('travel', 'travel_mode_active'),
+    ('returning', 'returning_home_active'),
+])
+async def test_idle_preview_precise_refusal_without_token_or_writes(setup, change, reason):
+    service, state, device = setup
+    state.automation.current_mode = 'idle'
+    if change == 'away': state.away_manager.away = True
+    if change == 'house_away': state.automation.house_state = 'away'
+    if change == 'sleeping': state.automation.current_mode = 'sleeping'
+    if change == 'dnd': state.automation.is_dnd_active = lambda: True
+    if change == 'tts': state.tts.is_speaking = True
+    if change == 'ambient': state.ambient_sound.get_state = lambda: {'playing': True}
+    if change == 'disconnected': state.sonos._connected = False
+    if change == 'unknown_house': state.automation.house_state = 'unknown'
+    if change == 'missing_house': del state.automation.house_state
+    if change == 'travel': state.music_assisted_playback._lifecycle_state = lambda: {'travel': True}
+    if change == 'returning': state.music_assisted_playback._lifecycle_state = lambda: {'returning_home': True}
+    result = await service.preview()
+    assert result == {'status': 'refused', 'reason': reason}
+    assert not service.previews and device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_authority_replacement_refuses_consumed_token(setup):
+    service, state, device = setup
+    token = (await service.preview())['token']
+    state.audio_ownership = None
+    assert (await service.confirm(token))['reason'] == 'authority_changed'
+    assert (await service.confirm(token))['reason'] == 'preview_expired_or_used'
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_blocking_transition_revision_never_revives_preview(setup):
+    service, state, device = setup
+    state.music_mapper = SimpleNamespace(_manual_music_block_revision=0)
+    token = (await service.preview())['token']
+    state.music_mapper._manual_music_block_revision = 1
+    state.automation.current_mode = 'idle'
+    assert (await service.confirm(token))['status'] == 'refused'
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_activity_revision_to_idle_preserves_explicit_preview(setup):
     service, state, device = setup
     state.music_mapper = SimpleNamespace(_mode_request_revision=1)
     token = (await service.preview())['token']
     state.music_mapper._mode_request_revision = 2
-    assert (await service.confirm(token))['status'] == 'refused'
-    assert device.writes == []
+    state.automation.current_mode = 'idle'
+    assert (await service.confirm(token))['status'] == 'ready'
+    assert device.writes == ['Stop', 'Unload']
 
 
 @pytest.mark.asyncio

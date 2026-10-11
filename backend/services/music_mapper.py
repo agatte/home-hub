@@ -142,6 +142,8 @@ class MusicMapper:
         # Tracks the most recent mode requested — used to skip stale auto-plays
         self._last_requested_mode: Optional[str] = None
         self._mode_request_revision = 0
+        # Explicit requests survive activity changes, but never Away/Sleeping.
+        self._manual_music_block_revision = 0
         # Set post-construction by bootstrap once AutomationEngine exists
         # (chicken-and-egg — engine needs music_mapper, music_mapper needs
         # engine for is_dnd_active() in on_mode_change / on_weather_change).
@@ -1001,6 +1003,8 @@ class MusicMapper:
         Returns:
             Dict describing the action taken, or None.
         """
+        if mode in {"away", "sleeping"}:
+            self._manual_music_block_revision += 1
         self._mode_request_revision += 1
         request_revision = self._mode_request_revision
         self._last_requested_mode = mode

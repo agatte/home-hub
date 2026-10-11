@@ -63,6 +63,7 @@ class FakeTasteProvider:
 class FakeAutomation:
     def __init__(self):
         self.current_mode = "gaming"
+        self.house_state = "home"
         self.dnd = False
         self.period = "evening"
 
@@ -88,7 +89,7 @@ class FakeSonos:
         self.volume = 22
         self.mute = False
         self.play_mode = "NORMAL"
-        self.queue_size = 100
+        self.queue_size = 0
         self.play_result = True
         self.fail_after_enqueue = False
         self.play_calls = []
@@ -255,7 +256,7 @@ async def test_status_reports_exact_mode_target_read_only_volume_contract(db_eng
 
     status = service.status()
 
-    assert status["volume_policy"] == "require_exact_current_mode_target_never_write"
+    assert status["volume_policy"] == "explicit_current_volume_ceiling_never_write"
 
 
 @pytest.mark.asyncio
@@ -469,6 +470,7 @@ async def test_volume_above_policy_suppresses_without_writing_volume(db_engine):
     assert result["status"] == "suppressed"
     assert result["reason"] == "sonos_volume_above_policy"
     assert result["volume_before"] == 40
+    assert result["volume_ceiling"] == 25
     assert app.sonos.volume_calls == []
     assert app.sonos.play_calls == []
 
@@ -478,15 +480,14 @@ async def test_volume_above_policy_suppresses_without_writing_volume(db_engine):
         client_event_id="play-volume-low", provider="itunes_search",
         provider_id="1713833576", source="test",
     )
-    assert result2["status"] == "suppressed"
-    assert result2["reason"] == "sonos_volume_below_playback_floor"
+    assert result2["status"] == "played"
     assert result2["volume_before"] == 8
     assert app2.sonos.volume_calls == []
-    assert app2.sonos.play_calls == []
+    assert len(app2.sonos.play_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_gaming_night_stale_volume_15_suppresses_without_volume_write(db_engine):
+async def test_gaming_night_volume_15_admitted_without_volume_write(db_engine):
     service, app, _logger, _approval, _factory = await build_service(db_engine)
     app.automation.period = "night"
     app.sonos.volume = 15
@@ -496,11 +497,10 @@ async def test_gaming_night_stale_volume_15_suppresses_without_volume_write(db_e
         provider_id="1713833576", source="test",
     )
 
-    assert result["status"] == "suppressed"
-    assert result["reason"] == "sonos_volume_below_playback_floor"
+    assert result["status"] == "played"
     assert result["volume_before"] == 15
     assert app.sonos.volume_calls == []
-    assert app.sonos.play_calls == []
+    assert len(app.sonos.play_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -532,7 +532,7 @@ async def test_unverified_start_is_failed_without_learning_evidence(db_engine):
 
     assert result["status"] == "failed"
     assert result["reason"] == "playback_start_unverified"
-    assert app.sonos.queue_size == 101
+    assert app.sonos.queue_size == 1
     assert logger.calls == []
     async with factory() as session:
         rows = list((await session.execute(select(SonosPlaybackEvent))).scalars())
@@ -559,7 +559,7 @@ async def test_failed_playback_never_writes_volume_or_learning_evidence(db_engin
 
 
 @pytest.mark.asyncio
-async def test_mode_without_music_volume_curve_fails_closed(db_engine):
+async def test_explicit_idle_home_without_curve_plays(db_engine):
     service, app, logger, _approval, _factory = await build_service(db_engine)
     app.automation.current_mode = "idle"
     result = await service.play_exact(
@@ -568,9 +568,124 @@ async def test_mode_without_music_volume_curve_fails_closed(db_engine):
         provider_id="1713833576",
         source="test",
     )
-    assert result["reason"] == "volume_policy_unavailable"
-    assert app.sonos.play_calls == []
+    assert result["status"] == "played"
+    assert len(app.sonos.play_calls) == 1
+    assert app.sonos.volume_calls == []
     assert logger.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('period,ceiling', [('day', 30), ('evening', 25), ('night', 18), ('late_night', 18)])
+@pytest.mark.parametrize('offset,status', [(0, 'played'), (1, 'suppressed')])
+async def test_idle_home_explicit_volume_ceiling(db_engine, period, ceiling, offset, status):
+    service, app, _, _, _ = await build_service(db_engine)
+    app.automation.current_mode = 'idle'
+    app.automation.period = period
+    app.sonos.volume = ceiling + offset
+    async def no_curve_read(_):
+        pytest.fail('Explicit policy must not load activity curves')
+    service._setting_loader = no_curve_read
+    policy = service.status()['manual_policy']
+    assert policy['volume_ceiling'] == ceiling and policy['reason'] is None
+    result = await assisted_request(service)
+    assert result['status'] == status
+    assert result['volume_ceiling'] == ceiling
+    if offset:
+        assert result['reason'] == 'sonos_volume_above_policy'
+    assert app.sonos.volume_calls == []
+    assert app.sonos.volume == ceiling + offset and not app.sonos.mute
+    assert app.automation.current_mode == 'idle'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change,reason', [
+    ('away', 'apartment_away'), ('house_away', 'apartment_away'),
+    ('house_sleeping', 'sleeping_active'), ('unknown_house', 'house_authority_unavailable'),
+    ('missing_house', 'authority_unavailable'), ('dnd', 'dnd_active'),
+    ('tts', 'tts_active'), ('ambient', 'ambient_playback_owned'),
+    ('disconnected', 'sonos_unavailable'), ('zero', 'sonos_volume_zero'),
+    ('muted', 'sonos_muted'), ('unknown_period', 'volume_policy_unavailable'),
+])
+async def test_idle_home_still_requires_real_authority(db_engine, change, reason):
+    service, app, _, _, _ = await build_service(db_engine)
+    app.automation.current_mode = 'idle'
+    if change == 'away': app.away_manager.away = True
+    if change == 'house_away': app.automation.house_state = 'away'
+    if change == 'house_sleeping': app.automation.house_state = 'sleeping'
+    if change == 'unknown_house': app.automation.house_state = 'unknown'
+    if change == 'missing_house': del app.automation.house_state
+    if change == 'dnd': app.automation.dnd = True
+    if change == 'tts': app.tts.is_speaking = True
+    if change == 'ambient': app.ambient_sound.pending = True
+    if change == 'disconnected': app.sonos.connected = False
+    if change == 'zero': app.sonos.volume = 0
+    if change == 'muted': app.sonos.mute = True
+    if change == 'unknown_period': app.automation.period = 'unknown'
+    result = await assisted_request(service)
+    assert result['status'] == 'suppressed' and result['reason'] == reason
+    assert app.sonos.play_calls == [] and app.sonos.volume_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['enqueue', 'post_enqueue', 'verification'])
+async def test_real_worker_active_to_idle_retains_explicit_authority(db_engine, monkeypatch, stage):
+    service, app, _, _, _ = await build_service(db_engine)
+    _, device, entered, release, _ = await install_settled_executor(app, monkeypatch, stage=stage)
+    task = asyncio.create_task(assisted_request(service))
+    await asyncio.wait_for(entered.wait(), 2)
+    app.automation.current_mode = 'idle'
+    await app.music_mapper.on_mode_change('idle')
+    release.set()
+    assert (await task)['status'] == 'played'
+    assert len(device.calls) == 1
+    assert app.sonos.volume_calls == [] and app.automation.current_mode == 'idle'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['enqueue', 'post_enqueue', 'verification'])
+async def test_later_night_ceiling_fences_inflight_explicit_request(db_engine, monkeypatch, stage):
+    service, app, _, _, factory = await build_service(db_engine)
+    _, device, entered, release, _ = await install_settled_executor(app, monkeypatch, stage=stage)
+    task = asyncio.create_task(assisted_request(service))
+    await asyncio.wait_for(entered.wait(), 2)
+    app.automation.period = 'late_night'
+    release.set()
+    assert (await task)['status'] == 'failed'
+    assert len(device.calls) == (1 if stage == 'verification' else 0)
+    assert app.sonos.volume_calls == []
+    async with factory() as session:
+        assert not list((await session.execute(select(SonosPlaybackEvent))).scalars())
+
+
+def test_real_engine_house_projection_preserves_hard_away_despite_idle():
+    from backend.services.automation_engine import AutomationEngine
+    engine = object.__new__(AutomationEngine)
+    engine._manual_override = False
+    engine._current_mode = 'idle'
+    engine._away_hold = False
+    assert engine.house_state == 'home'
+    engine._away_hold = True
+    assert engine.house_state == 'away'
+    engine._away_hold = False
+    engine._current_mode = 'sleeping'
+    assert engine.house_state == 'sleeping'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change,reason', [
+    ('queue', 'sonos_queue_owned'), ('unknown_queue', 'queue_context_unavailable'),
+    ('source', 'sonos_busy'), ('unknown_source', 'sonos_source_unavailable'),
+])
+async def test_idle_play_preserves_loaded_or_unknown_queue_source(db_engine, change, reason):
+    service, app, _, _, _ = await build_service(db_engine)
+    app.automation.current_mode = 'idle'
+    if change == 'queue': app.sonos.queue_size = 1
+    if change == 'unknown_queue': app.sonos.queue_size = None
+    if change == 'source': app.sonos.uri = 'x-sonos-http:user-source'
+    if change == 'unknown_source': app.sonos.uri = None
+    result = await assisted_request(service)
+    assert result['reason'] == reason and result['status'] == 'suppressed'
+    assert app.sonos.play_calls == [] and app.sonos.volume_calls == []
 
 
 @pytest.mark.asyncio
@@ -694,13 +809,13 @@ async def test_authority_change_after_enqueue_blocks_play_and_is_observable(db_e
     assert result["status"] == "failed"
     assert result["reason"] == "preplay_dnd_active"
     assert app.sonos.state == "STOPPED"
-    assert app.sonos.queue_size == 101
+    assert app.sonos.queue_size == 1
     assert len(app.sonos.play_calls) == 1
     assert logger.calls == []
 
 
 @pytest.mark.asyncio
-async def test_mode_change_after_trust_recheck_suppresses_before_enqueue(db_engine):
+async def test_active_to_idle_after_trust_recheck_can_play(db_engine):
     service, app, logger, _approval, _factory = await build_service(db_engine)
     real_lookup = service._catalog.get_by_identity
     calls = 0
@@ -709,7 +824,7 @@ async def test_mode_change_after_trust_recheck_suppresses_before_enqueue(db_engi
         nonlocal calls
         calls += 1
         if calls == 2:
-            app.automation.current_mode = "watching"
+            app.automation.current_mode = "idle"
         return await real_lookup(provider, provider_id)
 
     service._catalog.get_by_identity = changing_lookup
@@ -717,20 +832,19 @@ async def test_mode_change_after_trust_recheck_suppresses_before_enqueue(db_engi
         client_event_id="play-mode-changed-before-enqueue",
         provider="itunes_search", provider_id="1713833576", source="test",
     )
-    assert result["status"] == "suppressed"
-    assert result["reason"] == "activity_changed_before_play"
-    assert result["mode"] == "watching"
-    assert app.sonos.play_calls == []
+    assert result["status"] == "played"
+    assert result["mode"] == "idle"
+    assert len(app.sonos.play_calls) == 1
     assert logger.calls == []
 
 
 @pytest.mark.asyncio
-async def test_post_enqueue_volume_drop_below_target_suppresses_without_learning(db_engine):
+async def test_post_enqueue_zero_volume_suppresses_without_learning(db_engine):
     service, app, logger, _approval, factory = await build_service(db_engine)
     real_status = app.sonos.get_status
     async def changing_status():
         if app.sonos.track:
-            app.sonos.volume = 8
+            app.sonos.volume = 0
         return await real_status()
 
     app.sonos.get_status = changing_status
@@ -739,7 +853,7 @@ async def test_post_enqueue_volume_drop_below_target_suppresses_without_learning
         provider_id="1713833576", source="test",
     )
     assert result["status"] == "failed"
-    assert result["reason"] == "preplay_sonos_volume_below_playback_floor"
+    assert result["reason"] == "preplay_sonos_volume_zero"
     assert logger.calls == []
     async with factory() as session:
         assisted = (await session.execute(
@@ -764,7 +878,7 @@ async def test_post_enqueue_wrong_loaded_provider_is_busy(db_engine):
     assert result["status"] == "failed"
     assert result["reason"] == "preplay_sonos_busy"
     assert app.sonos.state == "STOPPED"
-    assert app.sonos.queue_size == 101
+    assert app.sonos.queue_size == 1
     assert logger.calls == []
 
 
@@ -778,7 +892,7 @@ async def test_post_enqueue_missing_loaded_uri_is_busy(db_engine):
     )
     assert result["status"] == "failed"
     assert result["reason"] == "preplay_sonos_busy"
-    assert app.sonos.queue_size == 101
+    assert app.sonos.queue_size == 1
     assert logger.calls == []
 
 
@@ -792,7 +906,7 @@ async def test_post_enqueue_paused_exact_track_is_busy(db_engine):
     )
     assert result["status"] == "failed"
     assert result["reason"] == "preplay_sonos_busy"
-    assert app.sonos.queue_size == 101
+    assert app.sonos.queue_size == 1
     assert logger.calls == []
 
 
@@ -894,7 +1008,7 @@ async def test_shared_assisted_manual_takeover_retains_append_and_withholds_lear
     assert events.index("append_accepted") < events.index("manual_" + action)
     plays = [call for call in device.calls if call[0] == "play_from_queue"]
     assert len(plays) == (1 if stage == "verification" else 0)
-    assert device.queue_size == (7 if action == "replace" else 101)
+    assert device.queue_size == (7 if action == "replace" else 1)
     assert all(call[0] not in {"stop", "clear_queue", "remove_from_queue"} for call in device.calls)
     async with factory() as session:
         assert not list((await session.execute(select(SonosPlaybackEvent))).scalars())
@@ -934,7 +1048,7 @@ async def test_assisted_settled_worker_keeps_shared_authority_after_timeout_or_c
         assert (await task)["status"] == "failed"
     assert await manual
     assert events == ["append_started", "append_accepted", "manual"]
-    assert device.queue_size == 101 and device.calls == []
+    assert device.queue_size == 1 and device.calls == []
     retry = await assisted_request(service)
     assert retry["status"] == ("indeterminate" if canceled else "failed")
     assert events.count("append_started") == 1
@@ -942,7 +1056,7 @@ async def test_assisted_settled_worker_keeps_shared_authority_after_timeout_or_c
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["enqueue", "post_enqueue", "verification"])
-@pytest.mark.parametrize("transition", ["physical_away", "semantic_away", "sleeping", "dnd", "tts", "ambient", "gameday"])
+@pytest.mark.parametrize("transition", ["physical_away", "house_away", "sleeping", "dnd", "tts", "ambient", "travel"])
 async def test_assisted_inflight_policy_fence_never_resumes_or_learns(
     db_engine, monkeypatch, stage, transition,
 ):
@@ -952,8 +1066,9 @@ async def test_assisted_inflight_policy_fence_never_resumes_or_learns(
     await asyncio.wait_for(entered.wait(), 2)
     if transition == "physical_away":
         app.away_manager.away = True
-    elif transition == "semantic_away":
+    elif transition == "house_away":
         app.automation.current_mode = "idle"
+        app.automation.house_state = "away"
     elif transition == "sleeping":
         app.automation.current_mode = "sleeping"
     elif transition == "dnd":
@@ -963,12 +1078,12 @@ async def test_assisted_inflight_policy_fence_never_resumes_or_learns(
     elif transition == "ambient":
         app.ambient_sound.pending = True
     else:
-        app.automation.current_mode = "gameday"
+        service._lifecycle_state = lambda: {"travel": True}
     release.set()
     result = await task
     assert result["status"] == "failed"
     assert len(device.calls) == (1 if stage == "verification" else 0)
-    assert device.queue_size == 101
+    assert device.queue_size == 1
     assert app.sonos.volume_calls == []
     async with factory() as session:
         assert not list((await session.execute(select(SonosPlaybackEvent))).scalars())
@@ -982,7 +1097,7 @@ async def test_accepted_append_exception_is_retained_and_never_replayed(db_engin
     await asyncio.wait_for(entered.wait(), 2)
     release.set()
     assert (await task)["status"] == "failed"
-    assert device.queue_size == 101 and device.calls == []
+    assert device.queue_size == 1 and device.calls == []
     assert (await assisted_request(service))["duplicate"]
     assert events.count("append_started") == 1
 
@@ -1039,7 +1154,7 @@ async def test_tts_queued_admission_and_restore_fences_assisted_success(
     assert await authority.run_if_valid(lease["lease_id"], AUDIO_DIMENSIONS, restore) == (True, True)
     await authority.release(lease["lease_id"])
     assert (await task)["status"] == "failed"
-    assert device.queue_size == 101
+    assert device.queue_size == 1
     assert len(device.calls) == (1 if stage == "verification" else 0)
     async with factory() as session:
         assert not list((await session.execute(select(SonosPlaybackEvent))).scalars())
@@ -1075,7 +1190,7 @@ async def test_semantic_away_and_home_does_not_revive_old_assisted_request(db_en
     app.automation.current_mode = "gaming"
     release.set()
     assert (await task)["status"] == "failed"
-    assert device.queue_size == 101 and device.calls == []
+    assert device.queue_size == 1 and device.calls == []
 
 
 @pytest.mark.asyncio
@@ -1097,7 +1212,7 @@ async def test_cancellation_during_stream_verification_releases_authority_withou
         MANUAL_TRANSPORT_DIMENSIONS, source="test", reason="pause", operation=manual,
     )
     assert (await assisted_request(service))["status"] == "indeterminate"
-    assert events.count("append_started") == 1 and device.queue_size == 101
+    assert events.count("append_started") == 1 and device.queue_size == 1
     assert (await app.audio_ownership.snapshot())["leases"] == []
     async with factory() as session:
         assert not list((await session.execute(select(SonosPlaybackEvent))).scalars())
@@ -1152,7 +1267,7 @@ async def test_real_tts_acquisition_ingress_fences_settled_append(
     if policy == "ambient":
         app.ambient_sound.pending = True
     elif policy == "gameday":
-        app.automation.current_mode = "gameday"
+        service._lifecycle_state = lambda: {"travel": True}
     if outcome == "cancelled":
         speech.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1166,7 +1281,7 @@ async def test_real_tts_acquisition_ingress_fences_settled_append(
         assert reserved is not None
         assert await app.audio_ownership.is_valid(reserved["lease_id"])
         await app.audio_ownership.release(reserved["lease_id"])
-    assert device.queue_size == 101 and device.calls == []
+    assert device.queue_size == 1 and device.calls == []
     assert not tts.is_speaking
     assert (await app.audio_ownership.snapshot())["leases"] == []
     # Refusal/cancellation fences old tokens, without blocking future requests.
@@ -1249,7 +1364,7 @@ async def test_manual_during_completion_preserves_positive_history(
     assert events.count("append_started") == 1
     assert len([call for call in device.calls if call[0] == "play_from_queue"]) == 1
     assert device.transport_state == ("PAUSED_PLAYBACK" if action == "pause" else "PLAYING")
-    assert device.queue_size == (7 if action == "replace" else 101)
+    assert device.queue_size == (7 if action == "replace" else 1)
     assert all(call[0] not in {"stop", "clear_queue", "remove_from_queue"} for call in device.calls)
     assert (await app.audio_ownership.snapshot())["leases"] == []
 
@@ -1290,7 +1405,7 @@ async def test_manual_pause_during_verification_reports_authority_change(db_engi
     assert result["reason"] == (
         "playback_authority_changed" if manual_ingress else "playback_start_unverified"
     )
-    assert device.queue_size == 101
+    assert device.queue_size == 1
     assert (await assisted_request(service))["duplicate"]
     assert events.count("append_started") == 1
     async with factory() as session:
@@ -1366,8 +1481,8 @@ async def test_completion_transaction_preserves_verified_history_or_safe_pending
         assert result["duplicate"]
         assert result["status"] == ("indeterminate" if failure == "first_commit" else "played")
     assert events.count("append_started") == 1
-    assert device.calls == [("play_from_queue", 100)]
-    assert device.queue_size == 101
+    assert device.calls == [("play_from_queue", 0)]
+    assert device.queue_size == 1
     async with factory() as session:
         rows = list((await session.execute(select(MusicAssistedPlaybackEvent))).scalars())
         assert len(rows) == 1
@@ -1458,11 +1573,11 @@ async def test_real_advancing_proof_freezes_authority_without_volume_lock(
     assert result["status"] == ("played" if pause_timing == "after" else "failed")
     assert device.transport_state == "PAUSED_PLAYBACK"
     assert device.volume == 22 and not device.mute
-    assert device.calls == [("play_from_queue", 100)]
-    assert device.queue_size == 101
+    assert device.calls == [("play_from_queue", 0)]
+    assert device.queue_size == 1
     assert events.count("append_started") == 1
     assert (await assisted_request(service, "volume-proof"))["duplicate"]
-    assert device.calls == [("play_from_queue", 100)]
+    assert device.calls == [("play_from_queue", 0)]
     async with factory() as session:
         learning = list((await session.execute(select(SonosPlaybackEvent))).scalars())
         assert len(learning) == (1 if pause_timing == "after" else 0)
@@ -1485,7 +1600,7 @@ async def test_legacy_async_verification_guard_remains_supported(db_engine, monk
 
     result = await executor.play_apple_music_share_link(
         "1713833576", apple_candidate().playback_reference,
-        expected_queue_size=100, verification_guard=guard,
+        expected_queue_size=0, verification_guard=guard,
     )
     assert result is verified
     assert calls == ["legacy"]

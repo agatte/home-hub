@@ -70,32 +70,34 @@
     guardMessage = ''
     details = ''
     try {
-      const [host, activity, sonos, curves, capability] = await Promise.all([
+      const [host, activity, sonos, capability] = await Promise.all([
         apiGet('/api/host/status'),
         apiGet('/api/automation/status'),
         apiGet('/api/sonos/status'),
-        apiGet('/api/automation/mode-volume'),
         apiGet('/api/music/assisted-playback/status'),
       ])
       const mode = String(activity?.current_mode || '').toLowerCase()
-      const period = activity?.time_period === 'late_night' ? 'night' : activity?.time_period
-      const target = curves?.[mode]?.[period || 'day']
+      const policy = capability?.manual_policy
+      const ceiling = policy?.volume_ceiling
+      const volume = Number(sonos?.volume)
       if (host?.mode !== 'HOME' || host?.can_control !== true || activity?.house_state !== 'home') {
         guardMessage = 'Use the Latitude kiosk while HomeHub is Home.'
-      } else if (activity?.dnd_enabled || ['idle', 'away', 'sleeping', ''].includes(mode)) {
+      } else if (activity?.dnd_enabled || ['away', 'sleeping'].includes(mode)) {
         guardMessage = 'Playback is unavailable in the current activity or DND state.'
       } else if (!capability?.enabled || !capability?.explicit_only || !capability?.actuation_allowed) {
         guardMessage = 'Assisted playback is not currently available.'
+      } else if (policy?.reason) {
+        guardMessage = `Playback is unavailable: ${String(policy.reason).replaceAll('_', ' ')}.`
       } else if (!['STOPPED', 'NO_MEDIA_PRESENT'].includes(sonos?.state) || sonos?.track || sonos?.mute) {
         guardMessage = 'Sonos must be stopped, unmuted, and have no loaded track.'
-      } else if (!Number.isInteger(target) || Number(sonos?.volume) !== target || target <= 0) {
-        guardMessage = Number.isInteger(target)
-          ? `For ${mode} / ${period}, Sonos must already be at volume ${target}. Current: ${sonos?.volume}.`
-          : 'The current activity has no supported Sonos volume target.'
+      } else if (!Number.isInteger(ceiling) || !Number.isInteger(volume) || volume <= 0 || volume > ceiling) {
+        guardMessage = Number.isInteger(ceiling)
+          ? `Sonos current volume: ${sonos?.volume}. Allowed: 1 to ${ceiling} (${policy.time_period}). HomeHub will not change volume.`
+          : 'The current time has no supported Sonos volume ceiling.'
       } else {
         details = explicitIdentity
-          ? `Request Apple Music track ${candidate.provider_id} at volume ${target} (${mode})? HomeHub will verify approval and current authority before it plays. No volume change or queue clearing.`
-          : `Start ${candidate.title} on Sonos at volume ${target} (${mode})? HomeHub will not change volume or clear the queue.`
+          ? `Request Apple Music track ${candidate.provider_id} at current volume ${volume} (ceiling ${ceiling})? HomeHub will verify approval and current authority before it plays. No volume change or queue clearing.`
+          : `Start ${candidate.title} on Sonos at current volume ${volume} (ceiling ${ceiling})? HomeHub will not change volume or clear the queue.`
         confirming = true
       }
     } catch {
@@ -162,6 +164,9 @@
         <small role="status">Verified playing: {candidate.title}. HomeHub recorded this request once.</small>
       {:else}
         <small role="status">Playback {result?.status || 'not confirmed'} ({result?.reason || 'unknown reason'}). No automatic retry.</small>
+        {#if Number.isInteger(result?.volume_before) && Number.isInteger(result?.volume_ceiling)}
+          <small>Current volume: {result.volume_before}. Ceiling: {result.volume_ceiling}. HomeHub did not change volume.</small>
+        {/if}
       {/if}
       {#if !sending && !uncertain && result?.status && result.status !== 'pending'}
         <button type="button" on:click={anotherAttempt}>Check before another attempt</button>
