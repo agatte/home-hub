@@ -352,6 +352,51 @@ class SonosService:
                     {'x-sonos-http', 'x-sonosapi-stream', 'x-sonosapi-hls',
                      'x-sonosapi-radio'})
 
+    @staticmethod
+    def prepare_ineligible_reason(evidence):
+        """Explain a refusal using only opaque codes; never grant authority or read devices."""
+        from urllib.parse import urlsplit
+
+        if not isinstance(evidence, dict) or not evidence:
+            return 'source_evidence_unavailable'
+        queue_size = evidence.get('queue_size')
+        if (type(queue_size) is not int or queue_size < 0
+                or not evidence.get('queue_update_id')):
+            return 'source_queue_evidence_unavailable'
+        if queue_size > 0:
+            return 'source_queue_not_empty'
+        if evidence.get('coordinator') is False:
+            return 'source_not_coordinator'
+        transport = evidence.get('transport_state')
+        if transport == 'PLAYING':
+            return 'source_playing'
+        if transport == 'STOPPED' and any(evidence.get(key) for key in (
+                'current_uri', 'queue_track_uri', 'title', 'metadata', 'media_metadata')):
+            return 'source_stopped_but_loaded'
+        if evidence.get('play_mode') not in (None, 'NORMAL'):
+            return 'source_play_mode_not_normal'
+        if evidence.get('mute') is True:
+            return 'source_muted'
+        if type(evidence.get('volume')) is int and evidence['volume'] == 0:
+            return 'source_volume_zero'
+        if transport == 'PAUSED_PLAYBACK':
+            track_uri = evidence.get('queue_track_uri')
+            if not track_uri or not evidence.get('title'):
+                return 'source_missing_track_details'
+            current_uri = evidence.get('current_uri', '')
+            if not isinstance(track_uri, str) or not isinstance(current_uri, str):
+                return 'source_not_eligible'
+            try:
+                scheme = urlsplit(current_uri).scheme
+            except ValueError:
+                return 'source_unsupported_transport'
+            if (track_uri.lower().startswith((
+                    'x-rincon:', 'x-rincon-queue:', 'x-rincon-stream:', 'x-sonos-htastream:'))
+                    or scheme not in {'x-sonos-http', 'x-sonosapi-stream',
+                                      'x-sonosapi-hls', 'x-sonosapi-radio'}):
+                return 'source_unsupported_transport'
+        return 'source_not_eligible'
+
     def _prepare_if_unchanged_sync(self, expected, still_allowed):
         def result(status, reason):
             return {'status': status, 'reason': reason}

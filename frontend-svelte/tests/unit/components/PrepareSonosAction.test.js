@@ -68,7 +68,56 @@ describe('PrepareSonosAction', () => {
     ))
     render(PrepareSonosAction)
     await fireEvent.click(await revealPreview())
-    expect(await screen.findByText(/Preparation refused: source not eligible/)).toBeInTheDocument()
+    expect(await screen.findByText(/This source is not eligible for preparation/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['dnd_active', /Do Not Disturb is active/],
+    ['apartment_away', /apartment Away/],
+    ['sleeping_active', /HomeHub is Sleeping/],
+    ['audio_ownership_busy', /Another audio action owns the speaker/],
+    ['source_stopped_but_loaded', /Sonos is stopped but still has a source loaded/],
+    ['source_evidence_unavailable', /Sonos source evidence is unavailable/],
+    ['source_queue_evidence_unavailable', /Sonos queue could not be verified/],
+    ['source_queue_not_empty', /Sonos queue is not empty/],
+    ['source_unsupported_transport', /source is not supported for preparation/],
+    ['source_playing', /Sonos is playing/],
+    ['source_missing_track_details', /no verified track details/],
+    ['source_not_coordinator', /group follower/],
+    ['source_play_mode_not_normal', /repeat or shuffle/],
+    ['source_muted', /Sonos is muted/],
+    ['source_volume_zero', /Sonos volume is zero/],
+    ['private-source://must-not-display', /current source or house policy/],
+    ['__proto__', /current source or house policy/],
+  ])('explains %s without confirmation or writes', async (reason, message) => {
+    vi.mocked(apiGet).mockImplementation((path) => Promise.resolve(
+      path === '/api/host/status'
+        ? { can_control: true }
+        : { status: 'refused', reason, track: 'private-title', uri: 'private-uri' },
+    ))
+    render(PrepareSonosAction)
+    await fireEvent.click(await revealPreview())
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/private-title|private-uri|must-not-display/)).not.toBeInTheDocument()
+    if (reason === 'source_stopped_but_loaded') {
+      expect(screen.getByRole('status')).toHaveTextContent('Nothing was automatically unloaded')
+      expect(screen.getByRole('status')).toHaveTextContent('paused-source preparation is unavailable')
+      expect(screen.getByRole('status').textContent).not.toMatch(/start|resume/i)
+    }
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it('keeps the already unloaded message without confirmation or writes', async () => {
+    vi.mocked(apiGet).mockImplementation((path) => Promise.resolve(
+      path === '/api/host/status' ? { can_control: true }
+        : { status: 'ready', reason: 'already_unloaded_play_requires_separate_action' },
+    ))
+    render(PrepareSonosAction)
+    await fireEvent.click(await revealPreview())
+    expect(await screen.findByText(/Sonos is already unloaded/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
