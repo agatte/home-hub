@@ -13,6 +13,7 @@
 | What was implemented, reviewed, or merged? | Git commits, pull requests, CI, and the owning issue | A merged PR is not proof of deployment or physical acceptance. |
 | What is actually deployed or healthy? | Direct Latitude/Windows version, health and operator evidence | Do not infer production state from a GitHub branch, release plan, or historical audit. |
 | How should an agent operate safely? | [../AGENTS.md](../AGENTS.md), [LOCAL_WORKSPACE.md](LOCAL_WORKSPACE.md), and relevant runbooks | Observe the separate commit/push/merge/deploy/restart/device/credential gates. |
+| How do ChatGPT/Codex preserve knowledge across chats? | [KNOWLEDGE_WORKFLOW.md](KNOWLEDGE_WORKFLOW.md) and [#365](https://github.com/agatte/home-hub/issues/365) | Retrieve current sources first, capture verified discoveries, reconcile the owning docs/issues at handoff; no second memory store. |
 | Why was a decision made, or what was rejected? | Subsystem specs, owning issues/PRs, and dated [audits](audits/) | Preserve historical evidence; add current cross-references instead of rewriting conclusions. |
 | Where do speculative ideas go? | [Future_Development.md](Future_Development.md) | Ideas are not approved product commitments or implementation-ready tickets. |
 
@@ -98,4 +99,6 @@ Run `python scripts/check_project_admin_drift.py --live` from the repository roo
 
 This pilot checks open issue owners in the **current** execution-map routing table, historical packet headings explicitly marked `(closed implementation)`, and open issue titles beginning `Post-deploy physical acceptance:` that are missing from current hub/map navigation. Old reconciliation dates are advisory. This is **not** a whole-backlog completeness audit or a GitHub Projects configuration check; it never edits issues, assumes deployment, or claims a physical test passed. Keep scheduled delivery and any future CI enforcement as separately reviewed follow-ups.
 
-**Optional knowledge browsing:** Obsidian or a private local docs site may read the same repo Markdown. Do not introduce a second editable backlog, enable automatic vault Git operations, or publish internal household/security/operations docs to a public site.
+**Assistant-maintained knowledge:** Follow [KNOWLEDGE_WORKFLOW.md](KNOWLEDGE_WORKFLOW.md) for the read/capture/reconcile loop in ordinary development work. This does not authorize background activity or broaden any Git/host gate. [#365](https://github.com/agatte/home-hub/issues/365) tracks advisory quality audits and possible synchronization separately.
+
+**Optional knowledge browsing:** Obsidian or a private local docs site may read the same repo Markdown. The user-verified permanent Vault is a manually refreshed, SHA-sealed mirror; real-host reboot persistence remains the separate acceptance gate in [#358](https://github.com/agatte/home-hub/issues/358). Do not introduce a second editable backlog, enable automatic vault Git operations, or publish internal household/security/operations docs to a public site.
