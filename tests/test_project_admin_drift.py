@@ -47,6 +47,79 @@ class ProjectAdminDriftTests(unittest.TestCase):
         self.assertEqual(len(notices), 1)
         self.assertIn("unverified", notices[0])
 
+    def test_optional_current_gate_check_accepts_fully_specified_routes(self):
+        self.assertEqual(drift.check_current_gate_rows(MAP, ISSUES), [])
+
+    def test_optional_current_gate_check_reports_unlinked_owner_and_missing_fields(self):
+        route = MAP.replace(
+            "| [#337](https://github.com/agatte/home-hub/issues/337) | Open implementation | Review |",
+            "| Unassigned | TBD | see issue |",
+        )
+        self.assertEqual(
+            drift.check_current_gate_rows(route, ISSUES),
+            [
+                "Current routing row 1: missing owning issue link in Work / owner",
+                "Current routing row 1: missing concrete current gate",
+                "Current routing row 1: missing concrete next step",
+            ],
+        )
+
+    def test_optional_current_gate_check_flags_only_explicit_current_closed_claim(self):
+        route = MAP.replace("| Open implementation | Review |", "| **CLOSED** | Review |")
+        self.assertEqual(
+            drift.check_current_gate_rows(route, ISSUES),
+            ["Current routing row 1: current gate claims closed, but owning issue #337 is open"],
+        )
+        route = MAP.replace(
+            "| Open implementation | Review |",
+            "| IMPLEMENTATION_COMPLETE | Review closed #334 evidence separately |",
+        )
+        self.assertEqual(drift.check_current_gate_rows(route, ISSUES), [])
+        self.assertEqual(
+            drift.check_current_gate_rows(
+                route + "\n## Dated audit\n| past | CLOSED | TBD |", ISSUES
+            ),
+            [],
+        )
+
+    def test_optional_current_gate_check_handles_malformed_and_empty_rows(self):
+        route = MAP.replace(
+            "| [#337](https://github.com/agatte/home-hub/issues/337) | Open implementation | Review |",
+            "| [#337](https://github.com/agatte/home-hub/issues/337) | Review |",
+        )
+        self.assertEqual(
+            drift.check_current_gate_rows(route, ISSUES),
+            ["Current routing row 1: expected three columns, found 2"],
+        )
+        empty = MAP.split("| [#337]", 1)[0] + "## Implementation packet references\n"
+        self.assertEqual(
+            drift.check_current_gate_rows(empty, ISSUES),
+            ["Current routing table has no data rows"],
+        )
+
+    def test_current_gate_option_is_advisory_by_default_and_strict_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "EXECUTION_MAP.md").write_text(
+                MAP.replace("| Open implementation | Review |", "| **CLOSED** | Review |"),
+                encoding="utf-8",
+            )
+            (docs / "PROJECT_ADMIN_HUB.md").write_text(HUB, encoding="utf-8")
+            snapshot = root / "issues.json"
+            snapshot.write_text(json.dumps({"issues": list(ISSUES.values())}), encoding="utf-8")
+            common = ["--snapshot", str(snapshot), "--root", str(root), "--as-of", "2026-10-08"]
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(drift.main(common), 0)
+            self.assertNotIn("claims closed", output.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(drift.main(common + ["--check-current-gates"]), 0)
+            self.assertIn("current gate claims closed", output.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(drift.main(common + ["--check-current-gates", "--strict"]), 1)
+            self.assertIn("current gate claims closed", output.getvalue())
+
     def test_closed_current_owner_is_flagged_not_historical_packet(self):
         issues = {**ISSUES, 337: {**ISSUES[337], "state": "closed"}}
         errors, _ = drift.audit(HUB, MAP, issues, date(2026, 10, 8))
