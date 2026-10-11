@@ -10,7 +10,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from check_obsidian_freshness import compare, main  # noqa: E402
+from check_obsidian_freshness import compare, main, plan_refresh  # noqa: E402
 from manage_obsidian_vault import MANAGED, initialize  # noqa: E402
 
 
@@ -211,3 +211,149 @@ def test_no_external_network_or_mutating_git_calls(source, monkeypatch):
     monkeypatch.setattr(checker, "git", recorded_git)
     assert checker.compare(repo, vault, first)["state"] == "aligned_to_supplied_sha"
     assert calls == [("rev-parse", "HEAD")]
+
+
+def test_reviewable_plan_lists_only_changed_tracked_markdown(source):
+    repo, vault, first = source
+    before_note = (vault / "Personal Note.md").read_bytes()
+    before_manifest = (vault / MANAGED / ".homehub-snapshot-manifest.json").read_bytes()
+    newer = next_head(repo)
+    (repo / "docs" / "NEW.md").write_text("New tracked docs", encoding="utf-8")
+    (repo / "docs" / "README.md").unlink()
+    (repo / "not-exported.log").write_text("not for documentation", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "More docs changed")
+    newest = git(repo, "rev-parse", "HEAD")
+    assert newest != newer
+    result = plan_refresh(repo, vault, newest)
+    assert result["refresh_authorized"] is False
+    assert result["refresh_plan"] == {
+        "state": "reviewable",
+        "reason": "manual_operator_review_required",
+        "paths": {
+            "added": ["docs/NEW.md"],
+            "modified": ["docs/PROJECT_SPEC.md"],
+            "removed": ["docs/README.md"],
+        },
+        "counts": {"added": 1, "modified": 1, "removed": 1},
+    }
+    assert (vault / "Personal Note.md").read_bytes() == before_note
+    assert (vault / MANAGED / ".homehub-snapshot-manifest.json").read_bytes() == before_manifest
+    assert (vault / MANAGED / "docs" / "README.md").exists()
+    assert git(repo, "status", "--porcelain") == ""
+    assert first != newest
+
+
+def test_plan_noop_when_already_at_current_git_sha(source):
+    repo, vault, first = source
+    result = plan_refresh(repo, vault, first)
+    assert result["refresh_plan"] == {
+        "state": "already_current",
+        "reason": "no_refresh_needed",
+        "paths": {},
+        "counts": {},
+    }
+    assert result["refresh_authorized"] is False
+
+
+def test_plan_blocks_missing_or_divergent_github_sha(source):
+    repo, vault, first = source
+    second = next_head(repo)
+    assert (
+        plan_refresh(repo, vault, None)["refresh_plan"]["reason"] == "no_authenticated_remote_sha"
+    )
+    assert (
+        plan_refresh(repo, vault, first)["refresh_plan"]["reason"]
+        == "checkout_differs_from_supplied_github_sha"
+    )
+    assert second != first
+
+
+def test_plan_blocks_uncommitted_and_untracked_files(source):
+    repo, vault, first = source
+    head = next_head(repo)
+    personal_file = repo / "never-index-me.txt"
+    personal_file.write_text("secret-like local work", encoding="utf-8")
+    report = plan_refresh(repo, vault, head)
+    assert report["refresh_plan"]["reason"] == "checkout_has_local_changes"
+    assert report["refresh_plan"]["paths"] is None
+    assert "never-index-me" not in json.dumps(report)
+    personal_file.unlink()
+    (repo / "docs" / "PROJECT_SPEC.md").write_text("Local edit", encoding="utf-8")
+    assert plan_refresh(repo, vault, head)["refresh_plan"]["reason"] == "checkout_has_local_changes"
+
+
+def test_plan_blocks_nonancestor_snapshot_without_writing(source):
+    repo, vault, first = source
+    newer = next_head(repo)
+    git(repo, "checkout", "-q", "--orphan", "unrelated")
+    git(repo, "rm", "-qr", "--cached", ".")
+    git(repo, "add", "AGENTS.md", "docs")
+    git(repo, "commit", "-qm", "Unrelated root")
+    orphan = git(repo, "rev-parse", "HEAD")
+    assert orphan not in (first, newer)
+    report = plan_refresh(repo, vault, orphan)
+    assert report["refresh_plan"]["reason"] == "snapshot_commit_not_verified_ancestor"
+    assert report["refresh_authorized"] is False
+
+
+def test_plan_refuses_modified_sealed_markdown(source):
+    repo, vault, first = source
+    second = next_head(repo)
+    doc = vault / MANAGED / "docs" / "PROJECT_SPEC.md"
+    doc.chmod(0o666)
+    doc.write_text("not sealed", encoding="utf-8")
+    with pytest.raises(ValueError, match="Managed file changed"):
+        plan_refresh(repo, vault, second)
+
+
+def test_plan_cli_report_is_bounded_and_never_calls_refresh(source, capsys):
+    repo, vault, first = source
+    second = next_head(repo)
+    args = ["--repo", str(repo), "--vault", str(vault), "--github-head", second]
+    assert main([*args, "--plan-refresh"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["refresh_plan"]["state"] == "reviewable"
+    assert report["refresh_plan"]["paths"]["modified"] == ["docs/PROJECT_SPEC.md"]
+    assert report["refresh_authorized"] is False
+    assert "Personal Note" not in json.dumps(report)
+    assert main(["--repo", str(repo), "--vault", str(vault), "--plan-refresh"]) == 1
+    assert json.loads(capsys.readouterr().out)["refresh_plan"]["state"] == "blocked"
+
+
+def test_plan_refuses_git_status_warnings_even_when_stdout_is_empty(source, monkeypatch):
+    repo, vault, first = source
+    second = next_head(repo)
+    import check_obsidian_freshness as checker
+
+    real_run = checker.subprocess.run
+
+    def warning_status(argv, **kwargs):
+        if "status" in argv and "--porcelain=v1" in argv:
+            return subprocess.CompletedProcess(argv, 0, b"", b"permission warning")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(checker.subprocess, "run", warning_status)
+    with pytest.raises(ValueError, match="cleanliness unverified"):
+        plan_refresh(repo, vault, second)
+    assert first != second
+
+
+def test_plan_blocks_checkout_moved_during_preview(source, monkeypatch):
+    repo, vault, first = source
+    head = next_head(repo)
+    import check_obsidian_freshness as checker
+
+    original = checker._tracked_docs
+
+    def tracked_then_move(target, sha):
+        value = original(target, sha)
+        if sha == head:
+            git(repo, "checkout", "-q", "--detach", first)
+        return value
+
+    monkeypatch.setattr(checker, "_tracked_docs", tracked_then_move)
+    result = plan_refresh(repo, vault, head)
+    assert result["refresh_plan"]["reason"] == "checkout_moved_during_preview"
+    assert result["refresh_plan"]["paths"] is None
+    assert result["refresh_authorized"] is False
