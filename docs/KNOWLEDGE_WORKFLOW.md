@@ -1,6 +1,6 @@
 # HomeHub Agent Knowledge Workflow
 
-> **Status:** proposed operational workflow under [Project Admin #365](https://github.com/agatte/home-hub/issues/365); pending review/integration.
+> **Status:** active repository workflow merged by [PR #367](https://github.com/agatte/home-hub/pull/367); optional read-only link checks merged by [PR #368](https://github.com/agatte/home-hub/pull/368). Remaining audits and mirror synchronization are tracked by [#365](https://github.com/agatte/home-hub/issues/365).
 > **Authority:** [PROJECT_SPEC.md](PROJECT_SPEC.md) and subsystem specifications for product behavior; GitHub issues/PRs and Git/runtime for implementation, delivery and evidence. This page is an assistant workflow, not a second memory store or backlog.
 
 ## Purpose and limits
@@ -64,6 +64,6 @@ For model-assisted knowledge review, use bounded, sanitized evidence with source
 ## Independent synchronization and authorization gates
 
 - Git/issue updates follow existing reviewed authority; **commit, push, merge, deploy, host writes, restart and credential changes are separate gates**.
-- Automatic Obsidian refresh is a **distinct future design**. No scheduled task, host agent, blind Git update, Vault backup cleanup or wider real-host bridge authority is authorized by this workflow.
+- Automatic Obsidian refresh is a **distinct future design** ([review proposal](OBSIDIAN_SYNC_DESIGN.md)). No scheduled task, host agent, blind Git update, Vault backup cleanup or wider real-host bridge authority is authorized by this workflow.
 - A future sync must verify exact source commit, sealed manifest, target identity, ACLs and preservation of `.obsidian`, personal notes and previous snapshots. On unexpected state, refuse and retain evidence.
 - Repo changes can be made while a host mirror is stale. Report the mirror's verified SHA, never suggest it is always current.
