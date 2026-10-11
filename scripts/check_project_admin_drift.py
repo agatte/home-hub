@@ -197,6 +197,54 @@ def check_knowledge_links(root: Path, documents: tuple[str, ...] = KNOWLEDGE_DOC
     return sorted(set(findings))
 
 
+# Exact, structured status labels only. Never interpret historical prose as live state.
+GATE_PLACEHOLDERS = frozenset(
+    {"", "-", "--", "—", "tbd", "todo", "unknown", "none", "n/a", "see issue", "follow up"}
+)
+CLOSED_CURRENT_GATES = frozenset({"closed", "merged/closed", "closed/merged", "done"})
+
+
+def check_current_gate_rows(execution_map: str, issues: dict[int, dict]) -> list[str]:
+    """Optional advisory check of only the current three-column routing table.
+
+    A missing issue link is a missing *documented* owner, not proof that the
+    underlying issue has no owner. Never infer release, deployment, or physical
+    acceptance from this table or the GitHub issue state.
+    """
+    findings: list[str] = []
+    count = 0
+    for line in current_section(execution_map).splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells[0] == "Work / owner" or all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        count += 1
+        where = f"Current routing row {count}"
+        if len(cells) != 3:
+            findings.append(f"{where}: expected three columns, found {len(cells)}")
+            continue
+        owner, gate, next_step = cells
+        owners = sorted({int(number) for number in ISSUE_LINK.findall(owner)})
+        if not owners:
+            findings.append(f"{where}: missing owning issue link in Work / owner")
+        gate_label = gate.strip("*` ").casefold()
+        next_label = next_step.strip("*` ").casefold()
+        if gate_label in GATE_PLACEHOLDERS:
+            findings.append(f"{where}: missing concrete current gate")
+        if next_label in GATE_PLACEHOLDERS:
+            findings.append(f"{where}: missing concrete next step")
+        if gate_label in CLOSED_CURRENT_GATES:
+            for number in owners:
+                if issues.get(number, {}).get("state") == "open":
+                    findings.append(
+                        f"{where}: current gate claims closed, but owning issue #{number} is open"
+                    )
+    if count == 0:
+        findings.append("Current routing table has no data rows")
+    return findings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -211,6 +259,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also check relative links in the bounded current knowledge entrypoints",
     )
+    parser.add_argument(
+        "--check-current-gates",
+        action="store_true",
+        help="Also check current route owners, placeholders, and explicit closed-status contradictions",
+    )
     args = parser.parse_args(argv)
 
     if args.max_age_days < 0:
@@ -223,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
         drift, notices = audit(hub, execution_map, issues, args.as_of, args.max_age_days)
         if args.check_doc_links:
             drift.extend(check_knowledge_links(args.root))
+        if args.check_current_gates:
+            drift.extend(check_current_gate_rows(execution_map, issues))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
