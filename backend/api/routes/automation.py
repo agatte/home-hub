@@ -45,6 +45,7 @@ from backend.services.automation_constants import (
     ScheduleConfig,
 )
 from backend.services.light_state_calculator import lux_to_multiplier
+from backend.services.desk_visual_comfort import is_neutral_page
 from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
 from backend.services.presence_fusion import PresenceReading
 from backend.services.agent_health_monitor import SUPERVISOR_SILENT_SECONDS
@@ -746,6 +747,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     frame_accepted_at = time.monotonic()
     boundary = getattr(engine, "lighting_transition_boundary", None)
     frame_leases = {}
+    neutral_desk_page = False
 
     def final_frame_guard(light_id):
         def eligible():
@@ -753,7 +755,18 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 return False
             if engine.current_mode != frame_mode or getattr(engine, "current_game", None) != frame_game:
                 return False
-            current = _watching_screen_sync_authority(engine, getattr(request.app.state, "presence", None))
+            current_presence = getattr(request.app.state, "presence", None)
+            if neutral_desk_page:
+                reader = getattr(current_presence, "get_source_reading", None)
+                desktop_now = reader("desktop") if callable(reader) else None
+                if (
+                    not _reading_is_fresh(desktop_now, 8.0)
+                    or desktop_now.face_present is not True
+                    or desktop_now.zone != "desk"
+                    or current_presence.latest_zone(max_age_s=8) != "desk"
+                ):
+                    return False
+            current = _watching_screen_sync_authority(engine, current_presence)
             return not current["enforced"] or current["source"] == report.source
         return eligible
 
@@ -808,12 +821,31 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
 
     # Watching mode intentionally has long dwell at night, but screen color
     # ownership should not inherit that stickiness. When the desktop reports
-    # explicit non-media foreground content (for example ChatGPT after pausing
-    # YouTube), hold the last valid media color until media returns or the mode
-    # itself transitions. None remains fail-open for older/indeterminate agents.
+    # explicit non-media foreground content, retain the media hold except for
+    # a qualified Desk white page below. None preserves legacy agent behavior.
     if engine.current_mode == "watching" and report.source == "desktop":
         targets = _screen_sync_target_lights(report, sync)
-        if report.foreground_media is False:
+        # A fresh physical Desktop Desk plus a neutral white page may replace
+        # unrelated video color even while manual/sticky Watching remains.
+        # Unknown/Couch/Bed and chromatic non-media frames keep the old hold.
+        reading = getattr(presence, "get_source_reading", None)
+        desktop = reading("desktop") if callable(reading) else None
+        qualified_desktop_desk = (
+            presence is not None
+            and desktop is not None
+            and presence.latest_zone(max_age_s=8) == "desk"
+            and _reading_is_fresh(desktop, 8.0)
+            and desktop.face_present is True
+            and desktop.zone == "desk"
+        )
+        neutral_desk_page = (
+            report.foreground_media is False
+            and is_neutral_page(report.r, report.g, report.b)
+            and qualified_desktop_desk
+        )
+        if not qualified_desktop_desk:
+            sync.revoke_desk_page_targets(report.source, targets)
+        if report.foreground_media is False and not neutral_desk_page:
             refresh_hold = getattr(sync, "refresh_watching_hold", None)
             if callable(refresh_hold):
                 refresh_hold(report.source, targets)
@@ -823,7 +855,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 "reason": "watching_foreground_not_media",
                 "reported_source": report.source,
             }
-        if report.foreground_media is True and callable(clear_watching_hold):
+        if (report.foreground_media is True or neutral_desk_page) and callable(clear_watching_hold):
             clear_watching_hold(report.source, targets)
 
     # Capture after this frame's synchronous hold release, before any wait.
@@ -952,6 +984,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 weather_condition=weather_condition,
                 final_guard=final_frame_guard(light_id),
                 authority_lease=frame_leases.get(light_id),
+                desk_neutral_page=neutral_desk_page,
             )
         else:
             accepted = await sync.apply_color(
@@ -968,6 +1001,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 weather_condition=weather_condition,
                 final_guard=final_frame_guard(light_id),
                 authority_lease=frame_leases.get(light_id),
+                desk_neutral_page=neutral_desk_page,
             )
         if accepted is not False:
             applied.append(light_id)

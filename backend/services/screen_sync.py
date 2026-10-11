@@ -427,6 +427,7 @@ def _leased_frame(method):
     async def guarded(self, *args, **kwargs):
         final_guard = kwargs.pop("final_guard", None)
         incoming_lease = kwargs.pop("authority_lease", None)
+        desk_neutral_page = kwargs.pop("desk_neutral_page", False)
         bound = signature.bind(self, *args, **kwargs)
         bound.apply_defaults()
         light_id = bound.arguments["light_id"]
@@ -456,7 +457,7 @@ def _leased_frame(method):
                 nonlocal lease
                 lease = authority.issue("screen_sync_ack", [light_id])
 
-            token = self._frame_guard.set((eligible, refresh_lease, method.__name__))
+            token = self._frame_guard.set((eligible, refresh_lease, method.__name__, desk_neutral_page))
             try:
                 return await method(self, *args, **kwargs)
             finally:
@@ -510,6 +511,7 @@ class ScreenSyncService:
         self._last_sat: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_bri: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_sent_state: dict[str, dict[str, int]] = {}
+        self._desk_page_source_by_light: dict[str, str] = {}
         # Daytime desktop Watching is brightness-only: keep a separate CT+bri
         # deadband so the first evening/night HSB frame is never suppressed by
         # a stale daytime state.
@@ -801,6 +803,10 @@ class ScreenSyncService:
         self._last_color_at_by_source[source] = observed_at
         self._last_color_at_by_light[light_id] = observed_at
         self._last_frame_kind_by_light[light_id] = (source, frame[2] if frame is not None else None)
+        if frame is not None and frame[3]:
+            self._desk_page_source_by_light[light_id] = source
+        else:
+            self._desk_page_source_by_light.pop(light_id, None)
         return True
 
     def rust_owned_light_ids(self) -> set[str]:
@@ -823,6 +829,13 @@ class ScreenSyncService:
     def target_lights(self) -> list[str]:
         """All Hue light ids this service can write to."""
         return list(self._targets)
+
+    def revoke_desk_page_targets(self, source: str, light_ids: list[str]) -> None:
+        """Release page-only claims at Desk loss without writing to the bridge."""
+        for light_id in light_ids:
+            if self._desk_page_source_by_light.get(light_id) == source:
+                self.invalidate_pending_frames([light_id])
+                self.supersede_light(light_id)
 
     def refresh_watching_hold(self, source: str, light_ids: list[str]) -> None:
         """Keep last valid media targets authoritative during sticky Watching.
@@ -916,6 +929,7 @@ class ScreenSyncService:
     def _drop_physical_claim(self, light_id: str) -> None:
         """Forget ScreenSync cache/ownership after bridge state becomes unknown."""
         self._last_sent_state.pop(light_id, None)
+        self._desk_page_source_by_light.pop(light_id, None)
         self._last_daylight_state.pop(light_id, None)
         self._last_color_at_by_light.pop(light_id, None)
         self._last_frame_kind_by_light.pop(light_id, None)
@@ -1269,6 +1283,12 @@ class ScreenSyncService:
         sh, ss, sb = self._smooth(
             light_id, h, s, br, alpha=self._smoothing_alpha_for(mode, period),
         )
+        # Neutral white composition releases vivid history immediately; keep
+        # brightness easing so a page switch does not produce a room-light pop.
+        frame = self._frame_guard.get()
+        if frame is not None and frame[3]:
+            ss = min(ss, float(s))
+            self._last_sat[light_id] = ss
         if sb > max_bri:
             sb = float(max_bri)
             # The physical write and the EMA state must agree. Otherwise the
