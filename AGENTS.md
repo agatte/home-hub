@@ -31,6 +31,25 @@ their subject is actually involved.
 - Production is the Latitude. Windows is the development/desktop-agent machine.
   Do not casually restart `home-hub-ambient.service`.
 
+## Durable knowledge workflow
+
+For substantive work, follow [docs/KNOWLEDGE_WORKFLOW.md](docs/KNOWLEDGE_WORKFLOW.md)
+without waiting for a separate documentation request. Read the smallest relevant
+current authority set at task start; distinguish live evidence, accepted
+decisions, implementation proof, dated history, and unverified hypotheses.
+During investigation and implementation, capture material discoveries and their
+evidence in the owning issue or reviewed docs. Before handoff, reconcile changed
+decisions, dependencies, operational lessons, and remaining gates so a fresh
+session can resume from GitHub/repo rather than chat history. Do not add a
+parallel agent-memory database or rewrite unrelated documentation.
+
+The Windows Obsidian `HomeHub Knowledge Vault` is a read-oriented, Git-SHA
+snapshot, **not** source authority or continuous assistant memory. Never edit
+its managed `HomeHub Source` directly, claim it auto-syncs, or refresh it
+without the guarded, separately authorized host procedure. Model-assisted
+summaries are advisory and must cite current evidence; local LLM experiments
+do not gain device, lifecycle, or host authority.
+
 ## Model routing and delegation
 
 - Use the cheapest credible current model likely to finish correctly after narrowing
