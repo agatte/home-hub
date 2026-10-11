@@ -16,21 +16,28 @@ class MusicPrepareService:
         return str(getattr(getattr(self.state, 'automation', None),
                            'current_mode', '') or '').strip().casefold()
 
-    def mode_revision(self):
-        return getattr(getattr(self.state, 'music_mapper', None), '_mode_request_revision', None)
+    def block_revision(self):
+        return getattr(getattr(self.state, "music_mapper", None), "_manual_music_block_revision", None)
 
     def allowed(self, mode):
         try:
-            return bool(mode) and self.state.music_assisted_playback._policy_reason(mode) is None
+            return self.policy_reason() is None
         except Exception:
             return False
+
+    def policy_reason(self):
+        try:
+            return self.state.music_assisted_playback._policy_reason()
+        except Exception:
+            return 'authority_unavailable'
 
     async def preview(self):
         now = time.monotonic()
         self.previews = {k: v for k, v in self.previews.items() if v['expires'] > now}
         mode = self.mode()
-        if not self.allowed(mode):
-            return {'status': 'refused', 'reason': 'policy_unavailable_or_blocked'}
+        reason = self.policy_reason()
+        if reason:
+            return {'status': 'refused', 'reason': reason}
         authority = getattr(self.state, 'audio_ownership', None)
         if authority is None:
             return {'status': 'refused', 'reason': 'audio_ownership_unavailable'}
@@ -38,9 +45,14 @@ class MusicPrepareService:
         if epoch is None:
             return {'status': 'refused', 'reason': 'audio_ownership_busy'}
         manual = authority.capture_manual_intent()
-        mode_revision = self.mode_revision()
+        block_revision = self.block_revision()
         evidence = await self.state.sonos.get_prepare_evidence()
-        if not self.allowed(mode) or not authority.opportunistic_is_current(epoch):
+        reason = self.policy_reason()
+        if reason:
+            return {'status': 'refused', 'reason': reason}
+        if (not authority.opportunistic_is_current(epoch)
+                or self.block_revision() != block_revision
+                or authority.capture_manual_intent() != manual):
             return {'status': 'refused', 'reason': 'authority_changed'}
         if self.state.sonos.prepare_unloaded(evidence):
             return {'status': 'ready', 'reason': 'already_unloaded_play_requires_separate_action'}
@@ -51,7 +63,7 @@ class MusicPrepareService:
         if len(self.previews) >= 64:
             self.previews.pop(next(iter(self.previews)))
         self.previews[token] = dict(evidence=evidence, mode=mode, epoch=epoch,
-                                    manual=manual, mode_revision=mode_revision,
+                                    manual=manual, authority=authority, block_revision=block_revision,
                                     expires=time.monotonic() + self.TTL)
         return {'status': 'preview', 'token': token, 'expires_in': self.TTL,
                 'track': evidence['title'], 'warning': 'The current track will be discarded.'}
@@ -61,12 +73,18 @@ class MusicPrepareService:
         preview = self.previews.pop(token, None) if isinstance(token, str) else None
         if not preview or preview['expires'] <= time.monotonic():
             return {'status': 'refused', 'reason': 'preview_expired_or_used'}
-        authority = self.state.audio_ownership
+        reason = self.policy_reason()
+        if reason:
+            return {'status': 'refused', 'reason': reason}
+        authority = getattr(self.state, 'audio_ownership', None)
+        if authority is not preview['authority']:
+            return {'status': 'refused', 'reason': 'authority_changed'}
 
         def current():
             return (time.monotonic() < preview['expires']
                     and self.allowed(preview['mode'])
-                    and self.mode_revision() == preview['mode_revision']
+                    and self.state.audio_ownership is authority
+                    and self.block_revision() == preview['block_revision']
                     and authority.capture_manual_intent() == preview['manual']
                     and authority.opportunistic_is_current(preview['epoch']))
 

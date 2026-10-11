@@ -4,7 +4,7 @@ Music Intelligence may select an exact candidate, but this service is the policy
 boundary that decides whether one explicit request may reach MusicMapper/Sonos.
 The first slice is deliberately restrictive: exact Apple Music tracks only,
 current Sonos transport idle, NORMAL play mode, no ambient/TTS owner, Home/Awake,
-DND off, and a current per-mode music-volume curve. It never raises volume.
+DND off, and a safe nonzero current volume. It never writes volume.
 """
 from __future__ import annotations
 
@@ -20,8 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.database import async_session
 from backend.models import MusicAssistedPlaybackEvent, SonosPlaybackEvent
 from backend.services.audio_ownership import QUEUE_SOURCE, TRANSPORT
-from backend.services.mode_volume_policy import compute_mode_volume
-from backend.services.mode_volume_service import MODE_VOLUME_CURVES_KEY
+from backend.services.music_manual_policy import manual_music_reason, manual_volume_policy
 from backend.services.music_trust import MusicApprovalService, MusicTrustPolicy
 from backend.services.playlist_catalog import MusicCatalog, VerifiedMusicCandidate
 
@@ -66,6 +65,7 @@ class MusicAssistedPlaybackService:
         self._lock = asyncio.Lock()
 
     def status(self) -> dict[str, Any]:
+        volume_policy = manual_volume_policy(getattr(self._app_state, "automation", None))
         return {
             "enabled": True,
             "explicit_only": True,
@@ -74,7 +74,8 @@ class MusicAssistedPlaybackService:
             "supported_adapters": [_SUPPORTED_ADAPTER],
             "ownership_policy": "idle_sonos_only",
             "idempotency": "durable_client_event_id",
-            "volume_policy": "require_exact_current_mode_target_never_write",
+            "volume_policy": "explicit_current_volume_ceiling_never_write",
+            "manual_policy": {**volume_policy, "reason": self._policy_reason() or volume_policy["reason"]},
         }
 
     async def play_exact(
@@ -96,7 +97,8 @@ class MusicAssistedPlaybackService:
 
         authority = getattr(self._app_state, "audio_ownership", None)
         manual_revision = authority.capture_manual_intent() if authority else None
-        mode_revision = getattr(getattr(self._app_state, "music_mapper", None), "_mode_request_revision", None)
+        mapper_at_request = getattr(self._app_state, "music_mapper", None)
+        block_revision = getattr(mapper_at_request, "_manual_music_block_revision", None)
         async with self._lock:
             existing = await self._load(client_event_id)
             if existing is not None:
@@ -185,6 +187,7 @@ class MusicAssistedPlaybackService:
                     mode=preflight.get("mode") or mode or None,
                     volume_before=preflight.get("volume_before"),
                     volume_used=preflight.get("volume_used"),
+                    volume_ceiling=preflight.get("volume_ceiling"),
                 )
 
             claimed, duplicate = await self._insert(
@@ -250,6 +253,9 @@ class MusicAssistedPlaybackService:
             # Final live authority read after every potentially slow provider/DB
             # operation. Manual Sonos ownership or a lifecycle transition wins.
             live = await self._runtime_preflight()
+            if (live["reason"] is None
+                    and getattr(mapper_at_request, "_manual_music_block_revision", None) != block_revision):
+                live = {**live, "reason": "authority_changed"}
             if live["reason"] is not None:
                 row = await self._complete(
                     client_event_id,
@@ -259,18 +265,7 @@ class MusicAssistedPlaybackService:
                     volume_before=live.get("volume_before"),
                     volume_used=live.get("volume_used"),
                 )
-                return self._row_result(row)
-
-            if live["mode"] != preflight["mode"]:
-                row = await self._complete(
-                    client_event_id,
-                    status="suppressed",
-                    reason="activity_changed_before_play",
-                    mode=live["mode"],
-                    volume_before=live.get("volume_before"),
-                    volume_used=live.get("volume_used"),
-                )
-                return self._row_result(row)
+                return {**self._row_result(row), "volume_ceiling": live.get("volume_ceiling")}
 
             sonos = self._app_state.sonos
             mapper = getattr(self._app_state, "music_mapper", None)
@@ -295,10 +290,15 @@ class MusicAssistedPlaybackService:
                 return self._row_result(row)
 
             def still_current():
+                volume_policy = manual_volume_policy(self._app_state.automation)
                 return (
-                    authority.opportunistic_is_current(token)
+                    volume_policy["reason"] is None
+                    and 0 < live["volume_before"] <= volume_policy["volume_ceiling"]
+                    and self._app_state.audio_ownership is authority
+                    and self._app_state.music_mapper is mapper_at_request
+                    and getattr(mapper_at_request, "_manual_music_block_revision", None) == block_revision
+                    and authority.opportunistic_is_current(token)
                     and authority.capture_manual_intent() == manual_revision
-                    and getattr(mapper, "_mode_request_revision", None) == mode_revision
                     and self._policy_reason(live["mode"]) is None
                 )
 
@@ -335,14 +335,6 @@ class MusicAssistedPlaybackService:
                     expected_queue_size=int(live["queue_size"]) + 1,
                     allowed_loaded_provider_id=candidate.provider_id,
                 )
-                if (
-                    post_enqueue_guard.get("reason") is None
-                    and post_enqueue_guard.get("mode") != live["mode"]
-                ):
-                    post_enqueue_guard = {
-                        **post_enqueue_guard,
-                        "reason": "activity_changed_before_play",
-                    }
                 if post_enqueue_guard.get("reason") is None and not still_current():
                     post_enqueue_guard = {**post_enqueue_guard, "reason": "authority_changed"}
                 return post_enqueue_guard
@@ -378,7 +370,8 @@ class MusicAssistedPlaybackService:
                 row = await self._complete(
                     client_event_id, status="failed", reason=failure_reason
                 )
-                return self._row_result(row)
+                context = post_enqueue_guard or live
+                return {**self._row_result(row), "volume_ceiling": context.get("volume_ceiling")}
 
             # Sonos froze authority synchronously at the stream proof boundary.
             # Later intent controls transport without retracting that observation.
@@ -395,6 +388,7 @@ class MusicAssistedPlaybackService:
                     client_event_id, status="failed", reason="playback_authority_changed",
                 )
             result = self._row_result(row)
+            result["volume_ceiling"] = final_context.get("volume_ceiling")
             result["candidate"] = candidate.to_dict()
             result["trust"] = trust.to_dict()
             return result
@@ -415,72 +409,19 @@ class MusicAssistedPlaybackService:
             candidate, match, approval_action=action,
         ), None
 
-    def _policy_reason(self, expected_mode: str) -> str | None:
-        """No await: fence lifecycle/manual intent after slow device setup."""
-        state = self._app_state
-        try:
-            lifecycle = self._lifecycle_state()
-            if lifecycle.get("travel") or lifecycle.get("returning_home"):
-                return "lifecycle_active"
-            if state.away_manager.away:
-                return "apartment_away"
-            mode = str(state.automation.current_mode or "").strip().casefold()
-            if mode != expected_mode or mode in {"away", "idle", "sleeping"}:
-                return "activity_changed"
-            if state.automation.is_dnd_active() or state.tts.is_speaking:
-                return "interruption_active"
-            ambient = state.ambient_sound.get_state()
-            if any(ambient.get(key) for key in (
-                "playing", "sonos_ambient_active", "sonos_ambient_pending",
-            )):
-                return "ambient_owned"
-        except Exception:
-            return "authority_unavailable"
-        return None
+    def _policy_reason(self, expected_mode: str | None = None) -> str | None:
+        return manual_music_reason(self._app_state, self._lifecycle_state)
 
     async def _runtime_preflight(
         self, *, expected_queue_size: int | None = None,
         allowed_loaded_provider_id: str | None = None,
     ) -> dict[str, Any]:
         automation = getattr(self._app_state, "automation", None)
-        away_manager = getattr(self._app_state, "away_manager", None)
-        sonos = getattr(self._app_state, "sonos", None)
-        tts = getattr(self._app_state, "tts", None)
-        ambient = getattr(self._app_state, "ambient_sound", None)
-        if any(item is None for item in (automation, away_manager, sonos, tts, ambient)):
-            return {"reason": "authority_unavailable"}
-
-        lifecycle = self._lifecycle_state()
-        if lifecycle.get("travel"):
-            return {"reason": "travel_mode_active"}
-        if lifecycle.get("returning_home"):
-            return {"reason": "returning_home_active"}
-        if bool(getattr(away_manager, "away", False)):
-            return {"reason": "apartment_away"}
-
         mode = str(getattr(automation, "current_mode", "") or "").strip().casefold()
-        if not mode:
-            return {"reason": "activity_mode_unavailable"}
-        if mode == "sleeping":
-            return {"reason": "sleeping_active", "mode": mode}
-        try:
-            if automation.is_dnd_active():
-                return {"reason": "dnd_active", "mode": mode}
-        except Exception:
-            return {"reason": "dnd_authority_unavailable", "mode": mode}
-        if bool(getattr(tts, "is_speaking", False)):
-            return {"reason": "tts_active", "mode": mode}
-
-        try:
-            ambient_state = ambient.get_state()
-        except Exception:
-            return {"reason": "ambient_authority_unavailable", "mode": mode}
-        if (
-            ambient_state.get("playing")
-            or ambient_state.get("sonos_ambient_active")
-            or ambient_state.get("sonos_ambient_pending")
-        ):
-            return {"reason": "ambient_playback_owned", "mode": mode}
+        reason = self._policy_reason()
+        if reason:
+            return {"reason": reason, "mode": mode}
+        sonos = self._app_state.sonos
 
         if not bool(getattr(sonos, "connected", False)) or bool(
             getattr(sonos, "breaker_open", False)
@@ -494,13 +435,15 @@ class MusicAssistedPlaybackService:
         track = str(status.get("track") or "").strip()
         if state not in _IDLE_STATES:
             return {"reason": "sonos_busy", "mode": mode}
-        if track:
+        try:
+            loaded_uri = await sonos.get_current_media_uri()
+        except Exception:
+            return {"reason": "sonos_source_unavailable", "mode": mode}
+        if loaded_uri is None:
+            return {"reason": "sonos_source_unavailable", "mode": mode}
+        if track or loaded_uri:
             if not allowed_loaded_provider_id:
                 return {"reason": "sonos_busy", "mode": mode}
-            try:
-                loaded_uri = await sonos.get_current_media_uri()
-            except Exception:
-                loaded_uri = None
             if not self._loaded_track_matches_provider(
                 loaded_uri, allowed_loaded_provider_id,
             ):
@@ -516,30 +459,28 @@ class MusicAssistedPlaybackService:
             return {"reason": "queue_context_unavailable", "mode": mode}
         if str(queue.get("play_mode") or "").upper() != "NORMAL":
             return {"reason": "sonos_play_mode_owned", "mode": mode}
-        queue_size = int(queue.get("queue_size") or 0)
+        try:
+            queue_size = int(queue["queue_size"])
+        except (KeyError, TypeError, ValueError):
+            return {"reason": "queue_context_unavailable", "mode": mode}
+        if expected_queue_size is None and queue_size != 0:
+            return {"reason": "sonos_queue_owned", "mode": mode}
         if expected_queue_size is not None and queue_size != expected_queue_size:
             return {"reason": "sonos_queue_changed", "mode": mode}
 
         try:
             current_volume = int(status.get("volume", 0))
-            config = await self._setting_loader(MODE_VOLUME_CURVES_KEY) or {}
-            period = automation._get_time_period()
-            volume_decision = compute_mode_volume(
-                mode,
-                time_period=period,
-                dnd=False,
-                current_volume=current_volume,
-                config=config,
-            )
+            volume_policy = manual_volume_policy(automation)
+            if volume_policy["reason"]:
+                return {**volume_policy, "mode": mode}
+            volume_limit = volume_policy["volume_ceiling"]
         except Exception:
             return {"reason": "volume_policy_unavailable", "mode": mode}
-        if volume_decision.reason == "no_curve":
-            return {"reason": "volume_policy_unavailable", "mode": mode}
-        volume_limit = int(volume_decision.target)
         if current_volume <= 0:
             return {
                 "reason": "sonos_volume_zero",
                 "mode": mode,
+                "volume_ceiling": volume_limit,
                 "volume_before": current_volume,
                 "volume_used": current_volume,
             }
@@ -547,19 +488,14 @@ class MusicAssistedPlaybackService:
             return {
                 "reason": "sonos_volume_above_policy",
                 "mode": mode,
-                "volume_before": current_volume,
-                "volume_used": None,
-            }
-        if current_volume < volume_limit:
-            return {
-                "reason": "sonos_volume_below_playback_floor",
-                "mode": mode,
+                "volume_ceiling": volume_limit,
                 "volume_before": current_volume,
                 "volume_used": None,
             }
         return {
             "reason": None,
             "mode": mode,
+            "volume_ceiling": volume_limit,
             "volume_before": current_volume,
             "volume_used": current_volume,
             "queue_size": queue_size,
@@ -593,9 +529,12 @@ class MusicAssistedPlaybackService:
             )
             return result.scalar_one_or_none()
 
-    async def _record_terminal(self, **kwargs: Any) -> dict[str, Any]:
+    async def _record_terminal(self, *, volume_ceiling=None, **kwargs: Any) -> dict[str, Any]:
         row, duplicate = await self._insert(**kwargs)
-        return self._row_result(row, duplicate=duplicate)
+        result = self._row_result(row, duplicate=duplicate)
+        if not duplicate and volume_ceiling is not None:
+            result["volume_ceiling"] = volume_ceiling
+        return result
 
     async def _insert(
         self,

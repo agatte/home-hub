@@ -32,7 +32,7 @@
       } else if (result.status === 'ready') {
         message = 'Sonos is already unloaded. Use the separate approved Play action below.'
       } else {
-        message = `Preparation refused: ${result.reason}.`
+        message = `Preparation refused: ${String(result.reason || 'authority_unavailable').replaceAll('_', ' ')}.`
       }
     } catch {
       message = 'Preview unavailable. Recheck manually.'
@@ -57,7 +57,7 @@
       const result = await apiPost('/api/music/prepare/confirm', { token: confirmedToken })
       message = result.status === 'ready'
         ? 'Sonos unloaded and ready. Use the separate approved Play action below.'
-        : `Sonos is not ready: ${result.reason}. Recheck manually.`
+        : `Sonos is not ready: ${String(result.reason || 'authority_unavailable').replaceAll('_', ' ')}. Recheck manually.`
     } catch {
       message = 'Preparation outcome unknown. No automatic retry. Recheck manually.'
     } finally { busy = false }

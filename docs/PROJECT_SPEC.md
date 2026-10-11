@@ -561,17 +561,42 @@ and shuffles the queue. Assisted playback requires Home/Awake, DND off, no
 Travel/Return hold, no active TTS or ambient Sonos owner, connected Sonos with a
 closed breaker, STOPPED/NO_MEDIA transport with no loaded track, and NORMAL play
 mode. Any existing/paused/manual playback is treated as user ownership and is not
-replaced. The current mode must also have a music-volume curve. The deployed #272/#278
-path never writes Sonos volume. Physical acceptance on 2026-09-17/18 proved that
+replaced. The historically deployed #272/#278 path required a music-volume curve and never
+wrote Sonos volume. Physical acceptance on 2026-09-17/18 proved that
 treating any nonzero volume below the mode target as acceptable is not sufficient:
 two runs at volume 15 reached Sonos PLAYING but were inaudible to Anthony, while the
 earlier #271 capability proof was audible at 25. **LIVE VERIFIED/DEPLOYED (#278):**
-explicit assisted playback therefore remains non-volume-writing and requires the
+the historically accepted assisted playback path therefore required the
 stopped speaker to already equal the current mode/time volume target. Above-target
-requests remain suppressed; below-target requests fail closed as
+requests were suppressed; below-target requests failed closed as
 `sonos_volume_below_playback_floor`. On 2026-09-18 the accepted Working/late-night
 run used the exact target volume 10, verified AJR `Bang!` was PLAYING with advancing
 position before returning `played`, and Anthony audibly confirmed the result.
+
+**Accepted explicit intent (#375; local implementation, physical acceptance pending).**
+Operator-initiated Sonos Prepare preview/confirm and approved Apple Music Play
+are independent of activity, including internal idle while physically Home. The
+shared manual policy requires the automation house state to be Home and the away
+manager to explicitly report not Away; hard Away, Travel/Returning Home, Sleeping,
+DND, TTS, ambient, unavailable authority and manual/owner takeover still block.
+No Listening activity, house-state change or autonomous permission is created.
+Explicit Play admits an already unmuted, nonzero current volume up to **30 day,
+25 evening, 18 night/late_night**; unknown time authority fails closed. The UI
+consumes the backend manual policy and reports current volume versus ceiling.
+This replaces the historical exact-mode-target/floor rule for explicit requests
+only; quiet playback remains possible and audibility needs physical acceptance.
+Activity transitions alone do not invalidate intent; an Away/Sleeping revision
+prevents old intent reviving after a round trip. Ownership, source/queue, manual
+intent, lifecycle and volume checks continue through enqueue and verified start.
+Prepare remains a read-only preview followed by a single-use, 45-second,
+source-fingerprinted discard confirmation with an empty queue. Play requires a
+separate confirmation, an empty queue/unloaded source, and the existing guarded
+append/proof contract. Nonempty/unknown queues or loaded/unknown sources refuse
+without writes; failed appends remain retained rather than cleared.
+Neither action runs without its separate user confirmation; neither automatically
+clears an existing queue, writes volume/mute, or changes modes. Play starts only
+the explicitly approved track after the guarded verification path.
+Auto-selected music retains its conservative mode-dependent policy.
 
 **DEPLOYED (#274 foundation; partial #273 adoption, build `7f309a3`).** HomeHub now has one durable
 audio-ownership authority with separate queue/source, transport, volume, and

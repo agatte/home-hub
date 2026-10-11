@@ -28,6 +28,7 @@ const fixtures = {
   '/api/automation/mode-volume': { gaming: { day: 25, evening: 22, night: 18 } },
   '/api/music/assisted-playback/status': {
     enabled: true, explicit_only: true, actuation_allowed: true,
+    manual_policy: { reason: null, time_period: "day", volume_ceiling: 30 },
   },
 }
 
@@ -83,25 +84,66 @@ describe('AssistedPlayAction', () => {
     expect(apiPost).not.toHaveBeenCalled()
   })
 
-  it('blocks idle activity before any playback request is made', async () => {
+  it('allows idle Home confirmation without a mode curve', async () => {
     vi.mocked(apiGet).mockImplementation((url) =>
       Promise.resolve(url === '/api/automation/status'
         ? { ...fixtures[url], current_mode: 'idle' } : fixtures[url])
     )
     render(AssistedPlayAction, { candidate, trust })
     await fireEvent.click(await revealPlayback())
-    expect(await screen.findByText(/unavailable in the current activity/)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Start approved track' })).toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
 
-  it('does not change volume and blocks nonmatching mode targets', async () => {
+  it('does not change volume and blocks above the shared ceiling', async () => {
     vi.mocked(apiGet).mockImplementation((url) =>
       Promise.resolve(url === '/api/sonos/status'
-        ? { ...fixtures[url], volume: 30 } : fixtures[url])
+        ? { ...fixtures[url], volume: 31 } : fixtures[url])
     )
     render(AssistedPlayAction, { candidate, trust })
     await fireEvent.click(await revealPlayback())
-    expect(await screen.findByText(/already be at volume 25.*Current: 30/)).toBeInTheDocument()
+    expect(await screen.findByText(/current volume: 31.*Allowed: 1 to 30/)).toBeInTheDocument()
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['day', 30], ['evening', 25], ['night', 18], ['late_night', 18],
+  ])('uses the backend explicit ceiling for idle Home in %s', async (period, ceiling) => {
+    vi.mocked(apiGet).mockImplementation((url) => Promise.resolve(
+      url === '/api/automation/status' ? { ...fixtures[url], current_mode: 'idle', time_period: period }
+        : url === '/api/sonos/status' ? { ...fixtures[url], volume: ceiling }
+          : url === '/api/music/assisted-playback/status'
+            ? { ...fixtures[url], manual_policy: { reason: null, time_period: period, volume_ceiling: ceiling } }
+            : fixtures[url],
+    ))
+    render(AssistedPlayAction, { candidate, trust })
+    await fireEvent.click(await revealPlayback())
+    expect(await screen.findByRole('button', { name: 'Start approved track' })).toBeInTheDocument()
+    expect(screen.getByText(new RegExp(`current volume ${ceiling} .*ceiling ${ceiling}`))).toBeInTheDocument()
+    expect(apiGet).not.toHaveBeenCalledWith('/api/automation/mode-volume')
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it.each(['dnd_active', 'tts_active', 'ambient_playback_owned', 'sonos_unavailable', 'travel_mode_active'])('shows shared policy refusal %s without sending Play', async (reason) => {
+    vi.mocked(apiGet).mockImplementation((url) => Promise.resolve(
+      url === '/api/music/assisted-playback/status'
+        ? { ...fixtures[url], manual_policy: { reason, volume_ceiling: 30 } } : fixtures[url],
+    ))
+    render(AssistedPlayAction, { candidate, trust })
+    await fireEvent.click(await revealPlayback())
+    expect(await screen.findByText(`Playback is unavailable: ${reason.replaceAll('_', ' ')}.`)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it.each(['away', 'sleeping'])('blocks house state %s despite idle activity', async (house) => {
+    vi.mocked(apiGet).mockImplementation((url) => Promise.resolve(
+      url === '/api/automation/status' ? { ...fixtures[url], current_mode: 'idle', house_state: house } : fixtures[url],
+    ))
+    render(AssistedPlayAction, { candidate, trust })
+    await fireEvent.click(await revealPlayback())
+    expect(await screen.findByText(/Use the Latitude kiosk while HomeHub is Home/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start approved track' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
 

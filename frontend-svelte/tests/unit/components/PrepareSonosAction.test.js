@@ -68,7 +68,7 @@ describe('PrepareSonosAction', () => {
     ))
     render(PrepareSonosAction)
     await fireEvent.click(await revealPreview())
-    expect(await screen.findByText(/Preparation refused: source_not_eligible/)).toBeInTheDocument()
+    expect(await screen.findByText(/Preparation refused: source not eligible/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
