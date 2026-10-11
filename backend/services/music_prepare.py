@@ -57,7 +57,8 @@ class MusicPrepareService:
         if self.state.sonos.prepare_unloaded(evidence):
             return {'status': 'ready', 'reason': 'already_unloaded_play_requires_separate_action'}
         if not self.state.sonos.prepare_eligible(evidence):
-            return {'status': 'refused', 'reason': 'source_not_eligible'}
+            return {'status': 'refused',
+                    'reason': self.state.sonos.prepare_ineligible_reason(evidence)}
         token = secrets.token_urlsafe(32)
         # Bound memory as well as lifetime; old previews lose authority.
         if len(self.previews) >= 64:

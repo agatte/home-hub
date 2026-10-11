@@ -215,6 +215,75 @@ async def test_preview_busy_owner_no_writes(setup):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('changes,reason', [
+    (None, 'source_evidence_unavailable'),
+    ({'transport_state': 'STOPPED', 'queue_track_uri': '', 'title': '',
+      'metadata': '', 'media_metadata': ''}, 'source_stopped_but_loaded'),
+    ({'transport_state': 'STOPPED', 'current_uri': '', 'queue_track_uri': '',
+      'title': '', 'metadata': 'stale-private-metadata', 'media_metadata': ''},
+     'source_stopped_but_loaded'),
+    ({'queue_size': None}, 'source_queue_evidence_unavailable'),
+    ({'queue_size': '0'}, 'source_queue_evidence_unavailable'),
+    ({'queue_size': -1}, 'source_queue_evidence_unavailable'),
+    ({'queue_update_id': None}, 'source_queue_evidence_unavailable'),
+    ({'queue_size': 1}, 'source_queue_not_empty'),
+    ({'transport_state': 'PLAYING'}, 'source_playing'),
+    ({'title': ''}, 'source_missing_track_details'),
+    ({'queue_track_uri': ''}, 'source_missing_track_details'),
+    ({'current_uri': 'x-rincon-mp3radio:private-radio'}, 'source_unsupported_transport'),
+    ({'queue_track_uri': 'x-rincon-queue:private-queue'}, 'source_unsupported_transport'),
+    ({'queue_track_uri': 'x-rincon-stream:private-line'}, 'source_unsupported_transport'),
+    ({'queue_track_uri': 'x-sonos-htastream:private-tv'}, 'source_unsupported_transport'),
+    ({'coordinator': False}, 'source_not_coordinator'),
+    ({'play_mode': 'SHUFFLE'}, 'source_play_mode_not_normal'),
+    ({'mute': True}, 'source_muted'),
+    ({'volume': 0}, 'source_volume_zero'),
+    ({'transport_state': 'UNKNOWN'}, 'source_not_eligible'),
+])
+async def test_source_diagnostics_are_opaque_read_only_refusals(setup, changes, reason):
+    service, state, device = setup
+    evidence = state.sonos._prepare_evidence_sync()
+    evidence = None if changes is None else dict(evidence, **changes)
+
+    async def read_evidence():
+        return evidence
+
+    state.sonos.get_prepare_evidence = read_evidence
+    before = dict(evidence) if evidence else evidence
+    assert SonosService.prepare_ineligible_reason(evidence) == reason
+    assert await service.preview() == {'status': 'refused', 'reason': reason}
+    assert evidence == before
+    assert not service.previews
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_failed_evidence_is_never_already_unloaded(setup):
+    service, state, device = setup
+    device.update = None  # Existing reader collapses failed queue reads to None.
+    assert await service.preview() == {
+        'status': 'refused', 'reason': 'source_evidence_unavailable'}
+    assert not service.previews and device.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('lifecycle,reason', [
+    ({'travel': True}, 'travel_mode_active'),
+    ({'returning_home': True}, 'returning_home_active'),
+])
+async def test_lifecycle_refusal_precedes_source_diagnostics(setup, lifecycle, reason):
+    service, state, device = setup
+    state.music_assisted_playback._lifecycle_state = lambda: lifecycle
+
+    async def unexpected_read():
+        pytest.fail('Lifecycle must refuse before reading source evidence')
+
+    state.sonos.get_prepare_evidence = unexpected_read
+    assert await service.preview() == {'status': 'refused', 'reason': reason}
+    assert not service.previews and device.writes == []
+
+
+@pytest.mark.asyncio
 async def test_idle_home_preview_confirm_keeps_activity_and_volume(setup):
     service, state, device = setup
     state.automation.current_mode = 'idle'

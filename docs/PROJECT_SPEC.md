@@ -593,6 +593,12 @@ source-fingerprinted discard confirmation with an empty queue. Play requires a
 separate confirmation, an empty queue/unloaded source, and the existing guarded
 append/proof contract. Nonempty/unknown queues or loaded/unknown sources refuse
 without writes; failed appends remain retained rather than cleared.
+The local #375 diagnostic-only improvement explains Prepare source refusals with
+allowlisted opaque codes and conservative UI messages, including stopped but
+still loaded versus unavailable evidence. It adds no Sonos reads or writes,
+does not relax eligibility or automatically unload, and retains the existing
+kiosk-only preview endpoint and ownership fences. Physical diagnostic proof
+remains pending; a stopped display alone does not prove an unloaded source.
 Neither action runs without its separate user confirmation; neither automatically
 clears an existing queue, writes volume/mute, or changes modes. Play starts only
 the explicitly approved track after the guarded verification path.
