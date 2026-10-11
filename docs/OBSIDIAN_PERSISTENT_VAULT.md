@@ -1,13 +1,19 @@
-# Persistent HomeHub Knowledge Vault — staged design (#358)
+# Persistent HomeHub Knowledge Vault — operating guide (#358)
 
-**Status:** implementation candidate, not installed on the real host. Preserve
-GitHub Issues/Projects and tracked HomeHub Markdown as the authorities. This
-Vault is a *local read-oriented mirror* of one named Git commit, not a task board.
+**Status (2026-10-10):** The permanent real-PC Vault is installed and was
+user-confirmed opening, navigating and searching normally following a guarded
+refresh to source commit `dcacfc7eda54acad016b4a5ddf95479b43cf10aa`.
+The refreshed manifest and Windows inherited access were verified; a previous
+managed snapshot remains preserved in a sibling backup outside the Vault.
+**Not yet verified:** persistence after a normal real-Windows reboot and
+Sandbox closure. Record that acceptance in [#358](https://github.com/agatte/home-hub/issues/358).
+GitHub Issues/Projects and tracked Markdown remain authoritative; this is a
+*local read-oriented snapshot*, not an independently editable task board.
 
-## Layout (approved proposed location)
+## Layout (installed real-host location)
 
-The real Windows user will use this stable private root, **only after explicit
-host-side setup and verification that the target is unused**:
+The stable real-Windows Vault root is already in use. **Do not reinitialize,
+overwrite, or remove it**; a new root would require a separate operator decision:
 
     C:\Users\Anthony\Documents\HomeHub Knowledge Vault\
       .obsidian\                         # Owned by Obsidian; never managed
@@ -19,11 +25,15 @@ host-side setup and verification that the target is unused**:
         AGENTS.md
         docs\...
 
-The new Vault is never stored in Windows Sandbox or within the Git project.
-Obsidian and Vault data must both live on the **real Windows host**. Sandbox
-installation and guest-local previews disappear upon Sandbox closure.
+The permanent Vault is outside the Git project and outside Windows Sandbox.
+Sandbox guest-local previews disappear upon Sandbox closure; they do not replace
+the installed real-host Vault.
 
-## Installation and initial setup (real host, operator-directed only)
+## Original installation/setup procedure (historical; do not rerun on the existing Vault)
+
+These steps apply only to a **separately authorized, absent target** in a future
+recovery/reinstallation scenario. The existing permanent Vault is already
+installed, and `--initialize` must not be run over it.
 
 1. Download the Windows Obsidian installer through
    <https://obsidian.md/download>, verify the publisher/signature, and perform
@@ -95,6 +105,13 @@ operation refuse/rollback rather than bypass access controls. If any error
 occurs, inspect the managed folder and reported staging/backup paths before
 retrying. Refreshing from the same commit is a no-op.
 
+## Future synchronization (not enabled)
+
+See [the bounded synchronization proposal](OBSIDIAN_SYNC_DESIGN.md) under
+[#365](https://github.com/agatte/home-hub/issues/365). There is **no** active
+automatic refresh or background task; the existing manual exact-SHA refresh is
+the only accepted operational path until separately reviewed and authorized.
+
 ## Constraints
 
 - Source selection is exactly Git-tracked regular Markdown from `AGENTS.md`
@@ -109,5 +126,9 @@ retrying. Refreshing from the same commit is a no-op.
 - The helper is not a general backup of the Vault or `.obsidian`. Protect
   personal notes through the user's ordinary host backup practices.
 
-**Acceptance remains pending** until the host installation, initial local
-Vault, actual UI use, manual refresh, and durability after restart are proven.
+**Acceptance checkpoint:** Host installation, guarded manual refresh, inherited
+Windows access, and user-reported reopen/navigation/search have passed.
+Normal real-host reboot durability (and any separately requested personal-note
+persistence test) is still unverified. #358 remains open. Never infer that
+`HomeHub Source` automatically follows GitHub `master`; a new approved
+refresh is required for a newer source SHA.
