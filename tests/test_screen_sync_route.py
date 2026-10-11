@@ -242,6 +242,105 @@ async def test_desktop_watching_holds_last_media_color_on_non_media_foreground()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manual_activity", [False, True])
+@pytest.mark.parametrize("zone,age,manual,expected", [
+    ("desk", 0, set(), {"2", "5"}),
+    ("desk", 0, {"2"}, {"5"}),
+    ("desk", 12, set(), set()),
+    ("couch", 0, set(), set()),
+    ("bed", 0, set(), set()),
+    (None, 0, set(), set()),
+])
+async def test_white_page_replaces_video_only_at_fresh_physical_desk(
+    zone, age, manual, expected, manual_activity,
+):
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "night"
+    req = _make_request(engine, sync)
+    await receive_screen_color(
+        ScreenColorReport(r=1, g=1, b=100, foreground_media=True), req,
+    )
+    # Establish a real non-media hold first so the replacement must release it.
+    await receive_screen_color(
+        ScreenColorReport(r=43, g=24, b=49, foreground_media=False), req,
+    )
+    engine.manual_light_overrides = manual
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop", captured_at=datetime.now(timezone.utc) - timedelta(seconds=age),
+        face_present=True, face_confidence=0.95, detection_source="face", zone=zone,
+    ))
+    req.app.state.presence = presence
+    if manual_activity:
+        engine._manual_override = True
+        engine.get_activity_context = lambda: {
+            "current_activity": "working",
+            "current_activity_source_key": "process:desktop",
+            "current_activity_fresh": True,
+            "process_evidence_by_device": {},
+        }
+    hue.calls.clear()
+    result = await receive_screen_color(
+        ScreenColorReport(r=245, g=245, b=245, foreground_media=False), req,
+    )
+    assert set(hue.lights_touched()) == expected
+    assert result["applied"] is bool(expected)
+    assert engine.current_mode == "watching"
+    if expected:
+        assert sync.held_owned_light_ids() == set()
+        for light in expected:
+            assert hue.last_for(light)["sat"] < 30
+
+
+@pytest.mark.asyncio
+async def test_white_page_abstains_if_desk_is_lost_before_final_write():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "night"
+    req = _make_request(engine, sync)
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop", captured_at=datetime.now(timezone.utc),
+        face_present=True, detection_source="face", zone="desk",
+    ))
+    req.app.state.presence = presence
+    entered, release, frame_ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def block():
+        async with sync._transition_boundary.serialized():
+            entered.set()
+            await release.wait()
+
+    original = sync.apply_color
+
+    async def queued_frame(*args, **kwargs):
+        frame_ready.set()
+        return await original(*args, **kwargs)
+
+    sync.apply_color = queued_frame
+    blocker = asyncio.create_task(block())
+    await entered.wait()
+    frame = asyncio.create_task(receive_screen_color(
+        ScreenColorReport(r=245, g=245, b=245, foreground_media=False), req,
+    ))
+    try:
+        await asyncio.wait_for(frame_ready.wait(), timeout=2)
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, zone=None,
+        ))
+    finally:
+        release.set()
+        await blocker
+    result = await frame
+    assert result["applied"] is False
+    assert hue.calls == []
+
+
+@pytest.mark.asyncio
 async def test_legacy_watching_report_without_foreground_media_still_applies():
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
@@ -1260,3 +1359,96 @@ async def test_screen_sync_status_exposes_watching_source_authority():
     assert status["authoritative_source"] == "laptop"
     assert status["authority_reason"] == "accepted_latitude_watching"
     assert status["authoritative_targets"] == ["1", "3", "4"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("zone,age,face", [
+    ("bed", 0, True), ("couch", 0, True),
+    (None, 0, False), ("desk", 12, True), (None, 0, True),
+])
+@pytest.mark.parametrize("period", ["day", "night"])
+async def test_acknowledged_desk_page_loses_ownership_but_media_resumes(
+    zone, age, face, period, mock_hue, mock_hue_v2, mock_ws,
+):
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _owned_watching_engine("desktop")
+    engine._manual_override = True
+    engine._get_time_period = lambda: period
+    req = _make_request(engine, sync)
+    presence = PresenceFusion()
+    req.app.state.presence = presence
+    presence.on_observation(PresenceReading(
+        source="desktop", captured_at=datetime.now(timezone.utc),
+        face_present=True, detection_source="face", zone="desk",
+    ))
+    page = ScreenColorReport(r=245, g=245, b=245, foreground_media=False)
+    assert (await receive_screen_color(page, req))["applied"]
+    assert sync.fresh_owned_light_ids() == {"2", "5"}
+    assert sync._desk_page_source_by_light == {"2": "desktop", "5": "desktop"}
+    protection = AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+    protection._current_mode = "watching"
+    protection._screen_sync = sync
+    protection.manual_light_overrides["5"] = datetime.now(timezone.utc)
+    assert protection._protected_light_ids() == {"2", "5"}
+    lease = sync._transition_boundary.authority.issue("reconcile", ["2"])
+    # Represent the current evidence after aging; fusion correctly rejects
+    # retrograde observations injected after a newer Desk observation.
+    if age:
+        presence = PresenceFusion()
+        req.app.state.presence = presence
+    presence.on_observation(PresenceReading(
+        source="desktop", captured_at=datetime.now(timezone.utc) - timedelta(seconds=age),
+        face_present=face, detection_source="face", zone=zone,
+    ))
+    hue.calls.clear()
+    for _ in range(2):
+        assert not (await receive_screen_color(page, req))["applied"]
+    assert hue.calls == []
+    assert engine.current_mode == "watching"
+    assert sync.fresh_owned_light_ids() == set()
+    assert sync.held_owned_light_ids() == set()
+    assert sync._last_sent_state == {}
+    assert sync._last_daylight_state == {}
+    async with sync._transition_boundary.serialized():
+        assert not sync._transition_boundary.authority.valid(lease)
+    # Camera/mode reconciliation now sees only the independent manual lease.
+    assert protection._protected_light_ids() == {"5"}
+    color = ScreenColorReport(r=210, g=20, b=15, foreground_media=True)
+    assert (await receive_screen_color(color, req))["applied"]
+    assert sync._desk_page_source_by_light == {}
+    if period == "night":
+        assert hue.last_for("2")["sat"] > 30
+        assert hue.last_for("2")["bri"] <= sync.get_cap("watching", "2", zone, None, period)
+    hue.calls.clear()
+    await receive_screen_color(page, req)
+    assert hue.calls == []
+    assert sync.held_owned_light_ids() == ({"2", "5"} if period == "night" else set())
+    assert sync.fresh_owned_light_ids() == {"2", "5"}
+
+
+@pytest.mark.asyncio
+async def test_desk_page_revocation_is_per_light_and_preserves_real_media():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    await sync.apply_color("2", 245, 245, 245, "watching", period="night",
+                           desk_neutral_page=True)
+    await sync.apply_color("5", 20, 20, 200, "watching", period="night")
+    hue.calls.clear()
+    sync.revoke_desk_page_targets("desktop", ["2", "5"])
+    sync.refresh_watching_hold("desktop", ["2", "5"])
+    assert hue.calls == []
+    assert sync.fresh_owned_light_ids() == {"5"}
+    assert sync.held_owned_light_ids() == {"5"}
+
+
+@pytest.mark.asyncio
+async def test_neutral_video_keeps_saturation_easing_outside_desk_page():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    await sync.apply_color("2", 10, 10, 220, "watching", zone="bed", period="night")
+    vivid = hue.last_for("2")["sat"]
+    await sync.apply_color("2", 245, 245, 245, "watching", zone="bed", period="night")
+    assert 30 < hue.last_for("2")["sat"] < vivid
+    await sync.apply_color("2", 220, 10, 10, "watching", zone="bed", period="night")
+    assert hue.last_for("2")["sat"] > 30
