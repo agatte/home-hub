@@ -278,6 +278,122 @@ class SonosService:
         """The underlying SoCo device object."""
         return self._device
 
+    def _prepare_evidence_sync(self):
+        import xml.etree.ElementTree as ET
+        evidence = self._queue_ownership_evidence_sync()
+        queue = self._device.contentDirectory.Browse([
+            ('ObjectID', 'Q:0'), ('BrowseFlag', 'BrowseDirectChildren'),
+            ('Filter', '*'), ('StartingIndex', 0), ('RequestedCount', 1), ('SortCriteria', '')])
+        if (queue.get('TotalMatches') is None or not queue.get('UpdateID')
+                or int(queue['TotalMatches']) != evidence['queue_size']
+                or str(queue['UpdateID']) != evidence['queue_update_id']):
+            raise ValueError('Unknown or changing queue')
+        position = self._device.avTransport.GetPositionInfo([('InstanceID', 0)])
+        media = self._device.avTransport.GetMediaInfo([('InstanceID', 0)])
+        if (not {'CurrentURI', 'CurrentURIMetaData'}.issubset(media)
+                or not {'TrackURI', 'TrackMetaData'}.issubset(position)):
+            raise ValueError('Unknown source metadata')
+        if (str(position.get('TrackURI') or '') != evidence['queue_track_uri']
+                or str(media.get('CurrentURI') or '') != evidence['current_uri']):
+            raise ValueError('Changing source')
+        evidence['media_metadata'] = str(media.get('CurrentURIMetaData') or '')
+        metadata = str(position.get('TrackMetaData') or '')
+        evidence['metadata'] = metadata
+        evidence['coordinator'] = self._device.is_coordinator is True
+        evidence['mute'] = bool(self._device.mute)
+        evidence['volume'] = int(self._device.volume)
+        root = ET.fromstring(metadata) if metadata else None
+        evidence['title'] = next((node.text or '' for node in root.iter()
+                                 if node.tag.endswith('}title')), '') if root is not None else ''
+        return evidence
+
+    async def get_prepare_evidence(self):
+        if not self.connected:
+            return None
+        try:
+            return await self._safe_mutation_call(self._prepare_evidence_sync)
+        except Exception:
+            return None
+
+    @staticmethod
+    def prepare_unloaded(evidence):
+        return bool(evidence and evidence.get('coordinator') is True
+                    and evidence.get('queue_size') == 0
+                    and evidence.get('queue_update_id')
+                    and evidence.get('play_mode') == 'NORMAL'
+                    and evidence.get('mute') is False
+                    and isinstance(evidence.get('volume'), int)
+                    and evidence['volume'] > 0
+                    and evidence.get('transport_state') in {'STOPPED', 'NO_MEDIA_PRESENT'}
+                    and not evidence.get('current_uri')
+                    and not evidence.get('queue_track_uri')
+                    and not evidence.get('media_metadata')
+                    and not evidence.get('metadata') and not evidence.get('title'))
+
+    @staticmethod
+    def prepare_eligible(evidence):
+        from urllib.parse import urlsplit
+        if not evidence:
+            return False
+        # Explicitly supported nonqueue music transports only. Unknown sources abstain.
+        return (evidence.get('coordinator') is True
+                and evidence.get('queue_size') == 0
+                and bool(evidence.get('queue_update_id'))
+                and evidence.get('play_mode') == 'NORMAL'
+                and evidence.get('mute') is False
+                and isinstance(evidence.get('volume'), int)
+                and evidence['volume'] > 0
+                and evidence.get('transport_state') == 'PAUSED_PLAYBACK'
+                and bool(evidence.get('title'))
+                and bool(evidence.get('queue_track_uri'))
+                and not evidence['queue_track_uri'].lower().startswith(
+                    ('x-rincon:', 'x-rincon-queue:', 'x-rincon-stream:', 'x-sonos-htastream:'))
+                and urlsplit(evidence.get('current_uri', '')).scheme in
+                    {'x-sonos-http', 'x-sonosapi-stream', 'x-sonosapi-hls',
+                     'x-sonosapi-radio'})
+
+    def _prepare_if_unchanged_sync(self, expected, still_allowed):
+        def result(status, reason):
+            return {'status': status, 'reason': reason}
+
+        def matches(sample, stopped=False):
+            if not stopped:
+                return sample == expected
+            # Stop can reset position and track number without changing the source.
+            # Keep queue/source/metadata equality before issuing any unload.
+            volatile = {'transport_state', 'position', 'duration', 'queue_track'}
+            return (sample.get('transport_state') == 'STOPPED'
+                    and all(sample.get(key) == value for key, value in expected.items()
+                            if key not in volatile))
+
+        fresh = self._prepare_evidence_sync()
+        if not self.prepare_eligible(fresh) or not matches(fresh) or not still_allowed():
+            return result('refused', 'source_or_authority_changed')
+        self._device.avTransport.Stop([('InstanceID', 0)])
+        # Sonos-app races cannot be atomically fenced by HomeHub's lock.
+        fresh = self._prepare_evidence_sync()
+        if not matches(fresh, stopped=True) or not still_allowed():
+            return result('not_ready', 'changed_after_stop')
+        self._device.avTransport.SetAVTransportURI([
+            ('InstanceID', 0), ('CurrentURI', ''), ('CurrentURIMetaData', '')])
+        unloaded = self._prepare_evidence_sync()
+        if (not still_allowed() or not self.prepare_unloaded(unloaded)
+                or unloaded.get('queue_uid') != expected.get('queue_uid')
+                or unloaded.get('queue_update_id') != expected.get('queue_update_id')
+                or unloaded.get('volume') != expected.get('volume')):
+            return result('not_ready', 'unload_not_verified')
+        return result('ready', 'unloaded_verified_play_requires_separate_action')
+
+    async def prepare_if_unchanged(self, expected, still_allowed):
+        if not self.connected:
+            return {'status': 'not_ready', 'reason': 'sonos_unavailable'}
+        try:
+            return await self._safe_mutation_call(
+                self._prepare_if_unchanged_sync, dict(expected), still_allowed)
+        except Exception:
+            # No retry or fallback: Stop alone is never proof of readiness.
+            return {'status': 'not_ready', 'reason': 'unload_unsupported_or_failed_recheck_required'}
+
     async def get_queue_context(self) -> dict[str, Any]:
         """Return fresh queue/play-mode facts for playback ownership policy.
 

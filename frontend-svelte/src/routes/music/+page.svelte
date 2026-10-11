@@ -3,6 +3,7 @@
   import ModePlaylistMapper from '$lib/components/ModePlaylistMapper.svelte'
   import ShadowDiscoveryPanel from '$lib/components/ShadowDiscoveryPanel.svelte'
   import ApprovedAppleMusicEntry from '$lib/components/ApprovedAppleMusicEntry.svelte'
+  import PrepareSonosAction from '$lib/components/PrepareSonosAction.svelte'
   import MusicBanditDiagnostics from '$lib/components/MusicBanditDiagnostics.svelte'
 
   /** @type {any} */
@@ -17,6 +18,7 @@
     <ShadowDiscoveryPanel />
   </section>
 
+  <PrepareSonosAction />
   <ApprovedAppleMusicEntry />
 
   <details class="music-manage">
