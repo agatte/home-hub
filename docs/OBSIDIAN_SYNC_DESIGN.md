@@ -6,7 +6,7 @@
 
 ## Existing verified boundary
 
-The real Windows Vault at `C:\Users\Anthony\Documents\HomeHub Knowledge Vault` was refreshed manually to verified source commit `dcacfc7eda54acad016b4a5ddf95479b43cf10aa` on 2026-10-10. A user-confirmed Obsidian reopen, search and navigation passed. Its managed `HomeHub Source` is a **sealed snapshot of one named SHA**, with `.homehub-snapshot-manifest.json` and a SHA-256 hash per tracked file. The previous snapshot remains preserved outside the Vault. The host reboot test is still pending; a newer GitHub `master` does not update this mirror by itself.
+The real Windows Vault at `C:\Users\Anthony\Documents\HomeHub Knowledge Vault` was refreshed manually to verified source commit `dcacfc7eda54acad016b4a5ddf95479b43cf10aa` on 2026-10-10. A user-confirmed Obsidian reopen, search and navigation passed. Its managed `HomeHub Source` is a **sealed snapshot of one named SHA**, with `.homehub-snapshot-manifest.json` and a SHA-256 hash per tracked file. The previous snapshot remains preserved outside the Vault. The normal Windows host reboot, Vault navigation/search and preferences were subsequently operator-confirmed on 2026-10-11 and #358 closed; a newer GitHub `master` still does not update this mirror by itself.
 
 Existing `--refresh` requires the host repo HEAD to equal an explicit expected 40-character SHA, validates the old sealed source, rejects symlinks/junctions or local edits, stages a new snapshot, and renames the old managed source to a unique sibling backup before swapping it. It does not fetch GitHub, update the host checkout, delete backups, schedule work, or prove Obsidian is closed.
 
@@ -32,9 +32,9 @@ Existing `--refresh` requires the host repo HEAD to equal an explicit expected 4
 | Snapshot backup count increases | Retain it; propose exact-target retention review, not a wildcard deletion |
 | New docs commit on GitHub, no matched host source checkout | Report an available update; do not pull/reset/rebase host or Sandbox just to match |
 
-## Phase A helper candidate — read-only, no host rollout
+## Phase A — merged read-only helper, no automatic host rollout
 
-A scoped Python candidate, [`scripts/check_obsidian_freshness.py`](../scripts/check_obsidian_freshness.py), compares the local checkout HEAD and the existing **fully hash-verified managed snapshot** against an *explicitly supplied* 40-character GitHub `master` SHA. Manifest hashes are **self-consistency checks, not an authenticated signature**. The caller must independently obtain/verify that SHA through an authorized GitHub read; the helper itself **does not fetch, authenticate or assume remote freshness**. Do not use a chat recollection or stale issue checkpoint as that input. Missing remote SHA produces `unknown`, not a green result.
+A merged scoped Python helper, [`scripts/check_obsidian_freshness.py`](../scripts/check_obsidian_freshness.py), compares the local checkout HEAD and the existing **fully hash-verified managed snapshot** against an *explicitly supplied* 40-character GitHub `master` SHA. Manifest hashes are **self-consistency checks, not an authenticated signature**. The caller must independently obtain/verify that SHA through an authorized GitHub read; the helper itself **does not fetch, authenticate or assume remote freshness**. Do not use a chat recollection or stale issue checkpoint as that input. Missing remote SHA produces `unknown`, not a green result.
 
 Illustrative syntax (synthetic fixtures or a separately authorized read-only operator session; **not** approval to operate on the real Windows host):
 
@@ -44,8 +44,22 @@ py -3 scripts/check_obsidian_freshness.py --repo 'C:\Users\Anthony\Documents\hom
 
 Output is a single bounded JSON report with `checkout_head`, `vault_snapshot`, supplied `github_master` provenance, managed integrity, explicit pairwise `same`/`different`/`unknown`, and `refresh_authorized: false`. Exit 0 means three SHA values match **only the supplied reference**, 1 means mismatch or unknown, and 2 means a refused/error state (missing/tampered Vault, invalid SHA, unsafe path, unavailable Git). It checks neither Git ancestry nor worktree cleanliness, runtime deployment, Obsidian app closure, real Windows ACLs or reboot persistence; equal SHAs do not grant permission to refresh. Hash verification reads only `HomeHub Source`, never personal notes or `.obsidian`. No Git fetch/write, logging of credentials, background service, Vault mutation or retention action is included.
 
+## Phase B — proposed assisted refresh preview (Sandbox candidate only)
+
+Extend the **existing** `check_obsidian_freshness.py` with opt-in `--plan-refresh` for a **read-only, reviewable path list**. It must receive an independently verified GitHub SHA, require the checkout to equal that supplied SHA and be clean (including untracked files), confirm the sealed managed snapshot is hash-consistent, and verify the snapshot commit is an ancestor of checkout HEAD. Only compare `AGENTS.md` and regular `docs/**/*.md` tracked Git tree blobs. Output added/modified/removed paths and counts, never document contents or personal notes; do not open a network connection or update Git/Windows/Vault. A plan is **not** permission to run `manage_obsidian_vault.py --refresh`, even when labeled reviewable.
+
+Example **synthetic fixture or separately authorized host operator** use (not authority to touch the real host):
+
+~~~powershell
+py -3 scripts/check_obsidian_freshness.py --plan-refresh --repo '<already-verified-checkout>' --vault '<already-verified-existing-vault>' --github-head '<independently-verified-GitHub-master-SHA>'
+~~~
+
+Exit 0 means either a reviewable proposed diff or no change; exit 1 means blocked/unknown; exit 2 means the helper refused to evaluate a corrupt/unsafe/unavailable source. The `refresh_authorized` field remains `false` always. Do not use this assistant CLI as an unattended refresh gate; operator still closes Obsidian, inspects the specific preview, approves a guarded exact-target refresh separately, and preserves all old backups. The script cannot prove Obsidian is closed or verify source authenticity beyond the explicitly supplied remote SHA.
+
+**2026-10-11 lifecycle checkpoint:** [#358](https://github.com/agatte/home-hub/issues/358) was completed following operator-confirmed normal Windows reboot survival of the real Vault, post-reboot link navigation, search and preferences. [#376](https://github.com/agatte/home-hub/issues/376) records a separate recovered Sandbox startup failure; neither closure authorizes automatic sync or any host action.
+
 ## Implementation constraints / evidence gate
 
 Test the Phase A report with synthetic manifest/checkout/SHA fixtures in protected Windows Sandbox and review its read-only behavior before publishing or authorizing real-host use. Its output should record the manifest SHA, proposed intended commit, whether source and target are verified, and a reason for any abstention. Inputs must be allowlisted and secrets excluded; no raw production DB, app settings, personal notes or logs. A later trigger would need independent authorization, host review, per-user scheduling/no elevation, strict concurrency and failure tests, and post-run Vault/GUI validation.
 
-No phase is authorized here beyond documentation/reversible Sandbox tests. The accepted existing manual refresh remains the fallback until a specifically reviewed and approved mechanism is proven. Avoid implying that ChatGPT runs continuously between conversations.
+No unattended host refresh, scheduled task, model installation or Windows automation is authorized by this proposal. The accepted existing manual refresh remains the fallback until a specifically reviewed and approved mechanism is proven. Avoid implying that ChatGPT runs continuously between conversations.
