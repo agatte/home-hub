@@ -1,5 +1,6 @@
 """Synthetic Git acceptance tests for the persistent HomeHub Obsidian vault."""
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -184,6 +185,34 @@ def test_rejects_relative_vault_path(source):
     repo, sha = source
     with pytest.raises(ValueError, match="absolute"):
         initialize(repo, Path("relative-vault"), sha)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
+def test_windows_vault_and_refreshed_source_inherit_user_acl(source, tmp_path):
+    repo, head = source
+    vault = tmp_path / "Private Vault"
+    account = subprocess.check_output(["whoami"], text=True).strip().casefold()
+    # Mirror a Documents folder with an explicit normal-user ACE.
+    subprocess.run(
+        ["icacls.exe", str(tmp_path), "/grant", f"{account}:(OI)(CI)(F)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    initialize(repo, vault, head)
+
+    def assert_user_can_traverse(path):
+        acl = subprocess.check_output(
+            ["icacls.exe", str(path)], text=True, encoding="utf-8", errors="replace"
+        ).casefold()
+        assert f"{account}:" in acl
+        assert "(i)" in acl
+
+    assert_user_can_traverse(vault)
+    assert_user_can_traverse(vault / MANAGED)
+    second = next_head(repo)
+    refresh(repo, vault, second)
+    assert_user_can_traverse(vault / MANAGED)
 
 
 def test_rejects_symlinked_managed_file(source, tmp_path):

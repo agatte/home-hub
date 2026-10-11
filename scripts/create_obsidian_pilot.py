@@ -8,6 +8,7 @@ regular Markdown blobs from docs/ and AGENTS.md are exported.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path, PurePosixPath
 import stat
 import subprocess
@@ -124,7 +125,10 @@ def create(repo: Path, output: Path) -> tuple[str, int]:
     head, files = tracked_markdown(repo)
     # Everything is prevalidated before the first write. A failed partial export
     # is intentionally preserved for inspection, not recursively cleaned up.
-    output.mkdir(mode=0o700)
+    # Python 3.13 on Windows treats 0o700 as a restrictive ACL that can
+    # prevent normal unelevated Obsidian from listing the exported directory.
+    # Let Windows inherit the existing parent ACL; retain private POSIX mode.
+    output.mkdir(mode=0o777 if os.name == "nt" else 0o700)
     for relative, data in files:
         target = output.joinpath(*relative.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
