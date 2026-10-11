@@ -1,0 +1,531 @@
+{
+  "version": 1,
+  "description": "Sanitized, source-inspired and explicitly synthetic holdout probes. Gold must never be exposed in model prompts.",
+  "cases": [
+    {
+      "id": "case-01",
+      "source": "https://github.com/agatte/home-hub/issues/376",
+      "provenance": "historical-summary",
+      "evidence": [
+        {
+          "id": "S1",
+          "text": "A protected Windows Sandbox launch previously failed with error 0xC03A0014."
+        },
+        {
+          "id": "S2",
+          "text": "A scratch VHDX mounted read-only and dismounted successfully."
+        },
+        {
+          "id": "S3",
+          "text": "The operator stopped the checked leftover Sandbox server and completed app Repair."
+        },
+        {
+          "id": "S4",
+          "text": "A later protected Sandbox launch succeeded; WDAGUtilityAccount and worktrees were verified."
+        },
+        {
+          "id": "S5",
+          "text": "The underlying cause was not established; future reboot persistence was not verified."
+        }
+      ],
+      "probes": [
+        {
+          "id": "recovery-observed",
+          "statement": "A later protected Sandbox launch succeeded.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "S4"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "cause-identifiable",
+          "statement": "The root cause was established.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "S5"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "vhdx-global",
+          "statement": "All virtual disk consumers work correctly.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "case-02",
+      "source": "https://github.com/agatte/home-hub/issues/376",
+      "provenance": "withheld",
+      "evidence": [
+        {
+          "id": "S1",
+          "text": "Windows Sandbox failed to start with error 0xC03A0014."
+        },
+        {
+          "id": "S2",
+          "text": "A basic scratch VHDX mounted successfully."
+        },
+        {
+          "id": "S3",
+          "text": "An app Repair was proposed. No result from Repair or subsequent launch is supplied."
+        }
+      ],
+      "probes": [
+        {
+          "id": "recovered",
+          "statement": "Sandbox recovery was successful.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "recovery-failed",
+          "statement": "Sandbox recovery failed.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "startup-failed",
+          "statement": "A Sandbox startup failure occurred.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "S1"
+            ]
+          },
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "case-03",
+      "source": "https://github.com/agatte/home-hub/pull/377",
+      "provenance": "historical-summary",
+      "evidence": [
+        {
+          "id": "D1",
+          "text": "PR #377 was merged to GitHub master."
+        },
+        {
+          "id": "D2",
+          "text": "The --plan-refresh option is read-only and always reports refresh_authorized=false; no Windows Obsidian Vault writes."
+        },
+        {
+          "id": "D3",
+          "text": "All six Linux CI checks passed."
+        },
+        {
+          "id": "D4",
+          "text": "Real host Vault refresh remains a separate guarded and manually authorized procedure."
+        }
+      ],
+      "probes": [
+        {
+          "id": "auto-vault-refresh",
+          "statement": "PR #377 automatically refreshes the real host Vault.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "D2",
+              "D4"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "merged",
+          "statement": "PR #377 was merged.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "D1"
+            ]
+          },
+          "critical": false
+        },
+        {
+          "id": "recent-vault-write",
+          "statement": "A Vault refresh occurred after this merge.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "case-04",
+      "source": "https://github.com/agatte/home-hub/pull/377",
+      "provenance": "withheld",
+      "evidence": [
+        {
+          "id": "D1",
+          "text": "A reviewed --plan-refresh proposal previews Markdown changes without writing the Vault."
+        },
+        {
+          "id": "D2",
+          "text": "No GitHub CI check outcome or merge record is supplied."
+        }
+      ],
+      "probes": [
+        {
+          "id": "ci-green",
+          "statement": "All six GitHub checks passed.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "merged",
+          "statement": "The proposed work was merged.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "preview-read-only",
+          "statement": "The proposed preview is read-only.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "D1"
+            ]
+          },
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "case-05",
+      "source": "https://github.com/agatte/home-hub/pull/378",
+      "provenance": "historical-summary",
+      "evidence": [
+        {
+          "id": "M1",
+          "text": "PR #378 was merged into GitHub master."
+        },
+        {
+          "id": "M2",
+          "text": "The PR says physical Sonos verification and audible Apple Music acceptance remain outstanding."
+        },
+        {
+          "id": "M3",
+          "text": "Manual confirmed Home listening intent was separated from activity mode; autonomous music selection was not changed."
+        }
+      ],
+      "probes": [
+        {
+          "id": "code-merged",
+          "statement": "The explicit Home listening implementation was merged.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "M1"
+            ]
+          },
+          "critical": false
+        },
+        {
+          "id": "physical-audio-verified",
+          "statement": "Audible playback was physically accepted.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "M2"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "automatic-selection-changed",
+          "statement": "The PR changed autonomous music selection.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "M3"
+            ]
+          },
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "case-06",
+      "source": "https://github.com/agatte/home-hub/issues/375",
+      "provenance": "withheld",
+      "evidence": [
+        {
+          "id": "M1",
+          "text": "On earlier deployed build 907c87d8, a Music Preview refusal occurred because internal idle activity was blocked by policy."
+        },
+        {
+          "id": "M2",
+          "text": "PR #378 later merged a separate manual Home listening policy on GitHub; no post-merge Latitude deployment record is supplied."
+        }
+      ],
+      "probes": [
+        {
+          "id": "older-refusal",
+          "statement": "The earlier preview was refused by idle-mode policy.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "M1"
+            ]
+          },
+          "critical": false
+        },
+        {
+          "id": "new-prod-deployed",
+          "statement": "The new merged Home listening policy is deployed on Latitude.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "sonos-down",
+          "statement": "Sonos network connectivity was down during the earlier preview.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "case-07",
+      "source": "project-invariant",
+      "provenance": "synthetic",
+      "evidence": [
+        {
+          "id": "B1",
+          "text": "The scheduled 04:30 Eastern Latitude SQLite backup intentionally quiesces home-hub.service for roughly one minute."
+        },
+        {
+          "id": "B2",
+          "text": "A hypothetical read-only API monitor observed a 502 at 04:30:20 Eastern."
+        },
+        {
+          "id": "B3",
+          "text": "No backup job correlation ID or service restart verification was supplied."
+        }
+      ],
+      "probes": [
+        {
+          "id": "compatible",
+          "statement": "The observed 502 is consistent with the planned backup window.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "B1",
+              "B2"
+            ]
+          },
+          "critical": false
+        },
+        {
+          "id": "definitive-cause",
+          "statement": "The backup job definitively caused the observed 502.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "permanent-down",
+          "statement": "HomeHub remained permanently offline after the 502.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "case-08",
+      "source": "docs/PROJECT_SPEC.md",
+      "provenance": "synthetic",
+      "evidence": [
+        {
+          "id": "W1",
+          "text": "HomeHub policy says PC/device wake alone cannot exit Sleeping."
+        },
+        {
+          "id": "W2",
+          "text": "Hypothetical observation: the desktop PC woke; no physical wake signal or recent trusted awake semantic activity is provided."
+        },
+        {
+          "id": "W3",
+          "text": "Desktop process activity cannot establish a physical room."
+        }
+      ],
+      "probes": [
+        {
+          "id": "wake-authority",
+          "statement": "PC waking is sufficient to exit Sleeping.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "W1"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "physical-room",
+          "statement": "The occupant is physically in the bedroom because the desktop PC woke.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "W3"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "live-house-state",
+          "statement": "The current live HomeHub state is Sleeping.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "case-09",
+      "source": "docs/AI_SEMANTIC_LAYER.md",
+      "provenance": "synthetic",
+      "evidence": [
+        {
+          "id": "C1",
+          "text": "Synthetic source-qualified physical sensor A locates a person in the bedroom at 12:00:01."
+        },
+        {
+          "id": "C2",
+          "text": "Synthetic source-qualified physical sensor B locates a person in the kitchen at 12:00:01."
+        },
+        {
+          "id": "C3",
+          "text": "No freshness preference or reconciliation result between the sensors is provided."
+        }
+      ],
+      "probes": [
+        {
+          "id": "bedroom-certainty",
+          "statement": "The person's physical room is bedroom.",
+          "gold": {
+            "verdict": "conflicted",
+            "evidence_ids": [
+              "C1",
+              "C2"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "kitchen-certainty",
+          "statement": "The person's physical room is kitchen.",
+          "gold": {
+            "verdict": "conflicted",
+            "evidence_ids": [
+              "C1",
+              "C2"
+            ]
+          },
+          "critical": true
+        },
+        {
+          "id": "conflict-exists",
+          "statement": "The two sensor observations disagree.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "C1",
+              "C2"
+            ]
+          },
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "case-10",
+      "source": "https://github.com/agatte/home-hub/pull/379",
+      "provenance": "historical-summary",
+      "evidence": [
+        {
+          "id": "G1",
+          "text": "PR #379 squash-merged on GitHub with six successful checks."
+        },
+        {
+          "id": "G2",
+          "text": "The approved PR added three read-only local-model evaluation files and explicitly did not authorize production deployment."
+        },
+        {
+          "id": "G3",
+          "text": "No Latitude deployment build or runtime verification is supplied."
+        }
+      ],
+      "probes": [
+        {
+          "id": "merged",
+          "statement": "PR #379 was merged.",
+          "gold": {
+            "verdict": "supported",
+            "evidence_ids": [
+              "G1"
+            ]
+          },
+          "critical": false
+        },
+        {
+          "id": "prod-running",
+          "statement": "The local model evaluation code is running on Latitude.",
+          "gold": {
+            "verdict": "unknown",
+            "evidence_ids": []
+          },
+          "critical": true
+        },
+        {
+          "id": "model-integrated",
+          "statement": "PR #379 installed a persistent local LLM service.",
+          "gold": {
+            "verdict": "contradicted",
+            "evidence_ids": [
+              "G2"
+            ]
+          },
+          "critical": true
+        }
+      ]
+    }
+  ]
+}
