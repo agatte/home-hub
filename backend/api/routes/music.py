@@ -378,6 +378,27 @@ async def preview_music_request(request: Request) -> dict:
 # Narrow explicit assisted playback (#272)
 # ------------------------------------------------------------------
 
+def _prepare_service(request):
+    from backend.services.music_prepare import MusicPrepareService
+    state = request.app.state
+    if not hasattr(state, 'music_prepare'):
+        state.music_prepare = MusicPrepareService(state)
+    return state.music_prepare
+
+
+@router.get('/prepare/preview', dependencies=[Depends(require_api_key_strict)])
+async def preview_prepare_music(request: Request) -> dict:
+    return await _prepare_service(request).preview()
+
+
+@router.post('/prepare/confirm', dependencies=[Depends(require_api_key_strict)])
+async def confirm_prepare_music(request: Request) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) != {'token'} or not isinstance(body['token'], str):
+        raise HTTPException(status_code=422, detail='Only an opaque preview token is accepted')
+    return await _prepare_service(request).confirm(body['token'])
+
+
 @router.get("/assisted-playback/status")
 async def get_assisted_playback_status(request: Request) -> dict:
     """Return the explicit-only assisted playback authority contract."""
