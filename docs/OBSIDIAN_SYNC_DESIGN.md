@@ -32,8 +32,20 @@ Existing `--refresh` requires the host repo HEAD to equal an explicit expected 4
 | Snapshot backup count increases | Retain it; propose exact-target retention review, not a wildcard deletion |
 | New docs commit on GitHub, no matched host source checkout | Report an available update; do not pull/reset/rebase host or Sandbox just to match |
 
+## Phase A helper candidate — read-only, no host rollout
+
+A scoped Python candidate, [`scripts/check_obsidian_freshness.py`](../scripts/check_obsidian_freshness.py), compares the local checkout HEAD and the existing **fully hash-verified managed snapshot** against an *explicitly supplied* 40-character GitHub `master` SHA. Manifest hashes are **self-consistency checks, not an authenticated signature**. The caller must independently obtain/verify that SHA through an authorized GitHub read; the helper itself **does not fetch, authenticate or assume remote freshness**. Do not use a chat recollection or stale issue checkpoint as that input. Missing remote SHA produces `unknown`, not a green result.
+
+Illustrative syntax (synthetic fixtures or a separately authorized read-only operator session; **not** approval to operate on the real Windows host):
+
+~~~powershell
+py -3 scripts/check_obsidian_freshness.py --repo 'C:\Users\Anthony\Documents\home-hub-project\main' --vault 'C:\Users\Anthony\Documents\HomeHub Knowledge Vault' --github-head '<independently-verified-exact-40-character-master-sha>'
+~~~
+
+Output is a single bounded JSON report with `checkout_head`, `vault_snapshot`, supplied `github_master` provenance, managed integrity, explicit pairwise `same`/`different`/`unknown`, and `refresh_authorized: false`. Exit 0 means three SHA values match **only the supplied reference**, 1 means mismatch or unknown, and 2 means a refused/error state (missing/tampered Vault, invalid SHA, unsafe path, unavailable Git). It checks neither Git ancestry nor worktree cleanliness, runtime deployment, Obsidian app closure, real Windows ACLs or reboot persistence; equal SHAs do not grant permission to refresh. Hash verification reads only `HomeHub Source`, never personal notes or `.obsidian`. No Git fetch/write, logging of credentials, background service, Vault mutation or retention action is included.
+
 ## Implementation constraints / evidence gate
 
-First implement and test a **pure read-only report** with synthetic manifest/checkout/SHA fixtures in protected Windows Sandbox. Its output should record the manifest SHA, proposed intended commit, whether source and target are verified, and a reason for any abstention. Inputs must be allowlisted and secrets excluded; no raw production DB, app settings, personal notes or logs. A later trigger would need independent authorization, host review, per-user scheduling/no elevation, strict concurrency and failure tests, and post-run Vault/GUI validation.
+Test the Phase A report with synthetic manifest/checkout/SHA fixtures in protected Windows Sandbox and review its read-only behavior before publishing or authorizing real-host use. Its output should record the manifest SHA, proposed intended commit, whether source and target are verified, and a reason for any abstention. Inputs must be allowlisted and secrets excluded; no raw production DB, app settings, personal notes or logs. A later trigger would need independent authorization, host review, per-user scheduling/no elevation, strict concurrency and failure tests, and post-run Vault/GUI validation.
 
 No phase is authorized here beyond documentation/reversible Sandbox tests. The accepted existing manual refresh remains the fallback until a specifically reviewed and approved mechanism is proven. Avoid implying that ChatGPT runs continuously between conversations.
