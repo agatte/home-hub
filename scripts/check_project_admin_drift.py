@@ -16,6 +16,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import unquote, urlsplit
 from datetime import date
 from pathlib import Path
 
@@ -27,6 +28,15 @@ LAST_RECONCILED = re.compile(
 )
 PHYSICAL_GATE_TITLE = re.compile(r"^Post-deploy physical acceptance:", re.IGNORECASE)
 CURRENT_HEADING = "## Current gate-aware routing"
+# Only living navigation/agent entrypoints, not dated audits or a whole-repo crawl.
+KNOWLEDGE_DOCS = (
+    "AGENTS.md",
+    "docs/README.md",
+    "docs/PROJECT_ADMIN_HUB.md",
+    "docs/EXECUTION_MAP.md",
+    "docs/KNOWLEDGE_WORKFLOW.md",
+)
+INLINE_LINK = re.compile(r"(?<!!)\[[^\]\n]+\]\((<[^>\n]+>|[^)\n]+)\)")
 
 
 def current_section(markdown: str) -> str:
@@ -153,6 +163,40 @@ def audit(
     return drift, notices
 
 
+def check_knowledge_links(root: Path, documents: tuple[str, ...] = KNOWLEDGE_DOCS) -> list[str]:
+    """Report broken/escaping relative links from the bounded current-doc set.
+
+    External links and fragment-only navigation are not verified here.
+    Markdown reference-style links and HTML links are also out of scope.
+    """
+    findings: list[str] = []
+    source_root = root.resolve()
+    for relative in documents:
+        source = source_root / relative
+        if not source.is_file() or not source.resolve().is_relative_to(source_root):
+            findings.append(f"Knowledge document missing or redirected: {relative}")
+            continue
+        for match in INLINE_LINK.finditer(source.read_text(encoding="utf-8")):
+            raw = match.group(1).strip()
+            if not raw:
+                continue
+            target = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw.split()[0]
+            # URL schemes (including mailto) aren't filesystem paths.
+            if not target or target.startswith("#") or urlsplit(target).scheme:
+                continue
+            if target.startswith("//"):
+                continue
+            local = unquote(target.split("#", 1)[0].split("?", 1)[0])
+            if not local:
+                continue
+            destination = (source.parent / local).resolve()
+            if not destination.is_relative_to(source_root):
+                findings.append(f"Knowledge link escapes repository: {relative} -> {target}")
+            elif not destination.exists():
+                findings.append(f"Knowledge link missing: {relative} -> {target}")
+    return sorted(set(findings))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -162,6 +206,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--as-of", type=date.fromisoformat, default=date.today())
     parser.add_argument("--max-age-days", type=int, default=30)
     parser.add_argument("--strict", action="store_true", help="Exit 1 when drift is detected")
+    parser.add_argument(
+        "--check-doc-links",
+        action="store_true",
+        help="Also check relative links in the bounded current knowledge entrypoints",
+    )
     args = parser.parse_args(argv)
 
     if args.max_age_days < 0:
@@ -172,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         raw = json.loads(args.snapshot.read_text(encoding="utf-8")) if args.snapshot else None
         issues = normalize_issues(raw) if args.snapshot else fetch_issues()
         drift, notices = audit(hub, execution_map, issues, args.as_of, args.max_age_days)
+        if args.check_doc_links:
+            drift.extend(check_knowledge_links(args.root))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

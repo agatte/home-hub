@@ -100,6 +100,76 @@ class ProjectAdminDriftTests(unittest.TestCase):
         )
         self.assertEqual(set(result), {337})
 
+    def test_bounded_knowledge_link_audit_is_read_only_and_reports_exact_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (root / "AGENTS.md").write_text(
+                "[valid](docs/README.md) [external](https://example.org/docs) "
+                "[section](#overview) ![image](missing-picture.png)",
+                encoding="utf-8",
+            )
+            (docs / "README.md").write_text(
+                "[local](PROJECT_ADMIN_HUB.md#heading) "
+                "[escaped](../../unrelated.md) [missing](missing.md)",
+                encoding="utf-8",
+            )
+            (docs / "PROJECT_ADMIN_HUB.md").write_text(
+                "[percent-encoded](M%49SSING.md) [mail](mailto:help@example.org)",
+                encoding="utf-8",
+            )
+            (docs / "EXECUTION_MAP.md").write_text("[fragment](#next-step)", encoding="utf-8")
+            (docs / "KNOWLEDGE_WORKFLOW.md").write_text(
+                "[angle destination](<README.md>)", encoding="utf-8"
+            )
+
+            findings = drift.check_knowledge_links(root)
+            self.assertEqual(
+                findings,
+                [
+                    "Knowledge link escapes repository: docs/README.md -> ../../unrelated.md",
+                    "Knowledge link missing: docs/PROJECT_ADMIN_HUB.md -> M%49SSING.md",
+                    "Knowledge link missing: docs/README.md -> missing.md",
+                ],
+            )
+            self.assertEqual(findings, drift.check_knowledge_links(root))
+
+    def test_missing_knowledge_entrypoint_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = drift.check_knowledge_links(Path(tmp), ("docs/KNOWLEDGE_WORKFLOW.md",))
+            self.assertEqual(
+                errors,
+                ["Knowledge document missing or redirected: docs/KNOWLEDGE_WORKFLOW.md"],
+            )
+
+    def test_link_checks_are_opt_in_and_strict_only_changes_exit_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "EXECUTION_MAP.md").write_text(MAP, encoding="utf-8")
+            (docs / "PROJECT_ADMIN_HUB.md").write_text(
+                HUB + "\n[broken](does-not-exist.md)", encoding="utf-8"
+            )
+            for name in ("AGENTS.md", "docs/README.md", "docs/KNOWLEDGE_WORKFLOW.md"):
+                file = root / name
+                file.write_text("# Stub for bounded fixture\n", encoding="utf-8")
+            fixture = root / "issues.json"
+            fixture.write_text(json.dumps({"issues": list(ISSUES.values())}), encoding="utf-8")
+            args = ["--snapshot", str(fixture), "--root", str(root), "--as-of", "2026-10-08"]
+            with contextlib.redirect_stdout(io.StringIO()) as plain:
+                self.assertEqual(drift.main(args), 0)
+            self.assertNotIn("Knowledge link", plain.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()) as report:
+                self.assertEqual(drift.main([*args, "--check-doc-links"]), 0)
+            self.assertIn(
+                "DRIFT: Knowledge link missing: docs/PROJECT_ADMIN_HUB.md -> does-not-exist.md",
+                report.getvalue(),
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(drift.main([*args, "--check-doc-links", "--strict"]), 1)
+
     def test_cli_is_report_only_unless_strict(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
