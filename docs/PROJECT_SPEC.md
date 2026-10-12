@@ -612,20 +612,19 @@ separate and unchanged. There is no atomic Sonos compare-and-clear primitive
 against outside controller races; this is bounded best-effort manual authority,
 not permission for autonomous cleanup.
 
-**Observed HTTP source and follow-up candidate (2026-10-11, #375).**
-The operator deployed `6654f1e4` successfully, but the physical STOPPED
-speaker still refused Preview. Read-only Sonos evidence found coordinator,
-empty verified queue, NORMAL mode, unmuted positive volume, and matching
-CurrentURI/TrackURI with an HTTP scheme and nonempty path; its track DIDL
-metadata reported musicTrack and an audio resource, while the media metadata
-was absent. The deployed allowlist excluded generic HTTP, so the refusal was
-expected. A narrower *unpublished candidate* considers direct HTTP only if
-CurrentURI equals TrackURI and the same track's DIDL `musicTrack` resource
-has an exact URI match and HTTP audio protocol. Missing/mismatched metadata,
-other HTTP streams, unsupported transports and owner/queue changes still
-refuse without writes. Physical exact-resource linkage and real Preview,
-followed by separately approved source discard and audible Apple Music Play,
-remain acceptance gates.
+**Observed HTTP source and accepted follow-up (2026-10-11/12, #375 / PR #388).**
+The initial stopped-source release refused direct HTTP despite matching
+CurrentURI/TrackURI and music metadata because its allowlist excluded HTTP.
+The merged [PR #388](https://github.com/agatte/home-hub/pull/388) added
+strict qualification: matching HTTP CurrentURI, TrackURI and a DIDL musicTrack
+audio resource/protocol. Unverified streams, unsafe ownership, and lifecycle
+conditions still refuse without writes. PR #388 was deployed as build
+4451e814; the operator subsequently confirmed Preview, separately confirmed
+source unload (Sonos unloaded and ready), and audible playback of an explicitly
+approved Apple Music track on 2026-10-12. These are dated acceptances, not
+permission for autonomous or unguarded playback. A later diagnostic-only
+zero-volume ordering correction is tracked under
+[#392](https://github.com/agatte/home-hub/issues/392).
 Neither action runs without its separate user confirmation; neither automatically
 clears an existing queue, writes volume/mute, or changes modes. Play starts only
 the explicitly approved track after the guarded verification path.
