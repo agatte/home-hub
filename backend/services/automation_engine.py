@@ -2862,14 +2862,67 @@ class AutomationEngine:
             if self._desk_authority_expiry_task is task:
                 self._desk_authority_expiry_task = None
 
+    async def _reconcile_desk_activity_from_physical_source(self) -> bool:
+        """Replace process-only Latitude Watching when fresh physical Desk wins.
+
+        This is an autonomous Activity handoff, not a new light writer. It
+        intentionally does not dispatch music/camera listeners while their
+        awaited consumer-level ownership checks remain under review.
+        """
+        # An earlier relax evaluation may have awaited, so refresh evidence and
+        # protection gates immediately before the one synchronous owner commit.
+        self._refresh_desk_authority_observation()
+        decision = self._desk_authority_decision
+        if (
+            decision is None or decision.disposition != "desk"
+            or decision.selection is None
+            or self._current_mode != "watching"
+            or self._mode_source_key != "process:latitude"
+            or self._mode_source != "process"
+        ):
+            return False
+        new_mode, new_key = decision.selection
+        if new_mode not in {"idle", "working", "gaming", "watching", "social"}:
+            return False
+        now = self._now()
+        self._current_mode = new_mode
+        self._current_game = None
+        self._mode_source = "time" if new_key == "time" else "process"
+        self._mode_source_key = new_key
+        self._last_activity = new_mode
+        self._last_activity_change = now
+        self._idle_entered_at = now if new_mode == "idle" else None
+        self._last_mode_source_report_at[new_key] = now
+        # The former Latitude Watching vote was media context, not proof of
+        # Couch occupancy. Retain its raw process observation for diagnostics
+        # but exclude the old accepted apartment semantic from fusion. A
+        # fresh post-dwell report must qualify anew; never replay saved media.
+        self._last_process_semantic_by_device.pop("latitude", None)
+        self._sync_process_fusion()
+        revision = self._mode_transition_revision
+        logger.info(
+            "Physical Desk overrides remote process-only Watching: %s (%s)",
+            new_mode, new_key,
+        )
+        # Existing mode composer / protected lights / Hue authority remain the
+        # only actuator route. The owner token revokes late delegated writes.
+        try:
+            await self._apply_mode(new_mode, force_resend=True)
+        except Exception:
+            logger.exception("Physical Desk Activity handoff apply failed")
+        if self._mode_transition_is_current(new_mode, revision):
+            await self._broadcast_mode()
+        return True
+
     async def notify_presence_observation(self, reading: Any) -> None:
         """Evaluate physical context and maintain fixture-comfort expiry."""
         source = getattr(reading, "source", "unknown")
-        # Capture the physical source promptly before downstream async work.
         self._refresh_desk_authority_observation()
         await self._evaluate_physical_context_relax(
             trigger=f"presence:{source}",
         )
+        # Physical source geometry outranks Latitude media, not manual scenes.
+        await self._reconcile_desk_activity_from_physical_source()
         self._refresh_fixture_comfort_expiry_task()
 
     def _cancel_fixture_comfort_expiry_task(self) -> None:
@@ -3472,6 +3525,10 @@ class AutomationEngine:
             await self._evaluate_physical_context_relax(
                 now=report_now, trigger="process_report",
             )
+            # Re-read camera source qualification after the awaited relax
+            # evaluation. A fresh Desk source revokes remote playback's
+            # apartment ownership, but the raw media observation remains.
+            self._refresh_desk_authority_observation()
             if not self._process_observation_is_current(observation):
                 return await self._finalize_process_report(
                     observation=observation, disposition="abstaining",
@@ -3496,6 +3553,24 @@ class AutomationEngine:
                 observation=observation,
                 disposition="retracted",
                 reason="latitude_media_intent_retracted",
+                agent_factors=factors,
+            )
+
+        # Continuous Latitude playback is truthful media/process evidence,
+        # not a new physical Couch claim. While an independently strong fresh
+        # Desktop Desk source owns the area (including brief loss dwell), it
+        # cannot keep re-selecting projector-oriented apartment Watching.
+        desk_decision = self._desk_authority_decision
+        if (
+            observation is not None and observation.device == "latitude"
+            and source == "process" and mode == "watching"
+            and desk_decision is not None
+            and desk_decision.disposition in {"desk", "loss_dwell"}
+            and desk_decision.selection is not None
+        ):
+            return await self._finalize_process_report(
+                observation=observation, disposition="rejected",
+                reason="physical_desk_remote_media",
                 agent_factors=factors,
             )
 
@@ -3565,6 +3640,16 @@ class AutomationEngine:
             not interactive_sleep_wake
             and new_priority < current_priority
             and source_key != self._mode_source_key
+            and not (
+                observation is not None
+                and observation.device == "desktop"
+                and mode in {"working", "gaming", "watching", "social"}
+                and self._current_mode == "watching"
+                and self._mode_source_key == "process:latitude"
+                and self._desk_authority_decision is not None
+                and self._desk_authority_decision.disposition == "desk"
+                and not self._manual_override
+            )
         ):
             last_report = self._last_mode_source_report_at.get(
                 self._mode_source_key,
