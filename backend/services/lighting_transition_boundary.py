@@ -52,6 +52,12 @@ class LightingTransitionBoundary:
     def __init__(self, hue_service) -> None:
         self._hue = hue_service
         self._lock = asyncio.Lock()
+        # Every serialized ownership turn has a unique epoch, including ABA.
+        # A to_thread Hue validator must still belong to the same turn.
+        self._serialized_epoch = 0
+        self._delegated_worker_epoch: ContextVar[int | None] = ContextVar(
+            "hue_delegated_worker_epoch", default=None,
+        )
         self.authority = LightingAuthority(self)
         self._held: ContextVar[asyncio.Task | None] = ContextVar(
             "hue_effect_transition_boundary_held", default=None,
@@ -66,12 +72,34 @@ class LightingTransitionBoundary:
             return False
         return task is not None and self._held.get() is task
 
+    @property
+    def delegated_worker_validator_active(self) -> bool:
+        """Allow synchronous lease validation in the guarded Hue worker only.
+
+        asyncio.to_thread inherits the delegated task context, but has no
+        running asyncio Task. An epoch + still-held lock prove that the exact
+        delegated serialization turn remains active. A plain executor caller
+        or one from an older/cancelled turn cannot use this exception.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            epoch = self._delegated_worker_epoch.get()
+            return bool(
+                epoch is not None
+                and epoch == self._serialized_epoch
+                and self._lock.locked()
+                and lighting_write_validator.get() is not None
+            )
+        return False
+
     @asynccontextmanager
     async def serialized(self) -> AsyncIterator[None]:
         """Acquire the boundary once for the current transition task."""
         if self.held_by_current_task:
             raise RuntimeError("Hue transition boundary cannot be re-entered")
         async with self._lock:
+            self._serialized_epoch += 1
             token = self._held.set(asyncio.current_task())
             try:
                 yield
@@ -88,14 +116,18 @@ class LightingTransitionBoundary:
         if not self.held_by_current_task:
             raise RuntimeError("Lighting write delegation requires the boundary")
 
+        epoch = self._serialized_epoch
+
         async def mutate():
             token = self._held.set(asyncio.current_task())
             validator_token = lighting_write_validator.set(validator)
+            worker_epoch_token = self._delegated_worker_epoch.set(epoch)
             try:
                 if validator is not None and not validator():
                     return False
                 return await write()
             finally:
+                self._delegated_worker_epoch.reset(worker_epoch_token)
                 lighting_write_validator.reset(validator_token)
                 self._held.reset(token)
 
