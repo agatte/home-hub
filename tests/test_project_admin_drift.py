@@ -41,6 +41,140 @@ ISSUES = {
 
 
 class ProjectAdminDriftTests(unittest.TestCase):
+
+    def test_explicit_knowledge_status_matches_live_issue_metadata(self):
+        issues = {
+            358: {"number": 358, "state": "closed"},
+            365: {"number": 365, "state": "open"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "OBSIDIAN_PERSISTENT_VAULT.md").write_text(
+                "# Dated history: issue #358 remains open in 2026-10-10\n"
+                "> **Current GitHub issue:** #358 closed\n",
+                encoding="utf-8",
+            )
+            (docs / "OBSIDIAN_SYNC_DESIGN.md").write_text(
+                "> **Current GitHub issue:** #365 open\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(drift.check_knowledge_status_claims(root, issues), [])
+            issues[358] = {**issues[358], "state": "open"}
+            self.assertEqual(
+                drift.check_knowledge_status_claims(root, issues),
+                [
+                    "Knowledge status docs/OBSIDIAN_PERSISTENT_VAULT.md: "
+                    "declares #358 closed, GitHub reports open"
+                ],
+            )
+
+    def test_knowledge_status_rejects_wrong_issue_even_if_its_state_matches(self):
+        issues = {
+            358: {"number": 358, "state": "closed"},
+            365: {"number": 365, "state": "open"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "OBSIDIAN_PERSISTENT_VAULT.md").write_text(
+                "> **Current GitHub issue:** #365 open\n", encoding="utf-8"
+            )
+            (docs / "OBSIDIAN_SYNC_DESIGN.md").write_text(
+                "> **Current GitHub issue:** #358 closed\n", encoding="utf-8"
+            )
+            findings = drift.check_knowledge_status_claims(Path(tmp), issues)
+            self.assertEqual(len(findings), 2)
+            self.assertIn("expected current issue #358, found #365", findings[0])
+            self.assertIn("expected current issue #365, found #358", findings[1])
+
+    def test_knowledge_status_missing_duplicate_and_unavailable_issue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            vault = docs / "OBSIDIAN_PERSISTENT_VAULT.md"
+            sync = docs / "OBSIDIAN_SYNC_DESIGN.md"
+            sync.write_text("> **Current GitHub issue:** #365 open\n", encoding="utf-8")
+            vault.write_text("# No current declaration\n", encoding="utf-8")
+            reported = drift.check_knowledge_status_claims(
+                root, {365: {"number": 365, "state": "open"}}
+            )
+            self.assertEqual(
+                reported,
+                [
+                    "Knowledge status docs/OBSIDIAN_PERSISTENT_VAULT.md: "
+                    "expected one current issue declaration, found 0"
+                ],
+            )
+            vault.write_text(
+                "> **Current GitHub issue:** #358 closed\n"
+                "> **Current GitHub issue:** #358 open\n",
+                encoding="utf-8",
+            )
+            self.assertIn("found 2", drift.check_knowledge_status_claims(root, {})[0])
+            vault.write_text("> **Current GitHub issue:** #358 closed\n", encoding="utf-8")
+            self.assertIn(
+                "#358 has no issue result", drift.check_knowledge_status_claims(root, {})[0]
+            )
+
+    def test_knowledge_status_rejects_redirected_or_missing_doc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(
+                drift.check_knowledge_status_claims(root, {}),
+                [
+                    "Knowledge status document missing or unsafe: "
+                    "docs/OBSIDIAN_PERSISTENT_VAULT.md",
+                    "Knowledge status document missing or unsafe: "
+                    "docs/OBSIDIAN_SYNC_DESIGN.md",
+                ],
+            )
+            self.assertEqual(
+                drift.check_knowledge_status_claims(root, {}, ("../outside.md",)),
+                ["Knowledge status document missing or unsafe: ../outside.md"],
+            )
+
+    def test_current_knowledge_status_cli_is_opt_in_advisory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "EXECUTION_MAP.md").write_text(MAP, encoding="utf-8")
+            (docs / "PROJECT_ADMIN_HUB.md").write_text(HUB, encoding="utf-8")
+            (docs / "OBSIDIAN_PERSISTENT_VAULT.md").write_text(
+                "> **Current GitHub issue:** #358 open\n", encoding="utf-8"
+            )
+            (docs / "OBSIDIAN_SYNC_DESIGN.md").write_text(
+                "> **Current GitHub issue:** #365 open\n", encoding="utf-8"
+            )
+            snapshot = root / "issues.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "issues": [
+                            *ISSUES.values(),
+                            {"number": 358, "state": "closed"},
+                            {"number": 365, "state": "open"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = ["--snapshot", str(snapshot), "--root", str(root), "--as-of", "2026-10-08"]
+            with contextlib.redirect_stdout(io.StringIO()) as plain:
+                self.assertEqual(drift.main(args), 0)
+            self.assertNotIn("Knowledge status", plain.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()) as audit:
+                self.assertEqual(drift.main(args + ["--check-knowledge-status"]), 0)
+            self.assertIn("declares #358 open", audit.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()) as strict:
+                self.assertEqual(
+                    drift.main(args + ["--check-knowledge-status", "--strict"]), 1
+                )
+            self.assertIn("Knowledge status", strict.getvalue())
+
     def test_current_good_state_has_no_drift(self):
         errors, notices = drift.audit(HUB, MAP, ISSUES, date(2026, 10, 8))
         self.assertEqual(errors, [])

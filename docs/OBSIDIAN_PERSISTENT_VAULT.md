@@ -1,12 +1,15 @@
 # Persistent HomeHub Knowledge Vault — operating guide (#358)
 
-**Status (2026-10-10):** The permanent real-PC Vault is installed and was
-user-confirmed opening, navigating and searching normally following a guarded
-refresh to source commit `dcacfc7eda54acad016b4a5ddf95479b43cf10aa`.
-The refreshed manifest and Windows inherited access were verified; a previous
-managed snapshot remains preserved in a sibling backup outside the Vault.
-**Not yet verified:** persistence after a normal real-Windows reboot and
-Sandbox closure. Record that acceptance in [#358](https://github.com/agatte/home-hub/issues/358).
+**Status (2026-10-11):** The permanent real-PC Vault is installed and survived
+a normal Windows reboot with expected managed files, preferences, navigation,
+links and search confirmed by the operator. The prior guarded refresh to
+`dcacfc7eda54acad016b4a5ddf95479b43cf10aa` retained a sealed manifest,
+inherited Windows permissions and a preserved previous managed snapshot.
+The successful [#358 acceptance](https://github.com/agatte/home-hub/issues/358#issuecomment-6110337423)
+did **not** rehash the full post-reboot manifest or inspect personal notes.
+
+> **Current GitHub issue:** #358 closed
+
 GitHub Issues/Projects and tracked Markdown remain authoritative; this is a
 *local read-oriented snapshot*, not an independently editable task board.
 
@@ -127,8 +130,10 @@ the only accepted operational path until separately reviewed and authorized.
   personal notes through the user's ordinary host backup practices.
 
 **Acceptance checkpoint:** Host installation, guarded manual refresh, inherited
-Windows access, and user-reported reopen/navigation/search have passed.
-Normal real-host reboot durability (and any separately requested personal-note
-persistence test) is still unverified. #358 remains open. Never infer that
-`HomeHub Source` automatically follows GitHub `master`; a new approved
-refresh is required for a newer source SHA.
+Windows access, post-reboot Vault navigation/search/preferences and continued
+availability without a running Sandbox have passed per #358. Full post-reboot
+manifest-file rehashing and personal-note content retention were not inspected.
+There is still **no** automatic Vault refresh. Do not infer that `HomeHub Source`
+follows GitHub `master`; a new separately approved guarded refresh is required
+for a newer source SHA. [#365](https://github.com/agatte/home-hub/issues/365)
+owns optional future synchronization.
