@@ -50,6 +50,46 @@ describe('PrepareSonosAction', () => {
     expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
   })
 
+  it('requires an explicit second click to discard a stopped source and hides source data', async () => {
+    vi.mocked(apiGet).mockImplementation((path) => Promise.resolve(
+      path === '/api/host/status' ? { can_control: true } : {
+        status: 'preview', source_kind: 'stopped', expires_in: 45,
+        token: 'stopped-source-token', track: 'private-stopped-title',
+        uri: 'private://source',
+      },
+    ))
+    render(PrepareSonosAction)
+    const preview = await revealPreview()
+    expect(apiPost).not.toHaveBeenCalled()
+    await fireEvent.click(preview)
+    const confirm = await screen.findByRole('button', { name: 'Confirm: discard stopped source' })
+    expect(screen.getByText(/stopped, but its verified music source will be discarded only if you confirm/)).toBeInTheDocument()
+    expect(screen.getByText(/Stopped music source verified/)).toBeInTheDocument()
+    expect(screen.queryByText(/private-stopped-title|private:\/\/source/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm: discard current track' })).not.toBeInTheDocument()
+    expect(apiPost).not.toHaveBeenCalled()
+    await fireEvent.click(confirm)
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith('/api/music/prepare/confirm', {
+      token: 'stopped-source-token',
+    })
+    expect(screen.queryByRole('button', { name: 'Confirm: discard stopped source' })).not.toBeInTheDocument()
+  })
+
+  it('cancels a stopped-source confirmation without writing to Sonos', async () => {
+    vi.mocked(apiGet).mockImplementation((path) => Promise.resolve(
+      path === '/api/host/status' ? { can_control: true } : {
+        status: 'preview', source_kind: 'stopped', expires_in: 45,
+        token: 'stopped-source-token',
+      },
+    ))
+    render(PrepareSonosAction)
+    await fireEvent.click(await revealPreview())
+    await fireEvent.click(await screen.findByRole('button', { name: 'Cancel preparation' }))
+    expect(screen.queryByRole('button', { name: 'Confirm: discard stopped source' })).not.toBeInTheDocument()
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
   it('never exposes preparation in a browser without kiosk authority', async () => {
     vi.mocked(apiGet).mockResolvedValue({ mode: 'HOME', can_control: false })
     render(PrepareSonosAction)
@@ -78,7 +118,7 @@ describe('PrepareSonosAction', () => {
     ['apartment_away', /apartment Away/],
     ['sleeping_active', /HomeHub is Sleeping/],
     ['audio_ownership_busy', /Another audio action owns the speaker/],
-    ['source_stopped_but_loaded', /Sonos is stopped but still has a source loaded/],
+    ['source_stopped_but_loaded', /Sonos is stopped but the retained source could not be verified/],
     ['source_evidence_unavailable', /Sonos source evidence is unavailable/],
     ['source_queue_evidence_unavailable', /Sonos queue could not be verified/],
     ['source_queue_not_empty', /Sonos queue is not empty/],
@@ -104,7 +144,7 @@ describe('PrepareSonosAction', () => {
     expect(screen.queryByText(/private-title|private-uri|must-not-display/)).not.toBeInTheDocument()
     if (reason === 'source_stopped_but_loaded') {
       expect(screen.getByRole('status')).toHaveTextContent('Nothing was automatically unloaded')
-      expect(screen.getByRole('status')).toHaveTextContent('paused-source preparation is unavailable')
+      expect(screen.getByRole('status')).toHaveTextContent('could not be verified as eligible')
       expect(screen.getByRole('status').textContent).not.toMatch(/start|resume/i)
     }
     expect(apiPost).not.toHaveBeenCalled()

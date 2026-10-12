@@ -353,6 +353,49 @@ class SonosService:
                      'x-sonosapi-radio'})
 
     @staticmethod
+    def prepare_stopped_eligible(evidence):
+        """Allow explicit discard only for a stable, empty-queue stopped music source.
+
+        STOPPED alone, stale metadata and unknown/non-music transports never
+        establish source identity. This is only an eligibility predicate; it
+        performs no device reads or writes and grants no playback authority.
+        """
+        from urllib.parse import urlsplit
+
+        if not isinstance(evidence, dict):
+            return False
+        if not (evidence.get('coordinator') is True
+                and type(evidence.get('queue_size')) is int
+                and evidence['queue_size'] == 0
+                and bool(evidence.get('queue_uid'))
+                and bool(evidence.get('queue_update_id'))
+                and evidence.get('play_mode') == 'NORMAL'
+                and evidence.get('mute') is False
+                and type(evidence.get('volume')) is int
+                and evidence['volume'] > 0
+                and evidence.get('transport_state') == 'STOPPED'):
+            return False
+        track_uri = evidence.get('queue_track_uri')
+        current_uri = evidence.get('current_uri')
+        if not isinstance(track_uri, str) or not isinstance(current_uri, str):
+            return False
+        if not current_uri:
+            return False
+        # An empty track URI or absent title is normal on some stopped speakers.
+        # The transport's independently re-read CurrentURI must identify the source.
+        if track_uri.lower().startswith((
+                'x-rincon:', 'x-rincon-queue:', 'x-rincon-stream:',
+                'x-sonos-htastream:')):
+            return False
+        try:
+            source = urlsplit(current_uri)
+        except ValueError:
+            return False
+        return (source.scheme in {'x-sonos-http', 'x-sonosapi-stream',
+                                  'x-sonosapi-hls', 'x-sonosapi-radio'}
+                and bool(source.path.strip('/ ')))
+
+    @staticmethod
     def prepare_ineligible_reason(evidence):
         """Explain a refusal using only opaque codes; never grant authority or read devices."""
         from urllib.parse import urlsplit
@@ -412,13 +455,25 @@ class SonosService:
                             if key not in volatile))
 
         fresh = self._prepare_evidence_sync()
-        if not self.prepare_eligible(fresh) or not matches(fresh) or not still_allowed():
+        paused = self.prepare_eligible(fresh)
+        stopped = self.prepare_stopped_eligible(fresh)
+        if not (paused or stopped) or not matches(fresh) or not still_allowed():
             return result('refused', 'source_or_authority_changed')
-        self._device.avTransport.Stop([('InstanceID', 0)])
-        # Sonos-app races cannot be atomically fenced by HomeHub's lock.
-        fresh = self._prepare_evidence_sync()
-        if not matches(fresh, stopped=True) or not still_allowed():
-            return result('not_ready', 'changed_after_stop')
+        if paused:
+            # Preserve the existing supported paused-source flow.
+            self._device.avTransport.Stop([('InstanceID', 0)])
+            # Sonos-app races cannot be atomically fenced by HomeHub's lock.
+            fresh = self._prepare_evidence_sync()
+            if not matches(fresh, stopped=True) or not still_allowed():
+                return result('not_ready', 'changed_after_stop')
+        else:
+            # The source is already stopped; never Stop/Play as a workaround.
+            # Recheck the exact transport/queue/source immediately before unload.
+            # External Sonos controllers have no device-side atomic compare-and-set.
+            fresh = self._prepare_evidence_sync()
+            if (not self.prepare_stopped_eligible(fresh)
+                    or not matches(fresh) or not still_allowed()):
+                return result('refused', 'source_or_authority_changed')
         self._device.avTransport.SetAVTransportURI([
             ('InstanceID', 0), ('CurrentURI', ''), ('CurrentURIMetaData', '')])
         unloaded = self._prepare_evidence_sync()
