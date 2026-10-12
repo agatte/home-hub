@@ -1033,11 +1033,11 @@ class AutomationEngine:
             "physical_context_process_arbitration": (
                 process_arbitration.as_context(now)
             ),
-            # Read-only evidence, not a lighting or Activity authority. Expose
-            # the pending #370 Desk handoff so real camera/loss timing can be
-            # verified before enabling it. No recomputation or writes here.
+            # Read-only status of the integrated source-qualified autonomous
+            # Desk handoff. Reading this property does not recompute or write.
+            # Manual/scene/physical provenance gates remain independently owned.
             "desk_authority_observation": {
-                "enforcing": False,
+                "enforcing": True,
                 "disposition": (
                     self._desk_authority_decision.disposition
                     if self._desk_authority_decision is not None else None
