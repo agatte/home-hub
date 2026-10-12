@@ -7749,6 +7749,337 @@ def engine(mock_hue, mock_hue_v2, mock_ws):
     )
 
 
+class TestDeskProcessAuthorityPolicy:
+    """Offline #370 candidate policy; runtime integration is intentionally pending."""
+
+    @pytest.fixture
+    def desk_policy(self, engine):
+        clock = SimpleNamespace(now=datetime(2026, 10, 11, 16, tzinfo=timezone.utc))
+        readings = {
+            "desktop": PresenceReading(
+                source="desktop", captured_at=clock.now,
+                face_present=True, zone="desk", detection_source="face",
+            ),
+        }
+        engine._presence_fusion = SimpleNamespace(
+            get_source_reading=lambda source: readings.get(source),
+        )
+        engine._current_mode = "watching"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:latitude"
+        engine._last_mode_source_report_at["process:latitude"] = clock.now
+        return engine, clock, readings
+
+    def test_persistent_resolver_survives_general_owner(self, desk_policy):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, _ = desk_policy
+        first = engine._resolve_desk_process_authority(clock.now, DeskAuthorityState())
+        engine._current_mode, engine._mode_source_key = first.selection
+        engine._mode_source = "time"
+        second = engine._resolve_desk_process_authority(clock.now, first.state)
+        assert second.disposition == "desk"
+        assert second.selection == ("idle", "time")
+        assert second.next_deadline == clock.now + timedelta(seconds=8, microseconds=1)
+
+    def test_source_expiry_with_other_zone_known_and_late_timer(self, desk_policy):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, readings = desk_policy
+        first = engine._resolve_desk_process_authority(clock.now, DeskAuthorityState())
+        readings["latitude"] = PresenceReading(
+            source="latitude", captured_at=clock.now + timedelta(seconds=20),
+            face_present=True, zone="couch", detection_source="yolo",
+        )
+        loss = engine._resolve_desk_process_authority(
+            clock.now + timedelta(seconds=20), first.state,
+        )
+        assert loss.disposition == "loss_dwell"
+        assert loss.state.loss_started_at == clock.now + timedelta(seconds=8)
+        assert loss.next_deadline == clock.now + timedelta(seconds=38)
+        released = engine._resolve_desk_process_authority(
+            clock.now + timedelta(seconds=38), loss.state,
+        )
+        assert released.disposition == "released"
+        assert released.selection is None  # Never replay saved Latitude media.
+
+    @pytest.mark.parametrize("invalidate", [False, True])
+    def test_negative_or_invalidation_loss_starts_when_processed(self, desk_policy, invalidate):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, readings = desk_policy
+        first = engine._resolve_desk_process_authority(clock.now, DeskAuthorityState())
+        now = clock.now + timedelta(seconds=3)
+        if not invalidate:
+            readings["desktop"] = PresenceReading(
+                source="desktop", captured_at=now, face_present=False, zone=None,
+            )
+        loss = engine._resolve_desk_process_authority(now, first.state, source_invalidated=invalidate)
+        assert loss.state.loss_started_at == now
+        assert loss.next_deadline == now + timedelta(seconds=30)
+
+    def test_conflict_cannot_renew_desk_by_capture_recency(self, desk_policy):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, readings = desk_policy
+        state = engine._resolve_desk_process_authority(clock.now, DeskAuthorityState()).state
+        for elapsed in (1, 10, 20, 31, 40):
+            now = clock.now + timedelta(seconds=elapsed)
+            readings["desktop"] = PresenceReading(
+                source="desktop", captured_at=now, face_present=True, zone="desk",
+            )
+            readings["latitude"] = PresenceReading(
+                source="latitude", captured_at=now - timedelta(seconds=1),
+                face_present=True, zone="couch", detection_source="yolo",
+            )
+            decision = engine._resolve_desk_process_authority(now, state)
+            assert decision.disposition == "conflict"
+            if elapsed < 31:
+                assert decision.state.loss_started_at == clock.now + timedelta(seconds=1)
+            else:
+                assert decision.selection is None
+            state = decision.state
+
+    def test_reacquisition_cancels_loss(self, desk_policy):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, readings = desk_policy
+        first = engine._resolve_desk_process_authority(clock.now, DeskAuthorityState())
+        loss = engine._resolve_desk_process_authority(clock.now + timedelta(seconds=9), first.state)
+        now = clock.now + timedelta(seconds=12)
+        readings["desktop"] = PresenceReading(
+            source="desktop", captured_at=now, face_present=True, zone="desk",
+        )
+        acquired = engine._resolve_desk_process_authority(now, loss.state)
+        assert acquired.disposition == "desk"
+        assert acquired.state.loss_started_at is None
+
+    def test_semantic_expiry_during_fresh_desk(self, desk_policy):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, readings = desk_policy
+        engine._record_process_semantic("working", [{"key": "device", "value": "desktop"}], clock.now)
+        state = DeskAuthorityState()
+        for elapsed, expected in [(299, "working"), (301, "idle")]:
+            now = clock.now + timedelta(seconds=elapsed)
+            readings["desktop"] = PresenceReading(
+                source="desktop", captured_at=now, face_present=True, zone="desk",
+            )
+            decision = engine._resolve_desk_process_authority(now, state)
+            assert decision.selection[0] == expected
+            if elapsed == 299:
+                assert decision.next_deadline == clock.now + timedelta(seconds=300, microseconds=1)
+            state = decision.state
+
+    def test_manual_protection_discards_arbitration_state(self, desk_policy):
+        from backend.services.automation_engine import DeskAuthorityState
+
+        engine, clock, _ = desk_policy
+        first = engine._resolve_desk_process_authority(clock.now, DeskAuthorityState())
+        engine._manual_override = True
+        decision = engine._resolve_desk_process_authority(clock.now, first.state)
+        assert decision.disposition == "protected"
+        assert decision.state == DeskAuthorityState()
+        assert decision.selection is None
+
+    def test_desk_arrival_selects_general_without_inventing_work(self, desk_policy):
+        engine, clock, _ = desk_policy
+        assert engine._desk_process_authority_candidate(clock.now) == ("idle", "time")
+        assert engine._current_mode == "watching"  # Pure policy has no actuator authority.
+        assert engine._mode_source_key == "process:latitude"
+
+    @pytest.mark.parametrize("mode", ["working", "gaming", "watching", "social"])
+    def test_accepted_desktop_semantic_selects_activity(self, desk_policy, mode):
+        engine, clock, _ = desk_policy
+        engine._record_process_semantic(
+            mode, [{"key": "device", "value": "desktop"}], clock.now,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) == (
+            mode, "process:desktop",
+        )
+
+    def test_raw_desktop_working_does_not_earn_semantic_authority(self, desk_policy):
+        engine, clock, _ = desk_policy
+        engine._record_process_observation(
+            "working", [{"key": "device", "value": "desktop"}], clock.now,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) == ("idle", "time")
+
+    def test_continuous_latitude_media_does_not_change_candidate(self, desk_policy):
+        engine, clock, readings = desk_policy
+        for elapsed in (0, 2, 6, 60, 600):
+            now = clock.now + timedelta(seconds=elapsed)
+            readings["desktop"] = PresenceReading(
+                source="desktop", captured_at=now, face_present=True, zone="desk",
+            )
+            engine._record_process_semantic(
+                "watching", [{"key": "device", "value": "latitude"}], now,
+            )
+            engine._last_mode_source_report_at["process:latitude"] = now
+            assert engine._desk_process_authority_candidate(now) == ("idle", "time")
+        assert "latitude" in engine._last_process_semantic_by_device
+
+    @pytest.mark.parametrize("age, expected", [(-3, None), (-2, ("idle", "time")),
+                                             (8, ("idle", "time")), (8.001, None)])
+    def test_physical_ttl_and_clock_skew(self, desk_policy, age, expected):
+        engine, clock, _ = desk_policy
+        assert engine._desk_process_authority_candidate(
+            clock.now + timedelta(seconds=age),
+        ) == expected
+
+    @pytest.mark.parametrize("face, zone, source", [
+        (False, "desk", "desktop"), (None, "desk", "desktop"),
+        (True, None, "desktop"), (True, "bed", "desktop"),
+        (True, "desk", "unknown"),
+    ])
+    def test_absent_unknown_or_opposing_desktop_abstains(
+        self, desk_policy, face, zone, source,
+    ):
+        engine, clock, readings = desk_policy
+        readings["desktop"] = PresenceReading(
+            source=source, captured_at=clock.now, face_present=face, zone=zone,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) is None
+
+    @pytest.mark.parametrize("zone", ["couch", "bed"])
+    def test_strong_opposing_location_abstains(self, desk_policy, zone):
+        engine, clock, readings = desk_policy
+        readings["latitude"] = PresenceReading(
+            source="latitude", captured_at=clock.now, face_present=True,
+            zone=zone, detection_source="yolo",
+        )
+        assert engine._desk_process_authority_candidate(clock.now) is None
+
+    @pytest.mark.parametrize("age, detection", [(0, None), (9, "yolo")])
+    def test_weak_or_stale_couch_cannot_overrule_desk(self, desk_policy, age, detection):
+        engine, clock, readings = desk_policy
+        readings["latitude"] = PresenceReading(
+            source="latitude", captured_at=clock.now - timedelta(seconds=age),
+            face_present=True, zone="couch", detection_source=detection,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) == ("idle", "time")
+
+    @pytest.mark.parametrize("age, expected", [(-1, "idle"), (300, "working"),
+                                             (301, "idle")])
+    def test_semantic_ttl_is_independent_of_physical_ttl(self, desk_policy, age, expected):
+        engine, clock, _ = desk_policy
+        engine._record_process_semantic(
+            "working", [{"key": "device", "value": "desktop"}],
+            clock.now - timedelta(seconds=age),
+        )
+        assert engine._desk_process_authority_candidate(clock.now)[0] == expected
+
+    @pytest.mark.parametrize("field, value", [
+        ("_enabled", False), ("_manual_override", True), ("_away_hold", True),
+        ("_host_return_hold", True), ("_external_off_detected", True),
+        ("_current_mode", "sleeping"), ("_current_mode", "gaming"),
+        ("_mode_source", "camera"), ("_mode_source_key", "process:desktop"),
+    ])
+    def test_mode_and_owner_guards(self, desk_policy, field, value):
+        engine, clock, _ = desk_policy
+        setattr(engine, field, value)
+        assert engine._desk_process_authority_candidate(clock.now) is None
+
+    def test_dnd_abstains(self, desk_policy):
+        engine, clock, _ = desk_policy
+        engine.is_dnd_active = lambda: True
+        assert engine._desk_process_authority_candidate(clock.now) is None
+
+    def test_manual_watching_keeps_mode_and_physical_comfort_context(self, desk_policy):
+        engine, clock, readings = desk_policy
+        engine._manual_override = True
+        engine._override_mode = "watching"
+        engine._override_source = "manual"
+        assert engine._desk_process_authority_candidate(clock.now) is None
+        assert engine.current_mode == "watching"
+        assert readings["desktop"].zone == "desk"
+
+
+    @pytest.mark.parametrize("detection", ["pose", "segmenter", "yolo", "unknown"])
+    def test_non_face_desktop_provenance_cannot_prove_desk(self, desk_policy, detection):
+        engine, clock, readings = desk_policy
+        readings["desktop"] = PresenceReading(
+            source="desktop", captured_at=clock.now, face_present=True,
+            zone="desk", detection_source=detection,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) is None
+
+    @pytest.mark.parametrize("mode", ["idle", "sleeping", "away"])
+    def test_accepted_non_meaningful_semantic_is_general(self, desk_policy, mode):
+        engine, clock, _ = desk_policy
+        engine._record_process_semantic(
+            mode, [{"key": "device", "value": "desktop"}], clock.now,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) == ("idle", "time")
+
+    @pytest.mark.parametrize("field, value", [("device", "latitude"), ("source", "camera")])
+    def test_semantic_provenance_must_match_desktop_process(self, desk_policy, field, value):
+        from dataclasses import replace
+
+        engine, clock, _ = desk_policy
+        engine._record_process_semantic(
+            "working", [{"key": "device", "value": "desktop"}], clock.now,
+        )
+        semantic = engine._last_process_semantic_by_device["desktop"]
+        engine._last_process_semantic_by_device["desktop"] = replace(
+            semantic, **{field: value},
+        )
+        assert engine._desk_process_authority_candidate(clock.now) == ("idle", "time")
+
+    def test_missing_source_has_no_rollback_or_actuator_authority(self, desk_policy):
+        engine, clock, readings = desk_policy
+        readings.pop("desktop")
+        assert engine._desk_process_authority_candidate(clock.now) is None
+        assert engine._current_mode == "watching"
+        assert engine._mode_source_key == "process:latitude"
+
+    def test_candidate_keeps_observations_semantics_fusion_and_owner_unchanged(self, desk_policy):
+        engine, clock, _ = desk_policy
+        engine._record_process_semantic(
+            "watching", [{"key": "device", "value": "latitude"}], clock.now,
+        )
+        engine._record_process_semantic(
+            "working", [{"key": "device", "value": "desktop"}], clock.now,
+        )
+        fusion = MagicMock()
+        engine._confidence_fusion = fusion
+        before = (
+            engine._last_process_observation_by_device.copy(),
+            engine._last_process_semantic_by_device.copy(),
+            engine._last_mode_source_report_at.copy(),
+            engine._current_mode, engine._mode_source, engine._mode_source_key,
+            engine._home_awake_confirmed, engine.house_state,
+        )
+        for _ in range(20):
+            assert engine._desk_process_authority_candidate(clock.now) == (
+                "working", "process:desktop",
+            )
+        after = (
+            engine._last_process_observation_by_device.copy(),
+            engine._last_process_semantic_by_device.copy(),
+            engine._last_mode_source_report_at.copy(),
+            engine._current_mode, engine._mode_source, engine._mode_source_key,
+            engine._home_awake_confirmed, engine.house_state,
+        )
+        assert before == after
+        assert fusion.mock_calls == []
+
+    @pytest.mark.parametrize("detection, confidence, expected", [
+        ("face", 0.69, ("idle", "time")), ("face", 0.70, None),
+        ("pose", None, None), ("yolo", None, None),
+        ("segmenter", None, ("idle", "time")),
+    ])
+    def test_latitude_conflict_uses_actual_strong_sensor_qualification(
+        self, desk_policy, detection, confidence, expected,
+    ):
+        engine, clock, readings = desk_policy
+        readings["latitude"] = PresenceReading(
+            source="latitude", captured_at=clock.now, face_present=True,
+            face_confidence=confidence, zone="couch", detection_source=detection,
+        )
+        assert engine._desk_process_authority_candidate(clock.now) == expected
+
+
 @pytest.mark.asyncio
 async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
     engine, mock_hue,
