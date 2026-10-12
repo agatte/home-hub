@@ -312,6 +312,7 @@ class ProcessObservation:
     source: str
     device: str
     received_at: datetime
+    revision: int = 0
 
     @property
     def committed_mode(self) -> str:
@@ -334,6 +335,7 @@ class ProcessObservation:
             "source": self.source,
             "device": self.device,
             "received_at": self.received_at.isoformat(),
+            "revision": self.revision,
             "age_seconds": (now - self.received_at).total_seconds(),
         }
 
@@ -352,6 +354,7 @@ class ProcessSemanticEvidence:
     source: str
     device: str
     received_at: datetime
+    revision: int = 0
 
     def as_context(self, now: datetime) -> dict[str, Any]:
         return {
@@ -365,6 +368,7 @@ class ProcessSemanticEvidence:
             "source": self.source,
             "device": self.device,
             "received_at": self.received_at.isoformat(),
+            "revision": self.revision,
             "age_seconds": (now - self.received_at).total_seconds(),
         }
 
@@ -419,21 +423,21 @@ class AutomationEngine:
     """
 
     # Publish semantic authority immediately, even when physical targets dedup.
-    _current_mode = LightingSemanticField()
-    _current_game = LightingSemanticField()
-    _manual_override = LightingSemanticField()
-    _override_mode = LightingSemanticField()
-    _override_source = LightingSemanticField()
-    _external_off_detected = LightingSemanticField()
-    _away_hold = LightingSemanticField()
-    _host_return_hold = LightingSemanticField()
-    _enabled = LightingSemanticField()
+    _current_mode = LightingSemanticField(mode_transition=True, underlying_mode=True)
+    _current_game = LightingSemanticField(mode_transition=True, underlying_mode=True)
+    _manual_override = LightingSemanticField(mode_transition=True)
+    _override_mode = LightingSemanticField(mode_transition=True)
+    _override_source = LightingSemanticField(mode_transition=True)
+    _external_off_detected = LightingSemanticField(mode_transition=True)
+    _away_hold = LightingSemanticField(mode_transition=True)
+    _host_return_hold = LightingSemanticField(mode_transition=True)
+    _enabled = LightingSemanticField(mode_transition=True)
     _active_scene_override_key = LightingSemanticField()
     _gaming_scene_override = LightingSemanticField()
     _gaming_scene_transition_pending = LightingSemanticField()
-    _mode_source_key = LightingSemanticField()
-    _home_awake_confirmed = LightingSemanticField()
-    _override_time = LightingSemanticField()
+    _mode_source_key = LightingSemanticField(mode_transition=True, underlying_mode=True)
+    _home_awake_confirmed = LightingSemanticField(mode_transition=True)
+    _override_time = LightingSemanticField(mode_transition=True)
 
     def __init__(
         self,
@@ -527,6 +531,9 @@ class AutomationEngine:
         # camera blip doesn't strand the user in relax while they're actively
         # at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
         self._last_process_working_at: Optional[datetime] = None
+        # A process-wide counter is monotonic for every device, including one
+        # evicted and later reintroduced into the bounded observation map.
+        self._process_observation_revision = 0
         # Raw observations remain per-device for physical-context consumers.
         self._last_process_observation_by_device: dict[
             str, ProcessObservation
@@ -2090,6 +2097,7 @@ class AutomationEngine:
                     parsed_detected_at = candidate
             except (TypeError, ValueError):
                 parsed_detected_at = None
+        self._process_observation_revision += 1
         observation = ProcessObservation(
             observed_mode=mode,
             candidate_mode=_string_factor(factors, "candidate_mode"),
@@ -2107,6 +2115,7 @@ class AutomationEngine:
             source="process",
             device=device,
             received_at=now,
+            revision=self._process_observation_revision,
         )
         self._last_process_observation_by_device[device] = observation
         if (
@@ -2121,6 +2130,13 @@ class AutomationEngine:
             )
             self._last_process_observation_by_device.pop(oldest_device, None)
         return observation
+
+    def _process_observation_is_current(self, observation: ProcessObservation) -> bool:
+        """A suspended report may not commit over newer same-device evidence."""
+        current = self._last_process_observation_by_device.get(observation.device)
+        return bool(
+            current is observation and current.revision == observation.revision
+        )
 
     def _record_process_semantic(
         self,
@@ -2138,6 +2154,8 @@ class AutomationEngine:
             observation = self._record_process_observation(
                 observation, factors, now or datetime.now(tz=TZ),
             )
+        if not self._process_observation_is_current(observation):
+            return
         self._last_process_semantic_by_device[observation.device] = (
             ProcessSemanticEvidence(
                 committed_mode=observation.observed_mode,
@@ -2150,6 +2168,7 @@ class AutomationEngine:
                 source=observation.source,
                 device=observation.device,
                 received_at=observation.received_at,
+                revision=observation.revision,
             )
         )
         if (
@@ -2172,11 +2191,11 @@ class AutomationEngine:
         semantic from another device; once eligible, the established mode
         priority and then recency choose the single non-double-counting voter.
         """
-        now = datetime.now(tz=TZ)
+        now = self._now()
         fresh_semantics = [
             evidence
             for evidence in self._last_process_semantic_by_device.values()
-            if (now - evidence.received_at).total_seconds()
+            if 0 <= (now - evidence.received_at).total_seconds()
             <= SOURCE_STALE_SECONDS
         ]
         if not fresh_semantics:
@@ -2471,8 +2490,9 @@ class AutomationEngine:
             old_mode, new_mode, new_source_key,
         )
         if old_mode != new_mode:
+            transition_revision = self._mode_transition_revision
             await self._apply_mode(new_mode, force_resend=True)
-            await self._fire_mode_change_callbacks(new_mode)
+            await self._dispatch_mode_change_if_current(new_mode, transition_revision)
             if self._event_logger:
                 await self._event_logger.log_mode_change(
                     mode=new_mode,
@@ -2492,13 +2512,22 @@ class AutomationEngine:
         reason: str,
         agent_factors: Optional[list[dict]],
     ) -> dict[str, Any]:
-        """Log a truthful process observation and update the semantic voter."""
+        """Log a decided observation; retract current evidence before any await."""
         included_in_fusion = False
         authority_reconciled = False
+        # Acceptance is committed synchronously beside mode selection, before
+        # lighting/persistence/listener awaits. Finalization only reports that
+        # decision; a late completion must never resurrect or refresh evidence.
+        semantic = self._derived_process_semantic()
+        semantic_mode = semantic.committed_mode if semantic else None
         if disposition == "accepted":
-            self._record_process_semantic(observation)
-            semantic_mode, included_in_fusion = self._sync_process_fusion()
-        elif disposition == "retracted":
+            included_in_fusion = bool(
+                self._confidence_fusion is not None
+                and semantic is not None
+                and semantic.device == observation.device
+                and semantic.revision == observation.revision
+            )
+        elif disposition == "retracted" and self._process_observation_is_current(observation):
             retracted_semantic = self._last_process_semantic_by_device.pop(
                 observation.device, None,
             )
@@ -2508,13 +2537,14 @@ class AutomationEngine:
                 retracted_semantic=retracted_semantic,
                 replacement=self._derived_process_semantic(),
             )
-        else:
-            semantic = self._derived_process_semantic()
-            semantic_mode = semantic.committed_mode if semantic else None
+        elif disposition == "retracted":
+            disposition = "abstaining"
+            reason = "superseded_observation"
 
         result = {
             "reported_mode": observation.observed_mode,
             "observed_source": f"process:{observation.device}",
+            "observation_revision": observation.revision,
             "semantic_disposition": disposition,
             "reason": reason,
             "semantic_mode": semantic_mode,
@@ -2784,6 +2814,7 @@ class AutomationEngine:
 
     async def close(self) -> None:
         """Cancel bounded auxiliary automation tasks before service shutdown."""
+        self._mode_transition_revision += 1
         self._transition_boundary.authority.close()
         task = self._fixture_comfort_expiry_task
         self._fixture_comfort_expiry_task = None
@@ -3219,15 +3250,41 @@ class AutomationEngine:
         )
         await self._apply_mode(mode, force_resend=True)
 
+    def _mode_transition_is_current(self, mode: str, revision: int) -> bool:
+        """Check a committed owner epoch, including same-mode owner ABA."""
+        return bool(
+            revision == self._mode_transition_revision
+            and self.current_mode == mode
+            and not self._away_hold
+            and not self._host_return_hold
+            and not self._external_off_detected
+        )
+
+    async def _dispatch_mode_change_if_current(self, mode: str, revision: int) -> None:
+        # This fences dispatch only. Listeners with internal waits still need
+        # consumer-side checks before effects; it is not a final-write lease.
+        if self._mode_transition_is_current(mode, revision):
+            await self._fire_mode_change_callbacks(mode)
+
     async def _fire_mode_change_callbacks(self, mode: str) -> None:
         """Invoke all registered mode-change callbacks with timeout protection."""
         # 15s budget per callback. CameraService.start() reopens V4L2 on
         # resume-from-sleeping, which can take 5-8s under contention; the
         # earlier 8s ceiling clipped legitimate restarts and orphaned the
         # camera silent.
-        for callback in self._on_mode_change_callbacks:
+        revision = self._mode_transition_revision
+
+        async def invoke_if_current(callback):
+            # wait_for schedules a child task. Recheck at its actual start as
+            # well as between callbacks, without holding the lighting lock.
+            if self._mode_transition_is_current(mode, revision):
+                await callback(mode)
+
+        for callback in tuple(self._on_mode_change_callbacks):
+            if not self._mode_transition_is_current(mode, revision):
+                return
             try:
-                await asyncio.wait_for(callback(mode), timeout=15.0)
+                await asyncio.wait_for(invoke_if_current(callback), timeout=15.0)
             except asyncio.TimeoutError:
                 logger.warning(
                     "Mode change callback %s timed out after 15s for mode '%s'",
@@ -3262,7 +3319,7 @@ class AutomationEngine:
                 authority uses only fresh, plausibly synchronized values.
         """
         source_key = _activity_source_key(source, factors)
-        report_now = datetime.now(tz=TZ)
+        report_now = self._now()
         observation: Optional[ProcessObservation] = None
         if source == "process":
             observation = self._record_process_observation(
@@ -3293,6 +3350,11 @@ class AutomationEngine:
             await self._evaluate_physical_context_relax(
                 now=report_now, trigger="process_report",
             )
+            if not self._process_observation_is_current(observation):
+                return await self._finalize_process_report(
+                    observation=observation, disposition="abstaining",
+                    reason="superseded_observation", agent_factors=factors,
+                )
 
         # Non-process sources own their own lanes. Process takes the separate
         # accepted-semantic path below; raw device reports never vote directly.
@@ -3365,7 +3427,6 @@ class AutomationEngine:
             if self._sleep_fade_task and not self._sleep_fade_task.done():
                 self._sleep_fade_task.cancel()
                 self._sleep_fade_task = None
-            await self._persist_override_state()
             logger.info(
                 "Sleeping wake accepted from fresh interactive Desktop %s", mode,
             )
@@ -3531,6 +3592,14 @@ class AutomationEngine:
             self._last_process_working_at = now
 
         old_mode = wake_previous_mode or self._current_mode
+        old_source_key = self._mode_source_key
+        old_game = self._current_game
+
+        # Semantic acceptance and owner selection are one non-awaiting commit.
+        # This preserves the original report timestamp even when output stalls.
+        if observation is not None:
+            self._record_process_semantic(observation)
+            self._sync_process_fusion()
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
@@ -3547,7 +3616,11 @@ class AutomationEngine:
         self._mode_source = source
         self._mode_source_key = source_key
         self._last_activity = mode
-        self._last_activity_change = now
+        if (
+            old_mode != mode or old_source_key != source_key
+            or old_game != self._current_game
+        ):
+            self._last_activity_change = now
 
         # Track continuous-idle dwell for the ambient_relax setter. Stamp on
         # entry only — re-stamping every confirming idle report would defeat
@@ -3557,6 +3630,8 @@ class AutomationEngine:
             self._idle_entered_at = now
         elif mode != "idle":
             self._idle_entered_at = None
+
+        transition_revision = self._mode_transition_revision
 
         # Priority-bypass for autonomous overrides: when an autonomous setter
         # (fusion_auto_apply, late_night_rescue, behavioral_predictor, …)
@@ -3618,10 +3693,14 @@ class AutomationEngine:
             self._override_mode = None
             self._override_source = None
             self._override_time = None
+            transition_revision = self._mode_transition_revision
             await self._persist_override_state()
             # Fall through to normal mode-application path below — per-light
             # overrides are preserved (no _clear_per_light_overrides) because
             # this displacement is autonomous, mirroring clear_override's gate.
+
+        if interactive_sleep_wake:
+            await self._persist_override_state()
 
         # If manual override is active, update detected mode silently but
         # never clear the override — only the user or the 4h timeout should.
@@ -3642,6 +3721,25 @@ class AutomationEngine:
             return {
                 "reported_mode": mode, "semantic_disposition": "accepted",
                 "reason": "manual_override_held", "semantic_mode": mode,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
+
+        # A newer owner may have arrived during persistence. Keep this
+        # report's accepted history, but do not clear suppression or apply its
+        # targets after supersession (including same-mode owner changes).
+        if (
+            transition_revision != self._mode_transition_revision
+            or self.current_mode != mode
+        ):
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation, disposition="accepted",
+                    reason="accepted_owner_superseded", agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "accepted",
+                "reason": "accepted_owner_superseded", "semantic_mode": mode,
                 "authoritative_mode": self.current_mode,
                 "included_in_fusion": False,
             }
@@ -3705,14 +3803,15 @@ class AutomationEngine:
         # previous/next resolved plans. A raw game-factor change does not by
         # itself invalidate the cache: two unknown games can share the exact
         # generic target, while real plan deltas naturally reach the applicator.
+        transition_revision = self._mode_transition_revision
         await self._apply_mode(
             mode,
             force_resend=(old_mode != mode),
         )
 
-        # Fire mode change callbacks (e.g., music auto-play)
+        # Log committed history, but only dispatch for the surviving owner.
         if old_mode != mode:
-            await self._fire_mode_change_callbacks(mode)
+            await self._dispatch_mode_change_if_current(mode, transition_revision)
             if self._event_logger:
                 await self._event_logger.log_mode_change(
                     mode=mode,
@@ -3839,15 +3938,17 @@ class AutomationEngine:
             "Manual override set: %s (source=%s, prior=%s, was_overridden=%s)",
             mode, source, prior_override, was_overridden,
         )
+        transition_revision = self._mode_transition_revision
         await self._persist_override_state()
         # Broadcast first so the UI updates immediately, then apply lights.
         # force_resend=True so any lights that were behind a per-light override
         # (now released) get a fresh write to the new mode's state.
         await self._broadcast_mode()
-        await self._apply_mode(mode, force_resend=True)
-        # Fire mode change callbacks only if the mode actually changed
+        if self._mode_transition_is_current(mode, transition_revision):
+            await self._apply_mode(mode, force_resend=True)
+        # Fire mode change callbacks only if the mode and owner survived awaits.
         if old_mode != mode:
-            await self._fire_mode_change_callbacks(mode)
+            await self._dispatch_mode_change_if_current(mode, transition_revision)
         if self._event_logger and old_mode != mode:
             await self._event_logger.log_mode_change(
                 mode=mode,
@@ -4060,10 +4161,12 @@ class AutomationEngine:
         self, duration_minutes: int = 120, source: str = "internal",
     ) -> dict:
         """Activate DND for ``duration_minutes`` (clamped to [1, 720])."""
+        self._mode_transition_revision += 1
         return await self._dnd.enable(duration_minutes, source=source)
 
     async def clear_dnd(self, source: str = "internal") -> dict:
         """Clear DND immediately."""
+        self._mode_transition_revision += 1
         return await self._dnd.clear(source=source)
 
     async def persist_manual_light_ownership(self) -> None:
