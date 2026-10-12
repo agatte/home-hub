@@ -391,6 +391,23 @@ class PhysicalContextProcessArbitration:
         return result
 
 
+@dataclass(frozen=True)
+class DeskAuthorityState:
+    """Caller-owned #370 policy state; never an actuation lease."""
+
+    selection: Optional[tuple[str, str]] = None
+    desk_expires_at: Optional[datetime] = None
+    loss_started_at: Optional[datetime] = None
+
+
+@dataclass(frozen=True)
+class DeskAuthorityDecision:
+    state: DeskAuthorityState
+    disposition: str
+    selection: Optional[tuple[str, str]]
+    next_deadline: Optional[datetime]
+
+
 class AutomationEngine:
     """
     Combines time-of-day rules and activity reports to control lights.
@@ -2171,6 +2188,181 @@ class AutomationEngine:
                 evidence.received_at,
             ),
         )
+
+    def _resolve_desk_process_authority(
+        self, now: datetime, previous: DeskAuthorityState, *,
+        source_invalidated: bool = False,
+    ) -> DeskAuthorityDecision:
+        """Persistent, clock-injected policy only; runtime wiring stays blocked.
+
+        One caller must carry state across reports, observations and expiry.
+        Deadlines belong to this source, regardless of the fused zone. A
+        deadline alone is not permission to restore or write lights. The caller
+        must fence its handoff against observation and transition revisions.
+        """
+        if (
+            not self._enabled or self._manual_override or self.is_dnd_active()
+            or self._away_hold or self._host_return_hold
+            or self._external_off_detected or self.house_state != "home"
+            or self._current_mode == "sleeping"
+        ):
+            return DeskAuthorityDecision(DeskAuthorityState(), "protected", None, None)
+
+        desktop = self._physical_context_source_reading("desktop")
+        desk = bool(
+            not source_invalidated and desktop is not None
+            and desktop.source == "desktop" and desktop.face_present is True
+            and desktop.detection_source in {None, "face"}
+            and desktop.zone == "desk"
+            and -2.0 <= self._physical_context_reading_age(desktop, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+        )
+        from backend.services.presence_fusion import PresenceFusion
+
+        latitude = self._physical_context_source_reading("latitude")
+        conflict = bool(
+            desk and latitude is not None and latitude.source == "latitude"
+            and latitude.zone in {"couch", "bed"}
+            and -2.0 <= self._physical_context_reading_age(latitude, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and PresenceFusion._is_strongly_present(latitude)
+        )
+        # Inclusive freshness needs a wake strictly after the expiry boundary.
+        tick = timedelta(microseconds=1)
+        deadlines = []
+        if desk:
+            deadlines.append(desktop.captured_at + timedelta(
+                seconds=PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+            ) + tick)
+        if conflict:
+            deadlines.append(latitude.captured_at + timedelta(
+                seconds=PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+            ) + tick)
+
+        semantic = self._last_process_semantic_by_device.get("desktop")
+        semantic_fresh = bool(
+            semantic is not None and semantic.device == "desktop"
+            and semantic.source == "process"
+            and semantic.committed_mode in {"working", "gaming", "watching", "social"}
+            and 0 <= (now - semantic.received_at).total_seconds() <= SOURCE_STALE_SECONDS
+        )
+        if semantic_fresh:
+            deadlines.append(semantic.received_at + timedelta(
+                seconds=SOURCE_STALE_SECONDS,
+            ) + tick)
+
+        if desk and not conflict:
+            selection = (
+                (semantic.committed_mode, "process:desktop")
+                if semantic_fresh else ("idle", "time")
+            )
+            state = DeskAuthorityState(selection, desktop.captured_at + timedelta(
+                seconds=PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+            ))
+            return DeskAuthorityDecision(state, "desk", selection, min(deadlines))
+
+        if previous.selection is None:
+            return DeskAuthorityDecision(
+                DeskAuthorityState(), "conflict" if conflict else "unqualified",
+                None, min(deadlines) if deadlines else None,
+            )
+
+        # Conflict/negative/invalidation starts loss when processed; silent
+        # expiry starts at capture+8, even when the timer wakes up late.
+        loss = previous.loss_started_at
+        if loss is None:
+            loss = now
+            fresh_negative = bool(
+                desktop is not None
+                and -2.0 <= self._physical_context_reading_age(desktop, now)
+                <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+                and not desk
+            )
+            if (
+                not conflict and not source_invalidated and not fresh_negative
+                and previous.desk_expires_at
+            ):
+                loss = min(now, previous.desk_expires_at)
+        restore_at = loss + timedelta(seconds=PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS)
+        if now >= restore_at:
+            # No saved media replay: restoration requires ordinary fresh source
+            # selection. Persistent conflict continues abstaining.
+            return DeskAuthorityDecision(
+                DeskAuthorityState(), "conflict" if conflict else "released",
+                None, min(deadlines) if deadlines else None,
+            )
+        deadlines.append(restore_at)
+        selection = previous.selection
+        if selection[1] == "process:desktop" and not semantic_fresh:
+            selection = ("idle", "time")
+        state = DeskAuthorityState(selection, previous.desk_expires_at, loss)
+        return DeskAuthorityDecision(
+            state, "conflict" if conflict else "loss_dwell", selection, min(deadlines),
+        )
+
+    def _desk_process_authority_candidate(
+        self, now: datetime,
+    ) -> Optional[tuple[str, str]]:
+        """Pure #370 policy for replacing autonomous Latitude Watching.
+
+        Deliberately not wired into reports, fusion, or the observation/timer
+        paths yet. A caller must reconcile all four together through existing
+        mode/application ownership gates. This method grants no write authority,
+        changes no evidence, and never infers Working from a face alone.
+        """
+        if (
+            not self._enabled
+            or self._manual_override
+            or self.is_dnd_active()
+            or self._away_hold
+            or self._host_return_hold
+            or self._external_off_detected
+            or self.house_state != "home"
+            or self._current_mode != "watching"
+            or self._mode_source != "process"
+            or self._mode_source_key != "process:latitude"
+        ):
+            return None
+
+        desktop = self._physical_context_source_reading("desktop")
+        if (
+            desktop is None
+            or desktop.source != "desktop"
+            or desktop.face_present is not True
+            or desktop.detection_source not in {None, "face"}
+            or desktop.zone != "desk"
+            or not -2.0 <= self._physical_context_reading_age(desktop, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+        ):
+            return None
+
+        # Abstain on simultaneous strong opposing physical evidence, even if
+        # the Desktop capture is newer. Software playback never enters this
+        # geographic decision. Use the existing source qualification rules.
+        from backend.services.presence_fusion import PresenceFusion
+
+        latitude = self._physical_context_source_reading("latitude")
+        if (
+            latitude is not None
+            and latitude.source == "latitude"
+            and latitude.zone in {"couch", "bed"}
+            and -2.0 <= self._physical_context_reading_age(latitude, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and PresenceFusion._is_strongly_present(latitude)
+        ):
+            return None
+
+        semantic = self._last_process_semantic_by_device.get("desktop")
+        if (
+            semantic is not None
+            and semantic.device == "desktop"
+            and semantic.source == "process"
+            and semantic.committed_mode in {"working", "gaming", "watching", "social"}
+            and 0 <= (now - semantic.received_at).total_seconds()
+            <= SOURCE_STALE_SECONDS
+        ):
+            return semantic.committed_mode, "process:desktop"
+        return "idle", "time"
 
     def _sync_process_fusion(self) -> tuple[Optional[str], bool]:
         """Replace fusion's process lane from accepted semantics only."""
