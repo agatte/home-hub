@@ -1,7 +1,9 @@
 # HomeHub #366 — Offline answer-key and citation adjudication guard
 
-> **Status:** Uncommitted Sandbox research candidate. No production rollout,
-> GitHub publication, fresh model call, or human-source attestation occurred.
+> **Status (2026-10-12):** The offline adjudication guard merged via
+> [PR #383](https://github.com/agatte/home-hub/pull/383); it remains advisory,
+> not a deployed HomeHub Analyst or independently human-certified gold.
+> Later bounded model research is recorded under [#366](https://github.com/agatte/home-hub/issues/366) and does not grant production authority.
 > **Owner:** Sensing & Intelligence, [#366](https://github.com/agatte/home-hub/issues/366).
 > The frozen regression scorer is
 > `scripts/local_llm_holdout_366.py`; the first real natural replay capture
