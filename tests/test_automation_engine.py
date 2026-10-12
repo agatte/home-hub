@@ -8552,7 +8552,9 @@ class TestDeskProcessAuthorityPolicy:
             )
             assert engine._desk_authority_decision.disposition == "released"
             assert engine._desk_authority_state.selection is None
-            engine._apply_mode.assert_not_awaited()
+            # The initial physical Desk arrival performs one intentional
+            # Home+General handoff; source expiry must not actuate again.
+            engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
             engine._fire_mode_change_callbacks.assert_not_awaited()
         finally:
             await engine.close()
