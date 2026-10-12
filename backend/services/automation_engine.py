@@ -64,7 +64,9 @@ from backend.services.automation_constants import (
 )
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
-from backend.services.light_applicator import LightApplicator, LightApplyResult
+from backend.services.light_applicator import (
+    LightApplicator, LightApplyResult, mode_apply_epoch,
+)
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.lighting_authority import LightingLease, LightingSemanticField
 from backend.services.light_override_manager import LightOverrideManager
@@ -634,6 +636,7 @@ class AutomationEngine:
             dispatch_per_light=lambda s, t=None: self._apply_per_light(s, t),
             dispatch_uniform=lambda s, t=None: self._apply_uniform(s, t),
             transition_boundary=self._transition_boundary,
+            owner_revision_getter=lambda: self._mode_transition_revision,
         )
 
         # Track if lights were turned off externally (Alexa geofence)
@@ -4842,6 +4845,22 @@ class AutomationEngine:
         return apply_working_post_sunset_warmth(state, period)
 
     async def _apply_mode(self, mode: str, *, force_resend: bool = False) -> None:
+        """Fence delegated static-mode Hue writes to their originating owner.
+
+        The async task-scoped token follows existing _apply_state and effect
+        delegation to the canonical Hue chokepoint. Other writers (explicit
+        manual, ScreenSync, protected transitions) retain their own leases.
+        """
+        owner = (self._mode_transition_revision, self.effective_mode)
+        token = mode_apply_epoch.set(owner)
+        try:
+            await self._apply_mode_under_owner(mode, force_resend=force_resend)
+        finally:
+            mode_apply_epoch.reset(token)
+
+    async def _apply_mode_under_owner(
+        self, mode: str, *, force_resend: bool = False,
+    ) -> None:
         """Apply light state for a given mode.
 
         Args:
