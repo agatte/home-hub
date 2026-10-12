@@ -131,6 +131,15 @@ class LightingAuthority:
 class LightingSemanticField:
     """Descriptor that publishes engine semantic/lifecycle changes immediately."""
 
+    def __init__(
+        self, *, mode_transition: bool = False, underlying_mode: bool = False,
+    ) -> None:
+        # Mode fan-out needs its own epoch: scene/effect bookkeeping performed
+        # by an apply legitimately invalidates Hue leases, but is not a new
+        # Activity owner. Do not use those write generations as callback tokens.
+        self._mode_transition = mode_transition
+        self._underlying_mode = underlying_mode
+
     def __set_name__(self, owner, name) -> None:
         self._name = name
 
@@ -142,6 +151,15 @@ class LightingSemanticField:
     def __set__(self, instance, value) -> None:
         previous = instance.__dict__.get(self._name)
         instance.__dict__[self._name] = value
+        # Raw detector updates under an override do not replace its effective
+        # owner. They still revoke Hue leases through the existing path below.
+        if (
+            previous != value and self._mode_transition
+            and not (self._underlying_mode and instance.__dict__.get("_manual_override"))
+        ):
+            instance.__dict__["_mode_transition_revision"] = (
+                instance.__dict__.get("_mode_transition_revision", 0) + 1
+            )
         boundary = instance.__dict__.get("_transition_boundary")
         if boundary is not None and previous != value:
             boundary.authority.invalidate()
