@@ -3,6 +3,9 @@
   import { apiGet, apiPost } from '$lib/api.js'
   import AssistedPlayAction from '$lib/components/AssistedPlayAction.svelte'
 
+  /** @type {((trackId: string) => void) | null} */
+  export let onReviewAppleTrack = null
+
   const MODES = [
     { key: 'gaming', label: 'Gaming' },
     { key: 'working', label: 'Working' },
@@ -236,6 +239,24 @@
       trustUpdates = { ...trustUpdates, [key]: { action, state: 'saved', clientEventId } }
     } catch {
       trustUpdates = { ...trustUpdates, [key]: { action, state: 'error', clientEventId } }
+    }
+  }
+
+  /** @param {any} track */
+  function canReviewAppleTrack(track) {
+    return track?.provider === 'itunes_search'
+      && /^\d{5,20}$/.test(String(track.provider_id || ''))
+      && track.catalog_verified === true
+      && track.playback_capability === 'supported'
+      && track.playback_adapter === 'sonos_apple_music_share_link'
+      && track.playback_reason === 'provider_exact_match'
+  }
+
+  /** @param {any} track */
+  function reviewAppleTrack(track) {
+    const callback = onReviewAppleTrack
+    if (canReviewAppleTrack(track) && typeof callback === 'function') {
+      callback(String(track.provider_id))
     }
   }
 
@@ -484,9 +505,16 @@
                 {#if track.playback_capability !== 'supported'}
                   <span class="track-trust">Suggestion only</span>
                 {/if}
-                {#if track.external_url}
-                  <a href={track.external_url} target="_blank" rel="noreferrer">Open</a>
-                {/if}
+                <div class="track-actions">
+                  {#if canReviewAppleTrack(track) && typeof onReviewAppleTrack === 'function'}
+                    <button type="button" on:click={() => reviewAppleTrack(track)}>
+                      Review for playback
+                    </button>
+                  {/if}
+                  {#if track.external_url}
+                    <a href={track.external_url} target="_blank" rel="noreferrer">Open</a>
+                  {/if}
+                </div>
               </div>
             {/each}
           </div>
@@ -891,7 +919,7 @@
 
   .track-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
     gap: 8px;
     align-items: center;
     padding: 7px 8px;
@@ -903,6 +931,20 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+  .track-row > .track-actions {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  .track-actions button {
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 5px 8px;
   }
 
   .track-title {

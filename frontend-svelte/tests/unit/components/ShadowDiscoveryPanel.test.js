@@ -356,4 +356,58 @@ describe('ShadowDiscoveryPanel', () => {
     expect(body).toMatchObject({ mode: 'gaming', policy: 'explore', intent: null })
   })
 
+  it('hands an exact verified Apple track to review without approving or playing it', async () => {
+    const onReviewAppleTrack = vi.fn()
+    const playable = {
+      ...previewPayload.clusters[0].tracks[0],
+      provider_id: '1713833576',
+      playback_capability: 'supported',
+      playback_adapter: 'sonos_apple_music_share_link',
+      playback_reason: 'provider_exact_match',
+    }
+    vi.mocked(apiPost).mockResolvedValue({
+      ...previewPayload,
+      clusters: [{ ...previewPayload.clusters[0], tracks: [playable] }],
+    })
+    render(ShadowDiscoveryPanel, { props: { onReviewAppleTrack } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Find recommendations' }))
+
+    const action = await screen.findByRole('button', { name: 'Review for playback' })
+    expect(onReviewAppleTrack).not.toHaveBeenCalled()
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    await fireEvent.click(action)
+    expect(onReviewAppleTrack).toHaveBeenCalledTimes(1)
+    expect(onReviewAppleTrack).toHaveBeenCalledWith('1713833576')
+    expect(apiPost).toHaveBeenCalledTimes(1) // discovery preview only
+  })
+
+  it.each([
+    ['metadata only', { playback_capability: 'metadata_only' }],
+    ['unsupported adapter', { playback_adapter: 'other_adapter' }],
+    ['wrong provider', { provider: 'lastfm' }],
+    ['unverified catalog', { catalog_verified: false }],
+    ['unresolved adapter proof', { playback_reason: 'no_exact_playable_provider_match' }],
+    ['invalid ID', { provider_id: 'not-a-song-id' }],
+  ])('does not offer playback review for %s', async (_, overrides) => {
+    const onReviewAppleTrack = vi.fn()
+    const track = {
+      ...previewPayload.clusters[0].tracks[0],
+      provider_id: '1713833576',
+      playback_capability: 'supported',
+      playback_adapter: 'sonos_apple_music_share_link',
+      playback_reason: 'provider_exact_match',
+      ...overrides,
+    }
+    vi.mocked(apiPost).mockResolvedValue({
+      ...previewPayload,
+      clusters: [{ ...previewPayload.clusters[0], tracks: [track] }],
+    })
+    render(ShadowDiscoveryPanel, { props: { onReviewAppleTrack } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Find recommendations' }))
+    await screen.findByText('Wardruna')
+    expect(screen.queryByRole('button', { name: 'Review for playback' })).not.toBeInTheDocument()
+    expect(onReviewAppleTrack).not.toHaveBeenCalled()
+    expect(apiPost).toHaveBeenCalledTimes(1)
+  })
+
 })
