@@ -8658,7 +8658,7 @@ class TestDeskProcessAuthorityPolicy:
 
 
     @pytest.mark.asyncio
-    async def test_desk_authority_diagnostics_are_explicitly_non_enforcing(
+    async def test_desk_authority_diagnostics_reflect_integrated_policy(
         self, desk_policy, monkeypatch,
     ):
         engine, clock, readings = desk_policy
@@ -8667,7 +8667,7 @@ class TestDeskProcessAuthorityPolicy:
             engine._refresh_desk_authority_observation()
             before = engine._desk_authority_decision
             context = engine.get_activity_context()["desk_authority_observation"]
-            assert context["enforcing"] is False
+            assert context["enforcing"] is True
             assert context["disposition"] == "desk"
             assert context["selection"] == {
                 "mode": "idle", "source_key": "time",
@@ -8813,6 +8813,98 @@ class TestDeskProcessAuthorityPolicy:
             accepted = await engine.report_activity("watching", "process", latitude)
             assert accepted["semantic_disposition"] == "accepted"
             assert engine._current_mode == "watching"
+        finally:
+            await engine.close()
+
+
+
+    @pytest.mark.asyncio
+    async def test_desk_observation_rechecks_capture_after_awaited_relax(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def delayed_relax(**kwargs):
+            entered.set()
+            await release.wait()
+
+        engine._evaluate_physical_context_relax = delayed_relax
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        task = asyncio.create_task(
+            engine.notify_presence_observation(readings["desktop"]),
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            readings["desktop"] = PresenceReading(
+                source="desktop", captured_at=clock.now,
+                face_present=False, zone=None,
+            )
+        finally:
+            release.set()
+            await task
+        try:
+            assert engine._current_mode == "watching"
+            engine._apply_mode.assert_not_awaited()
+            assert engine._desk_authority_decision.disposition == "loss_dwell"
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    async def test_manual_watching_arrival_during_camera_await_prevents_handoff(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def delayed_relax(**kwargs):
+            entered.set()
+            await release.wait()
+
+        engine._evaluate_physical_context_relax = delayed_relax
+        engine._apply_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        task = asyncio.create_task(
+            engine.notify_presence_observation(readings["desktop"]),
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            engine._manual_override = True
+            engine._override_mode = "watching"
+            engine._override_source = "manual"
+        finally:
+            release.set()
+            await task
+        try:
+            assert engine.current_mode == "watching"
+            engine._apply_mode.assert_not_awaited()
+            assert engine._desk_authority_decision.disposition == "protected"
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    async def test_unqualified_desktop_cannot_bypass_latitude_priority(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        readings["desktop"] = PresenceReading(
+            source="desktop", captured_at=clock.now,
+            face_present=False, zone=None,
+        )
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        try:
+            result = await engine.report_activity(
+                "working", "process", [{"key": "device", "value": "desktop"}],
+            )
+            assert result["reason"] == "source_priority"
+            assert engine._current_mode == "watching"
+            engine._apply_mode.assert_not_awaited()
         finally:
             await engine.close()
 
