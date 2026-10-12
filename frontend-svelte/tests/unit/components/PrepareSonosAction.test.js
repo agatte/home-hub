@@ -118,7 +118,7 @@ describe('PrepareSonosAction', () => {
     ['apartment_away', /apartment Away/],
     ['sleeping_active', /HomeHub is Sleeping/],
     ['audio_ownership_busy', /Another audio action owns the speaker/],
-    ['source_stopped_but_loaded', /Sonos is stopped but still has a source loaded/],
+    ['source_stopped_but_loaded', /Sonos is stopped but the retained source could not be verified/],
     ['source_evidence_unavailable', /Sonos source evidence is unavailable/],
     ['source_queue_evidence_unavailable', /Sonos queue could not be verified/],
     ['source_queue_not_empty', /Sonos queue is not empty/],
