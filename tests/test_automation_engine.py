@@ -7749,6 +7749,441 @@ def engine(mock_hue, mock_hue_v2, mock_ws):
     )
 
 
+class TestProcessHandoffRevisions:
+    """Await barriers for the semantic/dispatch foundation, not Desk integration."""
+
+    @pytest.fixture
+    def handoff(self, engine, monkeypatch):
+        clock = SimpleNamespace(now=datetime(2026, 10, 11, 16, tzinfo=TZ))
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._persist_override_state = AsyncMock()
+        engine._confidence_fusion = ConfidenceFusion()
+        engine._ml_logger = None
+        engine._event_logger = None
+        return engine, clock
+
+    async def test_acceptance_is_visible_before_apply_and_late_completion_is_read_only(self, handoff):
+        engine, clock = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        callbacks = []
+        factors = [{"key": "device", "value": "desktop"}]
+
+        async def apply(mode, **kwargs):
+            if mode == "working":
+                entered.set()
+                await release.wait()
+
+        async def callback(mode):
+            callbacks.append(mode)
+
+        engine._apply_mode = apply
+        engine.register_on_mode_change(callback)
+        first_at = clock.now
+        first = asyncio.create_task(engine.report_activity("working", "process", factors))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            accepted = engine._last_process_semantic_by_device["desktop"]
+            assert accepted.received_at == first_at
+            assert accepted.committed_mode == "working"
+            assert engine._confidence_fusion._signals["process"].timestamp == first_at
+            clock.now += timedelta(seconds=1)
+            await engine.report_activity("watching", "process", factors)
+            newer = engine._last_process_semantic_by_device["desktop"]
+            assert newer.revision > accepted.revision
+        finally:
+            release.set()
+            result = await first
+        assert engine._last_process_semantic_by_device["desktop"] is newer
+        assert engine._confidence_fusion._signals["process"].timestamp == clock.now
+        assert result["included_in_fusion"] is False
+        assert result["authoritative_mode"] == "watching"
+        assert callbacks == ["watching"]
+
+    async def test_late_accepted_latitude_cannot_resurrect_retracted_media(self, handoff):
+        engine, clock = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        factors = [{"key": "device", "value": "latitude"}]
+
+        async def apply(mode, **kwargs):
+            if mode == "watching":
+                entered.set()
+                await release.wait()
+
+        engine._apply_mode = apply
+        first = asyncio.create_task(engine.report_activity("watching", "process", factors))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            assert "latitude" in engine._last_process_semantic_by_device
+            clock.now += timedelta(seconds=1)
+            result = await engine.report_activity("idle", "process", factors)
+            assert result["authority_reconciled"] is True
+        finally:
+            release.set()
+            await first
+        assert "latitude" not in engine._last_process_semantic_by_device
+        assert "process" not in engine._confidence_fusion._signals
+        assert engine._mode_source_key == "time"
+
+    @pytest.mark.parametrize("older_mode", ["working", "idle"])
+    async def test_report_superseded_during_physical_evaluation_abstains(self, handoff, older_mode):
+        engine, clock = handoff
+        factors = [{"key": "device", "value": "latitude"}]
+        await engine.report_activity("watching", "process", factors)
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def evaluate(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+
+        engine._evaluate_physical_context_relax = evaluate
+        older = asyncio.create_task(engine.report_activity(older_mode, "process", factors))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            # Equal report timestamps must still have distinct revisions.
+            await engine.report_activity("watching", "process", factors)
+            newer = engine._last_process_semantic_by_device["latitude"]
+        finally:
+            release.set()
+            result = await older
+        assert result["semantic_disposition"] == "abstaining"
+        assert result["reason"] == "superseded_observation"
+        assert engine._last_process_semantic_by_device["latitude"] is newer
+        assert engine.current_mode == "watching"
+
+    async def test_stale_retraction_finalizer_cannot_remove_newer_record(self, handoff):
+        engine, clock = handoff
+        factors = [{"key": "device", "value": "latitude"}]
+        older = engine._record_process_observation("idle", factors, clock.now)
+        engine._record_process_semantic("watching", factors, clock.now)
+        newer = engine._last_process_semantic_by_device["latitude"]
+        result = await engine._finalize_process_report(
+            observation=older, disposition="retracted", reason="test", agent_factors=factors,
+        )
+        assert result["reason"] == "superseded_observation"
+        assert engine._last_process_semantic_by_device["latitude"] is newer
+        engine._apply_mode.assert_not_awaited()
+
+    def test_stale_semantic_commit_and_evicted_observation_are_rejected(self, handoff):
+        engine, clock = handoff
+        factors = [{"key": "device", "value": "desktop"}]
+        older = engine._record_process_observation("working", factors, clock.now)
+        engine._record_process_semantic("watching", factors, clock.now)
+        newer = engine._last_process_semantic_by_device["desktop"]
+        engine._record_process_semantic(older)
+        assert engine._last_process_semantic_by_device["desktop"] is newer
+        engine._last_process_observation_by_device.clear()
+        engine._record_process_semantic(older)
+        assert engine._last_process_semantic_by_device["desktop"] is newer
+        reacquired = engine._record_process_observation("gaming", factors, clock.now)
+        assert reacquired.revision > newer.revision > older.revision
+
+    @pytest.mark.parametrize("outcome", ["cancel", "failure"])
+    async def test_output_failure_does_not_undo_committed_evidence(self, handoff, outcome):
+        engine, clock = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def apply(mode, **kwargs):
+            entered.set()
+            await release.wait()
+            raise RuntimeError("fake output failure")
+
+        engine._apply_mode = apply
+        task = asyncio.create_task(engine.report_activity(
+            "working", "process", [{"key": "device", "value": "desktop"}],
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            accepted = engine._last_process_semantic_by_device["desktop"]
+            if outcome == "cancel":
+                task.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError if outcome == "cancel" else RuntimeError):
+                await task
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+        assert engine._last_process_semantic_by_device["desktop"] is accepted
+        assert accepted.received_at == clock.now
+
+    async def test_confirming_heartbeat_preserves_owner_epoch_and_transition_time(self, handoff):
+        engine, clock = handoff
+        factors = [{"key": "device", "value": "desktop"}]
+        await engine.report_activity("working", "process", factors)
+        epoch, changed_at = engine._mode_transition_revision, engine._last_activity_change
+        semantic_revision = engine._last_process_semantic_by_device["desktop"].revision
+        clock.now += timedelta(seconds=5)
+        await engine.report_activity("working", "process", factors)
+        assert engine._mode_transition_revision == epoch
+        assert engine._last_activity_change == changed_at
+        evidence = engine._last_process_semantic_by_device["desktop"]
+        assert evidence.revision > semantic_revision
+        assert evidence.received_at == clock.now
+
+    async def test_heartbeat_during_apply_does_not_cancel_committed_mode_callback(self, handoff):
+        engine, clock = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        factors = [{"key": "device", "value": "desktop"}]
+        calls = 0
+        callback = AsyncMock()
+        engine.register_on_mode_change(callback)
+
+        async def apply(mode, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+
+        engine._apply_mode = apply
+        first = asyncio.create_task(engine.report_activity("working", "process", factors))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            clock.now += timedelta(seconds=5)
+            await engine.report_activity("working", "process", factors)
+        finally:
+            release.set()
+            await first
+        callback.assert_awaited_once_with("working")
+
+    async def test_rejected_report_does_not_earn_semantic_from_precommit(self, handoff):
+        engine, _ = handoff
+        await engine.report_activity("gaming", "process", [{"key": "device", "value": "desktop"}])
+        accepted = engine._last_process_semantic_by_device["desktop"]
+        result = await engine.report_activity("watching", "process", [{"key": "device", "value": "latitude"}])
+        assert result["reason"] == "source_priority"
+        assert "latitude" not in engine._last_process_semantic_by_device
+        assert engine._last_process_semantic_by_device["desktop"] is accepted
+
+    async def test_disabled_and_dnd_reports_remain_unaccepted(self, handoff):
+        engine, _ = handoff
+        engine._enabled = False
+        result = await engine.report_activity("working", "process")
+        assert result["reason"] == "automation_disabled"
+        assert not engine._last_process_semantic_by_device
+        engine._enabled = True
+        engine.is_dnd_active = lambda: True
+        result = await engine.report_activity("working", "process")
+        assert result["reason"] == "dnd_active"
+        assert not engine._last_process_semantic_by_device
+
+    async def test_rejected_newer_observation_does_not_erase_previous_acceptance(self, handoff):
+        engine, clock = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        factors = [{"key": "device", "value": "desktop"}]
+
+        async def apply(mode, **kwargs):
+            entered.set()
+            await release.wait()
+
+        engine._apply_mode = apply
+        first = asyncio.create_task(engine.report_activity("working", "process", factors))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            accepted = engine._last_process_semantic_by_device["desktop"]
+            engine.is_dnd_active = lambda: True
+            clock.now += timedelta(seconds=1)
+            result = await engine.report_activity("watching", "process", factors)
+            assert result["reason"] == "dnd_active"
+        finally:
+            release.set()
+            await first
+        assert engine._last_process_semantic_by_device["desktop"] is accepted
+        assert accepted.received_at < clock.now
+
+    async def test_callback_failure_preserves_current_owner_fanout(self, handoff):
+        engine, _ = handoff
+        engine._current_mode = "working"
+        first = AsyncMock(side_effect=RuntimeError("fake listener failure"))
+        second = AsyncMock()
+        engine.register_on_mode_change(first)
+        engine.register_on_mode_change(second)
+        await engine._fire_mode_change_callbacks("working")
+        second.assert_awaited_once_with("working")
+
+    async def test_same_mode_owner_aba_suppresses_older_dispatch(self, handoff):
+        engine, _ = handoff
+        await engine.report_activity("watching", "process", [{"key": "device", "value": "desktop"}])
+        epoch = engine._mode_transition_revision
+        engine._mode_source_key = "process:latitude"
+        engine._mode_source_key = "process:desktop"
+        engine._fire_mode_change_callbacks = AsyncMock()
+        await engine._dispatch_mode_change_if_current("watching", epoch)
+        engine._fire_mode_change_callbacks.assert_not_awaited()
+
+    async def test_mode_epoch_does_not_weaken_existing_hue_leases(self, handoff):
+        engine, _ = handoff
+        engine._manual_override = True
+        engine._override_mode = "watching"
+        epoch = engine._mode_transition_revision
+        authority = engine._transition_boundary.authority
+        lease = authority.issue("test", ["2"], intent_only=True)
+        engine._current_mode = "working"
+        assert engine._mode_transition_revision == epoch
+        async with engine._transition_boundary.serialized():
+            assert not authority.valid(lease)
+
+    async def test_scene_bookkeeping_does_not_revoke_mode_dispatch(self, handoff):
+        engine, _ = handoff
+        await engine.report_activity("watching", "process", [{"key": "device", "value": "desktop"}])
+        epoch = engine._mode_transition_revision
+        engine._active_scene_override_key = ("watching", "night", "test", "bridge")
+        engine._fire_mode_change_callbacks = AsyncMock()
+        await engine._dispatch_mode_change_if_current("watching", epoch)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("watching")
+
+    async def test_supersession_between_callbacks_stops_old_fanout(self, handoff):
+        engine, _ = handoff
+        engine._current_mode = "working"
+        entered, release = asyncio.Event(), asyncio.Event()
+        second = AsyncMock()
+
+        async def first(mode):
+            entered.set()
+            await release.wait()
+
+        engine.register_on_mode_change(first)
+        engine.register_on_mode_change(second)
+        task = asyncio.create_task(engine._fire_mode_change_callbacks("working"))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            engine._mode_source_key = "process:latitude"
+        finally:
+            release.set()
+            await task
+        second.assert_not_awaited()
+        assert not engine._transition_boundary.held_by_current_task
+
+    async def test_manual_owner_during_report_apply_blocks_old_callbacks(self, handoff):
+        engine, _ = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        callbacks = []
+
+        async def apply(mode, **kwargs):
+            if mode == "working":
+                entered.set()
+                await release.wait()
+
+        async def callback(mode):
+            callbacks.append(mode)
+
+        engine._apply_mode = apply
+        engine.register_on_mode_change(callback)
+        task = asyncio.create_task(engine.report_activity("working", "process"))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await engine.set_manual_override("watching", source="api:test")
+        finally:
+            release.set()
+            await task
+        assert engine.current_mode == "watching"
+        assert callbacks == ["watching"]
+
+    async def test_manual_mode_pick_remains_allowed_while_automation_disabled(self, handoff):
+        engine, _ = handoff
+        engine._enabled = False
+        callback = AsyncMock()
+        engine.register_on_mode_change(callback)
+        await engine.set_manual_override("watching", source="api:test")
+        engine._apply_mode.assert_awaited_once_with("watching", force_resend=True)
+        callback.assert_awaited_once_with("watching")
+
+    async def test_new_manual_owner_while_persisting_skips_old_apply(self, handoff):
+        engine, _ = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def persist():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+
+        engine._persist_override_state = persist
+        task = asyncio.create_task(engine.set_manual_override("working", source="api:first"))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await engine.set_manual_override("watching", source="api:second")
+        finally:
+            release.set()
+            await task
+        engine._apply_mode.assert_awaited_once_with("watching", force_resend=True)
+        assert engine._override_source == "api:second"
+
+    async def test_detector_update_during_manual_persist_does_not_revoke_user_owner(self, handoff):
+        engine, _ = handoff
+        entered, release = asyncio.Event(), asyncio.Event()
+        callback = AsyncMock()
+        engine.register_on_mode_change(callback)
+
+        async def persist():
+            entered.set()
+            await release.wait()
+
+        engine._persist_override_state = persist
+        task = asyncio.create_task(engine.set_manual_override("watching", source="api:test"))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            epoch = engine._mode_transition_revision
+            await engine.report_activity("working", "process", [{"key": "device", "value": "desktop"}])
+            assert engine._mode_transition_revision == epoch
+        finally:
+            release.set()
+            await task
+        engine._apply_mode.assert_awaited_once_with("watching", force_resend=True)
+        callback.assert_awaited_once_with("watching")
+
+    @pytest.mark.parametrize("gate", ["_away_hold", "_host_return_hold", "_external_off_detected"])
+    async def test_lifecycle_gate_during_apply_suppresses_callback(self, handoff, gate):
+        engine, _ = handoff
+        callback = AsyncMock()
+        engine.register_on_mode_change(callback)
+
+        async def apply(mode, **kwargs):
+            setattr(engine, gate, True)
+
+        engine._apply_mode = apply
+        await engine.report_activity("working", "process")
+        callback.assert_not_awaited()
+
+    async def test_retraction_apply_superseded_by_same_device_watching(self, handoff):
+        engine, clock = handoff
+        latitude = [{"key": "device", "value": "latitude"}]
+        await engine.report_activity("watching", "process", latitude)
+        entered, release = asyncio.Event(), asyncio.Event()
+        callbacks = []
+
+        async def apply(mode, **kwargs):
+            if mode == "idle":
+                entered.set()
+                await release.wait()
+
+        async def callback(mode):
+            callbacks.append(mode)
+
+        engine._apply_mode = apply
+        engine.register_on_mode_change(callback)
+        task = asyncio.create_task(engine.report_activity("idle", "process", latitude))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            assert "latitude" not in engine._last_process_semantic_by_device
+            clock.now += timedelta(seconds=1)
+            await engine.report_activity("watching", "process", latitude)
+            newer = engine._last_process_semantic_by_device["latitude"]
+        finally:
+            release.set()
+            await task
+        assert engine._last_process_semantic_by_device["latitude"] is newer
+        assert callbacks == ["watching"]
+
+
 class TestDeskProcessAuthorityPolicy:
     """Offline #370 candidate policy; runtime integration is intentionally pending."""
 
