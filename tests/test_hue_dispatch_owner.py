@@ -151,3 +151,60 @@ async def test_cancelled_dispatch_retains_boundary_until_worker_settles():
         finally:
             release.set()
             await asyncio.gather(task, *([other] if other else []), return_exceptions=True)
+
+@pytest.mark.asyncio
+async def test_guarded_worker_validates_lighting_lease_in_thread():
+    """A real ScreenSync-style lease is valid in the delegated thread only."""
+    hue, boundary, calls = service()
+    async with boundary.serialized():
+        lease = boundary.authority.issue("screen_sync", ["1"])
+        def valid():
+            return boundary.authority.valid(lease)
+        assert await boundary.run_write(
+            lambda: hue.set_light("1", {"bri": 100}), validator=valid,
+        ) is True
+    assert calls == [(1, {"bri": 100})]
+    # A plain detached executor caller must not acquire Hue authority.
+    with pytest.raises(RuntimeError, match="final boundary"):
+        await asyncio.to_thread(lambda: boundary.authority.valid(lease))
+
+
+@pytest.mark.asyncio
+async def test_screen_lease_revoked_while_bridge_worker_queued():
+    """Thread-entry rechecks the latest lease; cancellation cannot bypass it."""
+    hue, boundary, calls = service()
+    original = asyncio.to_thread
+    entered, release = Event(), Event()
+
+    async def paused(fn, *args, **kwargs):
+        def worker():
+            entered.set()
+            assert release.wait(3)
+            return fn(*args, **kwargs)
+        return await original(worker)
+
+    async def apply():
+        async with boundary.serialized():
+            lease = boundary.authority.issue("screen_sync", ["1"])
+            def valid():
+                return boundary.authority.valid(lease)
+            return await boundary.run_write(
+                lambda: hue.set_light("1", {"bri": 110}),
+                validator=valid,
+            )
+
+    with patch("asyncio.to_thread", paused):
+        task = asyncio.create_task(apply())
+        try:
+            for _ in range(500):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(0.002)
+            assert entered.is_set()
+            boundary.authority.invalidate(["1"])
+            release.set()
+            assert await task is False
+            assert calls == []
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
