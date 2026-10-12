@@ -549,6 +549,15 @@ class AutomationEngine:
         self._physical_context_presence_lost_at: Optional[datetime] = None
         self._physical_context_last_decision: Optional[str] = None
 
+        # #370 non-actuating, source-qualified Desk expiry observation.
+        # This does NOT own Activity, call the composer, or authorize Hue writes.
+        self._desk_authority_state = DeskAuthorityState()
+        self._desk_authority_decision: Optional[DeskAuthorityDecision] = None
+        self._desk_authority_next_deadline: Optional[datetime] = None
+        self._desk_authority_wakeup = asyncio.Event()
+        self._desk_authority_expiry_task: Optional[asyncio.Task] = None
+        self._desk_authority_closed = False
+
         # Sleeping clears retain the normal autonomous cooldown for every
         # source except physical_context_relax after a new post-resume commit.
         self._user_clear_allows_physical_context_relax: bool = False
@@ -2753,9 +2762,64 @@ class AutomationEngine:
             trigger,
         )
 
+    def _refresh_desk_authority_observation(
+        self, *, source_invalidated: bool = False,
+    ) -> None:
+        """Update a non-actuating #370 Desk source clock and its next deadline.
+
+        No mode mutation, callback, light write, wake transition or replay of
+        Latitude media occurs here. A separate reviewed runtime reconciler must
+        consume this evidence through the established owner/lease boundaries.
+        """
+        if self._desk_authority_closed:
+            return
+        decision = self._resolve_desk_process_authority(
+            self._now(), self._desk_authority_state,
+            source_invalidated=source_invalidated,
+        )
+        self._desk_authority_state = decision.state
+        self._desk_authority_decision = decision
+        self._desk_authority_next_deadline = decision.next_deadline
+
+        task = self._desk_authority_expiry_task
+        if task is not None and not task.done():
+            self._desk_authority_wakeup.set()
+        elif decision.next_deadline is not None:
+            self._desk_authority_wakeup.clear()
+            self._desk_authority_expiry_task = asyncio.create_task(
+                self._observe_desk_authority_deadlines()
+            )
+
+    async def _observe_desk_authority_deadlines(self) -> None:
+        """Wait for Desktop-source deadlines independent of fused room labels."""
+        task = asyncio.current_task()
+        try:
+            while not self._desk_authority_closed:
+                deadline = self._desk_authority_next_deadline
+                if deadline is None:
+                    return
+                seconds = max(0.0, (deadline - self._now()).total_seconds())
+                self._desk_authority_wakeup.clear()
+                try:
+                    await asyncio.wait_for(
+                        self._desk_authority_wakeup.wait(), timeout=max(0.001, seconds),
+                    )
+                except asyncio.TimeoutError:
+                    # The deadline is evidence expiry, not a Hue/Activity lease.
+                    self._refresh_desk_authority_observation()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Non-actuating Desk source deadline observation failed")
+        finally:
+            if self._desk_authority_expiry_task is task:
+                self._desk_authority_expiry_task = None
+
     async def notify_presence_observation(self, reading: Any) -> None:
         """Evaluate physical context and maintain fixture-comfort expiry."""
         source = getattr(reading, "source", "unknown")
+        # Capture the physical source promptly before downstream async work.
+        self._refresh_desk_authority_observation()
         await self._evaluate_physical_context_relax(
             trigger=f"presence:{source}",
         )
@@ -2769,6 +2833,10 @@ class AutomationEngine:
 
     def notify_presence_source_invalidated(self, source: str) -> None:
         """Reconcile fixture comfort after source-qualified physical authority is revoked."""
+        # Source-local expiry must run even when another physical zone remains.
+        self._refresh_desk_authority_observation(
+            source_invalidated=(source == "desktop"),
+        )
         self._cancel_fixture_comfort_expiry_task()
         presence = self._presence_fusion
         if presence is None:
@@ -2816,12 +2884,19 @@ class AutomationEngine:
         """Cancel bounded auxiliary automation tasks before service shutdown."""
         self._mode_transition_revision += 1
         self._transition_boundary.authority.close()
-        task = self._fixture_comfort_expiry_task
+        self._desk_authority_closed = True
+        tasks = [
+            task for task in (
+                self._fixture_comfort_expiry_task,
+                self._desk_authority_expiry_task,
+            ) if task is not None and not task.done()
+        ]
         self._fixture_comfort_expiry_task = None
-        if task is None or task.done():
-            return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        self._desk_authority_expiry_task = None
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _refresh_fixture_comfort_expiry_task(self) -> None:
         """Arm one recompose when a recent physical Desk lock becomes unknown."""
