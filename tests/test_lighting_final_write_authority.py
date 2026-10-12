@@ -451,3 +451,83 @@ async def test_bridge_loss_preserves_external_off_and_hard_hold(lighting):
     request.app.state.hue.connected = False
     assert await engine._check_external_off() is True
     assert engine._away_hold and engine._external_off_detected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("takeover_kind", ["other_mode", "same_mode_aba", "external_off"])
+async def test_mode_apply_owner_epoch_blocks_stale_delegated_write(
+    lighting, takeover_kind,
+):
+    """The Hue delegate must refuse an earlier Activity owner after lock wait."""
+    from backend.services.light_applicator import mode_apply_epoch
+
+    engine, sync, request = lighting
+    engine._current_mode = "working"
+    revision = engine._mode_transition_revision
+    owner = (revision, engine.effective_mode)
+    new_target = {"on": True, "bri": 211, "ct": 350}
+    bridge = request.app.state.hue
+    with patch.object(bridge, "set_light", wraps=bridge.set_light) as write:
+        async with independent_blocker(engine.lighting_transition_boundary):
+            marker = mode_apply_epoch.set(owner)
+            try:
+                task = asyncio.create_task(
+                    engine._applicator.apply_per_light({"2": new_target}),
+                )
+            finally:
+                mode_apply_epoch.reset(marker)
+            await asyncio.sleep(0)
+            if takeover_kind == "other_mode":
+                engine._current_mode = "watching"
+            elif takeover_kind == "same_mode_aba":
+                engine._current_mode = "watching"
+                engine._current_mode = "working"
+            else:
+                engine._external_off_detected = True
+        result = await asyncio.wait_for(task, 2)
+        write.assert_not_called()
+        assert "2" not in result.successful
+        assert "2" in result.failed
+        assert engine._last_applied_per_light["2"]["bri"] == 100
+
+
+@pytest.mark.asyncio
+async def test_current_mode_owner_allows_same_hue_write(lighting):
+    from backend.services.light_applicator import mode_apply_epoch
+
+    engine, sync, request = lighting
+    engine._current_mode = "working"
+    marker = mode_apply_epoch.set(
+        (engine._mode_transition_revision, engine.effective_mode),
+    )
+    try:
+        with patch.object(
+            request.app.state.hue, "set_light",
+            wraps=request.app.state.hue.set_light,
+        ) as write:
+            result = await engine._applicator.apply_per_light(
+                {"2": {"on": True, "bri": 211, "ct": 350}},
+            )
+            assert "2" in result.successful
+            write.assert_called_once()
+    finally:
+        mode_apply_epoch.reset(marker)
+
+
+@pytest.mark.asyncio
+async def test_apply_mode_scopes_and_restores_owner_epoch(lighting):
+    from backend.services.light_applicator import mode_apply_epoch
+
+    engine, sync, request = lighting
+    engine._current_mode = "working"
+    witnessed = []
+
+    async def inspect_inner(mode, *, force_resend=False):
+        witnessed.append(mode_apply_epoch.get())
+
+    with patch.object(engine, "_apply_mode_under_owner", side_effect=inspect_inner):
+        await engine._apply_mode("working")
+    assert witnessed == [
+        (engine._mode_transition_revision, engine.effective_mode),
+    ]
+    assert mode_apply_epoch.get() is None
