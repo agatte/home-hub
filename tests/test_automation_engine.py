@@ -416,7 +416,7 @@ class TestAutomationEngine:
         assert engine._external_off_detected is False
         assert engine._away_hold is False
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
 
     async def test_explicit_sleeping_auto_persists_confirmed_awake(
         self, engine, monkeypatch,
@@ -537,7 +537,7 @@ class TestAutomationEngine:
         assert engine.activity == "general"
         assert engine._home_awake_confirmed is True
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
 
     async def test_explicit_sleeping_auto_is_user_authority_during_dnd(
         self, engine,
@@ -1300,7 +1300,7 @@ class TestSleepingFloor:
         assert engine.house_state == "home"
         assert engine._home_awake_confirmed is True
         engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("working", revision=engine._mode_transition_revision)
 
     async def test_wireless_bed_input_cannot_release_manual_sleeping(self, engine):
         """Global recent input is weak when no trusted desk device moved."""
@@ -3927,7 +3927,7 @@ class TestRecentDeskAttendanceVeto:
         assert engine._mode_source_key == "time"
         assert "process:latitude" not in engine._last_mode_source_report_at
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
         engine._broadcast_mode.assert_awaited_once()
 
     async def test_latitude_retraction_hands_authority_to_fresh_desktop_semantic(
@@ -3957,7 +3957,7 @@ class TestRecentDeskAttendanceVeto:
         assert engine._last_mode_source_report_at["process:desktop"] == desktop_at
         assert "process:latitude" not in engine._last_mode_source_report_at
         engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("working", revision=engine._mode_transition_revision)
         engine._broadcast_mode.assert_awaited_once()
 
     async def test_latitude_retraction_preserves_newer_replacement_liveness(
@@ -4119,7 +4119,7 @@ class TestRecentDeskAttendanceVeto:
         assert first["authority_reconciled"] is True
         assert second["authority_reconciled"] is False
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
         engine._broadcast_mode.assert_awaited_once()
 
     async def test_periodic_tick_cannot_reapply_retracted_latitude_watching(
@@ -8045,7 +8045,7 @@ class TestProcessHandoffRevisions:
         engine._active_scene_override_key = ("watching", "night", "test", "bridge")
         engine._fire_mode_change_callbacks = AsyncMock()
         await engine._dispatch_mode_change_if_current("watching", epoch)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("watching")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("watching", revision=engine._mode_transition_revision)
 
     async def test_supersession_between_callbacks_stops_old_fanout(self, handoff):
         engine, _ = handoff
@@ -8068,6 +8068,35 @@ class TestProcessHandoffRevisions:
             await task
         second.assert_not_awaited()
         assert not engine._transition_boundary.held_by_current_task
+
+    @pytest.mark.parametrize("new_mode", ["sleeping", "watching", "working"])
+    async def test_camera_owner_guard_invalidates_before_new_callback(self, handoff, new_mode):
+        engine, _ = handoff
+        engine._current_mode = "working"
+        entered, release = asyncio.Event(), asyncio.Event()
+        guards = []
+
+        async def camera_callback(mode, *, owner_is_current):
+            guards.append(owner_is_current)
+            entered.set()
+            await release.wait()
+            assert not owner_is_current()
+
+        engine.register_on_mode_change(camera_callback, with_owner_guard=True)
+        revision = engine._mode_transition_revision
+        task = asyncio.create_task(engine._dispatch_mode_change_if_current("working", revision))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            assert guards[0]()
+            # Remove delivery to isolate commit-time revocation. In particular,
+            # a manual selection of the SAME effective mode must revoke it.
+            engine.deregister_on_mode_change(camera_callback)
+            await engine.set_manual_override(new_mode, source="api:camera-owner-test")
+            assert engine._mode_transition_revision > revision
+            assert not guards[0]()
+        finally:
+            release.set()
+            await task
 
     async def test_manual_owner_during_report_apply_blocks_old_callbacks(self, handoff):
         engine, _ = handoff
