@@ -671,6 +671,7 @@ class AutomationEngine:
 
         # Mode change callbacks (e.g., music mapper auto-play)
         self._on_mode_change_callbacks: list = []
+        self._owner_guard_callbacks: set = set()
 
         # Config
         self._enabled: bool = True
@@ -3394,14 +3395,18 @@ class AutomationEngine:
         """
         self._bed_reclined_l1_night = max(1, min(100, int(value)))
 
-    def register_on_mode_change(self, callback) -> None:
+    def register_on_mode_change(self, callback, *, with_owner_guard: bool = False) -> None:
         """
         Register a callback to be invoked when the active mode changes.
 
         Args:
             callback: Async callable accepting a single mode string argument.
+            with_owner_guard: Opt in to an owner_is_current keyword predicate
+                bound to the initiating committed revision and effective mode.
         """
         self._on_mode_change_callbacks.append(callback)
+        if with_owner_guard:
+            self._owner_guard_callbacks.add(callback)
 
     def deregister_on_mode_change(self, callback) -> None:
         """Remove a previously-registered mode-change callback.
@@ -3416,6 +3421,7 @@ class AutomationEngine:
             self._on_mode_change_callbacks.remove(callback)
         except ValueError:
             pass
+        self._owner_guard_callbacks.discard(callback)
 
     async def notify_camera_commit(self) -> None:
         """Re-apply lighting after a source-qualified zone/posture commit.
@@ -3466,21 +3472,28 @@ class AutomationEngine:
         # This fences dispatch only. Listeners with internal waits still need
         # consumer-side checks before effects; it is not a final-write lease.
         if self._mode_transition_is_current(mode, revision):
-            await self._fire_mode_change_callbacks(mode)
+            await self._fire_mode_change_callbacks(mode, revision=revision)
 
-    async def _fire_mode_change_callbacks(self, mode: str) -> None:
+    async def _fire_mode_change_callbacks(self, mode: str, *, revision: Optional[int] = None) -> None:
         """Invoke all registered mode-change callbacks with timeout protection."""
         # 15s budget per callback. CameraService.start() reopens V4L2 on
         # resume-from-sleeping, which can take 5-8s under contention; the
         # earlier 8s ceiling clipped legitimate restarts and orphaned the
         # camera silent.
-        revision = self._mode_transition_revision
+        if revision is None:
+            revision = self._mode_transition_revision
+
+        def owner_is_current() -> bool:
+            return self._mode_transition_is_current(mode, revision)
 
         async def invoke_if_current(callback):
             # wait_for schedules a child task. Recheck at its actual start as
             # well as between callbacks, without holding the lighting lock.
             if self._mode_transition_is_current(mode, revision):
-                await callback(mode)
+                if callback in self._owner_guard_callbacks:
+                    await callback(mode, owner_is_current=owner_is_current)
+                else:
+                    await callback(mode)
 
         for callback in tuple(self._on_mode_change_callbacks):
             if not self._mode_transition_is_current(mode, revision):
