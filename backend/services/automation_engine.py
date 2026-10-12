@@ -5016,6 +5016,13 @@ class AutomationEngine:
                 of sync with the cache). Leave False on periodic reapply
                 ticks so dedup can no-op when nothing changed.
         """
+        # Keep the wrapper's originating intent across every awaited apply.
+        # Reading a fresh epoch on completion would let same-mode ABA win.
+        owner = mode_apply_epoch.get()
+
+        def owner_is_current() -> bool:
+            return owner == (self._mode_transition_revision, self.effective_mode)
+
         if mode != "gaming" and self._screen_sync is not None:
             clear_gaming = getattr(
                 self._screen_sync, "clear_accepted_gaming_state", None,
@@ -5136,6 +5143,7 @@ class AutomationEngine:
             period = "night"
         override_scene = self._scene_overrides.get(mode, {}).get(period)
         self._active_scene_override_key = None
+        self._gaming_scene_transition_pending = False
         atmosphere_plan = (
             await self._plan_living_room_atmosphere(
                 period=period,
@@ -5158,13 +5166,15 @@ class AutomationEngine:
                     or await self._release_external_owners_for_scene()
                 )
             except asyncio.CancelledError:
-                if mode == "gaming":
+                if mode == "gaming" and owner_is_current():
                     self._gaming_scene_transition_pending = False
                 raise
             except Exception:
-                if mode == "gaming":
+                if mode == "gaming" and owner_is_current():
                     self._gaming_scene_transition_pending = False
                 raise
+            if not owner_is_current():
+                return
             if not owners_released:
                 self._gaming_scene_transition_pending = False
                 logger.warning(
@@ -5219,7 +5229,7 @@ class AutomationEngine:
                     else:
                         failure_reason = f"preset '{override_scene}' not in SCENE_PRESETS"
             except asyncio.CancelledError:
-                if mode == "gaming":
+                if mode == "gaming" and owner_is_current():
                     self._gaming_scene_transition_pending = False
                 raise
             except Exception as e:
@@ -5229,6 +5239,9 @@ class AutomationEngine:
                     mode, period, override_scene, e,
                     exc_info=True,
                 )
+
+            if not owner_is_current():
+                return
 
             # No await occurs between clearing this latch and recording a
             # successful scene marker below, so another coroutine cannot enter
@@ -5278,6 +5291,8 @@ class AutomationEngine:
                 "source": source,
                 "reason": failure_reason or "unknown",
             })
+            if not owner_is_current():
+                return
             logger.warning(
                 "Falling back to ACTIVITY_LIGHT_STATES for %s/%s after scene override failure",
                 mode, period,
@@ -5295,6 +5310,8 @@ class AutomationEngine:
         scene_release_baseline: dict[str, dict[str, Any]] = {}
         if gaming_scene_released:
             scene_release_baseline = await self._read_scene_release_baseline()
+            if not owner_is_current():
+                return
             self._invalidate_dedup_cache()
 
         # Gaming has one production composition path. The pure resolver owns
@@ -5556,6 +5573,8 @@ class AutomationEngine:
                         intended_states=state,
                         transitiontime=tt,
                     )
+                if not owner_is_current():
+                    return
                 # Hue can perturb static lamp state while stop_effect_all()
                 # releases a prior effect, after the safety write has already
                 # advanced the normal dedup cache. Atmosphere-owned lights are
@@ -5592,6 +5611,10 @@ class AutomationEngine:
                     )
                 else:
                     applied = await self._apply_state(state, transitiontime=tt)
+            # Hue acceptance can precede awaited logging/settling. A newer
+            # Activity owns accepted caches and scene/atmosphere publication.
+            if not owner_is_current():
+                return
             if gaming_plan is not None and (
                 applied is True
                 or isinstance(applied, LightApplyResult) and not applied.failed
