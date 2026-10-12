@@ -1030,6 +1030,44 @@ class AutomationEngine:
             "physical_context_process_arbitration": (
                 process_arbitration.as_context(now)
             ),
+            # Read-only evidence, not a lighting or Activity authority. Expose
+            # the pending #370 Desk handoff so real camera/loss timing can be
+            # verified before enabling it. No recomputation or writes here.
+            "desk_authority_observation": {
+                "enforcing": False,
+                "disposition": (
+                    self._desk_authority_decision.disposition
+                    if self._desk_authority_decision is not None else None
+                ),
+                "selection": (
+                    {
+                        "mode": self._desk_authority_decision.selection[0],
+                        "source_key": self._desk_authority_decision.selection[1],
+                    }
+                    if self._desk_authority_decision is not None
+                    and self._desk_authority_decision.selection is not None
+                    else None
+                ),
+                "desk_expires_at": (
+                    self._desk_authority_state.desk_expires_at.isoformat()
+                    if self._desk_authority_state.desk_expires_at is not None
+                    else None
+                ),
+                "loss_started_at": (
+                    self._desk_authority_state.loss_started_at.isoformat()
+                    if self._desk_authority_state.loss_started_at is not None
+                    else None
+                ),
+                "next_deadline": (
+                    self._desk_authority_next_deadline.isoformat()
+                    if self._desk_authority_next_deadline is not None
+                    else None
+                ),
+                "timer_active": (
+                    self._desk_authority_expiry_task is not None
+                    and not self._desk_authority_expiry_task.done()
+                ),
+            },
             "gaming": self.get_gaming_diagnostics(),
         }
 
