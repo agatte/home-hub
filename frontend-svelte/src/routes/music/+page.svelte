@@ -11,15 +11,30 @@
   /** @type {any} */
   export let params = undefined
   data; params;
+
+  /** @type {{ provider_id: string } | null} */
+  let selectedAppleTrack = null
+
+  /** @param {string} providerId */
+  function reviewAppleTrack(providerId) {
+    selectedAppleTrack = { provider_id: providerId }
+  }
 </script>
 
 <main class="music-page">
   <section class="music-primary">
-    <ShadowDiscoveryPanel />
+    <ShadowDiscoveryPanel onReviewAppleTrack={reviewAppleTrack} />
   </section>
 
+  {#if selectedAppleTrack}
+    <p class="music-handoff" role="status">
+      Discovery track selected for review only.
+      <a href="#approved-apple-track">Review its exact Apple Music identity below</a>
+      before separately approving or starting playback.
+    </p>
+  {/if}
   <PrepareSonosAction />
-  <ApprovedAppleMusicEntry />
+  <ApprovedAppleMusicEntry selectedTrack={selectedAppleTrack} />
 
   <details class="music-manage">
     <summary>
@@ -55,6 +70,13 @@
   .music-primary {
     min-width: 0;
   }
+  .music-handoff {
+    max-width: 1240px;
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+  .music-handoff a { color: var(--accent); }
 
   .music-manage {
     max-width: 1240px;

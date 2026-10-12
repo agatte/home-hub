@@ -4,6 +4,10 @@
   import AssistedPlayAction from '$lib/components/AssistedPlayAction.svelte'
   import { appleMusicTrackId } from '$lib/assistedPlaybackAttempt.js'
 
+  /** @type {{ provider_id: string } | null} */
+  export let selectedTrack = null
+  /** @type {{ provider_id: string } | null} */
+  let appliedSelection = null
   let input = ''
   /** @type {boolean | null} */
   let kiosk = null
@@ -55,6 +59,19 @@
     }
   }
 
+  // An explicit discovery click may fill an exact ID, but cannot approve or play.
+  // Compare object identity so a second deliberate selection of the same song
+  // is still accepted, without overwriting subsequent manual input edits.
+  $: if (selectedTrack && selectedTrack !== appliedSelection) {
+    appliedSelection = selectedTrack
+    const id = String(selectedTrack.provider_id || '')
+    if (/^\d{5,20}$/.test(id)) {
+      input = id
+      approvedId = ''
+      approvalMessage = 'Discovery track selected. Verify the exact song and approve it separately; no playback was requested.'
+    }
+  }
+
   $: trackId = appleMusicTrackId(input)
   $: candidate = trackId
     ? {
@@ -67,7 +84,7 @@
     : null
 </script>
 
-<section class="approved-entry" aria-label="Explicit approved Apple Music playback">
+<section id="approved-apple-track" class="approved-entry" aria-label="Explicit approved Apple Music playback">
   <div>
     <h3>Play an approved Apple Music track</h3>
     <p>Paste an Apple Music song link or exact track ID. HomeHub verifies the track and its approval before any playback. This does not start music automatically.</p>
