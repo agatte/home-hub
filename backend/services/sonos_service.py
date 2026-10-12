@@ -459,6 +459,13 @@ class SonosService:
             return 'source_playing'
         if transport == 'STOPPED' and any(evidence.get(key) for key in (
                 'current_uri', 'queue_track_uri', 'title', 'metadata', 'media_metadata')):
+            # Diagnostic only: prove all other stopped-source conditions with a
+            # synthetic nonzero volume. Do not change eligibility or evidence.
+            if (type(evidence.get('volume')) is int
+                    and evidence['volume'] == 0
+                    and SonosService.prepare_stopped_eligible({
+                        **evidence, 'volume': 1})):
+                return 'source_volume_zero'
             return 'source_stopped_but_loaded'
         if evidence.get('play_mode') not in (None, 'NORMAL'):
             return 'source_play_mode_not_normal'
