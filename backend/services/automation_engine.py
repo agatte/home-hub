@@ -2773,10 +2773,16 @@ class AutomationEngine:
         """
         if self._desk_authority_closed:
             return
-        decision = self._resolve_desk_process_authority(
-            self._now(), self._desk_authority_state,
-            source_invalidated=source_invalidated,
-        )
+        try:
+            decision = self._resolve_desk_process_authority(
+                self._now(), self._desk_authority_state,
+                source_invalidated=source_invalidated,
+            )
+        except Exception:
+            # An optional observation-only tracker must never interrupt the
+            # established presence/fixture path or gain authority on failure.
+            logger.exception("Non-actuating Desk source observation failed")
+            return
         self._desk_authority_state = decision.state
         self._desk_authority_decision = decision
         self._desk_authority_next_deadline = decision.next_deadline
