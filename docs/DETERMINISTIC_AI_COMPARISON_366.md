@@ -1,6 +1,8 @@
 # HomeHub #366 — Deterministic explainer vs stronger read-only AI
 
-> **Status:** Offline Sandbox research candidate; not integrated or published.
+> **Status:** Deterministic baseline merged via [PR #381](https://github.com/agatte/home-hub/pull/381);
+> stronger-model comparison completed as bounded offline research, **not** integrated
+> or deployed. The answer-key adjudication guard is a separately reviewed follow-up.
 > **Owner:** [#366](https://github.com/agatte/home-hub/issues/366), Sensing &
 > Intelligence. Deterministic evidence authority remains
 > [#240](https://github.com/agatte/home-hub/issues/240).
@@ -82,16 +84,42 @@ No network, model inference, service, user-data access or device command.
 The output directory must not exist and will **never be overwritten or cleaned**
 by the evaluator. Do not use real production logs or credentials as evidence.
 
-## Stronger-model comparison — prepared, NOT RUN
+## Stronger-model comparison — research run completed, further acceptance gated
 
-**Independent execution matters:** the ongoing ChatGPT conversation has already
-seen the public gold labels and Qwen failures. Scoring an answer generated
-here as a "blind GPT-6 benchmark" would be invalid. The cloud provider,
-exact independently invoked model/version, account/cost budget, retention/privacy
-class, execution channel and approval are **not selected or authorized** by
-publishing this research candidate.
+A separately approved experiment ran **18** fresh, ephemeral, read-only Codex
+CLI completions in the protected Windows Sandbox with sanitized prompts only:
+10 original published-gold cases and eight additional author-adjudicated
+synthetic cases. The existing authenticated Codex CLI **default model** was
+used; its underlying model release was **not pinned**, and plan-credit charges
+were not independently observable. No model tool calls were observed, and no
+HomeHub runtime or device was accessed. See [#366 research evidence](https://github.com/agatte/home-hub/issues/366#issuecomment-6114800830).
 
-A credible controlled comparison requires:
+| Metric | Cloud default-model Codex research run |
+| --- | ---: |
+| Original published-gold verdicts / exact citations | 30/30; 30/30 |
+| Additional synthetic verdicts / exact authored citations | 23/24; 20/24 |
+| Schema-valid output cases | 18/18 |
+| Observed model-initiated tool calls | 0 |
+
+The eight-case initial score is **frozen**. A later review showed one
+deployment-related authored gold was overconfident; a **post-hoc** reinterpretation
+yields 24/24 verdicts and 21/24 exact citation sets, but is **not a new blinded
+score**. Several other penalties involved additional relevant citation IDs.
+A separate model-source reviewer agreed with 14 of 15 source-anchored
+documentary-case proposed verdicts, but itself overclaimed a current
+deployment negative from a dated merge event. **No independent human expert
+has approved the documentary gold**, and no natural #240 replay capture was
+established. See the [adjudication record](https://github.com/agatte/home-hub/issues/366#issuecomment-6115125009).
+
+These outcomes make an explicit on-demand read-only analyst worth researching,
+not production-ready. The new structural guard at
+[`scripts/local_llm_adjudication_366.py`](../scripts/local_llm_adjudication_366.py)
+and its [protocol](LOCAL_LLM_ADJUDICATION_366.md) can validate *declared*
+alternative citation sets, source provenance fields and version-pinned fixtures,
+but **cannot adjudicate truth or authenticate human reviewers**. Existing frozen
+scores and the original strict scorer are not rewritten.
+
+A further credible, consequential comparison requires:
 
 1. **Privacy/authority gate:** use only the sanitized source-inspired examples,
    with no raw audio/video/screenshots, personal logs, credentials, real host
@@ -126,15 +154,22 @@ prototype remains explicit, on-demand and read-only, with no actuation surface.
 
 ## Current gate and next owner action
 
-- **Verified:** old Qwen quality NO-GO; this deterministic baseline is
-  executable offline; 10/10 schema-valid abstentions, 12/30 exact matches,
-  zero affirmative hallucinations, 31 exact source quotes.
-- **Not verified:** independent stronger-model quality or cost/privacy,
-  normal-workload inference coexistence, usefulness on unseen incident traces.
-- **Next:** independent review of this uncommitted baseline and its docs; obtain
-  **separate Git commit/push/PR authorization** for publication. Then obtain a
-  concrete external provider, data privacy/cost authorization and unseen
-  fixture design before the stronger-model run.
-- **Do not:** merge, deploy, restart services, update Windows real-host controls,
-  refresh the Obsidian Vault, install a local model, query live production,
-  or operate lights/media/devices from this research.
+- **Merged:** the deterministic quote-and-abstain baseline, PR #381, has
+  10/10 valid responses, 12/30 correct abstentions, 31 faithful source quotes
+  and zero unsupported affirmative verdicts; it has no semantic causal engine.
+- **Executed offline:** the bounded 18-case default-model Codex experiment,
+  with the original and provisional new scores above. Fixed synthetic samples
+  are not an independently unseen natural-event benchmark.
+- **Prepared for review:** the separate structural citation/gold adjudication
+  validator and tests. Its `reviewed` field is a declaration, not a trusted
+  authentication mechanism. Do not turn a draft or disputed gold into accepted
+  truth merely because the validator parses it.
+- **Next:** independent human adjudication of source-anchored documentary
+  fixtures and acceptable citation alternatives; obtain a verified natural
+  trace only through #240's existing evidence gate. Pin the exact provider/model
+  release, privacy/retention and usage budget before **separately authorizing**
+  another cloud test or considering a read-only prototype.
+- **Do not:** infer room, wake, lifecycle, deployment or device decisions from
+  LLM output; no merge alone implies a deployed runtime. No installation,
+  deployment, service restart, Vault refresh or device actuation is authorized
+  by this research document.
