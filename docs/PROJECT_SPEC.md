@@ -599,23 +599,33 @@ for a STOPPED speaker with retained source evidence. It reports only safe
 allowlisted reasons; no automatic unload occurred. STOPPED alone does not
 prove an unloaded source or identify which source field is populated.
 
-**ACCEPTED DECISION 2026-10-11; PROPOSED IMPLEMENTATION (#375).** Extend
-the same kiosk-authenticated, single-use 45-second preview/confirm flow to a
-STOPPED source only if its nonempty CurrentURI identifies a supported nonqueue
-music transport, the queue/version/coordinator evidence is verified, queue is
-empty, mode is NORMAL, volume positive, unmuted, and source/ownership/policy
-fingerprints are unchanged at the final confirmation boundary. The preview
-uses a generic stopped-source label, not a URI or unverified track title.
-A second, explicitly labeled user confirmation discards exactly that stopped
-source with a verified empty SetAVTransportURI; no Stop/Play, queue clear,
-volume/mute, lifecycle or activity write is added. Metadata-only, unsupported
-transport, nonempty/unknown queue, and uncertain source/ownership refuse.
-The paused-track flow remains separate and unchanged. There is no atomic
-Sonos source compare-and-clear primitive against outside Sonos-app actions;
-this remains a bounded best-effort operator-confirmed action, not guaranteed
-external-race immunity, and must not enable autonomous cleanup. This
-candidate is not merged or deployed; real stopped-source and audible Apple
-Music acceptance remain pending.
+**Accepted STOPPED-source preparation (#375, deployed in `6654f1e4`).**
+The kiosk-authenticated, single-use 45-second preview/confirm flow admits
+verified stopped, nonqueue Sonos music transports only when queue identity and
+revision, coordinator, empty queue, NORMAL mode, positive volume, unmuted state,
+and source/ownership/policy fingerprints pass rechecks before the write.
+Preview displays a generic stopped-source label rather than URI or unverified
+title. A second, explicitly labeled user confirmation discards that source via
+a verified empty SetAVTransportURI; it never Stops, Plays, clears a queue,
+adjusts volume/mute, or changes lifecycle/activity. The paused-track flow is
+separate and unchanged. There is no atomic Sonos compare-and-clear primitive
+against outside controller races; this is bounded best-effort manual authority,
+not permission for autonomous cleanup.
+
+**Observed HTTP source and follow-up candidate (2026-10-11, #375).**
+The operator deployed `6654f1e4` successfully, but the physical STOPPED
+speaker still refused Preview. Read-only Sonos evidence found coordinator,
+empty verified queue, NORMAL mode, unmuted positive volume, and matching
+CurrentURI/TrackURI with an HTTP scheme and nonempty path; its track DIDL
+metadata reported musicTrack and an audio resource, while the media metadata
+was absent. The deployed allowlist excluded generic HTTP, so the refusal was
+expected. A narrower *unpublished candidate* considers direct HTTP only if
+CurrentURI equals TrackURI and the same track's DIDL `musicTrack` resource
+has an exact URI match and HTTP audio protocol. Missing/mismatched metadata,
+other HTTP streams, unsupported transports and owner/queue changes still
+refuse without writes. Physical exact-resource linkage and real Preview,
+followed by separately approved source discard and audible Apple Music Play,
+remain acceptance gates.
 Neither action runs without its separate user confirmation; neither automatically
 clears an existing queue, writes volume/mute, or changes modes. Play starts only
 the explicitly approved track after the guarded verification path.
