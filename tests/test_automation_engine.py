@@ -8638,6 +8638,25 @@ class TestDeskProcessAuthorityPolicy:
 
 
 
+    @pytest.mark.asyncio
+    async def test_desk_observer_failure_cannot_interrupt_existing_presence_handler(
+        self, desk_policy,
+    ):
+        engine, clock, readings = desk_policy
+        engine._resolve_desk_process_authority = MagicMock(
+            side_effect=ValueError("malformed optional Desk observation"),
+        )
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        await engine.notify_presence_observation(readings["desktop"])
+        engine._evaluate_physical_context_relax.assert_awaited_once_with(
+            trigger="presence:desktop",
+        )
+        engine._refresh_fixture_comfort_expiry_task.assert_called_once_with()
+        assert engine._desk_authority_decision is None
+        await engine.close()
+
+
 @pytest.mark.asyncio
 async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
     engine, mock_hue,
