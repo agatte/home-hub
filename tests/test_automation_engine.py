@@ -8515,6 +8515,129 @@ class TestDeskProcessAuthorityPolicy:
         assert engine._desk_process_authority_candidate(clock.now) == expected
 
 
+    @pytest.mark.asyncio
+    async def test_desk_deadline_releases_even_if_another_room_is_known(
+        self, desk_policy, monkeypatch,
+    ):
+        """The distinct Desk source timer cannot depend on latest_zone()."""
+        import backend.services.automation_engine as module
+
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(module, "PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS", 0.03)
+        monkeypatch.setattr(module, "PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS", 0.04)
+        monkeypatch.setattr(engine, "_now", lambda: datetime.now(timezone.utc))
+        clock.now = engine._now()
+        readings["desktop"] = PresenceReading(
+            source="desktop", captured_at=clock.now,
+            face_present=True, zone="desk", detection_source="face",
+        )
+        # Another source remains in an independently known room, without a
+        # qualified contradictory occupant. The fixture timer must not gate
+        # this source's independent expiry.
+        readings["latitude"] = PresenceReading(
+            source="latitude", captured_at=clock.now,
+            face_present=False, zone="couch", detection_source="face",
+        )
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        try:
+            await engine.notify_presence_observation(readings["desktop"])
+            assert engine._desk_authority_decision.disposition == "desk"
+            task = engine._desk_authority_expiry_task
+            assert task is not None
+            await asyncio.wait_for(
+                self._wait_for_desk_release(engine), timeout=1.5,
+            )
+            assert engine._desk_authority_decision.disposition == "released"
+            assert engine._desk_authority_state.selection is None
+            engine._apply_mode.assert_not_awaited()
+            engine._fire_mode_change_callbacks.assert_not_awaited()
+        finally:
+            await engine.close()
+
+    @staticmethod
+    async def _wait_for_desk_release(engine):
+        while engine._desk_authority_decision.disposition != "released":
+            await asyncio.sleep(0.005)
+
+    @pytest.mark.asyncio
+    async def test_desk_deadline_reacquisition_reuses_one_task(
+        self, desk_policy, monkeypatch,
+    ):
+        import backend.services.automation_engine as module
+
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(module, "PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS", 0.06)
+        monkeypatch.setattr(module, "PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS", 0.04)
+        monkeypatch.setattr(engine, "_now", lambda: datetime.now(timezone.utc))
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        clock.now = engine._now()
+        readings["desktop"] = PresenceReading(
+            source="desktop", captured_at=clock.now,
+            face_present=True, zone="desk", detection_source="face",
+        )
+        try:
+            await engine.notify_presence_observation(readings["desktop"])
+            first_task = engine._desk_authority_expiry_task
+            first_deadline = engine._desk_authority_next_deadline
+            await asyncio.sleep(0.015)
+            readings["desktop"] = PresenceReading(
+                source="desktop", captured_at=engine._now(),
+                face_present=True, zone="desk", detection_source="face",
+            )
+            await engine.notify_presence_observation(readings["desktop"])
+            assert engine._desk_authority_expiry_task is first_task
+            assert engine._desk_authority_next_deadline > first_deadline
+            assert engine._desk_authority_decision.disposition == "desk"
+        finally:
+            task = engine._desk_authority_expiry_task
+            await engine.close()
+            assert engine._desk_authority_closed is True
+            assert engine._desk_authority_expiry_task is None
+            assert task.done()
+
+    @pytest.mark.asyncio
+    async def test_desk_source_invalidation_recomputes_without_actuation(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        try:
+            engine._refresh_desk_authority_observation()
+            assert engine._desk_authority_decision.disposition == "desk"
+            engine.notify_presence_source_invalidated("desktop")
+            assert engine._desk_authority_decision.disposition == "loss_dwell"
+            assert engine._desk_authority_decision.state.loss_started_at == clock.now
+            engine._apply_mode.assert_not_awaited()
+            engine._fire_mode_change_callbacks.assert_not_awaited()
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    async def test_desk_deadline_rejects_future_source_and_no_timer(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        readings["desktop"] = PresenceReading(
+            source="desktop", captured_at=clock.now + timedelta(seconds=5),
+            face_present=True, zone="desk", detection_source="face",
+        )
+        try:
+            engine._refresh_desk_authority_observation()
+            assert engine._desk_authority_decision.disposition == "unqualified"
+            assert engine._desk_authority_next_deadline is None
+            assert engine._desk_authority_expiry_task is None
+        finally:
+            await engine.close()
+
+
+
 @pytest.mark.asyncio
 async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
     engine, mock_hue,
