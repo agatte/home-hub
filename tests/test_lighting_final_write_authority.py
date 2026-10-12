@@ -487,7 +487,12 @@ async def test_mode_apply_owner_epoch_blocks_stale_delegated_write(
         result = await asyncio.wait_for(task, 2)
         write.assert_not_called()
         assert "2" not in result.successful
-        assert "2" in result.failed
+        if takeover_kind == "external_off":
+            # The established away/external-off chokepoint skips before
+            # delegated write validation; both paths must remain write-free.
+            assert "2" in result.skipped
+        else:
+            assert "2" in result.failed
         assert engine._last_applied_per_light["2"]["bri"] == 100
 
 
