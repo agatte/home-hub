@@ -8657,6 +8657,30 @@ class TestDeskProcessAuthorityPolicy:
         await engine.close()
 
 
+    @pytest.mark.asyncio
+    async def test_desk_authority_diagnostics_are_explicitly_non_enforcing(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        try:
+            engine._refresh_desk_authority_observation()
+            before = engine._desk_authority_decision
+            context = engine.get_activity_context()["desk_authority_observation"]
+            assert context["enforcing"] is False
+            assert context["disposition"] == "desk"
+            assert context["selection"] == {
+                "mode": "idle", "source_key": "time",
+            }
+            assert context["next_deadline"] is not None
+            assert context["timer_active"] is True
+            assert engine._desk_authority_decision is before
+            assert engine._current_mode == "watching"
+            assert engine._mode_source_key == "process:latitude"
+        finally:
+            await engine.close()
+
+
 @pytest.mark.asyncio
 async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
     engine, mock_hue,
