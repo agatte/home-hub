@@ -245,6 +245,111 @@ async def test_stopped_allowlisted_source_types_preview_without_writes(setup, mu
     assert device.writes == []
 
 
+def _http_music_didl(uri, *, media_class='object.item.audioItem.musicTrack',
+                     protocol='http-get:*:audio/mpeg:*'):
+    from xml.sax.saxutils import escape
+
+    return ('<DIDL-Lite xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+            '<item><upnp:class>' + escape(media_class) + '</upnp:class>'
+            '<res protocolInfo="' + escape(protocol) + '">' + escape(uri) +
+            '</res></item></DIDL-Lite>')
+
+
+@pytest.mark.asyncio
+async def test_stopped_http_matching_music_track_requires_explicit_confirm(setup):
+    service, state, device = setup
+    state.automation.current_mode = 'idle'
+    device.state = 'STOPPED'
+    source = 'http://music.example.test/audio/song.mp3?opaque=one&item=two'
+    device.media_uri = device.uri = source
+    device.metadata = _http_music_didl(source)
+    preview = await service.preview()
+    assert preview['status'] == 'preview'
+    assert preview['source_kind'] == 'stopped'
+    assert 'track' not in preview
+    assert source not in repr(preview)
+    assert device.writes == []
+    result = await service.confirm(preview['token'])
+    assert result == {'status': 'ready',
+                      'reason': 'unloaded_verified_play_requires_separate_action'}
+    assert device.writes == ['Unload']  # no Stop, Play, queue clear or volume change
+    assert device.size == 0 and device.volume == 22
+    assert (await service.confirm(preview['token']))['status'] == 'refused'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('difference', [
+    'track_uri', 'metadata_resource', 'metadata_missing', 'metadata_malformed',
+    'metadata_video_class', 'metadata_broadcast_class', 'metadata_video_protocol',
+    'metadata_unsupported_protocol', 'http_host_only', 'http_missing_host',
+    'https_scheme', 'oversized_metadata',
+])
+async def test_stopped_http_unverified_music_never_previews_or_writes(setup, difference):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    source = 'http://music.example.test/audio/song.mp3'
+    device.media_uri = device.uri = source
+    device.metadata = _http_music_didl(source)
+    if difference == 'track_uri':
+        device.uri = 'http://music.example.test/audio/other.mp3'
+    elif difference == 'metadata_resource':
+        device.metadata = _http_music_didl('http://music.example.test/audio/other.mp3')
+    elif difference == 'metadata_missing':
+        device.metadata = ''
+    elif difference == 'metadata_malformed':
+        device.metadata = '<item><unclosed>'
+    elif difference == 'metadata_video_class':
+        device.metadata = _http_music_didl(source, media_class='object.item.videoItem')
+    elif difference == 'metadata_broadcast_class':
+        device.metadata = _http_music_didl(
+            source, media_class='object.item.audioItem.audioBroadcast')
+    elif difference == 'metadata_video_protocol':
+        device.metadata = _http_music_didl(source, protocol='http-get:*:video/mp4:*')
+    elif difference == 'metadata_unsupported_protocol':
+        device.metadata = _http_music_didl(source, protocol='unknown:*:audio/mpeg:*')
+    elif difference == 'http_host_only':
+        device.media_uri = device.uri = 'http://music.example.test/'
+        device.metadata = _http_music_didl(device.media_uri)
+    elif difference == 'http_missing_host':
+        device.media_uri = device.uri = 'http:/audio/song.mp3'
+        device.metadata = _http_music_didl(device.media_uri)
+    elif difference == 'https_scheme':
+        device.media_uri = device.uri = 'https://music.example.test/audio/song.mp3'
+        device.metadata = _http_music_didl(device.media_uri)
+    elif difference == 'oversized_metadata':
+        device.metadata = _http_music_didl(source) + ' ' * 65536
+    preview = await service.preview()
+    assert preview['status'] == 'refused'
+    # Malformed XML fails the existing evidence reader before classification.
+    expected = ('source_evidence_unavailable' if difference == 'metadata_malformed'
+                else 'source_stopped_but_loaded')
+    assert preview['reason'] == expected
+    assert 'token' not in preview
+    assert not service.previews and device.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['metadata', 'current_uri', 'track_uri', 'queue_revision'])
+async def test_stopped_http_source_changes_before_confirm_never_unload(setup, change):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    source = 'http://music.example.test/audio/song.mp3'
+    device.media_uri = device.uri = source
+    device.metadata = _http_music_didl(source)
+    preview = await service.preview()
+    assert preview['status'] == 'preview'
+    if change == 'metadata':
+        device.metadata = _http_music_didl(source, protocol='http-get:*:audio/aac:*')
+    elif change == 'current_uri':
+        device.media_uri = 'http://music.example.test/audio/other.mp3'
+    elif change == 'track_uri':
+        device.uri = 'http://music.example.test/audio/other.mp3'
+    elif change == 'queue_revision':
+        device.update = 'new-revision'
+    assert (await service.confirm(preview['token']))['status'] != 'ready'
+    assert device.writes == []
+
+
 @pytest.mark.asyncio
 async def test_stopped_preview_never_exposes_retained_title_or_source(setup):
     service, state, device = setup
