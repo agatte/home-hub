@@ -37,6 +37,16 @@ KNOWLEDGE_DOCS = (
     "docs/KNOWLEDGE_WORKFLOW.md",
 )
 INLINE_LINK = re.compile(r"(?<!!)\[[^\]\n]+\]\((<[^>\n]+>|[^)\n]+)\)")
+# Explicit single-source declarations, not NLP interpretation of dated prose.
+KNOWLEDGE_STATUS_ISSUES = {
+    "docs/OBSIDIAN_PERSISTENT_VAULT.md": 358,
+    "docs/OBSIDIAN_SYNC_DESIGN.md": 365,
+}
+KNOWLEDGE_STATUS_DOCS = tuple(KNOWLEDGE_STATUS_ISSUES)
+CURRENT_ISSUE_STATUS = re.compile(
+    r"^> \*\*Current GitHub issue:\*\* #([1-9][0-9]*) (open|closed)$",
+    re.MULTILINE,
+)
 
 
 def current_section(markdown: str) -> str:
@@ -197,6 +207,62 @@ def check_knowledge_links(root: Path, documents: tuple[str, ...] = KNOWLEDGE_DOC
     return sorted(set(findings))
 
 
+def check_knowledge_status_claims(
+    root: Path,
+    issues: dict[int, dict],
+    documents: tuple[str, ...] = KNOWLEDGE_STATUS_DOCS,
+) -> list[str]:
+    """Compare explicit current issue declarations with supplied issue metadata.
+
+    Only approved knowledge entrypoints are inspected. Dated narrative prose
+    and incidental issue links are deliberately NOT treated as current claims.
+    This cannot verify the freshness/authenticity of the supplied issue states.
+    """
+    findings: list[str] = []
+    source_root = root.resolve()
+    for relative in documents:
+        safe = Path(relative)
+        source = source_root / safe
+        if (
+            safe.is_absolute()
+            or ".." in safe.parts
+            or source.is_symlink()
+            or not source.is_file()
+            or not source.resolve().is_relative_to(source_root)
+        ):
+            findings.append(f"Knowledge status document missing or unsafe: {relative}")
+            continue
+        declarations = CURRENT_ISSUE_STATUS.findall(source.read_text(encoding="utf-8"))
+        if len(declarations) != 1:
+            findings.append(
+                f"Knowledge status {relative}: expected one current issue declaration, "
+                f"found {len(declarations)}"
+            )
+            continue
+        number, declared = declarations[0]
+        expected = KNOWLEDGE_STATUS_ISSUES.get(relative)
+        if expected is None:
+            findings.append(f"Knowledge status document not allowlisted: {relative}")
+            continue
+        if int(number) != expected:
+            findings.append(
+                f"Knowledge status {relative}: expected current issue #{expected}, "
+                f"found #{number}"
+            )
+            continue
+        issue = issues.get(expected)
+        if issue is None:
+            findings.append(
+                f"Knowledge status {relative}: current issue #{number} has no issue result"
+            )
+        elif issue["state"] != declared:
+            findings.append(
+                f"Knowledge status {relative}: declares #{number} {declared}, "
+                f"GitHub reports {issue['state']}"
+            )
+    return findings
+
+
 # Exact, structured status labels only. Never interpret historical prose as live state.
 GATE_PLACEHOLDERS = frozenset(
     {"", "-", "--", "—", "tbd", "todo", "unknown", "none", "n/a", "see issue", "follow up"}
@@ -264,6 +330,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also check current route owners, placeholders, and explicit closed-status contradictions",
     )
+    parser.add_argument(
+        "--check-knowledge-status",
+        action="store_true",
+        help="Check explicit current issue declarations in two bounded knowledge docs",
+    )
     args = parser.parse_args(argv)
 
     if args.max_age_days < 0:
@@ -278,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
             drift.extend(check_knowledge_links(args.root))
         if args.check_current_gates:
             drift.extend(check_current_gate_rows(execution_map, issues))
+        if args.check_knowledge_status:
+            drift.extend(check_knowledge_status_claims(args.root, issues))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
