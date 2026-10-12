@@ -97,7 +97,10 @@ class LightingAuthority:
 
     def valid(self, lease: LightingLease | None) -> bool:
         """Validate only while the caller owns the final transition boundary."""
-        if not self._boundary.held_by_current_task:
+        if not (
+            self._boundary.held_by_current_task
+            or self._boundary.delegated_worker_validator_active
+        ):
             raise RuntimeError(
                 "Lighting lease validation requires the final boundary"
             )
