@@ -4138,8 +4138,10 @@ class TestRecentDeskAttendanceVeto:
 
         await _drive_one_tick(engine)
 
-        engine._apply_time_based.assert_awaited_once()
-        engine._apply_mode.assert_not_awaited()
+        # Home+General now re-enters the unified Activity composer, not the
+        # legacy time-only writer. It must never replay old Latitude Watching.
+        engine._apply_time_based.assert_not_awaited()
+        engine._apply_mode.assert_awaited_once_with("idle")
 
     async def test_source_priority_rejection_keeps_one_existing_process_voter(
         self, engine,
@@ -9155,3 +9157,95 @@ async def test_current_owner_reapply_keeps_period_and_manual_paths(engine, mode,
     await engine.reapply_current_mode(force_resend=False)
     assert seen == [(mode, False, (engine._mode_transition_revision, engine.effective_mode))]
     assert mode_apply_epoch.get() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["static", "scene", "scene_release"])
+@pytest.mark.parametrize("new_owner", ["watching", "gaming_aba", None])
+async def test_gaming_completion_publication_keeps_originating_owner(
+    engine, mock_hue, path, new_owner,
+):
+    """Pause after fake Hue acceptance, then complete a newer Activity apply."""
+    from copy import deepcopy
+
+    engine._now = MagicMock(return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ))
+    engine._current_mode = "gaming"
+    sync = ScreenSyncService(
+        mock_hue, target_light_ids=["2", "5"],
+        transition_boundary=engine._transition_boundary,
+    )
+    engine._screen_sync = sync
+    sync.publish_accepted_gaming_state = MagicMock(wraps=sync.publish_accepted_gaming_state)
+    engine._effect_manager.needs_reconcile = MagicMock(return_value=False)
+    accepted, release = asyncio.Event(), asyncio.Event()
+    origin = engine._mode_transition_revision
+    original_apply = engine._apply_state
+
+    async def pause_after_acceptance(state, transitiontime=None):
+        result = await original_apply(state, transitiontime=transitiontime)
+        if engine._mode_transition_revision == origin:
+            assert not result.failed
+            assert result.successful
+            accepted.set()
+            await release.wait()
+        return result
+
+    engine._apply_state = pause_after_acceptance
+    if path == "scene":
+        engine._scene_overrides = {"gaming": {"day": "native-scene"}}
+        engine._release_external_owners_for_scene = AsyncMock(return_value=True)
+
+        async def accept_scene(action, **kwargs):
+            assert await action()
+            if engine._mode_transition_revision == origin:
+                accepted.set()
+                await release.wait()
+            return True
+
+        engine._effect_manager.replace_with_action = accept_scene
+    elif path == "scene_release":
+        engine._gaming_scene_override = {"previous": "native-scene"}
+        engine._read_scene_release_baseline = AsyncMock(return_value={})
+
+    fields = (
+        "_current_gaming_resolution", "_last_gaming_resolution",
+        "_last_gaming_target", "_last_gaming_transition_reason",
+        "_gaming_plan_changed", "_gaming_scene_override",
+        "_active_scene_override_key", "_gaming_scene_transition_pending",
+    )
+    task = asyncio.create_task(engine._apply_mode("gaming"))
+    try:
+        await asyncio.wait_for(accepted.wait(), 2)
+        if new_owner is not None:
+            engine._current_mode = "watching"
+            await engine._apply_mode("watching")
+            if new_owner == "gaming_aba":
+                if path == "scene":
+                    engine._scene_overrides["gaming"]["day"] = "new-native-scene"
+                engine._current_mode = "gaming"
+                await engine._apply_mode("gaming")
+            assert engine._mode_transition_revision != origin
+            before = deepcopy(tuple(getattr(engine, field) for field in fields))
+            sync_before = deepcopy(sync._accepted_gaming_targets)
+            sync.publish_accepted_gaming_state.reset_mock()
+        release.set()
+        await asyncio.wait_for(task, 2)
+        if new_owner is not None:
+            assert tuple(getattr(engine, field) for field in fields) == before
+            assert sync._accepted_gaming_targets == sync_before
+            sync.publish_accepted_gaming_state.assert_not_called()
+        elif path == "scene":
+            assert engine._active_scene_override_key == ("gaming", "day", "native-scene", "bridge")
+            assert engine._gaming_scene_override["transition_reason"] == "scene_override"
+            assert engine._gaming_scene_transition_pending is False
+            sync.publish_accepted_gaming_state.assert_not_called()
+        else:
+            sync.publish_accepted_gaming_state.assert_called_once()
+            assert sync._accepted_gaming_targets
+            assert engine._current_gaming_resolution is not None
+            assert engine._last_gaming_target
+            assert engine._gaming_scene_override is None
+    finally:
+        release.set()
+        await task
+        await engine.close()
