@@ -10,6 +10,13 @@ from typing import AsyncIterator, Awaitable, Callable, Iterable
 from backend.services.lighting_authority import LightingAuthority
 
 
+# Propagated through delegated tasks and asyncio.to_thread. Validators must be
+# synchronous, nonblocking reads of the captured owner (never asyncio APIs).
+lighting_write_validator: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "homehub_lighting_write_validator", default=None,
+)
+
+
 async def settle_lighting_io(awaitable):
     """Defer cancellation until local mutation work has actually settled.
 
@@ -83,11 +90,13 @@ class LightingTransitionBoundary:
 
         async def mutate():
             token = self._held.set(asyncio.current_task())
+            validator_token = lighting_write_validator.set(validator)
             try:
                 if validator is not None and not validator():
                     return False
                 return await write()
             finally:
+                lighting_write_validator.reset(validator_token)
                 self._held.reset(token)
 
         return asyncio.create_task(mutate())
