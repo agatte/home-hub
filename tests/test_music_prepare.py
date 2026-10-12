@@ -207,6 +207,146 @@ async def test_manual_recheck_unloaded_is_read_only(setup):
 
 
 @pytest.mark.asyncio
+async def test_stopped_nonqueue_empty_queue_requires_confirm_without_stop(setup):
+    service, state, device = setup
+    state.automation.current_mode = 'idle'
+    device.state = 'STOPPED'
+    device.uri = ''  # STOPPED can lose track details while retaining CurrentURI.
+    device.metadata = ''
+    original_volume = device.volume
+    preview = await service.preview()
+    assert preview['status'] == 'preview'
+    assert preview['source_kind'] == 'stopped'
+    assert 'track' not in preview and 'uri' not in repr(preview).lower()
+    assert device.writes == []
+    assert (await service.confirm(preview['token'])) == {
+        'status': 'ready', 'reason': 'unloaded_verified_play_requires_separate_action'}
+    assert device.writes == ['Unload']  # no Stop, Play, queue or volume write
+    assert device.state == 'STOPPED'
+    assert device.size == 0 and device.volume == original_volume
+    assert device.media_uri == '' and device.uri == ''
+    assert (await service.confirm(preview['token']))['reason'] == 'preview_expired_or_used'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('music_source', [
+    'x-sonos-http:track', 'x-sonosapi-stream:station',
+    'x-sonosapi-hls:station', 'x-sonosapi-radio:station',
+])
+async def test_stopped_allowlisted_source_types_preview_without_writes(setup, music_source):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    device.media_uri = music_source
+    device.uri = device.metadata = ''
+    result = await service.preview()
+    assert result['status'] == 'preview'
+    assert result['source_kind'] == 'stopped'
+    assert 'track' not in result
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_stopped_preview_never_exposes_retained_title_or_source(setup):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    preview = await service.preview()
+    assert preview['status'] == 'preview'
+    assert preview['source_kind'] == 'stopped'
+    assert 'track' not in preview
+    assert 'The Poplar Tree' not in repr(preview)
+    assert 'exact-source' not in repr(preview)
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field,value', [
+    ('media_uri', ''), ('media_uri', 'x-sonos-http:'),
+    ('media_uri', 'x-sonos-http:/'),
+    ('media_uri', 'x-rincon-queue:speaker#0'),
+    ('media_uri', 'x-rincon-stream:line-in'),
+    ('media_uri', 'x-sonos-htastream:tv'),
+    ('uri', 'x-rincon-queue:speaker#0'),
+    ('size', 1), ('update', ''), ('uid', ''), ('mode', 'SHUFFLE'),
+    ('mute', True), ('volume', 0), ('is_coordinator', False),
+    ('state', 'PLAYING'),
+])
+async def test_stopped_unsafe_source_never_previews_or_writes(setup, field, value):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    setattr(device, field, value)
+    result = await service.preview()
+    assert result['status'] == 'refused'
+    assert 'token' not in result and not service.previews
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_stopped_stale_metadata_only_cannot_be_discarded(setup):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    device.media_uri = device.uri = ''
+    result = await service.preview()
+    assert result['reason'] == 'source_stopped_but_loaded'
+    assert 'token' not in result and device.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', [
+    'source', 'queue', 'queue_revision', 'volume', 'manual', 'owner',
+    'away', 'expired', 'restart',
+])
+async def test_stopped_confirmation_rereads_source_and_authority(setup, change):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    preview = await service.preview()
+    token = preview['token']
+    if change == 'source': device.media_uri = 'x-sonos-http:other-source'
+    if change == 'queue': device.size = 1
+    if change == 'queue_revision': device.update = '2'
+    if change == 'volume': device.volume = 25
+    if change == 'manual': state.audio_ownership.record_manual_intent(('transport',))
+    if change == 'owner':
+        state.audio_ownership._leases['other'] = {'dimensions': [INTERRUPTION]}
+    if change == 'away': state.away_manager.away = True
+    if change == 'expired': service.previews[token]['expires'] = 0
+    if change == 'restart': service = MusicPrepareService(state)
+    assert (await service.confirm(token))['status'] != 'ready'
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+async def test_stopped_source_changes_during_confirm_final_read_no_write(setup):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    token = (await service.preview())['token']
+    original = device.GetMediaInfo
+    reads = {'count': 0}
+
+    def changing_media(args):
+        reads['count'] += 1
+        if reads['count'] == 3:
+            device.media_uri = 'x-sonos-http:externally-changed'
+        return original(args)
+
+    device.GetMediaInfo = changing_media
+    assert (await service.confirm(token))['status'] == 'refused'
+    assert device.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['unsupported', 'no_unload'])
+async def test_stopped_unload_failure_is_not_ready_and_not_retried(setup, failure):
+    service, state, device = setup
+    device.state = 'STOPPED'
+    token = (await service.preview())['token']
+    setattr(device, failure, True)
+    assert (await service.confirm(token))['status'] == 'not_ready'
+    assert device.writes == ['Unload']
+    assert (await service.confirm(token))['reason'] == 'preview_expired_or_used'
+    assert device.writes == ['Unload']
+
+
+@pytest.mark.asyncio
 async def test_preview_busy_owner_no_writes(setup):
     service, state, device = setup
     state.audio_ownership._leases['test'] = {'dimensions': [INTERRUPTION]}
@@ -217,8 +357,9 @@ async def test_preview_busy_owner_no_writes(setup):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('changes,reason', [
     (None, 'source_evidence_unavailable'),
-    ({'transport_state': 'STOPPED', 'queue_track_uri': '', 'title': '',
-      'metadata': '', 'media_metadata': ''}, 'source_stopped_but_loaded'),
+    ({'transport_state': 'STOPPED', 'current_uri': 'x-rincon-queue:speaker#0',
+      'queue_track_uri': '', 'title': '', 'metadata': '', 'media_metadata': ''},
+     'source_stopped_but_loaded'),
     ({'transport_state': 'STOPPED', 'current_uri': '', 'queue_track_uri': '',
       'title': '', 'metadata': 'stale-private-metadata', 'media_metadata': ''},
      'source_stopped_but_loaded'),

@@ -593,12 +593,29 @@ source-fingerprinted discard confirmation with an empty queue. Play requires a
 separate confirmation, an empty queue/unloaded source, and the existing guarded
 append/proof contract. Nonempty/unknown queues or loaded/unknown sources refuse
 without writes; failed appends remain retained rather than cleared.
-The local #375 diagnostic-only improvement explains Prepare source refusals with
-allowlisted opaque codes and conservative UI messages, including stopped but
-still loaded versus unavailable evidence. It adds no Sonos reads or writes,
-does not relax eligibility or automatically unload, and retains the existing
-kiosk-only preview endpoint and ownership fences. Physical diagnostic proof
-remains pending; a stopped display alone does not prove an unloaded source.
+The #375 diagnostic-only improvement is deployed in `a78f11a7`: the
+operator-confirmed read-only Music Preview returned `source_stopped_but_loaded`
+for a STOPPED speaker with retained source evidence. It reports only safe
+allowlisted reasons; no automatic unload occurred. STOPPED alone does not
+prove an unloaded source or identify which source field is populated.
+
+**ACCEPTED DECISION 2026-10-11; PROPOSED IMPLEMENTATION (#375).** Extend
+the same kiosk-authenticated, single-use 45-second preview/confirm flow to a
+STOPPED source only if its nonempty CurrentURI identifies a supported nonqueue
+music transport, the queue/version/coordinator evidence is verified, queue is
+empty, mode is NORMAL, volume positive, unmuted, and source/ownership/policy
+fingerprints are unchanged at the final confirmation boundary. The preview
+uses a generic stopped-source label, not a URI or unverified track title.
+A second, explicitly labeled user confirmation discards exactly that stopped
+source with a verified empty SetAVTransportURI; no Stop/Play, queue clear,
+volume/mute, lifecycle or activity write is added. Metadata-only, unsupported
+transport, nonempty/unknown queue, and uncertain source/ownership refuse.
+The paused-track flow remains separate and unchanged. There is no atomic
+Sonos source compare-and-clear primitive against outside Sonos-app actions;
+this remains a bounded best-effort operator-confirmed action, not guaranteed
+external-race immunity, and must not enable autonomous cleanup. This
+candidate is not merged or deployed; real stopped-source and audible Apple
+Music acceptance remain pending.
 Neither action runs without its separate user confirmation; neither automatically
 clears an existing queue, writes volume/mute, or changes modes. Play starts only
 the explicitly approved track after the guarded verification path.

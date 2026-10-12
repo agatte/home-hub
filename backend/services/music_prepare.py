@@ -56,7 +56,9 @@ class MusicPrepareService:
             return {'status': 'refused', 'reason': 'authority_changed'}
         if self.state.sonos.prepare_unloaded(evidence):
             return {'status': 'ready', 'reason': 'already_unloaded_play_requires_separate_action'}
-        if not self.state.sonos.prepare_eligible(evidence):
+        paused = self.state.sonos.prepare_eligible(evidence)
+        stopped = self.state.sonos.prepare_stopped_eligible(evidence)
+        if not (paused or stopped):
             return {'status': 'refused',
                     'reason': self.state.sonos.prepare_ineligible_reason(evidence)}
         token = secrets.token_urlsafe(32)
@@ -66,7 +68,13 @@ class MusicPrepareService:
         self.previews[token] = dict(evidence=evidence, mode=mode, epoch=epoch,
                                     manual=manual, authority=authority, block_revision=block_revision,
                                     expires=time.monotonic() + self.TTL)
+        if stopped:
+            # Never interpolate retained source URI, metadata or unverified title.
+            return {'status': 'preview', 'token': token, 'expires_in': self.TTL,
+                    'source_kind': 'stopped',
+                    'warning': 'Confirm to discard the stopped music source.'}
         return {'status': 'preview', 'token': token, 'expires_in': self.TTL,
+                'source_kind': 'paused',
                 'track': evidence['title'], 'warning': 'The current track will be discarded.'}
 
     async def confirm(self, token):

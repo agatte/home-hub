@@ -17,6 +17,7 @@
   let busy = false
   let message = ''
   let track = ''
+  let sourceKind = ''
 
   const refusalMessages = {
     apartment_away: 'HomeHub reports the apartment Away. Preparation requires Home.',
@@ -33,7 +34,7 @@
     audio_ownership_busy: 'Another audio action owns the speaker. Preparation is blocked.',
     authority_changed: 'The preparation authority changed. Recheck before attempting again.',
     source_evidence_unavailable: 'Sonos source evidence is unavailable. Recheck manually when Sonos is available.',
-    source_stopped_but_loaded: 'Sonos is stopped but still has a source loaded. Nothing was automatically unloaded. The separate supported paused-source preparation is unavailable in this state.',
+    source_stopped_but_loaded: 'Sonos is stopped but the retained source could not be verified as eligible for an explicit discard. Nothing was automatically unloaded. Review the source in Sonos before rechecking.',
     source_queue_not_empty: 'The Sonos queue is not empty. Preparation cannot discard queued music. Review the queue in Sonos before rechecking.',
     source_queue_evidence_unavailable: 'The Sonos queue could not be verified. Recheck manually; no queue changes were made.',
     source_unsupported_transport: 'This Sonos source is not supported for preparation. Review the source in Sonos; no changes were made.',
@@ -56,13 +57,18 @@
     if (busy || kiosk !== true) return
     busy = true
     token = ''
+    sourceKind = ''
+    track = ''
     try {
       const result = await apiGet('/api/music/prepare/preview')
       if (result.status === 'preview') {
         token = result.token
         expires = Date.now() + result.expires_in * 1000
-        track = result.track
-        message = 'Preview only. The current track will be discarded. Confirm within 45 seconds.'
+        sourceKind = result.source_kind === 'stopped' ? 'stopped' : 'paused'
+        track = sourceKind === 'paused' && typeof result.track === 'string' ? result.track : ''
+        message = sourceKind === 'stopped'
+          ? 'Preview only. Sonos is stopped, but its verified music source will be discarded only if you confirm within 45 seconds. This does not start playback.'
+          : 'Preview only. The current track will be discarded. Confirm within 45 seconds.'
       } else if (result.status === 'ready') {
         message = 'Sonos is already unloaded. Use the separate approved Play action below.'
       } else {
@@ -75,6 +81,8 @@
 
   function cancelPreview() {
     token = ''
+    sourceKind = ''
+    track = ''
     message = 'Preparation canceled. No speaker changes were made.'
   }
 
@@ -82,6 +90,8 @@
     if (busy || !token || kiosk !== true) return
     const confirmedToken = token
     token = ''
+    sourceKind = ''
+    track = ''
     if (Date.now() >= expires) {
       message = 'Preview expired. Recheck manually.'
       return
@@ -103,11 +113,15 @@
 {:else if kiosk === true}
 <section aria-label="Prepare Sonos for Playback">
   <h3>Prepare Sonos for Playback</h3>
-  <p>For a paused loaded track with an empty queue. Preparation discards the current track; it does not play music or change volume.</p>
+  <p>For an eligible paused track or stopped non-queue music source with a verified empty queue. Discard requires separate confirmation; it never starts playback or changes volume.</p>
   <button type="button" disabled={busy} on:click={preview}>Preview / manually recheck</button>
   {#if token}
-    <p>Loaded track: {track}. The current track will be discarded.</p>
-    <button type="button" disabled={busy} on:click={confirm}>Confirm: discard current track</button>
+    {#if sourceKind === 'stopped'}
+      <p>Stopped music source verified. Confirming will discard that source without starting playback.</p>
+    {:else}
+      <p>Loaded track: {track}. The current track will be discarded.</p>
+    {/if}
+    <button type="button" disabled={busy} on:click={confirm}>{sourceKind === 'stopped' ? 'Confirm: discard stopped source' : 'Confirm: discard current track'}</button>
     <button type="button" disabled={busy} on:click={cancelPreview}>Cancel preparation</button>
   {/if}
   {#if message}<p role="status" class="message">{message}</p>{/if}
