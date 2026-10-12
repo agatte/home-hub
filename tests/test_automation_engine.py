@@ -8681,6 +8681,143 @@ class TestDeskProcessAuthorityPolicy:
             await engine.close()
 
 
+    @pytest.mark.asyncio
+    async def test_physical_desk_arrival_reconciles_latitude_watching_to_general(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._record_process_semantic(
+            "watching", [{"key": "device", "value": "latitude"}], clock.now,
+        )
+        try:
+            await engine.notify_presence_observation(readings["desktop"])
+            assert engine._current_mode == "idle"
+            assert engine.house_state == "home"
+            assert engine.activity == "general"
+            assert engine._mode_source_key == "time"
+            assert "latitude" not in engine._last_process_semantic_by_device
+            assert "latitude" in engine._last_process_observation_by_device
+            engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
+            engine._broadcast_mode.assert_awaited_once()
+            engine._fire_mode_change_callbacks.assert_not_awaited()
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("protection", ["manual", "sleeping", "conflict"])
+    async def test_physical_desk_handoff_abstains_for_stronger_owner(
+        self, desk_policy, monkeypatch, protection,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        if protection == "manual":
+            engine._manual_override = True
+            engine._override_mode = "watching"
+            engine._override_source = "manual"
+        elif protection == "sleeping":
+            engine._current_mode = "sleeping"
+        else:
+            readings["latitude"] = PresenceReading(
+                source="latitude", captured_at=clock.now,
+                face_present=True, zone="couch", detection_source="yolo",
+            )
+        try:
+            await engine.notify_presence_observation(readings["desktop"])
+            assert engine._current_mode == (
+                "sleeping" if protection == "sleeping" else "watching"
+            )
+            engine._apply_mode.assert_not_awaited()
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    async def test_continuous_latitude_media_cannot_retake_live_desk(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        latitude = [{"key": "device", "value": "latitude"}]
+        try:
+            await engine.notify_presence_observation(readings["desktop"])
+            for _ in range(3):
+                clock.now += timedelta(seconds=1)
+                readings["desktop"] = PresenceReading(
+                    source="desktop", captured_at=clock.now,
+                    face_present=True, zone="desk", detection_source="face",
+                )
+                result = await engine.report_activity(
+                    "watching", "process", latitude,
+                )
+                assert result["reason"] == "physical_desk_remote_media"
+                assert engine._current_mode == "idle"
+                assert engine._mode_source_key == "time"
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    async def test_desktop_working_can_preempt_media_when_face_proves_desk(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        engine._mode_source_key = "process:latitude"
+        try:
+            result = await engine.report_activity(
+                "working", "process", [{"key": "device", "value": "desktop"}],
+            )
+            assert result["semantic_disposition"] == "accepted"
+            assert engine._current_mode == "working"
+            assert engine._mode_source_key == "process:desktop"
+            assert "desktop" in engine._last_process_semantic_by_device
+        finally:
+            await engine.close()
+
+    @pytest.mark.asyncio
+    async def test_lost_desk_dwell_blocks_remote_media_then_fresh_report_recovers(
+        self, desk_policy, monkeypatch,
+    ):
+        engine, clock, readings = desk_policy
+        monkeypatch.setattr(engine, "_now", lambda: clock.now)
+        engine._evaluate_physical_context_relax = AsyncMock()
+        engine._apply_mode = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task = MagicMock()
+        latitude = [{"key": "device", "value": "latitude"}]
+        try:
+            await engine.notify_presence_observation(readings["desktop"])
+            clock.now += timedelta(seconds=9)
+            engine._refresh_desk_authority_observation()
+            refused = await engine.report_activity("watching", "process", latitude)
+            assert refused["reason"] == "physical_desk_remote_media"
+            clock.now += timedelta(seconds=30)
+            engine._refresh_desk_authority_observation()
+            assert engine._desk_authority_decision.disposition == "released"
+            accepted = await engine.report_activity("watching", "process", latitude)
+            assert accepted["semantic_disposition"] == "accepted"
+            assert engine._current_mode == "watching"
+        finally:
+            await engine.close()
+
+
+
 @pytest.mark.asyncio
 async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
     engine, mock_hue,
