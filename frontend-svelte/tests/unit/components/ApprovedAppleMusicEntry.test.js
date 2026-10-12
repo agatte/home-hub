@@ -24,8 +24,9 @@ describe('ApprovedAppleMusicEntry discovery handoff', () => {
     })
 
     expect(screen.getByLabelText('Apple Music song link or track ID')).toHaveValue('1713833576')
-    expect(await screen.findByText(/Discovery track selected/)).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Check approval access' }))
     expect(await screen.findByRole('button', { name: 'Approve this exact track' })).toBeInTheDocument()
+    expect(screen.getByText(/Discovery track selected/)).toBeInTheDocument()
     expect(apiPost).not.toHaveBeenCalled()
   })
 
