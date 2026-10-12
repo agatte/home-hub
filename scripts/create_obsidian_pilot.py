@@ -134,12 +134,13 @@ def create(repo: Path, output: Path) -> tuple[str, int]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         target.chmod(stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
-    (output / "00-START-HERE.md").write_text(LANDING, encoding="utf-8")
-    (output / "SNAPSHOT.md").write_text(
-        f"# Preview provenance\n\nSource Git commit: `{head}`.\n\n"
-        f"Exported Git-tracked Markdown files: **{len(files)}**.\n\n"
-        "This is an isolated copy, not a live-status verification.\n",
-        encoding="utf-8",
+    (output / "00-START-HERE.md").write_bytes(LANDING.encode("utf-8"))
+    (output / "SNAPSHOT.md").write_bytes(
+        (
+            f"# Preview provenance\n\nSource Git commit: `{head}`.\n\n"
+            f"Exported Git-tracked Markdown files: **{len(files)}**.\n\n"
+            "This is an isolated copy, not a live-status verification.\n"
+        ).encode("utf-8")
     )
     return head, len(files)
 

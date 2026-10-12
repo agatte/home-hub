@@ -230,3 +230,19 @@ def test_rejects_symlinked_managed_file(source, tmp_path):
     with pytest.raises(ValueError, match="Refusing linked path"):
         refresh(repo, vault, next_head(repo))
     assert target.read_text() == "Never touch"
+
+
+def test_generated_pages_stay_sealed_after_lf_normalization(source, tmp_path):
+    """Opening an editor that normalizes CRLF to LF must not break the seal."""
+    repo, sha = source
+    vault = tmp_path / "Stable Newline Vault"
+    initialize(repo, vault, sha)
+    managed = vault / MANAGED
+    before = (managed / ".homehub-snapshot-manifest.json").read_bytes()
+    for filename in ("00-START-HERE.md", "SNAPSHOT.md"):
+        path = managed / filename
+        data = path.read_bytes()
+        assert b"\r\n" not in data
+        path.write_bytes(data.replace(b"\r\n", b"\n"))
+    assert verify_sealed(managed)["source_commit"] == sha
+    assert (managed / ".homehub-snapshot-manifest.json").read_bytes() == before
