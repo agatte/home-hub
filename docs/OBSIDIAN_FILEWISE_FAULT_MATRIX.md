@@ -58,3 +58,54 @@ acceptance are still UNKNOWN.
 ## Next acceptance sequence
 
 Obtain an expressly permitted **protected Windows Sandbox** test route. Prove all already drafted fault cases; add real child-process termination during restore and interruption within copy/journal writes without touching the actual Vault. After deterministic Windows green, obtain independent review, separately authorized source publication and full Linux CI. Real-host ACL/handle/watcher and task activation remain further independent gates. Until the user’s condition is fully demonstrated, keep #399 OPEN and automatic refresh OFF.
+
+## 2026-10-14 local integrity amendment (NOT in draft PR #404)
+
+PR #404 at commit 3ec181c6124b31d35292880f72d4e14aa5e2d17c
+remains unchanged. Independent read-only Codex review identified three
+MEDIUM fixture limitations: noncooperating concurrent edits, missing original
+old/new manifest digest binding, and phase/content contradiction reporting.
+
+A **new unpublished Sandbox-only candidate** updates the fixture transaction
+journal to schema 2, records SHA-256 of the exact old-backup and new-stage
+manifest bytes before managed mutation, refuses independently resealed
+backup/stage manifests at inspection, and requires review for terminal
+phase/content contradictions. Four new fixture regressions cover both
+reseal attacks and both contradictory terminal phases.
+
+**Runtime evidence on the unpublished amendment:** targeted transaction tests
+33 passed, 5 subtests passed, exit 0; complete 15-module Obsidian regression
+208 passed, 1 skipped, 66 subtests passed, exit 0. These results do NOT apply
+to the published PR #404 head until separately reviewed/published/CI-verified.
+
+**Still a blocking gap:** a noncooperating writer can modify a known
+Markdown file between a prior byte-hash validation and subsequent replace/
+unlink. The existing cooperative lock does not exclude Obsidian or human
+writers. Path-based rechecks only narrow, not eliminate, this TOCTOU race.
+A real-host least-privilege ACL/handle/share-mode and process-ownership
+contract must be independently reviewed before any activation. Likewise,
+journal hashes are self-contained evidence for accidental tamper, not a
+cryptographic signature against an adversary able to change the journal.
+No real Vault testing, scheduled task, merge or deployment is authorized.
+
+## 2026-10-14 terminal managed-seal follow-up — local only
+
+Independent read-only review of the 208-test amendment found that completed
+managed content itself was not bound to the recorded original manifest
+digest, even though the old backup and new stage now were. The unpublished
+fixture inspector now compares the exact managed manifest SHA-256 to the
+journal's expected NEW digest when the managed seal is NEW, and to the
+expected OLD digest when the managed seal is OLD. On any mismatch it
+returns UNKNOWN with operator review required and no host-write authority.
+Two new tests reseal a successfully published/restored managed snapshot
+under the same named source commit and assert rejection without changing
+the stored journal or the personal Obsidian fixture notes.
+
+Full 15-module protected Windows Sandbox suite: **210 passed, 1 skipped,
+66 subtests passed**, exit 0. This result applies to the unpublished
+local six-file amendment, NOT draft PR #404 at older head
+3ec181c6124b31d35292880f72d4e14aa5e2d17c (whose three Linux CI jobs
+were green). Journal/manifest digest evidence detects accidental changes
+when the journal is intact; it does NOT cryptographically authenticate a
+coordinated malicious change to content and journal, nor eliminate
+noncooperating-writer TOCTOU. No real-host activation is permitted.

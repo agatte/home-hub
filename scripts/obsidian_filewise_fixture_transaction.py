@@ -26,6 +26,7 @@ from obsidian_verified_stage import stage_only_verified_docs
 
 SUFFIX = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class FixtureInterrupted(RuntimeError):
@@ -107,16 +108,22 @@ def _read_journal(journal: Path, old: str, new: str, suffix: str) -> dict:
         raise ValueError("journal_missing_or_oversized")
     record = json.loads(journal.read_bytes())
     if not isinstance(record, dict) or set(record) != {
-        "schema", "old", "new", "suffix", "phase", "old_paths", "new_paths", "restore_attempts"
+        "schema", "old", "new", "suffix", "phase", "old_paths", "new_paths", "restore_attempts",
+        "old_manifest_sha256", "new_manifest_sha256"
     }:
         raise ValueError("unknown_journal_schema")
-    if (type(record["schema"]) is not int or record["schema"] != 1
+    if (type(record["schema"]) is not int or record["schema"] != 2
         or record["old"] != old or record["new"] != new
         or record["suffix"] != suffix or old == new):
         raise ValueError("journal_identity_mismatch")
     if (type(record["restore_attempts"]) is not int
             or not 0 <= record["restore_attempts"] <= 10):
         raise ValueError("invalid_restore_attempt_count")
+    if any(
+        not isinstance(record[key], str) or not SHA256.fullmatch(record[key])
+        for key in ("old_manifest_sha256", "new_manifest_sha256")
+    ):
+        raise ValueError("invalid_transaction_manifest_digest")
     for key in ("old_paths", "new_paths"):
         seq = record[key]
         if not isinstance(seq, list) or not all(isinstance(v, str) for v in seq):
@@ -184,9 +191,13 @@ def _fixture_report(vault: Path, expected_vault: Path, suffix: str, old: str, ne
         backup_commit, paths = _read_fully_sealed_commit(backup)
         if backup_commit != old or paths != set(record["old_paths"]):
             raise ValueError("backup_identity_or_membership_mismatch")
+        if sha256((backup / MANIFEST).read_bytes()).hexdigest() != record["old_manifest_sha256"]:
+            raise ValueError("backup_original_manifest_digest_mismatch")
         new_commit, new_paths = _read_fully_sealed_commit(stage)
         if new_commit != new or new_paths != set(record["new_paths"]):
             raise ValueError("new_stage_identity_or_membership_mismatch")
+        if sha256((stage / MANIFEST).read_bytes()).hexdigest() != record["new_manifest_sha256"]:
+            raise ValueError("stage_original_manifest_digest_mismatch")
         managed = vault / MANAGED
         evidence = vault.parent / f".{vault.name}-homehub-filewise-artifacts-{suffix}"
         lock = vault.parent / f".{vault.name}-homehub-refresh.lock"
@@ -201,14 +212,22 @@ def _fixture_report(vault: Path, expected_vault: Path, suffix: str, old: str, ne
         except Exception:
             return FixtureRecoveryReport("interrupted_mixed", "managed_seal_invalid", True), record
         if managed_commit == new and names == set(record["new_paths"]):
+            if sha256((managed / MANIFEST).read_bytes()).hexdigest() != record["new_manifest_sha256"]:
+                return FixtureRecoveryReport(
+                    "unknown", "managed_new_manifest_digest_mismatch", True
+                ), record
             return FixtureRecoveryReport(
                 "published", "new_seal_verified", True,
-                requires_operator_review=outstanding,
+                requires_operator_review=outstanding or record["phase"] != "published",
             ), record
         if managed_commit == old and names == paths:
+            if sha256((managed / MANIFEST).read_bytes()).hexdigest() != record["old_manifest_sha256"]:
+                return FixtureRecoveryReport(
+                    "unknown", "managed_old_manifest_digest_mismatch", True
+                ), record
             return FixtureRecoveryReport(
                 "old_intact", "old_seal_verified", True,
-                requires_operator_review=outstanding,
+                requires_operator_review=outstanding or record["phase"] != "restored",
             ), record
         return FixtureRecoveryReport("unknown", "unexpected_managed_version", True), record
     except Exception:
@@ -266,11 +285,13 @@ def publish_disposable_fixture(
         if set(new_meta["sha256"]) != set(contents):
             raise ValueError("stage_membership_mismatch")
         record = {
-            "schema": 1, "old": plan.old_commit, "new": plan.new_commit,
+            "schema": 2, "old": plan.old_commit, "new": plan.new_commit,
             "suffix": suffix, "phase": "prepared",
             "old_paths": sorted(original["sha256"]),
             "new_paths": sorted(new_meta["sha256"]),
             "restore_attempts": 0,
+            "old_manifest_sha256": sha256((backup / MANIFEST).read_bytes()).hexdigest(),
+            "new_manifest_sha256": sha256((stage / MANIFEST).read_bytes()).hexdigest(),
         }
         _journal_write(journal, pending, record, create=True)
         record["phase"] = "applying"

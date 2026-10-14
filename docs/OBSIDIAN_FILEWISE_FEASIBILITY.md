@@ -192,3 +192,42 @@ blocked/pending journal handling, Windows file sharing and effective ACLs,
 power-loss durability and handle-stable anti-reparse validation. All
 backup/evidence retention must be tested before operation on any nonfixture
 Vault. This design continues to refuse real-host activation.
+
+## Later 2026-10-14 evidence superseding historical unexecuted tests
+
+Protected Windows Sandbox tests now pass: the published six-file draft PR #404
+candidate passed 204 scoped Obsidian tests (1 skipped, 66 subtests).
+The later **unpublished amendment** addressing manifest-binding and
+phase/content contradiction gaps passed 208 scoped tests (1 skipped,
+66 subtests), including 33 transaction test cases. Separate tests actually
+terminated disposable child processes during restoration and evidence moves,
+then verified operator-confirmed recovery. This does not establish crashes
+inside every syscall, Windows host crash/reboot, power loss, noncooperating
+edit exclusion, actual Obsidian watcher or automatic task safety.
+
+The prior review document's 'tests not run' passages are dated historical
+evidence and no longer characterize the current Sandbox test state.
+The independent review still flags concurrent edit / handle-stable TOCTOU
+as an outstanding MEDIUM safety limitation. Do not activate on CI alone.
+
+## 2026-10-14 terminal managed-seal follow-up — local only
+
+Independent read-only review of the 208-test amendment found that completed
+managed content itself was not bound to the recorded original manifest
+digest, even though the old backup and new stage now were. The unpublished
+fixture inspector now compares the exact managed manifest SHA-256 to the
+journal's expected NEW digest when the managed seal is NEW, and to the
+expected OLD digest when the managed seal is OLD. On any mismatch it
+returns UNKNOWN with operator review required and no host-write authority.
+Two new tests reseal a successfully published/restored managed snapshot
+under the same named source commit and assert rejection without changing
+the stored journal or the personal Obsidian fixture notes.
+
+Full 15-module protected Windows Sandbox suite: **210 passed, 1 skipped,
+66 subtests passed**, exit 0. This result applies to the unpublished
+local six-file amendment, NOT draft PR #404 at older head
+3ec181c6124b31d35292880f72d4e14aa5e2d17c (whose three Linux CI jobs
+were green). Journal/manifest digest evidence detects accidental changes
+when the journal is intact; it does NOT cryptographically authenticate a
+coordinated malicious change to content and journal, nor eliminate
+noncooperating-writer TOCTOU. No real-host activation is permitted.

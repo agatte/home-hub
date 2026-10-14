@@ -502,6 +502,105 @@ class FilewiseTransactionTests(unittest.TestCase):
         self.assertEqual(json.loads(journal.read_bytes())["restore_attempts"], 2)
         self.check_private()
 
+    def test_resealed_old_backup_with_same_commit_refused_against_original_manifest(self):
+        with self.assertRaises(FixtureInterrupted):
+            self.run_publish(interrupt_after=1)
+        backup, stage, _, _ = _paths(self.vault, SUFFIX)
+        original_bytes = (backup / "AGENTS.md").read_bytes()
+        (backup / "AGENTS.md").write_bytes(b"modified and resealed old snapshot")
+        (backup / MANIFEST).unlink()
+        seal(backup, OLD)
+        self.assertEqual(verify_sealed(backup)["source_commit"], OLD)
+        report = self.inspect()
+        self.assertEqual(report.state, "unknown")
+        self.assertFalse(report.backup_verified)
+        with self.assertRaisesRegex(ValueError, "not_verified_interrupted_fixture"):
+            self.restore(operator_confirmed=True)
+        self.assertNotEqual((backup / "AGENTS.md").read_bytes(), original_bytes)
+        self.assertEqual(verify_sealed(stage)["source_commit"], NEW)
+        self.check_private()
+
+    def test_resealed_stage_with_same_commit_refused_against_original_manifest(self):
+        with self.assertRaises(FixtureInterrupted):
+            self.run_publish(interrupt_after=1)
+        backup, stage, _, _ = _paths(self.vault, SUFFIX)
+        (stage / "AGENTS.md").write_bytes(b"modified and resealed new snapshot")
+        (stage / MANIFEST).unlink()
+        seal(stage, NEW)
+        self.assertEqual(verify_sealed(stage)["source_commit"], NEW)
+        self.assertEqual(verify_sealed(backup)["source_commit"], OLD)
+        report = self.inspect()
+        self.assertEqual(report.state, "unknown")
+        with self.assertRaisesRegex(ValueError, "not_verified_interrupted_fixture"):
+            self.restore(operator_confirmed=True)
+        self.check_private()
+
+    def test_published_new_content_with_restored_phase_still_requires_review(self):
+        self.run_publish()
+        _, _, journal, _ = _paths(self.vault, SUFFIX)
+        record = json.loads(journal.read_bytes())
+        record["phase"] = "restored"
+        journal.write_text(json.dumps(record), encoding="utf-8")
+        report = self.inspect()
+        self.assertEqual(report.state, "published")
+        self.assertTrue(report.requires_operator_review)
+        self.assertFalse(report.authorizes_host_refresh)
+        self.assertEqual(verify_sealed(self.managed)["source_commit"], NEW)
+        self.check_private()
+
+    def test_restored_old_content_with_published_phase_still_requires_review(self):
+        with self.assertRaises(FixtureInterrupted):
+            self.run_publish(interrupt_after=1)
+        self.restore(operator_confirmed=True)
+        _, _, journal, _ = _paths(self.vault, SUFFIX)
+        record = json.loads(journal.read_bytes())
+        record["phase"] = "published"
+        journal.write_text(json.dumps(record), encoding="utf-8")
+        report = self.inspect()
+        self.assertEqual(report.state, "old_intact")
+        self.assertTrue(report.requires_operator_review)
+        self.assertFalse(report.authorizes_host_refresh)
+        self.assertEqual(verify_sealed(self.managed)["source_commit"], OLD)
+        self.check_private()
+
+    def test_resealed_published_managed_tree_fails_independent_journal_digest(self):
+        self.run_publish()
+        backup, stage, journal, _ = _paths(self.vault, SUFFIX)
+        self.assertEqual(verify_sealed(backup)["source_commit"], OLD)
+        self.assertEqual(verify_sealed(stage)["source_commit"], NEW)
+        (self.managed / "AGENTS.md").write_bytes(b"unexpected resealed published edit")
+        (self.managed / MANIFEST).unlink()
+        seal(self.managed, NEW)
+        self.assertEqual(verify_sealed(self.managed)["source_commit"], NEW)
+        prior_journal = journal.read_bytes()
+        report = self.inspect()
+        self.assertEqual(report.state, "unknown")
+        self.assertEqual(report.reason, "managed_new_manifest_digest_mismatch")
+        self.assertTrue(report.requires_operator_review)
+        self.assertFalse(report.authorizes_host_refresh)
+        self.assertEqual(journal.read_bytes(), prior_journal)
+        self.check_private()
+
+    def test_resealed_restored_managed_tree_fails_independent_journal_digest(self):
+        with self.assertRaises(FixtureInterrupted):
+            self.run_publish(interrupt_after=1)
+        self.restore(operator_confirmed=True)
+        backup, stage, journal, _ = _paths(self.vault, SUFFIX)
+        self.assertEqual(verify_sealed(backup)["source_commit"], OLD)
+        self.assertEqual(verify_sealed(stage)["source_commit"], NEW)
+        (self.managed / "AGENTS.md").write_bytes(b"unexpected resealed restored edit")
+        (self.managed / MANIFEST).unlink()
+        seal(self.managed, OLD)
+        self.assertEqual(verify_sealed(self.managed)["source_commit"], OLD)
+        prior_journal = journal.read_bytes()
+        report = self.inspect()
+        self.assertEqual(report.state, "unknown")
+        self.assertEqual(report.reason, "managed_old_manifest_digest_mismatch")
+        self.assertTrue(report.requires_operator_review)
+        self.assertFalse(report.authorizes_host_refresh)
+        self.assertEqual(journal.read_bytes(), prior_journal)
+        self.check_private()
+
     def test_second_transaction_same_suffix_refused(self):
         self.run_publish()
         with self.assertRaisesRegex(ValueError, "old_managed_commit_changed"):
