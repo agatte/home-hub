@@ -123,6 +123,7 @@ async def test_sleeping_release_waits_for_acknowledged_transition_deadlines():
         events.append("fade")
 
     engine._sleep_fade = fade
+    engine._current_mode = "sleeping"
     task = asyncio.create_task(engine._apply_mode("sleeping", force_resend=True))
     await settle_entered.wait()
 
@@ -310,6 +311,7 @@ async def test_sleeping_release_blocks_screen_sync_through_no_effect():
     )
     engine._sleep_fade = AsyncMock()
 
+    engine._current_mode = "sleeping"
     sleeping = asyncio.create_task(engine._apply_mode("sleeping"))
     await settle_entered.wait()
     screen = asyncio.create_task(
@@ -374,6 +376,7 @@ async def test_sleeping_release_reestablishes_transit_targets_without_clearing_o
     mock_hue_v2.stop_effect_all = stop_all
     engine._sleep_fade = AsyncMock()
 
+    engine._current_mode = "sleeping"
     await engine._apply_mode("sleeping", force_resend=True)
     await engine._sleep_fade_task
 
@@ -407,6 +410,7 @@ async def test_failed_sleeping_safety_write_aborts_release_and_retries(
     mock_hue_v2.stop_effect_all = AsyncMock(return_value=True)
     engine._sleep_fade = AsyncMock()
 
+    engine._current_mode = "sleeping"
     await engine._apply_mode("sleeping", force_resend=True)
 
     mock_hue.wait_for_transition_settle.assert_not_awaited()
@@ -484,6 +488,7 @@ async def test_failed_required_safety_write_aborts_release_and_stays_retryable(
         return light_id != "3"
 
     mock_hue.set_light = fail_l3
+    engine._current_mode = "watching"
     await engine._apply_mode("watching", force_resend=True)
 
     mock_hue_v2.stop_effect_all.assert_not_awaited()
@@ -524,6 +529,7 @@ async def test_transit_protected_gaming_to_watching_reestablishes_held_targets(
     mock_hue_v2.set_effect = AsyncMock(return_value=True)
     engine._transition_boundary.wait_for_settle = AsyncMock()
 
+    engine._current_mode = "watching"
     await engine._apply_mode("watching", force_resend=True)
 
     by_id = {light_id: state for light_id, state in calls}
@@ -839,6 +845,7 @@ async def test_august_3_254_fixture_never_exposes_unprotected_transit_lamps(
     mock_hue_v2.set_effect = AsyncMock(return_value=True)
     engine._transition_boundary.wait_for_settle = AsyncMock()
 
+    engine._current_mode = "watching"
     await engine._apply_mode("watching", force_resend=True)
 
     assert exposed_254 == []

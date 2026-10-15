@@ -24,6 +24,7 @@ filter.
 """
 import asyncio
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -38,6 +39,12 @@ from backend.services.light_state_calculator import ALL_LIGHT_IDS
 
 # Same logger name as the engine so journald output is unchanged.
 logger = logging.getLogger("home_hub.automation")
+
+# Scoped exclusively to _apply_mode calls, including delegated async Hue tasks.
+# A detached/late mode writer must not outlive the effective Activity owner.
+mode_apply_epoch: ContextVar[tuple[int, str] | None] = ContextVar(
+    "homehub_mode_apply_epoch", default=None,
+)
 
 
 @dataclass
@@ -75,6 +82,7 @@ class LightApplicator:
             [dict, Optional[int]], Awaitable[LightApplyResult]
         ],
         transition_boundary,
+        owner_revision_getter: Callable[[], int] | None = None,
     ) -> None:
         self._st = state
         self._overrides = overrides
@@ -99,6 +107,7 @@ class LightApplicator:
         # before the run_loop external-off continue). Paths that legitimately
         # re-light clear the flag first (signal_presence, user override).
         self._suppressed = suppressed_getter
+        self._owner_revision_getter = owner_revision_getter
         self._incident_capture: object | None = None
 
     def set_navigation_incident_capture(self, capture: object | None) -> None:
@@ -210,8 +219,24 @@ class LightApplicator:
                 invalidate(light_ids)
 
     async def _write_many(self, writes, light_ids):
+        # The bridge boundary evaluates this validator inside its delegated
+        # mutation task, not merely before acquiring a serialization lock.
+        # Non-mode writers retain existing protected-owner/lease semantics.
+        owner = mode_apply_epoch.get()
+        validator = None
+        if owner is not None and self._owner_revision_getter is not None:
+            revision, expected_mode = owner
+
+            def validator():
+                return (
+                    not self._suppressed()
+                    and self._owner_revision_getter() == revision
+                    and self._current_mode_getter() == expected_mode
+                )
         try:
-            return await self._transition_boundary.write_many(writes, light_ids=light_ids)
+            return await self._transition_boundary.write_many(
+                writes, light_ids=light_ids, validator=validator,
+            )
         except asyncio.CancelledError:
             for light_id in light_ids:
                 self._st.last_applied_per_light.pop(light_id, None)

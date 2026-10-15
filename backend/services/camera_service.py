@@ -398,6 +398,8 @@ class CameraService:
 
         self._enabled = False
         self._paused = False  # Paused during sleeping mode
+        self._mode_callback_revision = 0
+        self._closed = False
         self._cap = None
         self._cap_lock = threading.Lock()  # Serializes poll-loop and snapshot reads
         self._face_detector = None
@@ -1406,12 +1408,45 @@ class CameraService:
         callers hand off a prior handle so the release also happens off-loop.
         """
         loop = asyncio.get_event_loop()
+        # Cancellation cannot stop an executor syscall. Transfer ownership
+        # under a thread lock so a late result is released by that worker even
+        # if the event loop has already stopped. A completed-but-undelivered
+        # result is instead handed to a release worker by the abandoning task.
+        handoff_lock = threading.Lock()
+        abandoned = False
+        pending = None
+
+        def open_owned():
+            nonlocal pending
+            cap = self._release_and_open(release_first)
+            with handoff_lock:
+                discard = abandoned
+                if not discard:
+                    pending = cap
+            if discard and cap is not None:
+                self._release_capture(cap)
+
+        def abandon():
+            nonlocal abandoned, pending
+            with handoff_lock:
+                abandoned = True
+                cap, pending = pending, None
+            if cap is not None:
+                loop.run_in_executor(None, self._release_capture, cap)
+
+        worker = loop.run_in_executor(None, open_owned)
+        # Retrieve exceptions even when the awaiting task was cancelled.
+        worker.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         try:
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, self._release_and_open, release_first),
-                timeout=CAP_OPEN_WATCHDOG_SECONDS,
-            )
+            await asyncio.wait_for(asyncio.shield(worker), timeout=CAP_OPEN_WATCHDOG_SECONDS)
+            with handoff_lock:
+                cap, pending = pending, None
+            return cap
+        except asyncio.CancelledError:
+            abandon()
+            raise
         except asyncio.TimeoutError:
+            abandon()
             logger.warning(
                 "Camera open exceeded %.0fs watchdog — treating as unavailable "
                 "(V4L2 likely wedged; an executor thread may be parked on the "
@@ -1419,6 +1454,23 @@ class CameraService:
                 CAP_OPEN_WATCHDOG_SECONDS,
             )
             return None
+
+    @staticmethod
+    def _release_capture(cap: Any) -> None:
+        """Executor-only disposal, including abandoned late open results."""
+        try:
+            cap.release()
+        except Exception:
+            logger.exception("Discarded camera capture release failed")
+
+    async def _discard_capture(self, cap: Any) -> None:
+        if cap is None:
+            return
+        release = asyncio.get_running_loop().run_in_executor(None, self._release_capture, cap)
+        try:
+            await asyncio.wait_for(asyncio.shield(release), timeout=CAP_OPEN_WATCHDOG_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning("Discarded camera capture release exceeded watchdog; worker still owns handle")
 
     async def _recover_capture(self) -> None:
         """Release and reopen the capture handle from the asyncio thread.
@@ -2587,11 +2639,17 @@ class CameraService:
 
         return jpeg
 
-    async def on_mode_change(self, new_mode: str) -> None:
+    async def on_mode_change(
+        self, new_mode: str, *, owner_is_current: Optional[Callable[[], bool]] = None,
+    ) -> None:
         """Mode-change callback — pause polling during sleeping mode.
 
         Pausing turns off the camera (LED goes dark) for sleep privacy.
         """
+        if self._closed or (owner_is_current is not None and not owner_is_current()):
+            return
+        self._mode_callback_revision += 1
+        revision = self._mode_callback_revision
         if new_mode == "sleeping":
             if not self._paused:
                 self._paused = True
@@ -2639,7 +2697,18 @@ class CameraService:
                 # /dev/video0 across the sleep cycle.
                 old = self._cap
                 self._cap = None
-                self._cap = await self._open_capture_async(release_first=old)
+                cap = await self._open_capture_async(release_first=old)
+                # No await between this check and publication. The engine
+                # predicate retains the original owner, including same-mode
+                # ABA; local lifecycle gates also protect direct callers.
+                if (
+                    self._closed or not self._enabled or self._paused or self._cap is not None
+                    or revision != self._mode_callback_revision
+                    or (owner_is_current is not None and not owner_is_current())
+                ):
+                    await self._discard_capture(cap)
+                    return
+                self._cap = cap
                 if self._cap is not None:
                     logger.info("Camera resumed after sleeping mode")
                 else:
@@ -2653,6 +2722,7 @@ class CameraService:
         race with the old loop's next iteration.
         """
         self._enabled = False
+        self._closed = True
         if self._shadow_coordinator is not None:
             self._shadow_coordinator.stop()
         if self._heartbeat is not None:
@@ -2827,7 +2897,7 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
         }
 
     app.state.camera_service = camera
-    automation.register_on_mode_change(camera.on_mode_change)
+    automation.register_on_mode_change(camera.on_mode_change, with_owner_guard=True)
     automation.set_camera_service(camera)
     # Re-wire the rest of the subscriber set so a respawn restores all
     # context (zone enrichment on activity_events rows, presence-aware

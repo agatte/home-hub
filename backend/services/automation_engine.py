@@ -64,7 +64,9 @@ from backend.services.automation_constants import (
 )
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
-from backend.services.light_applicator import LightApplicator, LightApplyResult
+from backend.services.light_applicator import (
+    LightApplicator, LightApplyResult, mode_apply_epoch,
+)
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.lighting_authority import LightingLease, LightingSemanticField
 from backend.services.light_override_manager import LightOverrideManager
@@ -312,6 +314,7 @@ class ProcessObservation:
     source: str
     device: str
     received_at: datetime
+    revision: int = 0
 
     @property
     def committed_mode(self) -> str:
@@ -334,6 +337,7 @@ class ProcessObservation:
             "source": self.source,
             "device": self.device,
             "received_at": self.received_at.isoformat(),
+            "revision": self.revision,
             "age_seconds": (now - self.received_at).total_seconds(),
         }
 
@@ -352,6 +356,7 @@ class ProcessSemanticEvidence:
     source: str
     device: str
     received_at: datetime
+    revision: int = 0
 
     def as_context(self, now: datetime) -> dict[str, Any]:
         return {
@@ -365,6 +370,7 @@ class ProcessSemanticEvidence:
             "source": self.source,
             "device": self.device,
             "received_at": self.received_at.isoformat(),
+            "revision": self.revision,
             "age_seconds": (now - self.received_at).total_seconds(),
         }
 
@@ -391,6 +397,23 @@ class PhysicalContextProcessArbitration:
         return result
 
 
+@dataclass(frozen=True)
+class DeskAuthorityState:
+    """Caller-owned #370 policy state; never an actuation lease."""
+
+    selection: Optional[tuple[str, str]] = None
+    desk_expires_at: Optional[datetime] = None
+    loss_started_at: Optional[datetime] = None
+
+
+@dataclass(frozen=True)
+class DeskAuthorityDecision:
+    state: DeskAuthorityState
+    disposition: str
+    selection: Optional[tuple[str, str]]
+    next_deadline: Optional[datetime]
+
+
 class AutomationEngine:
     """
     Combines time-of-day rules and activity reports to control lights.
@@ -402,21 +425,21 @@ class AutomationEngine:
     """
 
     # Publish semantic authority immediately, even when physical targets dedup.
-    _current_mode = LightingSemanticField()
-    _current_game = LightingSemanticField()
-    _manual_override = LightingSemanticField()
-    _override_mode = LightingSemanticField()
-    _override_source = LightingSemanticField()
-    _external_off_detected = LightingSemanticField()
-    _away_hold = LightingSemanticField()
-    _host_return_hold = LightingSemanticField()
-    _enabled = LightingSemanticField()
+    _current_mode = LightingSemanticField(mode_transition=True, underlying_mode=True)
+    _current_game = LightingSemanticField(mode_transition=True, underlying_mode=True)
+    _manual_override = LightingSemanticField(mode_transition=True)
+    _override_mode = LightingSemanticField(mode_transition=True)
+    _override_source = LightingSemanticField(mode_transition=True)
+    _external_off_detected = LightingSemanticField(mode_transition=True)
+    _away_hold = LightingSemanticField(mode_transition=True)
+    _host_return_hold = LightingSemanticField(mode_transition=True)
+    _enabled = LightingSemanticField(mode_transition=True)
     _active_scene_override_key = LightingSemanticField()
     _gaming_scene_override = LightingSemanticField()
     _gaming_scene_transition_pending = LightingSemanticField()
-    _mode_source_key = LightingSemanticField()
-    _home_awake_confirmed = LightingSemanticField()
-    _override_time = LightingSemanticField()
+    _mode_source_key = LightingSemanticField(mode_transition=True, underlying_mode=True)
+    _home_awake_confirmed = LightingSemanticField(mode_transition=True)
+    _override_time = LightingSemanticField(mode_transition=True)
 
     def __init__(
         self,
@@ -510,6 +533,9 @@ class AutomationEngine:
         # camera blip doesn't strand the user in relax while they're actively
         # at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
         self._last_process_working_at: Optional[datetime] = None
+        # A process-wide counter is monotonic for every device, including one
+        # evicted and later reintroduced into the bounded observation map.
+        self._process_observation_revision = 0
         # Raw observations remain per-device for physical-context consumers.
         self._last_process_observation_by_device: dict[
             str, ProcessObservation
@@ -524,6 +550,16 @@ class AutomationEngine:
         self._physical_context_last_qualifying_at: Optional[datetime] = None
         self._physical_context_presence_lost_at: Optional[datetime] = None
         self._physical_context_last_decision: Optional[str] = None
+
+        # #370 non-actuating, source-qualified Desk expiry observation.
+        # This does NOT own Activity, call the composer, or authorize Hue writes.
+        self._desk_authority_state = DeskAuthorityState()
+        self._desk_authority_decision: Optional[DeskAuthorityDecision] = None
+        self._desk_authority_next_deadline: Optional[datetime] = None
+        self._desk_authority_wakeup = asyncio.Event()
+        self._desk_authority_expiry_task: Optional[asyncio.Task] = None
+        self._desk_authority_closed = False
+        self._desk_activity_owner: Optional[tuple[int, str, str]] = None
 
         # Sleeping clears retain the normal autonomous cooldown for every
         # source except physical_context_relax after a new post-resume commit.
@@ -601,6 +637,7 @@ class AutomationEngine:
             dispatch_per_light=lambda s, t=None: self._apply_per_light(s, t),
             dispatch_uniform=lambda s, t=None: self._apply_uniform(s, t),
             transition_boundary=self._transition_boundary,
+            owner_revision_getter=lambda: self._mode_transition_revision,
         )
 
         # Track if lights were turned off externally (Alexa geofence)
@@ -634,6 +671,7 @@ class AutomationEngine:
 
         # Mode change callbacks (e.g., music mapper auto-play)
         self._on_mode_change_callbacks: list = []
+        self._owner_guard_callbacks: set = set()
 
         # Config
         self._enabled: bool = True
@@ -997,6 +1035,44 @@ class AutomationEngine:
             "physical_context_process_arbitration": (
                 process_arbitration.as_context(now)
             ),
+            # Read-only status of the integrated source-qualified autonomous
+            # Desk handoff. Reading this property does not recompute or write.
+            # Manual/scene/physical provenance gates remain independently owned.
+            "desk_authority_observation": {
+                "enforcing": True,
+                "disposition": (
+                    self._desk_authority_decision.disposition
+                    if self._desk_authority_decision is not None else None
+                ),
+                "selection": (
+                    {
+                        "mode": self._desk_authority_decision.selection[0],
+                        "source_key": self._desk_authority_decision.selection[1],
+                    }
+                    if self._desk_authority_decision is not None
+                    and self._desk_authority_decision.selection is not None
+                    else None
+                ),
+                "desk_expires_at": (
+                    self._desk_authority_state.desk_expires_at.isoformat()
+                    if self._desk_authority_state.desk_expires_at is not None
+                    else None
+                ),
+                "loss_started_at": (
+                    self._desk_authority_state.loss_started_at.isoformat()
+                    if self._desk_authority_state.loss_started_at is not None
+                    else None
+                ),
+                "next_deadline": (
+                    self._desk_authority_next_deadline.isoformat()
+                    if self._desk_authority_next_deadline is not None
+                    else None
+                ),
+                "timer_active": (
+                    self._desk_authority_expiry_task is not None
+                    and not self._desk_authority_expiry_task.done()
+                ),
+            },
             "gaming": self.get_gaming_diagnostics(),
         }
 
@@ -2073,6 +2149,7 @@ class AutomationEngine:
                     parsed_detected_at = candidate
             except (TypeError, ValueError):
                 parsed_detected_at = None
+        self._process_observation_revision += 1
         observation = ProcessObservation(
             observed_mode=mode,
             candidate_mode=_string_factor(factors, "candidate_mode"),
@@ -2090,6 +2167,7 @@ class AutomationEngine:
             source="process",
             device=device,
             received_at=now,
+            revision=self._process_observation_revision,
         )
         self._last_process_observation_by_device[device] = observation
         if (
@@ -2104,6 +2182,13 @@ class AutomationEngine:
             )
             self._last_process_observation_by_device.pop(oldest_device, None)
         return observation
+
+    def _process_observation_is_current(self, observation: ProcessObservation) -> bool:
+        """A suspended report may not commit over newer same-device evidence."""
+        current = self._last_process_observation_by_device.get(observation.device)
+        return bool(
+            current is observation and current.revision == observation.revision
+        )
 
     def _record_process_semantic(
         self,
@@ -2121,6 +2206,8 @@ class AutomationEngine:
             observation = self._record_process_observation(
                 observation, factors, now or datetime.now(tz=TZ),
             )
+        if not self._process_observation_is_current(observation):
+            return
         self._last_process_semantic_by_device[observation.device] = (
             ProcessSemanticEvidence(
                 committed_mode=observation.observed_mode,
@@ -2133,6 +2220,7 @@ class AutomationEngine:
                 source=observation.source,
                 device=observation.device,
                 received_at=observation.received_at,
+                revision=observation.revision,
             )
         )
         if (
@@ -2147,6 +2235,20 @@ class AutomationEngine:
             )
             self._last_process_semantic_by_device.pop(oldest_device, None)
 
+    def _retract_latitude_watching_for_desk(self) -> None:
+        """Retract only the displaced positive media vote; retain raw reports.
+
+        Call synchronously inside a qualified Desk acceptance commit, before
+        publishing fusion. Other devices and other Latitude semantics survive.
+        """
+        semantic = self._last_process_semantic_by_device.get("latitude")
+        if (
+            semantic is not None and semantic.device == "latitude"
+            and semantic.source == "process"
+            and semantic.committed_mode == "watching"
+        ):
+            self._last_process_semantic_by_device.pop("latitude", None)
+
     def _derived_process_semantic(self) -> Optional[ProcessSemanticEvidence]:
         """Return the freshest accepted process voter for fusion.
 
@@ -2155,11 +2257,11 @@ class AutomationEngine:
         semantic from another device; once eligible, the established mode
         priority and then recency choose the single non-double-counting voter.
         """
-        now = datetime.now(tz=TZ)
+        now = self._now()
         fresh_semantics = [
             evidence
             for evidence in self._last_process_semantic_by_device.values()
-            if (now - evidence.received_at).total_seconds()
+            if 0 <= (now - evidence.received_at).total_seconds()
             <= SOURCE_STALE_SECONDS
         ]
         if not fresh_semantics:
@@ -2171,6 +2273,181 @@ class AutomationEngine:
                 evidence.received_at,
             ),
         )
+
+    def _resolve_desk_process_authority(
+        self, now: datetime, previous: DeskAuthorityState, *,
+        source_invalidated: bool = False,
+    ) -> DeskAuthorityDecision:
+        """Persistent, clock-injected Desk policy; the caller owns actuation.
+
+        One caller must carry state across reports, observations and expiry.
+        Deadlines belong to this source, regardless of the fused zone. A
+        deadline alone is not permission to restore or write lights. The caller
+        must fence its handoff against observation and transition revisions.
+        """
+        if (
+            not self._enabled or self._manual_override or self.is_dnd_active()
+            or self._away_hold or self._host_return_hold
+            or self._external_off_detected or self.house_state != "home"
+            or self._current_mode == "sleeping"
+        ):
+            return DeskAuthorityDecision(DeskAuthorityState(), "protected", None, None)
+
+        desktop = self._physical_context_source_reading("desktop")
+        desk = bool(
+            not source_invalidated and desktop is not None
+            and desktop.source == "desktop" and desktop.face_present is True
+            and desktop.detection_source in {None, "face"}
+            and desktop.zone == "desk"
+            and -2.0 <= self._physical_context_reading_age(desktop, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+        )
+        from backend.services.presence_fusion import PresenceFusion
+
+        latitude = self._physical_context_source_reading("latitude")
+        conflict = bool(
+            desk and latitude is not None and latitude.source == "latitude"
+            and latitude.zone in {"couch", "bed"}
+            and -2.0 <= self._physical_context_reading_age(latitude, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and PresenceFusion._is_strongly_present(latitude)
+        )
+        # Inclusive freshness needs a wake strictly after the expiry boundary.
+        tick = timedelta(microseconds=1)
+        deadlines = []
+        if desk:
+            deadlines.append(desktop.captured_at + timedelta(
+                seconds=PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+            ) + tick)
+        if conflict:
+            deadlines.append(latitude.captured_at + timedelta(
+                seconds=PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+            ) + tick)
+
+        semantic = self._last_process_semantic_by_device.get("desktop")
+        semantic_fresh = bool(
+            semantic is not None and semantic.device == "desktop"
+            and semantic.source == "process"
+            and semantic.committed_mode in {"working", "gaming", "watching", "social"}
+            and 0 <= (now - semantic.received_at).total_seconds() <= SOURCE_STALE_SECONDS
+        )
+        if semantic_fresh:
+            deadlines.append(semantic.received_at + timedelta(
+                seconds=SOURCE_STALE_SECONDS,
+            ) + tick)
+
+        if desk and not conflict:
+            selection = (
+                (semantic.committed_mode, "process:desktop")
+                if semantic_fresh else ("idle", "time")
+            )
+            state = DeskAuthorityState(selection, desktop.captured_at + timedelta(
+                seconds=PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+            ))
+            return DeskAuthorityDecision(state, "desk", selection, min(deadlines))
+
+        if previous.selection is None:
+            return DeskAuthorityDecision(
+                DeskAuthorityState(), "conflict" if conflict else "unqualified",
+                None, min(deadlines) if deadlines else None,
+            )
+
+        # Conflict/negative/invalidation starts loss when processed; silent
+        # expiry starts at capture+8, even when the timer wakes up late.
+        loss = previous.loss_started_at
+        if loss is None:
+            loss = now
+            fresh_negative = bool(
+                desktop is not None
+                and -2.0 <= self._physical_context_reading_age(desktop, now)
+                <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+                and not desk
+            )
+            if (
+                not conflict and not source_invalidated and not fresh_negative
+                and previous.desk_expires_at
+            ):
+                loss = min(now, previous.desk_expires_at)
+        restore_at = loss + timedelta(seconds=PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS)
+        if now >= restore_at:
+            # No saved media replay: restoration requires ordinary fresh source
+            # selection. Persistent conflict continues abstaining.
+            return DeskAuthorityDecision(
+                DeskAuthorityState(), "conflict" if conflict else "released",
+                None, min(deadlines) if deadlines else None,
+            )
+        deadlines.append(restore_at)
+        selection = previous.selection
+        if selection[1] == "process:desktop" and not semantic_fresh:
+            selection = ("idle", "time")
+        state = DeskAuthorityState(selection, previous.desk_expires_at, loss)
+        return DeskAuthorityDecision(
+            state, "conflict" if conflict else "loss_dwell", selection, min(deadlines),
+        )
+
+    def _desk_process_authority_candidate(
+        self, now: datetime,
+    ) -> Optional[tuple[str, str]]:
+        """Pure #370 policy for replacing autonomous Latitude Watching.
+
+        Deliberately not wired into reports, fusion, or the observation/timer
+        paths yet. A caller must reconcile all four together through existing
+        mode/application ownership gates. This method grants no write authority,
+        changes no evidence, and never infers Working from a face alone.
+        """
+        if (
+            not self._enabled
+            or self._manual_override
+            or self.is_dnd_active()
+            or self._away_hold
+            or self._host_return_hold
+            or self._external_off_detected
+            or self.house_state != "home"
+            or self._current_mode != "watching"
+            or self._mode_source != "process"
+            or self._mode_source_key != "process:latitude"
+        ):
+            return None
+
+        desktop = self._physical_context_source_reading("desktop")
+        if (
+            desktop is None
+            or desktop.source != "desktop"
+            or desktop.face_present is not True
+            or desktop.detection_source not in {None, "face"}
+            or desktop.zone != "desk"
+            or not -2.0 <= self._physical_context_reading_age(desktop, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+        ):
+            return None
+
+        # Abstain on simultaneous strong opposing physical evidence, even if
+        # the Desktop capture is newer. Software playback never enters this
+        # geographic decision. Use the existing source qualification rules.
+        from backend.services.presence_fusion import PresenceFusion
+
+        latitude = self._physical_context_source_reading("latitude")
+        if (
+            latitude is not None
+            and latitude.source == "latitude"
+            and latitude.zone in {"couch", "bed"}
+            and -2.0 <= self._physical_context_reading_age(latitude, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and PresenceFusion._is_strongly_present(latitude)
+        ):
+            return None
+
+        semantic = self._last_process_semantic_by_device.get("desktop")
+        if (
+            semantic is not None
+            and semantic.device == "desktop"
+            and semantic.source == "process"
+            and semantic.committed_mode in {"working", "gaming", "watching", "social"}
+            and 0 <= (now - semantic.received_at).total_seconds()
+            <= SOURCE_STALE_SECONDS
+        ):
+            return semantic.committed_mode, "process:desktop"
+        return "idle", "time"
 
     def _sync_process_fusion(self) -> tuple[Optional[str], bool]:
         """Replace fusion's process lane from accepted semantics only."""
@@ -2279,8 +2556,9 @@ class AutomationEngine:
             old_mode, new_mode, new_source_key,
         )
         if old_mode != new_mode:
+            transition_revision = self._mode_transition_revision
             await self._apply_mode(new_mode, force_resend=True)
-            await self._fire_mode_change_callbacks(new_mode)
+            await self._dispatch_mode_change_if_current(new_mode, transition_revision)
             if self._event_logger:
                 await self._event_logger.log_mode_change(
                     mode=new_mode,
@@ -2300,13 +2578,22 @@ class AutomationEngine:
         reason: str,
         agent_factors: Optional[list[dict]],
     ) -> dict[str, Any]:
-        """Log a truthful process observation and update the semantic voter."""
+        """Log a decided observation; retract current evidence before any await."""
         included_in_fusion = False
         authority_reconciled = False
+        # Acceptance is committed synchronously beside mode selection, before
+        # lighting/persistence/listener awaits. Finalization only reports that
+        # decision; a late completion must never resurrect or refresh evidence.
+        semantic = self._derived_process_semantic()
+        semantic_mode = semantic.committed_mode if semantic else None
         if disposition == "accepted":
-            self._record_process_semantic(observation)
-            semantic_mode, included_in_fusion = self._sync_process_fusion()
-        elif disposition == "retracted":
+            included_in_fusion = bool(
+                self._confidence_fusion is not None
+                and semantic is not None
+                and semantic.device == observation.device
+                and semantic.revision == observation.revision
+            )
+        elif disposition == "retracted" and self._process_observation_is_current(observation):
             retracted_semantic = self._last_process_semantic_by_device.pop(
                 observation.device, None,
             )
@@ -2316,13 +2603,14 @@ class AutomationEngine:
                 retracted_semantic=retracted_semantic,
                 replacement=self._derived_process_semantic(),
             )
-        else:
-            semantic = self._derived_process_semantic()
-            semantic_mode = semantic.committed_mode if semantic else None
+        elif disposition == "retracted":
+            disposition = "abstaining"
+            reason = "superseded_observation"
 
         result = {
             "reported_mode": observation.observed_mode,
             "observed_source": f"process:{observation.device}",
+            "observation_revision": observation.revision,
             "semantic_disposition": disposition,
             "reason": reason,
             "semantic_mode": semantic_mode,
@@ -2531,12 +2819,138 @@ class AutomationEngine:
             trigger,
         )
 
+    def _refresh_desk_authority_observation(
+        self, *, source_invalidated: bool = False,
+    ) -> None:
+        """Refresh Desk policy and schedule owner-scoped deadline reconciliation.
+
+        This synchronous refresh does not mutate Activity or replay media. The
+        deadline consumer must still validate the accepted handoff owner and
+        enter the established composer/mutation gates.
+        """
+        if self._desk_authority_closed:
+            return
+        try:
+            decision = self._resolve_desk_process_authority(
+                self._now(), self._desk_authority_state,
+                source_invalidated=source_invalidated,
+            )
+        except Exception:
+            # Failed refresh must not reuse an earlier qualified decision.
+            self._desk_authority_decision = None
+            self._desk_authority_next_deadline = None
+            logger.exception("Desk source observation failed")
+            return
+        self._desk_authority_state = decision.state
+        self._desk_authority_decision = decision
+        self._desk_authority_next_deadline = decision.next_deadline
+
+        task = self._desk_authority_expiry_task
+        if task is not None and not task.done():
+            self._desk_authority_wakeup.set()
+        elif decision.next_deadline is not None:
+            self._desk_authority_wakeup.clear()
+            self._desk_authority_expiry_task = asyncio.create_task(
+                self._observe_desk_authority_deadlines()
+            )
+
+    async def _observe_desk_authority_deadlines(self) -> None:
+        """Wait for Desktop-source deadlines independent of fused room labels."""
+        task = asyncio.current_task()
+        try:
+            while not self._desk_authority_closed:
+                deadline = self._desk_authority_next_deadline
+                if deadline is None:
+                    return
+                seconds = max(0.0, (deadline - self._now()).total_seconds())
+                self._desk_authority_wakeup.clear()
+                try:
+                    await asyncio.wait_for(
+                        self._desk_authority_wakeup.wait(), timeout=max(0.001, seconds),
+                    )
+                except asyncio.TimeoutError:
+                    # Re-evaluate only the owner accepted by the Desk handoff;
+                    # the deadline itself grants no new Activity authority.
+                    await self._reconcile_desk_activity_from_physical_source()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Desk source deadline reconciliation failed")
+        finally:
+            if self._desk_authority_expiry_task is task:
+                self._desk_authority_expiry_task = None
+
+    async def _reconcile_desk_activity_from_physical_source(self) -> bool:
+        """Accept physical Desk, then reconcile expiry only for its surviving owner.
+
+        This is an autonomous Activity handoff, not a new light writer. It
+        intentionally does not dispatch music/camera listeners while their
+        awaited consumer-level ownership checks remain under review.
+        """
+        # An earlier relax evaluation may have awaited, so refresh evidence and
+        # protection gates immediately before the one synchronous owner commit.
+        self._refresh_desk_authority_observation()
+        decision = self._desk_authority_decision
+        owner = (
+            self._mode_transition_revision, self._current_mode, self._mode_source_key,
+        )
+        owns_handoff = self._desk_activity_owner == owner
+        latitude_handoff = (
+            self._current_mode == "watching"
+            and self._mode_source_key == "process:latitude"
+            and self._mode_source == "process"
+        )
+        if (
+            decision is None or decision.selection is None
+            or decision.disposition not in {"desk", "loss_dwell"}
+            or not (owns_handoff or latitude_handoff and decision.disposition == "desk")
+        ):
+            return False
+        new_mode, new_key = decision.selection
+        if (new_mode, new_key) == (self._current_mode, self._mode_source_key):
+            return False
+        if new_mode not in {"idle", "working", "gaming", "watching", "social"}:
+            return False
+        now = self._now()
+        self._current_mode = new_mode
+        self._current_game = None
+        self._mode_source = "time" if new_key == "time" else "process"
+        self._mode_source_key = new_key
+        self._last_activity = new_mode
+        self._last_activity_change = now
+        self._idle_entered_at = now if new_mode == "idle" else None
+        self._last_mode_source_report_at[new_key] = now
+        # The former Latitude Watching vote was media context, not proof of
+        # Couch occupancy. Retain its raw process observation for diagnostics
+        # but exclude the old accepted apartment semantic from fusion. A
+        # fresh post-dwell report must qualify anew; never replay saved media.
+        self._retract_latitude_watching_for_desk()
+        self._sync_process_fusion()
+        revision = self._mode_transition_revision
+        self._desk_activity_owner = (revision, new_mode, new_key)
+        logger.info(
+            "Physical Desk Activity selection: %s (%s)",
+            new_mode, new_key,
+        )
+        # Existing mode composer / protected lights / Hue authority remain the
+        # only actuator route. The owner token revokes late delegated writes.
+        try:
+            await self._apply_mode(new_mode, force_resend=True)
+        except Exception:
+            logger.exception("Physical Desk Activity handoff apply failed")
+        if self._mode_transition_is_current(new_mode, revision):
+            await self._broadcast_mode()
+        return True
+
     async def notify_presence_observation(self, reading: Any) -> None:
         """Evaluate physical context and maintain fixture-comfort expiry."""
         source = getattr(reading, "source", "unknown")
+        self._refresh_desk_authority_observation()
         await self._evaluate_physical_context_relax(
             trigger=f"presence:{source}",
         )
+        # Physical source geometry outranks Latitude media, not manual scenes.
+        await self._reconcile_desk_activity_from_physical_source()
         self._refresh_fixture_comfort_expiry_task()
 
     def _cancel_fixture_comfort_expiry_task(self) -> None:
@@ -2547,6 +2961,10 @@ class AutomationEngine:
 
     def notify_presence_source_invalidated(self, source: str) -> None:
         """Reconcile fixture comfort after source-qualified physical authority is revoked."""
+        # Source-local expiry must run even when another physical zone remains.
+        self._refresh_desk_authority_observation(
+            source_invalidated=(source == "desktop"),
+        )
         self._cancel_fixture_comfort_expiry_task()
         presence = self._presence_fusion
         if presence is None:
@@ -2592,13 +3010,21 @@ class AutomationEngine:
 
     async def close(self) -> None:
         """Cancel bounded auxiliary automation tasks before service shutdown."""
+        self._mode_transition_revision += 1
         self._transition_boundary.authority.close()
-        task = self._fixture_comfort_expiry_task
+        self._desk_authority_closed = True
+        tasks = [
+            task for task in (
+                self._fixture_comfort_expiry_task,
+                self._desk_authority_expiry_task,
+            ) if task is not None and not task.done()
+        ]
         self._fixture_comfort_expiry_task = None
-        if task is None or task.done():
-            return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        self._desk_authority_expiry_task = None
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _refresh_fixture_comfort_expiry_task(self) -> None:
         """Arm one recompose when a recent physical Desk lock becomes unknown."""
@@ -2969,14 +3395,18 @@ class AutomationEngine:
         """
         self._bed_reclined_l1_night = max(1, min(100, int(value)))
 
-    def register_on_mode_change(self, callback) -> None:
+    def register_on_mode_change(self, callback, *, with_owner_guard: bool = False) -> None:
         """
         Register a callback to be invoked when the active mode changes.
 
         Args:
             callback: Async callable accepting a single mode string argument.
+            with_owner_guard: Opt in to an owner_is_current keyword predicate
+                bound to the initiating committed revision and effective mode.
         """
         self._on_mode_change_callbacks.append(callback)
+        if with_owner_guard:
+            self._owner_guard_callbacks.add(callback)
 
     def deregister_on_mode_change(self, callback) -> None:
         """Remove a previously-registered mode-change callback.
@@ -2991,6 +3421,7 @@ class AutomationEngine:
             self._on_mode_change_callbacks.remove(callback)
         except ValueError:
             pass
+        self._owner_guard_callbacks.discard(callback)
 
     async def notify_camera_commit(self) -> None:
         """Re-apply lighting after a source-qualified zone/posture commit.
@@ -3027,15 +3458,48 @@ class AutomationEngine:
         )
         await self._apply_mode(mode, force_resend=True)
 
-    async def _fire_mode_change_callbacks(self, mode: str) -> None:
+    def _mode_transition_is_current(self, mode: str, revision: int) -> bool:
+        """Check a committed owner epoch, including same-mode owner ABA."""
+        return bool(
+            revision == self._mode_transition_revision
+            and self.current_mode == mode
+            and not self._away_hold
+            and not self._host_return_hold
+            and not self._external_off_detected
+        )
+
+    async def _dispatch_mode_change_if_current(self, mode: str, revision: int) -> None:
+        # This fences dispatch only. Listeners with internal waits still need
+        # consumer-side checks before effects; it is not a final-write lease.
+        if self._mode_transition_is_current(mode, revision):
+            await self._fire_mode_change_callbacks(mode, revision=revision)
+
+    async def _fire_mode_change_callbacks(self, mode: str, *, revision: Optional[int] = None) -> None:
         """Invoke all registered mode-change callbacks with timeout protection."""
         # 15s budget per callback. CameraService.start() reopens V4L2 on
         # resume-from-sleeping, which can take 5-8s under contention; the
         # earlier 8s ceiling clipped legitimate restarts and orphaned the
         # camera silent.
-        for callback in self._on_mode_change_callbacks:
+        if revision is None:
+            revision = self._mode_transition_revision
+
+        def owner_is_current() -> bool:
+            return self._mode_transition_is_current(mode, revision)
+
+        async def invoke_if_current(callback):
+            # wait_for schedules a child task. Recheck at its actual start as
+            # well as between callbacks, without holding the lighting lock.
+            if self._mode_transition_is_current(mode, revision):
+                if callback in self._owner_guard_callbacks:
+                    await callback(mode, owner_is_current=owner_is_current)
+                else:
+                    await callback(mode)
+
+        for callback in tuple(self._on_mode_change_callbacks):
+            if not self._mode_transition_is_current(mode, revision):
+                return
             try:
-                await asyncio.wait_for(callback(mode), timeout=15.0)
+                await asyncio.wait_for(invoke_if_current(callback), timeout=15.0)
             except asyncio.TimeoutError:
                 logger.warning(
                     "Mode change callback %s timed out after 15s for mode '%s'",
@@ -3070,7 +3534,7 @@ class AutomationEngine:
                 authority uses only fresh, plausibly synchronized values.
         """
         source_key = _activity_source_key(source, factors)
-        report_now = datetime.now(tz=TZ)
+        report_now = self._now()
         observation: Optional[ProcessObservation] = None
         if source == "process":
             observation = self._record_process_observation(
@@ -3101,6 +3565,15 @@ class AutomationEngine:
             await self._evaluate_physical_context_relax(
                 now=report_now, trigger="process_report",
             )
+            # Re-read camera source qualification after the awaited relax
+            # evaluation. A fresh Desk source revokes remote playback's
+            # apartment ownership, but the raw media observation remains.
+            self._refresh_desk_authority_observation()
+            if not self._process_observation_is_current(observation):
+                return await self._finalize_process_report(
+                    observation=observation, disposition="abstaining",
+                    reason="superseded_observation", agent_factors=factors,
+                )
 
         # Non-process sources own their own lanes. Process takes the separate
         # accepted-semantic path below; raw device reports never vote directly.
@@ -3120,6 +3593,24 @@ class AutomationEngine:
                 observation=observation,
                 disposition="retracted",
                 reason="latitude_media_intent_retracted",
+                agent_factors=factors,
+            )
+
+        # Continuous Latitude playback is truthful media/process evidence,
+        # not a new physical Couch claim. While an independently strong fresh
+        # Desktop Desk source owns the area (including brief loss dwell), it
+        # cannot keep re-selecting projector-oriented apartment Watching.
+        desk_decision = self._desk_authority_decision
+        if (
+            observation is not None and observation.device == "latitude"
+            and source == "process" and mode == "watching"
+            and desk_decision is not None
+            and desk_decision.disposition in {"desk", "loss_dwell"}
+            and desk_decision.selection is not None
+        ):
+            return await self._finalize_process_report(
+                observation=observation, disposition="rejected",
+                reason="physical_desk_remote_media",
                 agent_factors=factors,
             )
 
@@ -3173,7 +3664,6 @@ class AutomationEngine:
             if self._sleep_fade_task and not self._sleep_fade_task.done():
                 self._sleep_fade_task.cancel()
                 self._sleep_fade_task = None
-            await self._persist_override_state()
             logger.info(
                 "Sleeping wake accepted from fresh interactive Desktop %s", mode,
             )
@@ -3190,6 +3680,16 @@ class AutomationEngine:
             not interactive_sleep_wake
             and new_priority < current_priority
             and source_key != self._mode_source_key
+            and not (
+                observation is not None
+                and observation.device == "desktop"
+                and mode in {"working", "gaming", "watching", "social"}
+                and self._current_mode == "watching"
+                and self._mode_source_key == "process:latitude"
+                and self._desk_authority_decision is not None
+                and self._desk_authority_decision.disposition == "desk"
+                and not self._manual_override
+            )
         ):
             last_report = self._last_mode_source_report_at.get(
                 self._mode_source_key,
@@ -3339,6 +3839,22 @@ class AutomationEngine:
             self._last_process_working_at = now
 
         old_mode = wake_previous_mode or self._current_mode
+        old_source_key = self._mode_source_key
+        old_game = self._current_game
+
+        # Semantic acceptance and owner selection are one non-awaiting commit.
+        # This preserves the original report timestamp even when output stalls.
+        desktop_desk_acceptance = bool(
+            observation is not None and observation.device == "desktop"
+            and mode in {"working", "gaming", "watching", "social"}
+            and self._desk_authority_decision is not None
+            and self._desk_authority_decision.disposition == "desk"
+        )
+        if observation is not None:
+            self._record_process_semantic(observation)
+            if desktop_desk_acceptance:
+                self._retract_latitude_watching_for_desk()
+            self._sync_process_fusion()
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
@@ -3355,7 +3871,11 @@ class AutomationEngine:
         self._mode_source = source
         self._mode_source_key = source_key
         self._last_activity = mode
-        self._last_activity_change = now
+        if (
+            old_mode != mode or old_source_key != source_key
+            or old_game != self._current_game
+        ):
+            self._last_activity_change = now
 
         # Track continuous-idle dwell for the ambient_relax setter. Stamp on
         # entry only — re-stamping every confirming idle report would defeat
@@ -3365,6 +3885,13 @@ class AutomationEngine:
             self._idle_entered_at = now
         elif mode != "idle":
             self._idle_entered_at = None
+
+        transition_revision = self._mode_transition_revision
+        if desktop_desk_acceptance:
+            self._desk_activity_owner = (transition_revision, mode, source_key)
+            # The accepted semantic adds its own expiry, independently of the
+            # physical source clock and fixture-comfort timer.
+            self._refresh_desk_authority_observation()
 
         # Priority-bypass for autonomous overrides: when an autonomous setter
         # (fusion_auto_apply, late_night_rescue, behavioral_predictor, …)
@@ -3426,10 +3953,14 @@ class AutomationEngine:
             self._override_mode = None
             self._override_source = None
             self._override_time = None
+            transition_revision = self._mode_transition_revision
             await self._persist_override_state()
             # Fall through to normal mode-application path below — per-light
             # overrides are preserved (no _clear_per_light_overrides) because
             # this displacement is autonomous, mirroring clear_override's gate.
+
+        if interactive_sleep_wake:
+            await self._persist_override_state()
 
         # If manual override is active, update detected mode silently but
         # never clear the override — only the user or the 4h timeout should.
@@ -3450,6 +3981,25 @@ class AutomationEngine:
             return {
                 "reported_mode": mode, "semantic_disposition": "accepted",
                 "reason": "manual_override_held", "semantic_mode": mode,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
+
+        # A newer owner may have arrived during persistence. Keep this
+        # report's accepted history, but do not clear suppression or apply its
+        # targets after supersession (including same-mode owner changes).
+        if (
+            transition_revision != self._mode_transition_revision
+            or self.current_mode != mode
+        ):
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation, disposition="accepted",
+                    reason="accepted_owner_superseded", agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "accepted",
+                "reason": "accepted_owner_superseded", "semantic_mode": mode,
                 "authoritative_mode": self.current_mode,
                 "included_in_fusion": False,
             }
@@ -3513,14 +4063,15 @@ class AutomationEngine:
         # previous/next resolved plans. A raw game-factor change does not by
         # itself invalidate the cache: two unknown games can share the exact
         # generic target, while real plan deltas naturally reach the applicator.
+        transition_revision = self._mode_transition_revision
         await self._apply_mode(
             mode,
             force_resend=(old_mode != mode),
         )
 
-        # Fire mode change callbacks (e.g., music auto-play)
+        # Log committed history, but only dispatch for the surviving owner.
         if old_mode != mode:
-            await self._fire_mode_change_callbacks(mode)
+            await self._dispatch_mode_change_if_current(mode, transition_revision)
             if self._event_logger:
                 await self._event_logger.log_mode_change(
                     mode=mode,
@@ -3647,15 +4198,17 @@ class AutomationEngine:
             "Manual override set: %s (source=%s, prior=%s, was_overridden=%s)",
             mode, source, prior_override, was_overridden,
         )
+        transition_revision = self._mode_transition_revision
         await self._persist_override_state()
         # Broadcast first so the UI updates immediately, then apply lights.
         # force_resend=True so any lights that were behind a per-light override
         # (now released) get a fresh write to the new mode's state.
         await self._broadcast_mode()
-        await self._apply_mode(mode, force_resend=True)
-        # Fire mode change callbacks only if the mode actually changed
+        if self._mode_transition_is_current(mode, transition_revision):
+            await self._apply_mode(mode, force_resend=True)
+        # Fire mode change callbacks only if the mode and owner survived awaits.
         if old_mode != mode:
-            await self._fire_mode_change_callbacks(mode)
+            await self._dispatch_mode_change_if_current(mode, transition_revision)
         if self._event_logger and old_mode != mode:
             await self._event_logger.log_mode_change(
                 mode=mode,
@@ -3748,7 +4301,14 @@ class AutomationEngine:
         ):
             self._home_awake_confirmed = True
 
+        # A clear is a distinct initiating intent even if its fields already
+        # match Auto. Preserve its epoch across persistence, including ABA.
+        self._mode_transition_revision += 1
+        clear_revision = self._mode_transition_revision
         await self._persist_override_state()
+        if clear_revision != self._mode_transition_revision:
+            logger.debug("Override clear superseded during persistence")
+            return
 
         if old_effective == "sleeping":
             if user_requested_auto:
@@ -3812,17 +4372,21 @@ class AutomationEngine:
                     "(source=%s)",
                     source,
                 )
+                clear_revision = self._mode_transition_revision
                 await self._apply_mode("idle", force_resend=True)
+                if not self._mode_transition_is_current("idle", clear_revision):
+                    return
                 await self._broadcast_mode()
-                await self._fire_mode_change_callbacks(self._current_mode)
+                await self._dispatch_mode_change_if_current("idle", clear_revision)
                 return
 
             # Non-explicit clears keep the historical safety contract: the
             # user may still be asleep, so leave lights off but wake lifecycle
             # subscribers (camera, ambient, ML logger) to the exposed mode.
+            cleared_mode = self.current_mode
             await self._broadcast_mode()
-            if old_effective != self._current_mode:
-                await self._fire_mode_change_callbacks(self._current_mode)
+            if old_effective != cleared_mode:
+                await self._dispatch_mode_change_if_current(cleared_mode, clear_revision)
             return
 
         # Clearing an autonomous override while away must expose raw state
@@ -3837,15 +4401,13 @@ class AutomationEngine:
         # Re-apply current detected mode or time-based. force_resend=True
         # because we've just released the override and per-light overrides;
         # the cache may not reflect what's actually on the bridge.
-        if self._current_mode in ("idle",):
-            await self._apply_time_based()
-        else:
-            await self._apply_mode(self._current_mode, force_resend=True)
-
+        cleared_mode = self.current_mode
+        await self._apply_mode(cleared_mode, force_resend=True)
+        if not self._mode_transition_is_current(cleared_mode, clear_revision):
+            return
         await self._broadcast_mode()
-        # Only fire callbacks if the effective mode actually changed
-        if old_effective != self._current_mode:
-            await self._fire_mode_change_callbacks(self._current_mode)
+        if old_effective != cleared_mode:
+            await self._dispatch_mode_change_if_current(cleared_mode, clear_revision)
 
     # ------------------------------------------------------------------
     # Do Not Disturb
@@ -3868,10 +4430,12 @@ class AutomationEngine:
         self, duration_minutes: int = 120, source: str = "internal",
     ) -> dict:
         """Activate DND for ``duration_minutes`` (clamped to [1, 720])."""
+        self._mode_transition_revision += 1
         return await self._dnd.enable(duration_minutes, source=source)
 
     async def clear_dnd(self, source: str = "internal") -> dict:
         """Clear DND immediately."""
+        self._mode_transition_revision += 1
         return await self._dnd.clear(source=source)
 
     async def persist_manual_light_ownership(self) -> None:
@@ -4428,6 +4992,31 @@ class AutomationEngine:
         return apply_working_post_sunset_warmth(state, period)
 
     async def _apply_mode(self, mode: str, *, force_resend: bool = False) -> None:
+        """Fence delegated static-mode Hue writes to their originating owner.
+
+        The async task-scoped token follows existing _apply_state and effect
+        delegation to the canonical Hue chokepoint. Other writers (explicit
+        manual, ScreenSync, protected transitions) retain their own leases.
+        """
+        effective = self.effective_mode
+        requested = "general" if mode == "idle" else mode
+        if requested != effective:
+            logger.debug("Rejected stale mode apply: requested=%s owner=%s", mode, effective)
+            return
+        owner = (self._mode_transition_revision, effective)
+        inherited = mode_apply_epoch.get()
+        if inherited is not None and inherited != owner:
+            logger.debug("Rejected superseded reapply owner")
+            return
+        token = mode_apply_epoch.set(owner)
+        try:
+            await self._apply_mode_under_owner(mode, force_resend=force_resend)
+        finally:
+            mode_apply_epoch.reset(token)
+
+    async def _apply_mode_under_owner(
+        self, mode: str, *, force_resend: bool = False,
+    ) -> None:
         """Apply light state for a given mode.
 
         Args:
@@ -4440,6 +5029,13 @@ class AutomationEngine:
                 of sync with the cache). Leave False on periodic reapply
                 ticks so dedup can no-op when nothing changed.
         """
+        # Keep the wrapper's originating intent across every awaited apply.
+        # Reading a fresh epoch on completion would let same-mode ABA win.
+        owner = mode_apply_epoch.get()
+
+        def owner_is_current() -> bool:
+            return owner == (self._mode_transition_revision, self.effective_mode)
+
         if mode != "gaming" and self._screen_sync is not None:
             clear_gaming = getattr(
                 self._screen_sync, "clear_accepted_gaming_state", None,
@@ -4560,6 +5156,7 @@ class AutomationEngine:
             period = "night"
         override_scene = self._scene_overrides.get(mode, {}).get(period)
         self._active_scene_override_key = None
+        self._gaming_scene_transition_pending = False
         atmosphere_plan = (
             await self._plan_living_room_atmosphere(
                 period=period,
@@ -4582,13 +5179,15 @@ class AutomationEngine:
                     or await self._release_external_owners_for_scene()
                 )
             except asyncio.CancelledError:
-                if mode == "gaming":
+                if mode == "gaming" and owner_is_current():
                     self._gaming_scene_transition_pending = False
                 raise
             except Exception:
-                if mode == "gaming":
+                if mode == "gaming" and owner_is_current():
                     self._gaming_scene_transition_pending = False
                 raise
+            if not owner_is_current():
+                return
             if not owners_released:
                 self._gaming_scene_transition_pending = False
                 logger.warning(
@@ -4643,7 +5242,7 @@ class AutomationEngine:
                     else:
                         failure_reason = f"preset '{override_scene}' not in SCENE_PRESETS"
             except asyncio.CancelledError:
-                if mode == "gaming":
+                if mode == "gaming" and owner_is_current():
                     self._gaming_scene_transition_pending = False
                 raise
             except Exception as e:
@@ -4653,6 +5252,9 @@ class AutomationEngine:
                     mode, period, override_scene, e,
                     exc_info=True,
                 )
+
+            if not owner_is_current():
+                return
 
             # No await occurs between clearing this latch and recording a
             # successful scene marker below, so another coroutine cannot enter
@@ -4702,6 +5304,8 @@ class AutomationEngine:
                 "source": source,
                 "reason": failure_reason or "unknown",
             })
+            if not owner_is_current():
+                return
             logger.warning(
                 "Falling back to ACTIVITY_LIGHT_STATES for %s/%s after scene override failure",
                 mode, period,
@@ -4719,6 +5323,8 @@ class AutomationEngine:
         scene_release_baseline: dict[str, dict[str, Any]] = {}
         if gaming_scene_released:
             scene_release_baseline = await self._read_scene_release_baseline()
+            if not owner_is_current():
+                return
             self._invalidate_dedup_cache()
 
         # Gaming has one production composition path. The pure resolver owns
@@ -4980,6 +5586,8 @@ class AutomationEngine:
                         intended_states=state,
                         transitiontime=tt,
                     )
+                if not owner_is_current():
+                    return
                 # Hue can perturb static lamp state while stop_effect_all()
                 # releases a prior effect, after the safety write has already
                 # advanced the normal dedup cache. Atmosphere-owned lights are
@@ -5016,6 +5624,10 @@ class AutomationEngine:
                     )
                 else:
                     applied = await self._apply_state(state, transitiontime=tt)
+            # Hue acceptance can precede awaited logging/settling. A newer
+            # Activity owns accepted caches and scene/atmosphere publication.
+            if not owner_is_current():
+                return
             if gaming_plan is not None and (
                 applied is True
                 or isinstance(applied, LightApplyResult) and not applied.failed
@@ -5915,7 +6527,7 @@ class AutomationEngine:
                     not self._manual_override
                     and self._current_mode in ("idle",)
                 ):
-                    await self._apply_time_based()
+                    await self._apply_mode("idle")
                 elif (
                     not self._manual_override
                     and self._current_mode not in ("idle", "social")

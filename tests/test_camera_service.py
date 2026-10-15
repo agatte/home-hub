@@ -1260,6 +1260,200 @@ class TestModeChangeCallback:
 # ---------------------------------------------------------------------------
 
 
+def _camera_owner_harness():
+    """Load actual callback methods without native/config imports or devices.
+
+    Also runnable by a standalone AST runner in the protected Windows Sandbox.
+    Ordinary pytest still imports the full module and exercises its wiring.
+    """
+    import ast
+    import logging
+    import threading
+    from pathlib import Path
+    from typing import Any, Callable, Optional
+
+    namespace = dict(
+        asyncio=asyncio, threading=threading, Any=Any, Callable=Callable,
+        Optional=Optional, logger=logging.getLogger("camera-owner-test"),
+        CAP_OPEN_WATCHDOG_SECONDS=2, POLL_INTERVAL=2,
+    )
+    root = Path(__file__).resolve().parents[1]
+    for filename, classname, methods in (
+        ("camera_service.py", "CameraService", {
+            "on_mode_change", "close", "_open_capture_async", "_release_capture", "_discard_capture",
+        }),
+        ("automation_engine.py", "AutomationEngine", {
+            "register_on_mode_change", "deregister_on_mode_change", "_mode_transition_is_current",
+            "_dispatch_mode_change_if_current", "_fire_mode_change_callbacks",
+        }),
+    ):
+        tree = ast.parse((root / "backend/services" / filename).read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == classname)
+        cls.body = [n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in methods]
+        exec(compile(ast.Module(body=[cls], type_ignores=[]), filename, "exec"), namespace)
+    camera = namespace["CameraService"]()
+    camera.__dict__.update(
+        _closed=False, _enabled=True, _paused=True, _mode_callback_revision=0,
+        _cap=None, _shadow_coordinator=None, _heartbeat=None, _source_trust=None,
+        _poll_task=None, _face_detector=None, _pose_landmarker=None,
+        _register_camera_sanity=lambda: None, _invalidate_live_detection_state=lambda: None,
+    )
+    engine = namespace["AutomationEngine"]()
+    engine.__dict__.update(
+        _mode_transition_revision=1, current_mode="working", _away_hold=False,
+        _host_return_hold=False, _external_off_detected=False,
+        _on_mode_change_callbacks=[], _owner_guard_callbacks=set(),
+    )
+    engine.register_on_mode_change(camera.on_mode_change, with_owner_guard=True)
+    return camera, engine, namespace
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", ["sleeping", "manual", "activity", "aba", "pause", "close", "valid"])
+async def test_camera_owner_blocked_open(successor):
+    camera, engine, _ = _camera_owner_harness()
+    entered, release = asyncio.Event(), asyncio.Event()
+    cap = MagicMock()
+
+    async def open_capture(**kwargs):
+        entered.set()
+        await release.wait()
+        return cap
+
+    camera._open_capture_async = open_capture
+    task = asyncio.create_task(engine._dispatch_mode_change_if_current("working", 1))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if successor in {"sleeping", "manual", "activity", "aba"}:
+            engine._mode_transition_revision += 1
+            engine.current_mode = "sleeping" if successor == "sleeping" else "watching"
+            if successor == "aba":
+                engine._mode_transition_revision += 1
+                engine.current_mode = "working"
+            # Intentionally do NOT dispatch the newer consumer callback.
+        elif successor == "pause":
+            await camera.on_mode_change("sleeping")
+        elif successor == "close":
+            await camera.close()
+    finally:
+        release.set()
+        await task
+    if successor == "valid":
+        assert camera._cap is cap
+        cap.release.assert_not_called()
+    else:
+        assert camera._cap is None
+        cap.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("abandonment", ["cancel", "timeout"])
+async def test_camera_owner_late_executor_handle_is_released(abandonment):
+    import threading
+    camera, engine, namespace = _camera_owner_harness()
+    loop = asyncio.get_running_loop()
+    entered, closed = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    cap = MagicMock()
+    loop_thread = threading.get_ident()
+
+    def close_cap():
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(closed.set)
+
+    cap.release.side_effect = close_cap
+
+    def open_capture(old):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        return cap
+
+    camera._release_and_open = open_capture
+    real_wait_for = asyncio.wait_for
+    timed_out = asyncio.Event()
+
+    async def controlled_wait_for(awaitable, timeout):
+        # Deterministically expire the opener watchdog after the worker enters.
+        await entered.wait()
+        timed_out.set()
+        raise asyncio.TimeoutError
+
+    if abandonment == "timeout":
+        namespace["asyncio"] = SimpleNamespace(**{
+            **vars(asyncio), "wait_for": controlled_wait_for,
+        })
+    task = asyncio.create_task(camera.on_mode_change("working"))
+    try:
+        await real_wait_for(entered.wait(), 2)
+        if abandonment == "cancel":
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("Cancellation must propagate")
+        else:
+            await real_wait_for(timed_out.wait(), 2)
+            await task
+        assert camera._cap is None
+    finally:
+        release.set()
+        await real_wait_for(closed.wait(), 2)
+    cap.release.assert_called_once()
+    assert camera._cap is None
+
+
+@pytest.mark.asyncio
+async def test_camera_owner_registration_and_original_revision():
+    camera, engine, _ = _camera_owner_harness()
+    legacy = AsyncMock()
+    engine.register_on_mode_change(legacy)
+    camera._open_capture_async = AsyncMock(return_value=None)
+    await engine._dispatch_mode_change_if_current("working", 0)
+    camera._open_capture_async.assert_not_awaited()
+    await engine._dispatch_mode_change_if_current("working", 1)
+    legacy.assert_awaited_once_with("working")
+    engine.deregister_on_mode_change(camera.on_mode_change)
+    assert not engine._owner_guard_callbacks
+    assert engine._on_mode_change_callbacks == [legacy]
+
+
+@pytest.mark.asyncio
+async def test_camera_owner_completed_executor_cancellation_is_released():
+    """Cancel after worker completion but before the awaiting task receives it."""
+    import threading
+    camera, _, namespace = _camera_owner_harness()
+    loop = asyncio.get_running_loop()
+    closed = asyncio.Event()
+    cap = MagicMock()
+    loop_thread = threading.get_ident()
+
+    def close_cap():
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(closed.set)
+
+    cap.release.side_effect = close_cap
+    camera._release_and_open = lambda old: cap
+
+    async def cancel_on_delivery(awaitable, timeout):
+        await awaitable
+        raise asyncio.CancelledError
+
+    namespace["asyncio"] = SimpleNamespace(**{
+        **vars(asyncio), "wait_for": cancel_on_delivery,
+    })
+    try:
+        await camera.on_mode_change("working")
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("Cancellation must propagate")
+    await asyncio.wait_for(closed.wait(), 2)
+    assert camera._cap is None
+    cap.release.assert_called_once()
+
+
 class TestGracefulDegradation:
     """Verify service handles missing camera/dependencies gracefully."""
 

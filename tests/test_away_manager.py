@@ -948,6 +948,7 @@ class TestEngineHooks:
         engine._effect_manager.reconcile = AsyncMock()
 
         engine.arm_away_suppression("geofence:test")
+        engine._current_mode = "working"
         await engine._apply_mode("working", force_resend=True)
         engine._apply_state.assert_not_awaited()
         engine._effect_manager.reconcile.assert_not_awaited()
