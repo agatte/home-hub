@@ -87,6 +87,30 @@ def test_resolver_supports_valheim_and_freeform_mood_text():
     assert {name for name, _ in custom.concepts} == {"dark", "ritual", "drums"}
 
 
+@pytest.mark.parametrize("phrase", [
+    "calm", "calming", "soothing", "peaceful", "play calming music",
+    "relaxing music for a quiet evening", "calming music while working",
+])
+def test_explicit_calm_phrases_resolve_to_relax_preset(phrase):
+    resolved = DeterministicSemanticIntentResolver().resolve(
+        mode="working", request=phrase,
+    )
+    assert resolved.key == "relax"
+    assert {"calm", "chill", "ambient"} <= {name for name, _ in resolved.concepts}
+
+
+def test_mixed_mood_phrase_does_not_get_silently_rewritten_to_relax():
+    resolved = DeterministicSemanticIntentResolver().resolve(
+        mode="social", request="calming but energetic",
+    )
+    assert resolved.key == "calming but energetic"
+    assert "energetic" in {name for name, _ in resolved.concepts}
+    for request in ("not calming", "don't want calming", "avoid calming music"):
+        assert DeterministicSemanticIntentResolver().resolve(
+            mode="working", request=request,
+        ).key != "relax"
+
+
 @pytest.mark.asyncio
 async def test_semantic_fit_reorders_otherwise_equal_candidates():
     source = FakeDiscoverySource([_candidate("Alpha"), _candidate("Zulu")])
@@ -120,6 +144,96 @@ async def test_semantic_failure_preserves_existing_discovery_order_and_score():
 
     expected = await baseline.preview("gaming", policy="gentle")
     actual = await failing.preview("gaming", policy="gentle", intent="energetic")
+
+    assert [(c.artist_name, c.score) for c in actual.clusters] == [
+        (c.artist_name, c.score) for c in expected.clusters
+    ]
+    assert all(c.semantic_score is None for c in actual.clusters)
+
+
+class MoodTagSource:
+    enabled = True
+
+    async def get_semantic_tags(self, artist_name, *, track_name=None, limit=20):
+        if track_name:
+            return []
+        return (
+            [{"name": "chillout"}, {"name": "ambient"}, {"name": "acoustic"}]
+            if artist_name == "Gentle"
+            else [{"name": "hard rock"}, {"name": "energetic"}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_explicit_calming_ranks_verified_mood_tags_above_rock_adjacency():
+    source = FakeDiscoverySource([
+        _candidate("Hard Rock", 0.98),
+        _candidate("Gentle", 0.77),
+    ])
+    service = MusicDiscoveryService(
+        source=source,
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(MoodTagSource()),
+    )
+
+    ordinary = await service.preview("working", policy="gentle")
+    calming = await service.preview("working", policy="gentle", intent="calming")
+
+    assert [cluster.artist_name for cluster in ordinary.clusters] == ["Hard Rock", "Gentle"]
+    assert [cluster.artist_name for cluster in calming.clusters] == ["Gentle", "Hard Rock"]
+    assert calming.clusters[0].semantic_intent == "relax"
+    assert set(calming.clusters[0].matched_semantics) & {"calm", "chill", "ambient", "acoustic"}
+    assert calming.clusters[1].semantic_score == 0
+    assert all(
+        cluster.tracks[0].playback_capability == "metadata_only"
+        for cluster in calming.clusters
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_calming_preserves_baseline_when_semantic_provider_fails():
+    candidates = [_candidate("Hard Rock", 0.98), _candidate("Gentle", 0.77)]
+    baseline = MusicDiscoveryService(
+        source=FakeDiscoverySource(candidates),
+        taste_provider=EmptyTasteProvider(),
+    )
+    outage = MusicDiscoveryService(
+        source=FakeDiscoverySource(candidates),
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=FakeSemanticAnalyzer(fail=True),
+    )
+
+    expected = await baseline.preview("working", policy="gentle", intent="calming")
+    actual = await outage.preview("working", policy="gentle", intent="calming")
+
+    assert [(c.artist_name, c.score) for c in actual.clusters] == [
+        (c.artist_name, c.score) for c in expected.clusters
+    ]
+    assert all(c.semantic_score is None for c in actual.clusters)
+
+
+class EmptyMoodTagSource:
+    enabled = True
+
+    async def get_semantic_tags(self, artist_name, *, track_name=None, limit=20):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_explicit_calming_preserves_baseline_when_tags_have_no_evidence():
+    candidates = [_candidate("Hard Rock", 0.98), _candidate("Gentle", 0.77)]
+    baseline = MusicDiscoveryService(
+        source=FakeDiscoverySource(candidates),
+        taste_provider=EmptyTasteProvider(),
+    )
+    empty_tags = MusicDiscoveryService(
+        source=FakeDiscoverySource(candidates),
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(EmptyMoodTagSource()),
+    )
+
+    expected = await baseline.preview("working", policy="gentle", intent="calming")
+    actual = await empty_tags.preview("working", policy="gentle", intent="calming")
 
     assert [(c.artist_name, c.score) for c in actual.clusters] == [
         (c.artist_name, c.score) for c in expected.clusters
