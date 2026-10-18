@@ -177,9 +177,13 @@ async def test_explicit_calming_ranks_verified_mood_tags_above_rock_adjacency():
     )
 
     ordinary = await service.preview("working", policy="gentle")
-    calming = await service.preview("working", policy="gentle", intent="calming")
+    inferred = await service.preview("working", policy="gentle", intent="calming")
+    calming = await service.preview(
+        "working", policy="gentle", intent="calming", explicit_user_intent=True,
+    )
 
     assert [cluster.artist_name for cluster in ordinary.clusters] == ["Hard Rock", "Gentle"]
+    assert [cluster.artist_name for cluster in inferred.clusters] == ["Hard Rock", "Gentle"]
     assert [cluster.artist_name for cluster in calming.clusters] == ["Gentle", "Hard Rock"]
     assert calming.clusters[0].semantic_intent == "relax"
     assert set(calming.clusters[0].matched_semantics) & {"calm", "chill", "ambient", "acoustic"}
@@ -203,8 +207,12 @@ async def test_explicit_calming_preserves_baseline_when_semantic_provider_fails(
         semantic_analyzer=FakeSemanticAnalyzer(fail=True),
     )
 
-    expected = await baseline.preview("working", policy="gentle", intent="calming")
-    actual = await outage.preview("working", policy="gentle", intent="calming")
+    expected = await baseline.preview(
+        "working", policy="gentle", intent="calming", explicit_user_intent=True,
+    )
+    actual = await outage.preview(
+        "working", policy="gentle", intent="calming", explicit_user_intent=True,
+    )
 
     assert [(c.artist_name, c.score) for c in actual.clusters] == [
         (c.artist_name, c.score) for c in expected.clusters
@@ -232,8 +240,12 @@ async def test_explicit_calming_preserves_baseline_when_tags_have_no_evidence():
         semantic_analyzer=LastFmSemanticAnalyzer(EmptyMoodTagSource()),
     )
 
-    expected = await baseline.preview("working", policy="gentle", intent="calming")
-    actual = await empty_tags.preview("working", policy="gentle", intent="calming")
+    expected = await baseline.preview(
+        "working", policy="gentle", intent="calming", explicit_user_intent=True,
+    )
+    actual = await empty_tags.preview(
+        "working", policy="gentle", intent="calming", explicit_user_intent=True,
+    )
 
     assert [(c.artist_name, c.score) for c in actual.clusters] == [
         (c.artist_name, c.score) for c in expected.clusters

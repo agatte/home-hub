@@ -77,13 +77,17 @@ class FakeDiscovery:
             to_dict=lambda: {"status": "shadow_ready", "clusters": [{"artist_name": "New Artist"}]},
         )
 
-    async def preview(self, mode, *, policy="gentle", count=6, tracks_per_artist=3, intent=None):
+    async def preview(
+        self, mode, *, policy="gentle", count=6, tracks_per_artist=3,
+        intent=None, explicit_user_intent=False,
+    ):
         self.calls.append({
             "mode": mode,
             "policy": policy,
             "count": count,
             "tracks_per_artist": tracks_per_artist,
             "intent": intent,
+            "explicit_user_intent": explicit_user_intent,
         })
         return self.result
 
@@ -185,6 +189,7 @@ async def test_new_music_request_uses_only_bounded_discovery_lane():
     assert discovery.calls == [{
         "mode": "working", "policy": "explore", "count": 6,
         "tracks_per_artist": 3, "intent": None,
+        "explicit_user_intent": False,
     }]
 
 
@@ -198,6 +203,7 @@ async def test_mood_request_targets_five_familiar_to_one_discovery_at_six_result
     assert discovery.calls == [{
         "mode": "working", "policy": "gentle", "count": 1,
         "tracks_per_artist": 3, "intent": "I'm feeling energetic",
+        "explicit_user_intent": True,
     }]
     payload = result.to_dict()
     assert payload["resolved_request"]["semantic_key"] == "energetic"

@@ -202,6 +202,7 @@ class MusicDiscoveryService:
         count: int = 6,
         tracks_per_artist: int = 3,
         intent: Optional[str] = None,
+        explicit_user_intent: bool = False,
     ) -> MusicDiscoveryResult:
         if policy not in DISCOVERY_POLICIES:
             raise ValueError(f"unsupported discovery policy: {policy}")
@@ -262,7 +263,9 @@ class MusicDiscoveryService:
                 policy=policy,
                 snapshot=snapshot,
                 semantic_intent=semantic_intent,
-                explicit_intent=bool(intent and intent.strip()),
+                explicit_intent=(
+                    explicit_user_intent and bool(intent and intent.strip())
+                ),
             )
             if cluster is not None:
                 clusters.append(cluster)
