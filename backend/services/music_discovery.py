@@ -16,6 +16,9 @@ from backend.services.playlist_catalog import MusicCatalog
 
 DISCOVERY_POLICIES = ("gentle", "explore")
 DISCOVERY_SOURCE_CACHE_TTL = timedelta(hours=1)
+# A deliberate calming request should favor matched mood tags over artist
+# similarity. This applies only when the semantic provider returned evidence.
+EXPLICIT_RELAX_SEMANTIC_WEIGHT = 0.60
 
 
 class MusicDiscoverySource(Protocol):
@@ -199,6 +202,7 @@ class MusicDiscoveryService:
         count: int = 6,
         tracks_per_artist: int = 3,
         intent: Optional[str] = None,
+        explicit_user_intent: bool = False,
     ) -> MusicDiscoveryResult:
         if policy not in DISCOVERY_POLICIES:
             raise ValueError(f"unsupported discovery policy: {policy}")
@@ -259,6 +263,9 @@ class MusicDiscoveryService:
                 policy=policy,
                 snapshot=snapshot,
                 semantic_intent=semantic_intent,
+                explicit_intent=(
+                    explicit_user_intent and bool(intent and intent.strip())
+                ),
             )
             if cluster is not None:
                 clusters.append(cluster)
@@ -284,6 +291,7 @@ class MusicDiscoveryService:
         policy: str,
         snapshot: Any,
         semantic_intent: SemanticIntent,
+        explicit_intent: bool = False,
     ) -> Optional[DiscoveryArtistCluster]:
         artist_name = str(candidate.get("artist_name") or "").strip()
         seed_artist = str(candidate.get("seed_artist") or "").strip()
@@ -415,7 +423,18 @@ class MusicDiscoveryService:
                 semantic_match = SemanticMusicMatch(available=False)
         score = base_score
         if semantic_match.available:
-            score = 0.85 * base_score + 0.15 * semantic_match.score
+            # Source/taste adjacency is still evidence, but a manually requested
+            # calm mood must not be overwhelmed by similar (possibly loud) artists.
+            # Missing/failed semantic evidence retains the exact baseline score.
+            semantic_weight = (
+                EXPLICIT_RELAX_SEMANTIC_WEIGHT
+                if explicit_intent and semantic_intent.key == "relax"
+                else 0.15
+            )
+            score = (
+                (1.0 - semantic_weight) * base_score
+                + semantic_weight * semantic_match.score
+            )
         score = max(0.0, min(1.0, score))
 
         reasons = [

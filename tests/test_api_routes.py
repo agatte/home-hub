@@ -169,11 +169,16 @@ class TestMusicAPI:
                 }
 
         class FakeDiscovery:
-            async def preview(self, mode, *, policy, count, tracks_per_artist, intent=None):
+            async def preview(
+                self, mode, *, policy, count, tracks_per_artist,
+                intent=None, explicit_user_intent=False,
+            ):
                 assert mode == "gaming"
                 assert policy == "explore"
                 assert count == 4
                 assert tracks_per_artist == 2
+                assert intent == "valheim"
+                assert explicit_user_intent is True
                 return FakeResult()
 
         app.state.music_discovery = FakeDiscovery()

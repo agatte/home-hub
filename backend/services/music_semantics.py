@@ -78,6 +78,10 @@ INTENT_ALIASES = {
     "party": "social",
     "work": "working",
     "relaxing": "relax",
+    "calm": "relax",
+    "calming": "relax",
+    "soothing": "relax",
+    "peaceful": "relax",
     "viking": "valheim",
     "norse": "valheim",
 }
@@ -104,6 +108,21 @@ class DeterministicSemanticIntentResolver:
                     concepts=INTENT_PRESETS[preset_key],
                     provenance=("deterministic_preset_from_phrase",),
                 )
+        # Preserve an unambiguous calm-mood request even when accompanied by
+        # ordinary context (e.g. "relaxing music for a quiet evening"). Mixed,
+        # negated, or conflicting requests keep their original free-text tokens.
+        calm_words = {"calm", "calming", "relax", "relaxing", "soothing", "peaceful"}
+        conflicting_words = {
+            "not", "energetic", "upbeat", "fast", "loud", "intense", "party",
+            "dance", "dancing", "valheim", "viking", "norse", "gameday",
+            "no", "dont", "don", "without", "avoid", "never",
+        }
+        if calm_words.intersection(words) and not conflicting_words.intersection(words):
+            return SemanticIntent(
+                key="relax",
+                concepts=INTENT_PRESETS["relax"],
+                provenance=("deterministic_calm_mood_phrase",),
+            )
         seen: set[str] = set()
         concepts: list[tuple[str, float]] = []
         for word in words[:8]:
