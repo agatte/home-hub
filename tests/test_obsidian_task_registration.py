@@ -15,6 +15,10 @@ from test_obsidian_schedule_launcher import spec
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/register_obsidian_mirror_task.ps1"
 PS = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
+# The mocked COM/AST checks require native Windows PowerShell. Linux CI cannot run them.
+# Keep the full suite active in the protected Windows Sandbox instead of failing on Linux.
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows PowerShell")
+
 
 def ps(code, functions=True):
     prefix = ""
