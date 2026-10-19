@@ -148,13 +148,10 @@ Remaining concrete gates, in order:
    bundle manifest/action digest. No source worktree may be the installed bundle.
 2. Separately authorize host bundle preparation. Verify pinned installed bytes
    and Python compatibility; preserve prior versions. No host preparation here.
-3. **Installer integration remains intentionally unimplemented:** this slice uses
-   the permitted pure XML builder. A future registration adapter must require two
-   exact operator-controlled keys plus separate disabled-registration approval,
-   create only the named disabled task, refuse an existing task, and neither start
-   nor enable it. XML must first be schema/import tested on Windows with a mocked
-   adapter; actual registration needs separate host authorization. Merely staging
-   a bundle or generating XML grants neither registration nor activation.
+3. The local disabled-only adapter below is implemented but real Windows identity,
+   COM/schema import and registration remain unverified. Actual registration needs
+   separate host authorization. Staging or generating XML grants neither
+   registration nor activation.
 4. Separately approve activation. Record task definition/digest, SID, interpreter,
    bundle pins and target; offer optional app-closed preference (not a requirement).
    Physically verify logon/reboot, logged-off skip, offline/no-change/forward update,
@@ -165,6 +162,115 @@ Remaining concrete gates, in order:
 `plan_obsidian_schedule.py` remains an older pure advisory JSON interface; its
 `implemented=false` and gates describe that planner output, not this launcher.
 No registration/activation shortcut was added to it.
+
+## Disabled-only registration adapter (local, unpublished 2026-10-19)
+
+Worktree `obsidian-register-399-20261019`, branch
+`work/399-disabled-registration-20261019`, baseline
+`c63996ee19739ee6cd5d984ea257dadaade5ad62`: the uncommitted
+`scripts/register_obsidian_mirror_task.ps1` adds native ordinary-user registration
+code. No Scheduler connection or registration was performed during implementation.
+This supersedes the earlier installer-unimplemented statement only; no host gate
+is satisfied. Network/GitHub status was not fetched.
+
+No arguments prints OFF without identity, filesystem or COM probes. Explicit
+`-Check` requires the same literal name, XML digest and path as registration and
+validates read-only without connecting to Scheduler. Both switches together refuse.
+The XML must be a separately reviewed existing UTF-8 local file. The manifest's
+digest is bound by the approved XML's exact action; all nine source hashes are also
+pinned in the adapter. Review updates to these pins as a new candidate, never
+regenerate them to accept unexplained drift. Validation accepts the exact builder
+tree (including element order and attributes), not arbitrary Scheduler XML.
+It does not claim to implement Microsoft's full schema validator.
+
+Future operator procedure, **each host write separately authorized**:
+
+1. Review/publish this candidate and the launcher/package candidate. On ordinary
+   real Windows, independently review the unelevated interactive
+   account/SID/profile, entire user-local Python runtime/ACLs, existing Vault and
+   bundle parent. An account with local Administrators membership may run in an
+   ordinary UAC-filtered, unelevated session; an elevated/high-integrity token
+   remains refused by the effective WindowsPrincipal.IsInRole Administrator check.
+   Separately authorize and stage the exclusive stable bundle using the package
+   procedure above; retain old versions. Do not install from a worktree.
+2. Generate XML with the pure builder and store it in a separately reviewed local
+   file using explicit UTF-8 without BOM. Review its exact bytes, SHA-256, manifest
+   digest, identity, paths, module/runtime hashes and action. Saving that file is
+   an operator staging action, never an implicit adapter write.
+3. In native Windows PowerShell as that signed-in ordinary user, run the reviewed
+   adapter with `-Check -ApproveTaskName 'HomeHub Obsidian Mirror Refresh'
+   -ApproveXmlSha256 '<reviewed lowercase 64 hex>' -XmlPath '<literal absolute XML path>'`.
+   Inspect the fixed `validated_plan_only` result. No task lookup occurs in check
+   mode. Obtain separate approval for disabled registration, then use the identical
+   arguments with `-RegisterDisabled` replacing `-Check`. Never execute this step
+   in protected Sandbox or via Host Bridge under the present authorization.
+4. The adapter enumerates root tasks (including hidden), refuses any case-insensitive
+   exact name/path collision or lookup error, and calls COM `RegisterTask` only
+   with TASK_CREATE=2, current SID, null password, InteractiveToken=3. There is no
+   replacement, elevation, credential, enable, start or deletion path. It verifies
+   both the returned task and a fresh lookup: disabled, principal, URI, triggers,
+   non-termination/settings policy and exact single executable action. Inspect the
+   task in Scheduler UI and retain the reviewed XML/digests plus observed definition
+   and status externally. Schema normalization or any postflight uncertainty emits
+   `registration_uncertain_STOP_manual_review_preserve_task`; do not retry, delete
+   or repair automatically. Retain the task and evidence for manual review.
+5. Enabling is a later separate authorization and native Task Scheduler UI action;
+   this adapter contains no activation code. Only after that approval, physically
+   test signed-in logon and hourly cadence, reboot, logged-off skip, offline skip,
+   no-change and forward update, Obsidian-open operation, personal/settings/backup
+   preservation, overlap and interruption behavior. Record definition/digests,
+   times, results and retained evidence. DST and no-total-deadline policy still
+   require acceptance. Separately authorized rollback disables only this exact task
+   in UI and retains bundles, Vault, locks and backups.
+
+All path components must exist and be literal absolute local paths without reparse
+ancestors; no path creation, variable expansion or shell interpreter is accepted.
+Identity uses WindowsIdentity SID/account round-trip and actual profile rather than
+environment username. Session zero, unauthenticated/system accounts and elevated
+Administrator tokens refuse. Raw Administrators SID membership may be deny-only
+in an ordinary UAC-filtered token and is not grounds for refusal. Physical logged-on
+state, profile resolution,
+Scheduler COM normalization and XML import still require native host evidence.
+Offline tests cannot prove them. Cooperative hash checks have race limits and do
+not isolate against same-user malware or prove the whole Python installation safe.
+
+Safe review fix, 2026-10-19, remains local and uncommitted in
+`C:\Work\home-hub-project\worktrees\obsidian-register-399-20261019`, base
+`c63996ee19739ee6cd5d984ea257dadaade5ad62`. Removed the raw Administrators-group
+rejection found by independent review; authentication/system, effective admin
+role, interactive/session, SID/account round-trip and profile checks remain.
+A separable token-policy helper exercises deny-only admin-capable acceptance and
+`IsInRole(Administrator)=true` refusal, plus invalid token/session cases.
+
+The adapter tests now execute the complete original main validation body extracted
+through PowerShell AST, with only exit statements rewritten to returns and catch
+instrumentation to assert the precise refusal reason. Synthetic identity, path
+metadata, directory enumeration, XML/manifest/runtime bytes and bounded read
+methods replace OS dependencies. The nine source files are read from this reviewed
+repository and hashed against the adapter's real pins; no writer imports execute.
+The success case reaches `validated_plan_only` after all twelve bounded reads.
+Mutation cases cover missing/extra/unpinned source membership, stale identity,
+source revision, manifest keys, runtime digest/path, Vault/path refusal, stale
+manifest anchor/XML digest and enabled XML. A Scheduler factory tripwire and
+call-count assertion prove Check never connects, on success or refusal.
+These are simulated filesystem/identity results, not proof of native Windows
+identity translation, profile resolution, ACLs, reparse detection or Scheduler
+schema/COM normalization. Those require separately authorized host acceptance.
+
+The pre-review baseline was 212 tests and 46 subtests (174 existing tests plus
+38 adapter tests). Review-fix validation: **245 tests and 46 subtests passed**
+(174 existing tests plus 71 adapter cases), in 141.20 seconds, with:
+
+```powershell
+& C:\Work\home-hub-project\main\.venv\Scripts\python.exe -B -m pytest -q -p no:cacheprovider tests/test_obsidian_schedule_launcher.py tests/test_plan_obsidian_schedule.py tests/test_run_obsidian_simple_mirror.py tests/test_obsidian_simple_mirror.py tests/test_obsidian_raw_blob_transport.py tests/test_obsidian_task_registration.py
+```
+
+The absolute sibling `ruff.exe check --no-cache` passed for those six test files
+and the six Python scripts (launcher, package, planner, runner, mirror, raw
+transport). Native PowerShell Parser: **0 errors**. `git diff --check` passed;
+status contains exactly this document, the registration adapter and its test file.
+No task installed, no real host identity/schema proof, no secrets, network fetch,
+commit or push.
 
 ## Offline evidence
 
