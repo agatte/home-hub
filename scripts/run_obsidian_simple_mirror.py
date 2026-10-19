@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from obsidian_github_docs_source import SourceUnavailable, github_json, prepare_current_docs
+from obsidian_raw_blob_transport import github_raw_blob
 from obsidian_simple_mirror import _guard, _refuse_active_evidence, _sealed, run_once
 
 
@@ -29,7 +30,7 @@ def exact_path(raw: str) -> Path:
     return path
 
 
-def main(argv=None, *, fetch=github_json, blob_source=None, output=None) -> int:
+def main(argv=None, *, fetch=None, blob_source=None, output=None) -> int:
     """Emit bounded JSON; transports are injectable for offline fixture tests.
 
     Exit 0: no change/updated, 1: update available, 2: refused,
@@ -43,6 +44,12 @@ def main(argv=None, *, fetch=github_json, blob_source=None, output=None) -> int:
     parser.add_argument("--expected-vault", required=True)
     parser.add_argument("--approve-local-evaluation", action="store_true")
     args = parser.parse_args(argv)
+    # Only the production default selects raw content. Injected API fixtures
+    # retain their in-memory REST blobs unless they also inject a blob source.
+    if fetch is None:
+        fetch = github_json
+        if blob_source is None:
+            blob_source = github_raw_blob
     report = {}
     try:
         vault, expected = exact_path(args.vault), exact_path(args.expected_vault)
