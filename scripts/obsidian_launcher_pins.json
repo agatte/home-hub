@@ -1,0 +1,14 @@
+{
+  "files": {
+    "create_obsidian_pilot.py": "d79b6788ede512dcccaebe226ffa79d0621b7a1db6f68302514bcda21b14542a",
+    "launch_obsidian_mirror.py": "e8771f93a7c8d694242b2e4015f369e9daea11e8e564ccb56da3ac0a6e29efcd",
+    "manage_obsidian_vault.py": "0fc3981bdad21fe384db3ceae99e46b2bbad142d941272a681430dda82157500",
+    "obsidian_github_docs_source.py": "1d4cddd425c0f4f961fb20654851417aaae39c25429ba66e99208b9137450526",
+    "obsidian_raw_blob_transport.py": "0b44b30519bf6ce7ae2065a51a2d210405290983e21cdb412ff4b48ea88e48d8",
+    "obsidian_simple_mirror.py": "de9a0b6cb5a5919e9832788b904145f6aa0eb1caaccbd5365990ff2d51f318e6",
+    "obsidian_source_verifier.py": "eabd0a292a5268903e8fa47b4ea4bc1c49af473ee27bd2324303a9ee2d4fdfbe",
+    "obsidian_verified_stage.py": "a69a38ca77e8f5444911aca06a949ababd8f407bb8aba6f49baf0b6742f24682",
+    "run_obsidian_simple_mirror.py": "4f8859954d96b6496660e2faacc19b3a9c7e44f7f9bca2b8032e2fbb5dfd3fef"
+  },
+  "source_commit": "f91407d165fd1263319bbadc45586da3681560aa"
+}

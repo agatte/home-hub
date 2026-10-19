@@ -1,193 +1,188 @@
-# #399 scheduled mirror candidate: OFF, plan only
+﻿# #399 scheduled mirror launcher candidate: OFF, not installed
 
-2026-10-19 development handoff at `4156e2d93a7cdc991783d3831bb74ecd0e243aa5`.
-A pure JSON planner is provided; no launcher, installer, task XML, registration
-or activation is shipped here. There is no dormant activation command. Stable
-installation identity and timeout policy remain open before installation review.
-The [one-shot CLI](OBSIDIAN_SIMPLE_MIRROR_RUNNER.md) is the existing code boundary.
+Local Sandbox implementation, 2026-10-19, based on
+`f91407d165fd1263319bbadc45586da3681560aa`, branch
+`work/399-hourly-launcher-20261019`, worktree
+`C:\Work\home-hub-project\worktrees\obsidian-hourly-launcher-399-20261019`.
+Changes are uncommitted and unpublished. No permanent Vault, Scheduler, service,
+Host Bridge, credentials or network was accessed by this implementation task.
 
-## Evidence and accepted behavior
+## Authority and accepted behavior
 
-The supplied #399 task input reports successful permanent Windows one-shot apply
-and operator GUI acceptance at the base SHA. This is operator-reported, not
-independently reproduced here; byte-exact personal-note and prior-backup hashes
-were not persisted. No network or permanent Vault inspection is authorized here.
-Automatic refresh remains OFF.
+The supplied #399 product contract and operator decisions are the offline issue
+record for this task; GitHub was not fetched. October 18 accepted the regenerable
+mirror, Obsidian remaining open, brief mixed versions and cooperative races.
+Unknown edits, locks, interruptions and incomplete evidence refuse without cleanup.
+Personal notes, `.obsidian` and historical backups remain outside refresh scope.
+The supplied physical one-shot acceptance is operator-reported, not reproduced here.
+Older atomic-swap/app-closure requirements do not block this simplified runner.
 
-The supplied October 18 decision accepts rebuildable generated `HomeHub Source`,
-brief mixed versions and Obsidian remaining open. Cooperative app-open write
-races remain possible: this is not an atomic transaction or security boundary.
-Older [sync proposals](OBSIDIAN_SYNC_DESIGN.md) and
-[persistent Vault guidance](OBSIDIAN_PERSISTENT_VAULT.md) are superseded for this
-runner where they require all-launch-path owner checks, app closure or directory
-swaps. Do not restore those as blockers. Preserve notes, `.obsidian` and all
-historical backups; never clean. Unknown or interrupted evidence requires review.
+October 19 accepted hourly plus user-specific logon while signed in:
+[#399 cadence decision](https://github.com/agatte/home-hub/issues/399#issuecomment-6260713157).
+No logged-out operation, catch-up, wake, restart or retry. Automatic refresh is OFF.
+The existing [one-shot CLI](OBSIDIAN_SIMPLE_MIRROR_RUNNER.md) remains the writer.
 
-## Accepted cadence; task contract pending security review
+## Executable implementation
 
-| Item | Candidate |
+- `scripts/launch_obsidian_mirror.py`: default prints `{"status": "off"}`;
+  no local writer imports or path probes. Scheduled execution requires both
+  `--run --anchor <reviewed manifest SHA-256>` and Python `-I -B`.
+- `scripts/package_obsidian_schedule.py`: default is OFF. Pure `--xml` builds
+  disabled XML on stdout. Explicit two-key `--stage --approve-stage <exact bundle>`
+  prepares a new bundle, never registers a task. No registration or activation
+  API, password, elevated principal, shell invocation or task replacement exists.
+- `scripts/obsidian_launcher_pins.json`: static candidate pins for the reviewed
+  base revision's eight local writer modules plus this new launcher. The launcher
+  never creates or updates pins. Candidate launcher bytes are additions to that
+  base. The `source_commit` label is the baseline SHA, **not a claim that the base Git commit already contains this launcher**.
+  Review and publish these additions before approving an installation; retain the
+  exact file hashes as the candidate build identity.
+
+The exact local import closure is `run_obsidian_simple_mirror`,
+`obsidian_simple_mirror`, `obsidian_github_docs_source`,
+`obsidian_raw_blob_transport`, `obsidian_source_verifier`,
+`obsidian_verified_stage`, `manage_obsidian_vault`, `create_obsidian_pilot`.
+The last two are transitive dependencies even though their management commands
+are never called. An AST inventory regression test checks this closure.
+Only these eight `.py` files, the launcher and `manifest.json` may exist in the
+installed directory. Missing/extra files (including caches), pin changes,
+reparse/symlink ancestors and path misbindings refuse before local imports.
+
+The launcher compares a manifest's bytes to the **external task-action digest**,
+then validates its exact schema, fixed base SHA, module set, canonical Windows
+paths, process-token SID/profile/elevation/session and exact interpreter path/hash.
+The bundle must be exactly
+`C:\Users\<ordinary user>\AppData\Local\HomeHub\ObsidianMirror\f91407d165fd1263319bbadc45586da3681560aa`.
+Python must be explicitly user-local; Vault must be explicitly under that user's
+profile, outside the bundle. No environment identity or target default is used.
+The current process must be unelevated and outside session zero. Scheduler's
+InteractiveToken principal is the additional signed-in execution constraint.
+
+Verified module bytes are retained in memory and imported by an explicit loader;
+module preloading refuses. Isolated Python excludes working-directory/user-site
+imports. The selected Python installation, standard library, DLLs and its ordinary
+user profile ACLs still need independent host review. Hashing `python.exe` alone
+is not a signature for the full Python runtime. Launcher self-checks detect drift
+in a cooperative installation; they cannot defend against malicious code replacing
+the launcher itself. Same-user malware resistance is explicitly out of scope.
+No complex anti-malware/ACL framework is introduced.
+
+The launcher calls the existing CLI exactly once, in process, with fixed
+`--apply --approve-local-evaluation --vault <fixed Vault> --expected-vault <same>`.
+It does not perform a separate source acquisition/check. Source unavailability
+skips without fallback; existing writer lock/pending checks protect manual races.
+No child process exists to orphan. The only output is a bounded status JSON with
+validated SHA labels; incidental stdout/stderr is discarded, report capture is
+limited to 512 characters, and exception contents are never emitted. There are no
+persistent logs. Both launcher and package builder refuse malformed arguments with
+one fixed bounded JSON status and exit 2, without echoing argv to stderr; explicit
+`--help` retains its fixed display and successful exit. Strict flag spelling remains
+required (`allow_abbrev=False`). Invalid report/status/exit requires review, never an internal retry.
+
+## Package and XML interface (future approved operator use)
+
+All examples here describe a future approved host operation, **not authorization**.
+Use the reviewed ordinary user's Python with `-B` for the package builder. Its
+`--spec-json` argument is one literal JSON object, not an environment expansion or
+shell-generated command. Required exact keys:
+
+| Key | Value |
 | --- | --- |
-| Identity | One exact named task; ordinary current user's SID, InteractiveToken, Limited; no password, elevation, service or machine task |
-| Triggers | **ACCEPTED HOURLY + LOGIN**: user-specific logon plus hourly clock triggers while the ordinary user is signed in |
-| Reboot | Resume after that user's logon; no logged-out unattended operation |
-| Missed runs | No catch-up burst, wake-to-run or failure restart; next normal trigger only |
-| Concurrency | MultipleInstances IgnoreNew plus existing one-shot exact-lock and pending-evidence refusal, including manual-run races |
-| Network | No connectivity probe or alternate source; verified acquisition returns unavailable when offline, skipping that occurrence without retries |
-| Action | Absolute pinned Python and stable reviewed launcher, fixed argv, exact Vault and expected-Vault; no shell, environment expansion or extra arguments |
-| Lifecycle | Immutable versioned user-local reviewed bundle; no disposable worktree, Git pull or self-update |
-| Reporting | Bounded fixed status and SHA labels; no exception text, transport payloads or contents; no persistent log by default |
-| Preservation | No backup rotation, cleanup, settings writes, lock removal or forced task replacement |
+| `source_commit` | Fixed base SHA above |
+| `user_root` | Exact `C:\Users\<ordinary user>` |
+| `sid` | Reviewed ordinary current-user SID |
+| `bundle` | Exact versioned user-local directory above |
+| `python` | Reviewed user-local absolute `python.exe` |
+| `python_sha256` | Independently checked interpreter digest |
+| `vault` | Exact existing accepted Vault path |
+| `files` | Exact filename-to-SHA256 mapping from static pins |
 
-Cadence authority is the operator decision in [#399 comment 6260713157](https://github.com/agatte/home-hub/issues/399#issuecomment-6260713157),
-as supplied to this offline task: once per hour plus login, replacing the four-hour
-proposal. No network verification was performed. Ordinary user only, InteractiveToken,
-least privilege (Scheduler XML `LeastPrivilege`, API `Limited`); logged-off triggers
-are skipped, no backlog catch-up, restart or wake. The proposed calendar is daily
-local midnight with PT1H repetition for P1D, plus that user's logon trigger.
-Logon and an adjacent hourly trigger can both occur; IgnoreNew skips overlap,
-not sequential invocations. DST/clock behavior needs physical Windows verification.
+`--spec-json <object> --xml` emits disabled XML without probing paths or writing
+anything. The action contains `-I -B "<bundle>\launch_obsidian_mirror.py" --run
+--anchor <manifest digest>`. Manifest bytes are deterministic UTF-8 JSON with
+sorted keys and compact separators, no newline. Independently review these exact
+bytes and the resulting digest/action; a computed digest is a review artifact,
+not automatic approval. Never regenerate a new manifest to bless unexpected drift.
 
-At the accepted 58-file snapshot each occurrence acquires 58 raw requests plus
-five anonymous GitHub REST requests for identical source or six for changed
-source. Login adds another occurrence. Counts vary with source membership;
-shared quotas, raw limits and availability mean no rate-limit guarantee.
-Offline acquisition fails closed with no fallback or retry.
+After separate installation approval, the staging interface is
+`--spec-json <object> --stage --approve-stage <exact bundle>
+--reviewed-pins-sha256 <independently reviewed static pins file digest>`.
+Both keys and the pins digest are required. The bundle parent must already exist
+and have separately reviewed identity/permissions. Staging verifies all source
+bytes and interpreter before creating the exclusive new version directory;
+existing destinations refuse. Partial packaging is retained for manual review;
+there is no overwrite, cleanup, repair, self-update or backup rotation.
+No actual stable host bundle was prepared in this task; tests stage TEMP only.
 
-`scripts/plan_obsidian_schedule.py` prints deterministic JSON to stdout only.
-All eight parameters are required: `--user-root`, `--bundle`, `--python`, `--vault`,
-`--expected-vault`, `--user-sid`, `--source-commit`, `--manifest-sha256`.
-No environment defaults, extra arguments, credential, elevation, registration
-or activation flags exist. Missing parameters refuse. It never probes a path,
-imports the writer, creates files, calls Scheduler, spawns or accesses network.
-Its process disables bytecode caching; direct use should also use `python -B`.
+The pure XML builder specifies exactly `HomeHub Obsidian Mirror Refresh`,
+InteractiveToken, LeastPrivilege, matching user logon and daily midnight calendar
+with PT1H/P1D repetition. Settings are Enabled=false, IgnoreNew,
+StartWhenAvailable=false, WakeToRun=false, no RestartOnFailure,
+ExecutionTimeLimit=PT0S, AllowHardTerminate=false; battery transitions do not kill
+writes. It supplies absolute interpreter, launcher and working directory.
+Logon and an adjacent hourly trigger can run sequentially; IgnoreNew only skips
+overlap. DST and missed-trigger semantics still require physical acceptance.
 
-The plan is disabled and explicitly unverified, not importable task XML. Its
-future action record names reviewed user-local Python with `-I -B` and a fixed
-`launch_obsidian_mirror.py` in the exact versioned bundle. That launcher does
-not exist in this slice and the action must not be executed. The fixed CLI argv
-records the existing one-shot apply, not a second writer. The bundle must be
-`<explicit C:\Users\ordinary-user>\AppData\Local\HomeHub\ObsidianMirror\<40hex SHA>`;
-worktrees cannot be installed sources. Python must be an explicit user-local
-`python.exe`; the planner does not establish its provenance. No secrets are inputs.
-Lexical validation is not host identity, ACL, reparse, pin or review verification.
-Caller-provided SHA/digest labels cannot prove source review or bless a bundle.
+## Runtime policy and remaining gates
 
-Keep check-only evaluation separate from approved scheduled apply. An approved
-occurrence calls the CLI once with fixed apply mode and its required approval
-argument. Do not check then apply as two acquisitions or treat check exit 1 as
-write approval. Identical commit writes nothing; update reacquires and validates
-source, seals backup first and produces the completed receipt.
+Runtime uses the existing bounded per-request transport (12 seconds per request),
+bounded file sizes/membership and in-process ownership. **There is no total wall
+clock deadline.** Scheduler must not kill a write: PT0S and no hard termination
+are deliberate. A slow/hung instance holds IgnoreNew until it finishes; external
+logoff/shutdown/kill can still interrupt the process. Preserve all interruption
+evidence. Before activation, measure worst-case acquisition on the selected host
+and approve this no-forced-termination policy. A safe total deadline would require
+cooperative cancellation before the writer's mutation boundary, not a child kill.
+No physical runtime/termination proof is claimed by offline tests.
 
-## Stable installation and integrity gate
+At the previously accepted 58-file snapshot each occurrence uses 58 anonymous raw
+requests plus five GitHub metadata requests if identical or six if changed.
+Offline/rate limits can skip occurrences; no availability/quota guarantee is made.
+Successful updates retain backups/completed evidence indefinitely. Capacity and
+manual review remain necessary; **no automatic backup retention or cleanup**.
 
-Review exact stable user-local version directory, interpreter, Vault spelling and
-user identity before generating an actionable task. Installation needs separate
-host approval. Do not install from this worktree or align host main. Retain old
-bundles without cleanup.
+Remaining concrete gates, in order:
 
-Pin reviewed source Git SHA plus SHA-256 for launcher, complete transitive local
-module bundle, interpreter and configuration. Enumerate dependencies from code,
-not just the entrypoint. Pin the manifest digest in the separately reviewed task
-action/launcher trust anchor; an editable self-blessing manifest is insufficient.
-Reject missing, added, changed, linked/reparse files and untrusted roots before
-import/spawn. Isolate Python imports from working directory, user site and
-environment; disable bytecode writes. Test compatibility with the selected
-installed Python before registration. Pins detect drift, not a malicious same-user
-actor able to rewrite task and trust anchor, nor all validation/use races.
+1. Independent review/publication of candidate code, static pins and tests. Review
+   exact ordinary-user identity, user-local Python/runtime, fixed Vault and stable
+   bundle manifest/action digest. No source worktree may be the installed bundle.
+2. Separately authorize host bundle preparation. Verify pinned installed bytes
+   and Python compatibility; preserve prior versions. No host preparation here.
+3. **Installer integration remains intentionally unimplemented:** this slice uses
+   the permitted pure XML builder. A future registration adapter must require two
+   exact operator-controlled keys plus separate disabled-registration approval,
+   create only the named disabled task, refuse an existing task, and neither start
+   nor enable it. XML must first be schema/import tested on Windows with a mocked
+   adapter; actual registration needs separate host authorization. Merely staging
+   a bundle or generating XML grants neither registration nor activation.
+4. Separately approve activation. Record task definition/digest, SID, interpreter,
+   bundle pins and target; offer optional app-closed preference (not a requirement).
+   Physically verify logon/reboot, logged-off skip, offline/no-change/forward update,
+   Obsidian-open behavior, personal notes/settings/backup preservation, manual
+   overlap and interruption refusal. Rollback is separately authorized disable of
+   only the exact task; retain Vault, bundles, locks and backups.
 
-## Runtime bounds and refusal policy
+`plan_obsidian_schedule.py` remains an older pure advisory JSON interface; its
+`implemented=false` and gates describe that planner output, not this launcher.
+No registration/activation shortcut was added to it.
 
-Per-request transport timeouts do not bound total runtime as file count grows.
-The inert plan records PT0S (no scheduler limit) and AllowHardTerminate=false
-to avoid termination mid-apply; this is not approval for unbounded production
-runtime. Resolve a safe runtime policy after synthetic worst-case measurement. Forced
-scheduler termination can interrupt apply after backup/staging begins. Timeout,
-lost child status, malformed output or unknown exit requires manual review with
-all evidence retained, never immediate retry. A launcher must wait for its child
-and return status; Windows acceptance must prove termination leaves no orphan
-writer. Do not ship a detached launcher with a misleading execution bound.
+## Offline evidence
 
-| Exit | Interpretation |
-| --- | --- |
-| 0 | no_change or updated; validate bounded JSON and SHA fields |
-| 1 | update_available only in check-only evaluation; refuse in apply configuration |
-| 2 | Refused or failed review evidence; preserve evidence, no retry |
-| 3 | Source unavailable; skip, no snapshot fallback or retry loop |
-| 4 / unknown | Review required; retain evidence |
+`tests/test_obsidian_schedule_launcher.py` exercises inert defaults and single
+keys, malformed/unknown and hostile 1000-byte arguments with no stderr or operations,
+explicit successful help, pure deterministic disabled XML, exact module
+closure/static pins, identity/path/interpreter/module/manifest tampering, reparse
+refusal, retained verified import bytes, package refusal before writes, exclusive
+TEMP staging, bounded output and actual one-shot synthetic Vault outcomes.
+The existing planner/runner/mirror/raw transport tests remain part of validation.
+These are local fixture results, not real Scheduler, ACL or permanent Vault proof.
 
-Later periodic triggers may still launch after refusal. Existing lock/pending
-evidence must continue to refuse. No repair or cleanup is permitted. Disable the
-exact task for investigation only under separate operator authorization. A
-persistent latch suppressing all future launches would need separately reviewed
-write scope; none is introduced here.
-
-## Verification and next gates
-
-Existing offline tests are `tests/test_run_obsidian_simple_mirror.py`,
-`tests/test_obsidian_simple_mirror.py` and
-`tests/test_obsidian_raw_blob_transport.py`: mocked acquisition, synthetic Vaults,
-attempted-write interception, malformed arguments, unavailable source, exact
-target and lock/pending refusals, backup and completed receipt. These prove
-one-shot contracts, **not scheduler or integrity-launcher acceptance**.
-
-Before executable scheduling is reviewable, add tests for:
-
-1. Default and malformed config and each single activation flag: zero task,
-   process, network and write calls before accepted preflight. Offline source:
-   mocked acquisition, zero Vault mutations, no fallback or retry.
-2. Deterministic idempotent dry-run with no timestamp, directory creation, import
-   cache, subprocess or accidental registration/start call.
-3. Exact argv for spaces and hostile quoting; reject aliases, environment
-   expansion, unexpected fields/modes and mismatched Vault identity.
-4. All bundle/interpreter/config pin mismatches before import/spawn, module
-   shadowing, reparse roots and manifest trust-anchor changes.
-5. Mocked bounded child output/status/timeout ownership, IgnoreNew parameters,
-   manual-lock concurrency refusal and no retry after failure.
-6. Independently reviewed installation and activation authorization semantics;
-   no executable registration/activation path before that review and approval,
-   no existing task replacement, credentials or global-policy changes.
-
-Cadence/logon/missed-run policy is accepted. Project Admin next resolves timeout policy, exact
-bundle trust anchor and target, then reviews implementation and tests. Separately
-authorize publication, stable host installation, disabled registration and
-activation. None is authorized by this development task. At activation ask about
-optional app-closed preference; closure is not required by the accepted contract.
-
-After approved activation, record exact task definition, SID, bundle pins, target
-and rollback (disable only the exact task; retain Vault, backups and bundles).
-Physically verify reboot/logon survival, offline skip, no-change/forward update,
-Obsidian-open behavior, notes/settings preservation, concurrent runs and
-interruption refusal. Backups grow indefinitely with successful updates; discuss
-capacity and manual review, never automatic retention cleanup. No live acceptance
-is claimed here. This local uncommitted plan is not published GitHub evidence.
-
-Local verification on 2026-10-19: the three test files above passed **76 tests
-and 46 subtests**, using
-`C:\Work\home-hub-project\main\.venv\Scripts\python.exe -B -m pytest -q -p no:cacheprovider`.
-`C:\Work\home-hub-project\main\.venv\Scripts\ruff.exe check --no-cache`
-passed for those tests and their three corresponding runner/mirror/raw-transport
-scripts. `git diff --check` passed. No tools were installed or fetched; no live
-source request, task operation or permanent Vault evaluation was performed.
-
-## Local planner evidence (2026-10-19)
-
-The planner and `tests/test_plan_obsidian_schedule.py` cover deterministic JSON,
-no attempted path probes/process/network calls, rejected flags and aliases,
-fixed action arguments, hourly/logon settings, logged-off skip semantics and
-cache suppression without writer imports. Logged-off skipping is a declarative
-InteractiveToken contract, not observed Scheduler behavior. Integrity refusal,
-transitive hashes, isolated transitive imports and physical task behavior remain
-unimplemented acceptance gates. A future launcher must verify pinned interpreter,
-configuration and complete transitive module hashes against a separately trusted
-manifest before imports, refuse drift and invoke only the existing one-shot CLI.
-No live scheduled apply or physical acceptance is claimed by these tests.
-
-Updated local validation: **108 tests and 46 subtests passed** across planner,
-one-shot runner, raw transport and mirror tests using the approved venv Python
-with `-B -m pytest -q -p no:cacheprovider`. Ruff `check --no-cache` passed for
-those four test files and four corresponding scripts; `git diff --check` passed.
-All changes remain local and uncommitted in
-`C:\Work\home-hub-project\worktrees\obsidian-auto-399-20261019`, branch
-`work/399-auto-schedule-20261019`, base
-`4156e2d93a7cdc991783d3831bb74ecd0e243aa5`. The pre-existing candidate and runner
-doc additions were retained and extended. No issue comment was published.
+Local validation on 2026-10-19: **174 tests and 46 subtests passed** with approved
+`C:\Work\home-hub-project\main\.venv\Scripts\python.exe -B -m pytest -q -p no:cacheprovider`
+against `test_obsidian_schedule_launcher.py`, `test_plan_obsidian_schedule.py`,
+`test_run_obsidian_simple_mirror.py`, `test_obsidian_simple_mirror.py`, and
+`test_obsidian_raw_blob_transport.py` under `tests/`. Approved Ruff 0.15.10
+`check --no-cache` passed for those tests and corresponding six scripts
+(launcher, package, planner, runner, mirror, raw transport). `git diff --check`
+passed. All fixture writes were disposable TEMP artifacts; no live source
+acquisition, stable host package preparation, task registration or activation ran.

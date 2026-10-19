@@ -75,5 +75,6 @@ claimed. Next gate: review the uncommitted candidate, then separately authorize
 publication and any future host evaluation. No scheduler activation is included.
 
 The separate [scheduled mirror candidate](OBSIDIAN_SCHEDULE_CANDIDATE.md) records
-the accepted hourly-plus-login cadence, an OFF-by-default pure JSON planner and
-unresolved activation gates; it installs nothing.
+the accepted hourly-plus-login cadence, the OFF-by-default pinned in-process
+launcher, explicit bundle preparation and pure disabled task XML builder.
+Registration and activation remain unimplemented, separately authorized gates.
