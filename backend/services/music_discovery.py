@@ -1,6 +1,8 @@
 """Explainable, non-actuating music discovery for shared Music Intelligence (#257)."""
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Protocol
@@ -19,6 +21,8 @@ DISCOVERY_SOURCE_CACHE_TTL = timedelta(hours=1)
 # A deliberate calming request should favor matched mood tags over artist
 # similarity. This applies only when the semantic provider returned evidence.
 EXPLICIT_RELAX_SEMANTIC_WEIGHT = 0.60
+EXPLICIT_RELAX_SOURCE_TIMEOUT_SECONDS = 14.0
+EXPLICIT_RELAX_SEMANTIC_TIMEOUT_SECONDS = 1.8
 
 
 class MusicDiscoverySource(Protocol):
@@ -168,7 +172,7 @@ class MusicDiscoveryService:
         self._intent_resolver = intent_resolver or DeterministicSemanticIntentResolver()
         self._playable_catalog = playable_catalog
         self._source_cache: dict[
-            tuple[str, int, int], tuple[datetime, list[dict]]
+            tuple[str, int, int, Optional[str]], tuple[datetime, list[dict]]
         ] = {}
 
     @property
@@ -221,7 +225,17 @@ class MusicDiscoveryService:
                 note="discovery source is not configured",
             )
 
-        cache_key = (mode, count, tracks_per_artist)
+        # Only a deliberate calm-mood request uses mood-tag retrieval.
+        # Inferred live context and mixed/negated intents remain mode-based.
+        explicit_relax = (
+            explicit_user_intent
+            and bool(intent and intent.strip())
+            and semantic_intent.key == "relax"
+        )
+        cache_key = (
+            mode, count, tracks_per_artist,
+            "explicit_relax" if explicit_relax else None,
+        )
         source_cache_hit = False
         raw: list[dict]
         cached = self._source_cache.get(cache_key)
@@ -229,11 +243,30 @@ class MusicDiscoveryService:
             raw = list(cached[1])
             source_cache_hit = True
         else:
-            raw = await self._source.discover_artist_candidates(
-                mode,
-                count=min(12, max(count + 3, count)),
-                tracks_per_artist=tracks_per_artist,
+            query_count = (
+                min(6, max(1, count))
+                if explicit_relax
+                else min(12, max(count + 3, count))
             )
+            mood_source = getattr(self._source, "discover_mood_candidates", None)
+            if explicit_relax and callable(mood_source):
+                try:
+                    raw = await asyncio.wait_for(
+                        mood_source(
+                            "relax",
+                            count=query_count,
+                            tracks_per_artist=tracks_per_artist,
+                        ),
+                        timeout=EXPLICIT_RELAX_SOURCE_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    raw = []
+            else:
+                raw = await self._source.discover_artist_candidates(
+                    mode,
+                    count=query_count,
+                    tracks_per_artist=tracks_per_artist,
+                )
             if raw:
                 self._source_cache[cache_key] = (now, list(raw))
         if not raw:
@@ -267,6 +300,20 @@ class MusicDiscoveryService:
                     explicit_user_intent and bool(intent and intent.strip())
                 ),
             )
+            # A deliberate request for calm must not fall back to a high
+            # adjacency score when tags are missing or don't match the mood.
+            if (
+                cluster is not None
+                and explicit_relax
+                and (
+                    cluster.semantic_score is None
+                    or not {"calm", "chill", "ambient"}.intersection(
+                        cluster.matched_semantics
+                    )
+                    or cluster.semantic_score < 0.10
+                )
+            ):
+                continue
             if cluster is not None:
                 clusters.append(cluster)
         clusters.sort(key=lambda item: (-item.score, item.artist_name.casefold()))
@@ -414,10 +461,18 @@ class MusicDiscoveryService:
         analyzer = self._semantic_analyzer
         if analyzer is not None and getattr(analyzer, "enabled", False):
             try:
-                semantic_match = await analyzer.analyze(
+                semantic_coro = analyzer.analyze(
                     artist_name=artist_name,
                     track_name=tracks[0].track_name if tracks else None,
                     intent=semantic_intent,
+                )
+                semantic_match = (
+                    await asyncio.wait_for(
+                        semantic_coro,
+                        timeout=EXPLICIT_RELAX_SEMANTIC_TIMEOUT_SECONDS,
+                    )
+                    if explicit_intent and semantic_intent.key == "relax"
+                    else await semantic_coro
                 )
             except Exception:
                 semantic_match = SemanticMusicMatch(available=False)
@@ -437,8 +492,13 @@ class MusicDiscoveryService:
             )
         score = max(0.0, min(1.0, score))
 
+        source_reason = (
+            f"Last.fm mood-tag candidate: {seed_artist.removeprefix('tag:').strip()}"
+            if source == "lastfm_mood_tag+itunes_search"
+            else f"Last.fm adjacency to {seed_artist} ({source_match:.2f})"
+        )
         reasons = [
-            f"Last.fm adjacency to {seed_artist} ({source_match:.2f})",
+            source_reason,
             f"{exploratory_count}/{len(tracks)} tracks new-to-HomeHub",
         ]
         if snapshot is not None:

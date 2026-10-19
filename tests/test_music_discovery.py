@@ -295,6 +295,114 @@ async def test_recommendation_service_discovery_is_non_persisting_and_multi_trac
 
 
 @pytest.mark.asyncio
+async def test_explicit_mood_source_uses_tagged_artists_and_catalog_verified_tracks(monkeypatch):
+    service = RecommendationService(lastfm_api_key="test-key")
+    profile = SimpleNamespace(top_artists=[{"name": "Already Owned"}])
+    tag_calls = []
+    track_calls = []
+
+    async def load_profile():
+        return profile
+
+    async def tagged_artists(tag, *, limit=8):
+        tag_calls.append((tag, limit))
+        return {
+            "chillout": ["Already Owned", "Quiet", "Shared"],
+            "mellow": ["Shared", "Mellow"],
+            "acoustic": ["Acoustic"],
+        }.get(tag, [])
+
+    async def tracks(name, *, limit=3):
+        track_calls.append(name)
+        return [_track(name, "Quiet Song", f"{name}-123")][:limit]
+
+    monkeypatch.setattr(service, "_load_profile", load_profile)
+    monkeypatch.setattr(service, "_query_lastfm_tag_artists", tagged_artists)
+    monkeypatch.setattr(service, "_search_itunes_tracks", tracks)
+    try:
+        mood_results = await service.discover_mood_candidates(
+            "relax", count=3, tracks_per_artist=2,
+        )
+        ignored = await service.discover_mood_candidates(
+            "energetic", count=3, tracks_per_artist=2,
+        )
+    finally:
+        await service.close()
+
+    assert tag_calls == [("chillout", 8), ("mellow", 8), ("acoustic", 8)]
+    assert [item["artist_name"] for item in mood_results] == [
+        "Quiet", "Shared", "Mellow",
+    ]
+    assert track_calls == ["Quiet", "Shared", "Mellow"]
+    assert all(item["source"] == "lastfm_mood_tag+itunes_search" for item in mood_results)
+    assert all(item["seed_artist"].startswith("tag:") for item in mood_results)
+    assert all(item["tracks"][0]["catalog_verified"] is True for item in mood_results)
+    assert ignored == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_mood_source_abstains_if_no_tag_artists(monkeypatch):
+    service = RecommendationService(lastfm_api_key="test-key")
+
+    async def load_profile():
+        return SimpleNamespace(top_artists=[{"name": "Owned"}])
+
+    async def no_tag_artists(tag, *, limit=8):
+        return []
+
+    async def unexpected_tracks(*args, **kwargs):
+        raise AssertionError("No iTunes calls without tag candidates")
+
+    monkeypatch.setattr(service, "_load_profile", load_profile)
+    monkeypatch.setattr(service, "_query_lastfm_tag_artists", no_tag_artists)
+    monkeypatch.setattr(service, "_search_itunes_tracks", unexpected_tracks)
+    try:
+        assert await service.discover_mood_candidates("relax") == []
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_lastfm_mood_tag_api_is_bounded_and_source_qualified(monkeypatch):
+    service = RecommendationService(lastfm_api_key="test-key")
+    observed = []
+
+    class Response:
+        status_code = 200
+        def json(self):
+            return {"topartists": {"artist": [
+                {"name": "Quiet One"},
+                {"name": "Quiet One"},
+                {"name": "Quiet Two"},
+                {"name": ""},
+            ]}}
+
+    class Http:
+        async def get(self, url, *, params, timeout):
+            observed.append((url, dict(params), timeout))
+            return Response()
+        async def aclose(self):
+            pass
+
+    async def no_sleep(_):
+        pass
+
+    service._http = Http()
+    monkeypatch.setattr("backend.services.recommendation_service.asyncio.sleep", no_sleep)
+    try:
+        names = await service._query_lastfm_tag_artists("chillout", limit=80)
+    finally:
+        await service.close()
+
+    assert names == ["Quiet One", "Quiet One", "Quiet Two"]
+    assert len(observed) == 1
+    assert observed[0][1]["method"] == "tag.gettopartists"
+    assert observed[0][1]["tag"] == "chillout"
+    assert observed[0][1]["limit"] == 12
+    assert observed[0][2] == 3.0
+
+
+@pytest.mark.asyncio
 async def test_itunes_discovery_verifies_exact_artist_and_dedupes(monkeypatch):
     service = RecommendationService(lastfm_api_key="test-key")
 
