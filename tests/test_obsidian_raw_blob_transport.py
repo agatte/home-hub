@@ -5,6 +5,7 @@ from hashlib import sha1
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -54,6 +55,22 @@ class RawBlobTransportTests(unittest.TestCase):
         self.assertEqual(github_raw_blob(COMMIT, BLOB, opener=opener), BYTES)
         self.assertEqual(opener.calls, [(url, 12, "GET")])
         self.assertEqual(response.read_limit, len(BYTES) + 1)
+
+    def test_url_encodes_literal_segments(self):
+        blob = DocBlob("docs/a #é%2F.md", OID, "100644", len(BYTES))
+        self.assertTrue(raw_blob_url(COMMIT, blob).endswith(
+            "/docs/a%20%23%C3%A9%252F.md"))
+
+    def test_default_opener_uses_redirect_guard_and_verified_tls(self):
+        import obsidian_raw_blob_transport as transport
+
+        opener = FakeOpener(FakeResponse(raw_blob_url(COMMIT, BLOB)))
+        with patch.object(transport, "build_opener", return_value=opener) as build:
+            self.assertEqual(github_raw_blob(COMMIT, BLOB), BYTES)
+        redirect, https = build.call_args.args
+        self.assertIsInstance(redirect, _NoRedirect)
+        self.assertTrue(https._context.check_hostname)
+        self.assertEqual(https._context.verify_mode, transport.ssl.CERT_REQUIRED)
 
     def test_path_allowlist_and_oid_refusal_before_network(self):
         for path in ("../secret.md", ".env", "docs/../../secret.md",
@@ -108,7 +125,9 @@ class RawBlobTransportTests(unittest.TestCase):
                     github_raw_blob(COMMIT, BLOB, opener=FakeOpener(error=exc))
 
     def test_forward_fetch_uses_six_rest_metadata_calls_not_one_per_file(self):
-        api = fake_payloads()
+        contents = {**FILES, **{f"docs/extra-{i}.md": b"extra\n" for i in range(54)}}
+        with patch("test_obsidian_github_docs_source.FILES", contents):
+            api = fake_payloads()
         old = "d" * 40
         api[REPO_PATH + "/compare/" + old + "..." + COMMIT] = {
             "status": "ahead", "base_commit": {"sha": old},
@@ -127,11 +146,28 @@ class RawBlobTransportTests(unittest.TestCase):
             return data
         result = prepare_current_docs(old, fetch=fetch, blob_source=get_raw)
         self.assertEqual(result.ancestry, "forward")
-        self.assertEqual(result.docs.contents, FILES)
+        self.assertEqual(result.docs.contents, contents)
         self.assertEqual(len(requests), 6)
-        self.assertEqual(len(raw_commits), len(FILES))
+        self.assertEqual(len(raw_commits), 58)
         self.assertEqual(set(raw_commits), {COMMIT})
         self.assertFalse(result.refresh_authorized)
+
+    def test_raw_acquisition_rechecks_master(self):
+        api = fake_payloads()
+        seen = 0
+
+        def fetch(path):
+            nonlocal seen
+            if path.endswith("/git/ref/heads/master"):
+                seen += 1
+                if seen == 2:
+                    return {"object": {"type": "commit", "sha": "f" * 40}}
+            self.assertNotIn("/git/blobs/", path)
+            return api[path]
+
+        with self.assertRaisesRegex(ValueError, "github_master_changed"):
+            prepare_current_docs(COMMIT, fetch=fetch,
+                                 blob_source=lambda commit, blob: FILES[blob.path])
 
     def test_tampered_raw_content_refused_even_if_metadata_correct(self):
         api = fake_payloads()

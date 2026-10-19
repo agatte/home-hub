@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import build_opener, HTTPSHandler, HTTPRedirectHandler, Request
 
+from obsidian_github_docs_source import SourceUnavailable
 from obsidian_source_verifier import (
     DocBlob, MAX_FILE_BYTES, OID, _safe_markdown_path, verify_blob,
 )
@@ -21,7 +22,7 @@ PREFIX = "/agatte/home-hub"
 MAX_RESPONSE_BUFFER = MAX_FILE_BYTES + 1
 
 
-class RawBlobUnavailable(ValueError):
+class RawBlobUnavailable(SourceUnavailable):
     """Fail closed for invalid identity or inaccessible source content."""
 
 

@@ -17,6 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_obsidian_simple_mirror as runner
 import test_obsidian_simple_mirror as fixtures
 from obsidian_github_docs_source import SourceUnavailable, REPO_PATH
+from obsidian_raw_blob_transport import RawBlobUnavailable, github_raw_blob, raw_blob_url
+from test_obsidian_raw_blob_transport import FakeOpener, FakeResponse
+from test_obsidian_github_docs_source import FILES as SOURCE_FILES
 
 
 @pytest.fixture
@@ -66,6 +69,67 @@ def test_check_never_stages_even_new_source(vault, commit, code, status):
     assert result == (code, {"status": status, "previous_commit": fixtures.OLD,
                              "commit": commit})
     assert vault.snapshot(vault.parent) == before
+
+
+@pytest.mark.parametrize("failure", [None, "offline", "http", "redirect", "oversized", "tampered"])
+def test_cli_default_raw_check_no_writes_or_rest_fallback(vault, failure):
+    api = vault.source_api()
+    requests = []
+
+    def fetch(path):
+        requests.append(path)
+        assert "/git/blobs/" not in path
+        return api[path]
+
+    def raw(commit, blob):
+        assert commit == fixtures.NEW
+        data = SOURCE_FILES[blob.path]
+        error = None
+        if failure == "offline":
+            error = OSError("offline")
+        elif failure == "http":
+            from urllib.error import HTTPError
+            error = HTTPError(raw_blob_url(commit, blob), 429, "limited", {}, None)
+        elif failure == "redirect":
+            error = RawBlobUnavailable("raw_redirect_refused")
+        elif failure == "oversized":
+            data += b"extra"
+        elif failure == "tampered":
+            data = b"x" * len(data)
+        opener = FakeOpener(FakeResponse(raw_blob_url(commit, blob), data), error)
+        return github_raw_blob(commit, blob, opener=opener)
+
+    before = vault.snapshot(vault.parent)
+    output = StringIO()
+    with ExitStack() as stack:
+        no_writes(stack)
+        stack.enter_context(patch.object(runner, "github_json", side_effect=fetch))
+        stack.enter_context(patch.object(runner, "github_raw_blob", side_effect=raw))
+        writer = stack.enter_context(patch.object(runner, "run_once"))
+        code = runner.main(["--check", "--vault", str(vault.vault),
+                            "--expected-vault", str(vault.vault)], output=output)
+        writer.assert_not_called()
+    assert code == (3 if failure else 1)
+    assert json.loads(output.getvalue())["status"] == (
+        "source_unavailable" if failure else "update_available")
+    assert len(requests) == (5 if failure else 6)
+    assert vault.snapshot(vault.parent) == before
+
+
+def test_injected_fetch_never_selects_live_raw(vault):
+    with patch.object(runner, "github_raw_blob", side_effect=AssertionError("network")) as raw:
+        assert invoke(vault)[0] == 1
+    raw.assert_not_called()
+
+
+def test_default_apply_passes_raw_transport_to_library(vault):
+    with patch.object(runner, "run_once", return_value=Mock(
+        state="updated", previous_commit=fixtures.OLD, commit=fixtures.NEW
+    )) as writer:
+        assert runner.main(["--apply", "--approve-local-evaluation", "--vault",
+                            str(vault.vault), "--expected-vault", str(vault.vault)],
+                           output=StringIO()) == 0
+    assert writer.call_args.kwargs["blob_source"] is runner.github_raw_blob
 
 
 @pytest.mark.parametrize("mode", ["--check", "--apply"])
