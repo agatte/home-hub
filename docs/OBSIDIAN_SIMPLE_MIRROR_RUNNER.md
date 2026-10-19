@@ -73,3 +73,7 @@ as well as byte preservation for read-only and refusal paths. No real-host
 ACL, sharing-handle, watcher, live GitHub, or permanent Vault acceptance is
 claimed. Next gate: review the uncommitted candidate, then separately authorize
 publication and any future host evaluation. No scheduler activation is included.
+
+The separate [scheduled mirror candidate](OBSIDIAN_SCHEDULE_CANDIDATE.md) records
+the accepted hourly-plus-login cadence, an OFF-by-default pure JSON planner and
+unresolved activation gates; it installs nothing.
