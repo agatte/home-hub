@@ -115,7 +115,7 @@ class DeterministicSemanticIntentResolver:
         conflicting_words = {
             "not", "energetic", "upbeat", "fast", "loud", "intense", "party",
             "dance", "dancing", "valheim", "viking", "norse", "gameday",
-            "no", "dont", "don", "without", "avoid", "never",
+            "gaming", "no", "dont", "don", "without", "avoid", "never",
         }
         if calm_words.intersection(words) and not conflicting_words.intersection(words):
             return SemanticIntent(

@@ -105,7 +105,7 @@ def test_mixed_mood_phrase_does_not_get_silently_rewritten_to_relax():
     )
     assert resolved.key == "calming but energetic"
     assert "energetic" in {name for name, _ in resolved.concepts}
-    for request in ("not calming", "don't want calming", "avoid calming music"):
+    for request in ("not calming", "don't want calming", "avoid calming music", "calming music while gaming"):
         assert DeterministicSemanticIntentResolver().resolve(
             mode="working", request=request,
         ).key != "relax"
@@ -184,10 +184,9 @@ async def test_explicit_calming_ranks_verified_mood_tags_above_rock_adjacency():
 
     assert [cluster.artist_name for cluster in ordinary.clusters] == ["Hard Rock", "Gentle"]
     assert [cluster.artist_name for cluster in inferred.clusters] == ["Hard Rock", "Gentle"]
-    assert [cluster.artist_name for cluster in calming.clusters] == ["Gentle", "Hard Rock"]
+    assert [cluster.artist_name for cluster in calming.clusters] == ["Gentle"]
     assert calming.clusters[0].semantic_intent == "relax"
     assert set(calming.clusters[0].matched_semantics) & {"calm", "chill", "ambient", "acoustic"}
-    assert calming.clusters[1].semantic_score == 0
     assert all(
         cluster.tracks[0].playback_capability == "metadata_only"
         for cluster in calming.clusters
@@ -207,17 +206,14 @@ async def test_explicit_calming_preserves_baseline_when_semantic_provider_fails(
         semantic_analyzer=FakeSemanticAnalyzer(fail=True),
     )
 
-    expected = await baseline.preview(
-        "working", policy="gentle", intent="calming", explicit_user_intent=True,
-    )
+    expected = await baseline.preview("working", policy="gentle")
     actual = await outage.preview(
         "working", policy="gentle", intent="calming", explicit_user_intent=True,
     )
 
-    assert [(c.artist_name, c.score) for c in actual.clusters] == [
-        (c.artist_name, c.score) for c in expected.clusters
-    ]
-    assert all(c.semantic_score is None for c in actual.clusters)
+    assert len(expected.clusters) == 2
+    assert actual.clusters == ()
+    assert actual.status == "no_candidates"
 
 
 class EmptyMoodTagSource:
@@ -240,17 +236,155 @@ async def test_explicit_calming_preserves_baseline_when_tags_have_no_evidence():
         semantic_analyzer=LastFmSemanticAnalyzer(EmptyMoodTagSource()),
     )
 
-    expected = await baseline.preview(
-        "working", policy="gentle", intent="calming", explicit_user_intent=True,
-    )
+    expected = await baseline.preview("working", policy="gentle")
     actual = await empty_tags.preview(
         "working", policy="gentle", intent="calming", explicit_user_intent=True,
     )
 
-    assert [(c.artist_name, c.score) for c in actual.clusters] == [
-        (c.artist_name, c.score) for c in expected.clusters
-    ]
-    assert all(c.semantic_score is None for c in actual.clusters)
+    assert len(expected.clusters) == 2
+    assert actual.clusters == ()
+    assert actual.status == "no_candidates"
+
+
+class AcousticOnlySource:
+    enabled = True
+
+    async def get_semantic_tags(self, artist_name, *, track_name=None, limit=20):
+        return [{"name": "acoustic"}] if not track_name else []
+
+
+@pytest.mark.asyncio
+async def test_explicit_calm_does_not_accept_acoustic_tag_alone():
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([_candidate("Loud Acoustic Artist")]),
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(AcousticOnlySource()),
+    )
+    actual = await service.preview(
+        "relax", intent="calming", explicit_user_intent=True,
+    )
+    assert actual.status == "no_candidates"
+    assert actual.clusters == ()
+
+
+class MoodAwareDiscoverySource(FakeDiscoverySource):
+    def __init__(self):
+        super().__init__([_candidate("Hard Rock", 0.99)])
+        self.mood_calls = []
+        self.mode_calls = []
+
+    async def discover_artist_candidates(self, mode, *, count=8, tracks_per_artist=3):
+        self.mode_calls.append(mode)
+        return await super().discover_artist_candidates(
+            mode, count=count, tracks_per_artist=tracks_per_artist,
+        )
+
+    async def discover_mood_candidates(self, mood, *, count=8, tracks_per_artist=3):
+        self.mood_calls.append(mood)
+        candidate = _candidate("Gentle", 0.70)
+        candidate["source"] = "lastfm_mood_tag+itunes_search"
+        candidate["seed_artist"] = "tag:chillout"
+        return [candidate]
+
+
+@pytest.mark.asyncio
+async def test_explicit_calming_uses_mood_retrieval_and_separate_source_cache():
+    source = MoodAwareDiscoverySource()
+    service = MusicDiscoveryService(
+        source=source,
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(MoodTagSource()),
+    )
+
+    calming = await service.preview(
+        "gaming", intent="calming", explicit_user_intent=True,
+    )
+    second_calming = await service.preview(
+        "gaming", intent="calming", explicit_user_intent=True,
+    )
+    implicit = await service.preview("gaming")
+
+    assert [c.artist_name for c in calming.clusters] == ["Gentle"]
+    assert calming.clusters[0].source == "lastfm_mood_tag+itunes_search"
+    assert "mood-tag candidate: chillout" in calming.clusters[0].reasons[0]
+    assert [c.artist_name for c in implicit.clusters] == ["Hard Rock"]
+    assert source.mood_calls == ["relax"]
+    assert source.mode_calls == ["gaming"]
+    assert calming.source_cache_hit is False
+    assert second_calming.source_cache_hit is True
+    assert implicit.source_cache_hit is False
+    assert calming.shadow and not calming.actuation_allowed
+
+
+@pytest.mark.asyncio
+async def test_mixed_calm_gaming_text_uses_normal_mode_retrieval():
+    source = MoodAwareDiscoverySource()
+    service = MusicDiscoveryService(
+        source=source,
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(MoodTagSource()),
+    )
+
+    result = await service.preview(
+        "gaming", intent="calming music while gaming", explicit_user_intent=True,
+    )
+
+    assert source.mood_calls == []
+    assert source.mode_calls == ["gaming"]
+    assert [c.artist_name for c in result.clusters] == ["Hard Rock"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_calm_mood_source_timeout_abstains_without_rock_fallback(monkeypatch):
+    import asyncio
+    import backend.services.music_discovery as discovery_module
+
+    class SlowMoodSource(MoodAwareDiscoverySource):
+        async def discover_mood_candidates(self, mood, *, count=8, tracks_per_artist=3):
+            await asyncio.sleep(0.05)
+            return await super().discover_mood_candidates(
+                mood, count=count, tracks_per_artist=tracks_per_artist,
+            )
+
+    monkeypatch.setattr(discovery_module, "EXPLICIT_RELAX_SOURCE_TIMEOUT_SECONDS", 0.001)
+    source = SlowMoodSource()
+    service = MusicDiscoveryService(
+        source=source,
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(MoodTagSource()),
+    )
+
+    result = await service.preview(
+        "gaming", intent="calming", explicit_user_intent=True,
+    )
+    assert result.clusters == ()
+    assert result.status == "no_candidates"
+    assert source.mode_calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_calm_slow_semantics_abstains(monkeypatch):
+    import asyncio
+    import backend.services.music_discovery as discovery_module
+
+    class SlowSemantics:
+        enabled = True
+
+        async def analyze(self, *, artist_name, track_name, intent):
+            await asyncio.sleep(0.05)
+            return SemanticMusicMatch(
+                available=True, score=0.99, matched_concepts=("calm",),
+            )
+
+    monkeypatch.setattr(discovery_module, "EXPLICIT_RELAX_SEMANTIC_TIMEOUT_SECONDS", 0.001)
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([_candidate("Hard Rock")]),
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=SlowSemantics(),
+    )
+    result = await service.preview("gaming", intent="calming", explicit_user_intent=True)
+    assert result.clusters == ()
+    assert result.status == "no_candidates"
 
 
 class FakeTagSource:
