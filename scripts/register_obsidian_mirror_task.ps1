@@ -21,10 +21,10 @@ function Assert-LiteralPath([string]$Path) {
 function Assert-Plain([string]$Path, [bool]$Directory = $false) {
     Assert-LiteralPath $Path
     $item = Get-Item -LiteralPath $Path -Force
-    if ([bool]$item.PSIsContainer -ne $Directory) { throw 'type' }
+    if (($item -is [IO.DirectoryInfo]) -ne $Directory) { throw 'type' }
     while ($null -ne $item) {
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparse' }
-        if ($item.PSIsContainer) { $item = $item.Parent } else { $item = $item.Directory }
+        if ($item -is [IO.DirectoryInfo]) { $item = $item.Parent } else { $item = $item.Directory }
     }
 }
 

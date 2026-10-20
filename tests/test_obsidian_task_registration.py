@@ -50,6 +50,23 @@ def test_parser_and_default_off():
     assert ps("'parsed'") == "parsed"
 
 
+def test_native_plain_path_walk_and_bounded_file_read(tmp_path):
+    # Provider-added PSIsContainer is not present on .Parent/.Directory FileSystemInfo.
+    # Exercise the real on-disk ancestor walk under Set-StrictMode, not a path mock.
+    folder = tmp_path / "native_path"
+    folder.mkdir()
+    filename = folder / "manifest.json"
+    data = b'{"test":true}'
+    filename.write_bytes(data)
+    assert ps(f"""
+Assert-Plain {literal(str(folder))} $true
+Assert-Plain {literal(str(filename))}
+$read=Read-Bounded {literal(str(filename))} 128
+if ((Get-Digest $read) -cne {literal(package.digest(data))}) {{ throw 'unexpected hash' }}
+'verified_native_file_path'
+""") == "verified_native_file_path"
+
+
 @pytest.mark.parametrize("args", ["-Check", "-RegisterDisabled", "-ApproveTaskName 'wrong'",
                                   "-XmlPath 'relative.xml'", "-ApproveXmlSha256 'abc'"])
 def test_incomplete_keys_refuse_before_identity_or_com(args):
