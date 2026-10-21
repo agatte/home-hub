@@ -120,6 +120,17 @@ def test_spec_misbindings(key, value):
         package.task_xml(data)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='requires native Windows token APIs')
+def test_windows_identity_native_token_read_without_mocks():
+    # Regression: without ctypes argtypes a HANDLE from GetCurrentProcess
+    # raises ArgumentError at OpenProcessToken before any identity check.
+    sid, profile, elevated, session = launch.windows_identity()
+    assert isinstance(sid, str) and sid.startswith('S-1-5-')
+    assert isinstance(profile, str) and Path(profile).is_absolute()
+    assert isinstance(elevated, bool)
+    assert isinstance(session, int) and session > 0
+
+
 def test_xml_is_disabled_hourly_interactive_and_non_terminating():
     data = spec()
     with ExitStack() as stack:

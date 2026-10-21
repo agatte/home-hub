@@ -16,7 +16,7 @@ from pathlib import Path, PureWindowsPath
 import re
 import stat
 
-SOURCE_COMMIT = "f91407d165fd1263319bbadc45586da3681560aa"
+SOURCE_COMMIT = "5fbc1ddbe2d42d6a1540704b58da75a921b1e7f5"
 MODULES = (
     "create_obsidian_pilot", "manage_obsidian_vault", "obsidian_github_docs_source",
     "obsidian_raw_blob_transport", "obsidian_simple_mirror", "obsidian_source_verifier",
@@ -104,6 +104,20 @@ def windows_identity():
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
     kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    # ctypes cannot convert a HANDLE return value into an untyped call argument.
+    # Declare native Win32 prototypes before passing token handles/pointers.
+    adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    adv.OpenProcessToken.restype = wintypes.BOOL
+    adv.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    adv.GetTokenInformation.restype = wintypes.BOOL
+    adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    adv.ConvertSidToStringSidW.restype = wintypes.BOOL
+    userenv.GetUserProfileDirectoryW.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+    ]
+    userenv.GetUserProfileDirectoryW.restype = wintypes.BOOL
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p

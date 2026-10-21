@@ -1,5 +1,14 @@
 # HomeHub Obsidian Mirror Synchronization — Proposal
 
+> **2026-10-21 live correction (#399):** the real Windows task is **enabled**
+> and physically fired at 11:00 ET, but returned code **2**. The sealed Vault
+> manifest still names the October 19 commit; successful unattended refresh is
+> **NOT accepted**. An original-bundle ctypes token-handle bug was reproduced
+> on Windows Sandbox. The replacement source is a **new immutable version**, not
+> an in-place repair of the original bundle or the existing task. Host installation
+> and action migration require separate explicit authorization and physical
+> acceptance. The older phase/status text below is historical proposal evidence.
+
 > **Status:** Read-only freshness and refresh-preview tools are merged via
 > [PR #377](https://github.com/agatte/home-hub/pull/377). Future notifications
 > and unattended refresh remain designs under [#365](https://github.com/agatte/home-hub/issues/365).
