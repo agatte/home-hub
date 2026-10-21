@@ -142,8 +142,15 @@ $folder=New-Object PSObject
 
 
 def test_pins_and_mutation_surface():
+    # The registrar is a frozen, create-only LEGACY adapter. The replacement
+    # bundle has a different path and launcher digest, and must fail closed.
     pins = json.loads(ps("Get-ReviewedPins | ConvertTo-Json -Compress"))
-    assert pins == spec()["files"]
+    replacement = spec()["files"]
+    assert pins == {
+        **replacement,
+        "launch_obsidian_mirror.py": "e8771f93a7c8d694242b2e4015f369e9daea11e8e564ccb56da3ac0a6e29efcd",
+    }
+    assert pins["launch_obsidian_mirror.py"] != replacement["launch_obsidian_mirror.py"]
     source = SCRIPT.read_text()
     assert source.count(".RegisterTask(") == 1
     assert "$xmlText, 2, $who.Sid, $null, 3, $null" in source
@@ -281,9 +288,20 @@ if ($identity.IsAuthenticated -and !$identity.IsSystem -and $identity.User -and
 ])
 def test_complete_check_main_with_synthetic_reads(mutation, reason):
     data = spec()
+    # Exercise the historical registrar on its own exact, frozen namespace.
+    # Current replacement release bytes are intentionally incompatible.
+    data["source_commit"] = "f91407d165fd1263319bbadc45586da3681560aa"
+    data["bundle"] = (
+        data["user_root"] + r"\AppData\Local\HomeHub\ObsidianMirror"
+        + r"\f91407d165fd1263319bbadc45586da3681560aa"
+    )
+    data["files"]["launch_obsidian_mirror.py"] = (
+        "e8771f93a7c8d694242b2e4015f369e9daea11e8e564ccb56da3ac0a6e29efcd"
+    )
     data["python_sha256"] = package.digest(b"synthetic runtime")
     # No task, Vault or bundle is created. All reads map to in-memory fixture bytes
-    # or the nine reviewed repository source files; their real hashes are checked.
+    # or the current replacement repository files. Its launcher source MUST
+    # refuse the old registrar's historical pin; never fake a legacy digest.
     code = r"""
 $who=@{Sid=SID; Profile=PROFILE; Name='synthetic\ordinary'}
 $spec=SPEC | ConvertFrom-Json
@@ -357,6 +375,11 @@ if ($global:failure -cne REASON) { throw ('unexpected refusal: '+$global:failure
 if (!REASON -and $global:reads.Count -ne 12) { throw 'incomplete validation reads' }
 $result
 """
+    # No historical launcher bytes are shipped by this new source tree.
+    # The old create-only registrar must reject the replacement on source-pin
+    # validation rather than ever reaching its Scheduler COM mutation surface.
+    if reason in {"", "xml_value"}:
+        reason = "source_pin"
     replacements = {"MUTATION": mutation, "REASON": literal(reason),
                     "SID": literal(data["sid"]), "PROFILE": literal(data["user_root"]),
                     "SPEC": literal(json.dumps(data)), "BUNDLE": literal(data["bundle"]),
@@ -364,5 +387,4 @@ $result
     for key, value in replacements.items():
         code = code.replace(key, value)
     result = json.loads(ps(code))
-    assert result == {"status": "registration_refused" if mutation else "validated_plan_only",
-                      "registered": False}
+    assert result == {"status": "registration_refused", "registered": False}

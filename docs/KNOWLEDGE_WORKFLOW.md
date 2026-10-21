@@ -64,6 +64,7 @@ For model-assisted knowledge review, use bounded, sanitized evidence with source
 ## Independent synchronization and authorization gates
 
 - Git/issue updates follow existing reviewed authority; **commit, push, merge, deploy, host writes, restart and credential changes are separate gates**.
-- Automatic Obsidian refresh is a **distinct future design** ([review proposal](OBSIDIAN_SYNC_DESIGN.md)). No scheduled task, host agent, blind Git update, Vault backup cleanup or wider real-host bridge authority is authorized by this workflow.
-- A future sync must verify exact source commit, sealed manifest, target identity, ACLs and preservation of `.obsidian`, personal notes and previous snapshots. On unexpected state, refuse and retain evidence.
+- **Current Windows evidence (2026-10-21):** #399's exact user-local scheduled task is **enabled**, and an hourly run was observed; it returned code **2**, without a verified Vault update. This is **not** successful automatic synchronization. The original bundle has a reproducible native token/ctypes bug and must not be changed in place. See [the sync design](OBSIDIAN_SYNC_DESIGN.md) and [#399](https://github.com/agatte/home-hub/issues/399) for the replacement release and remaining physical acceptance.
+- Any replacement bundle installation or Task Scheduler action change requires **separate explicit host authorization**; the existing task may not be manually started, overwritten, or repaired on this development approval. No generic host agent, blind Git update, Vault backup cleanup or wider real-host bridge authority is granted.
+- A future accepted sync must verify exact source commit, sealed manifest, target identity, ACLs and preservation of `.obsidian`, personal notes and previous snapshots. On unexpected state, refuse and retain evidence.
 - Repo changes can be made while a host mirror is stale. Report the mirror's verified SHA, never suggest it is always current.
