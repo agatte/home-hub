@@ -9278,3 +9278,387 @@ async def test_gaming_completion_publication_keeps_originating_owner(
         release.set()
         await task
         await engine.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_at", ["persist", "broadcast"])
+async def test_sleeping_privacy_survives_unrelated_dnd_revision(engine, mock_ws, wait_at):
+    camera = CameraService(mock_ws, engine)
+    camera._cap = MagicMock()
+    handle = camera._cap
+    engine.set_camera_service(camera)
+    engine.register_on_mode_change(camera.on_mode_change, with_owner_guard=True)
+    other_consumer = AsyncMock()
+    engine.register_on_mode_change(other_consumer)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await release.wait()
+
+    engine._persist_override_state = AsyncMock()
+    engine._broadcast_mode = AsyncMock()
+    setattr(engine, "_persist_override_state" if wait_at == "persist" else "_broadcast_mode", blocked)
+    engine._apply_mode = AsyncMock()
+    task = asyncio.create_task(engine.set_manual_override("sleeping", source="api:test"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        # The synchronous revision publication performed by enable/clear DND.
+        engine._mode_transition_revision += 1
+    finally:
+        release.set()
+        await task
+    assert engine.current_mode == "sleeping"
+    assert camera._paused
+    assert camera._cap is None
+    handle.release.assert_called_once()
+    engine._apply_mode.assert_not_awaited()
+    other_consumer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supersession", ["cancel", "dnd"])
+async def test_detected_sleeping_camera_privacy_survives_lighting_await(
+    engine, mock_ws, supersession,
+):
+    camera = CameraService(mock_ws, engine)
+    camera._cap = MagicMock()
+    handle = camera._cap
+    engine.set_camera_service(camera)
+    engine.register_on_mode_change(camera.on_mode_change, with_owner_guard=True)
+    engine._current_mode = "working"
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked_lighting(*args, **kwargs):
+        entered.set()
+        await release.wait()
+
+    engine._apply_mode = blocked_lighting
+    task = asyncio.create_task(engine.report_activity("sleeping", source="process"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert engine.current_mode == "sleeping"
+        if supersession == "cancel":
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        else:
+            # Unrelated DND ownership publication must not cancel privacy.
+            engine._mode_transition_revision += 1
+            release.set()
+            await asyncio.wait_for(task, 2)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    await asyncio.gather(*list(engine._sleep_privacy_tasks))
+    assert camera._paused
+    assert camera._cap is None
+    handle.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_relax_planner_cannot_stamp_newer_activity_checkpoint(engine):
+    engine._current_mode = "relax"
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def plan(**kwargs):
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(should_apply=True)
+
+    engine._plan_living_room_atmosphere = plan
+    engine._apply_state = AsyncMock()
+    engine._effect_manager.replace_with_action = AsyncMock()
+    engine._scene_overrides = {"relax": {"day": "fake-scene"}}
+    engine._get_time_period = lambda now=None: "day"
+    task = asyncio.create_task(engine._apply_mode("relax"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        engine._current_mode = "working"
+        engine._active_scene_override_key = ("working", "day", "new")
+        engine._gaming_scene_transition_pending = True
+    finally:
+        release.set()
+        await task
+    assert engine._active_scene_override_key == ("working", "day", "new")
+    assert engine._gaming_scene_transition_pending is True
+    engine._effect_manager.replace_with_action.assert_not_awaited()
+    engine._apply_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("takeover", ["manual", "transit", "screen", "external", "source", "lease", "unchanged"])
+async def test_static_queued_write_rechecks_per_light_authority(engine, takeover):
+    from backend.services.hue_service import HueService
+    from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+    from threading import Event
+
+    hue = HueService("fake", "fake")
+    hue._connected = True
+    calls = []
+    hue._bridge = SimpleNamespace(set_light=lambda lid, command: calls.append((lid, command)))
+    boundary = LightingTransitionBoundary(hue)
+    hue.set_transition_boundary(boundary)
+    engine._current_mode = "watching"
+    app = engine._applicator
+    app._hue_getter = lambda: hue
+    app._transition_boundary = boundary
+    app._overrides._transition_boundary = boundary
+    engine._transition_boundary = boundary
+    external_targets = {}
+    external_notifier = []
+    external = SimpleNamespace(
+        owned_light_targets=lambda: external_targets.copy(),
+        set_lighting_authority_notifier=external_notifier.append,
+    )
+    engine.register_external_light_owner(external)
+    sync = ScreenSyncService(hue, target_light_ids=["1", "2"], transition_boundary=boundary)
+    app._screen_sync_getter = lambda: sync
+    loop_thread = __import__("threading").get_ident()
+    real_getter = sync.fresh_owned_light_ids
+
+    def checked_getter():
+        assert __import__("threading").get_ident() == loop_thread
+        return real_getter()
+
+    sync.fresh_owned_light_ids = checked_getter
+    engine._presence_fusion = SimpleNamespace(latest_zone=lambda: "couch")
+    engine._refresh_desk_authority_observation = MagicMock()
+    entered, release = Event(), Event()
+    original = asyncio.to_thread
+
+    async def paused(fn, *args, **kwargs):
+        def worker():
+            entered.set()
+            assert release.wait(3)
+            return fn(*args, **kwargs)
+        return await original(worker)
+
+    with patch("asyncio.to_thread", paused):
+        from backend.services.light_applicator import mode_source_guard
+        source_revision = engine._physical_source_revision
+        token = mode_source_guard.set(lambda: engine._physical_source_revision == source_revision)
+        task = asyncio.create_task(app.apply_per_light({"1": {"bri": 100}, "2": {"bri": 90}}))
+        mode_source_guard.reset(token)
+        try:
+            assert await original(entered.wait, 2)
+            if takeover == "source":
+                engine.notify_presence_source_invalidated("desktop")
+            elif takeover != "unchanged":
+                if takeover == "lease":
+                    boundary.authority.invalidate(["1"])
+                if takeover == "manual":
+                    app._overrides.mark_manual("1", {"bri": 180})
+                elif takeover == "transit":
+                    app._st.transit_light_overrides["1"] = engine._now() + timedelta(minutes=1)
+                elif takeover == "external":
+                    external_targets["1"] = {"bri": 190}
+                    external_notifier[0](["1"])
+                elif takeover == "screen":
+                    # Native frame publication revokes the queued static lease.
+                    assert sync._record_source_write("desktop", "1")
+                    published = sync._last_color_at_by_light["1"]
+            release.set()
+            result = await task
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+    if takeover == "screen":
+        assert sync._last_color_at_by_light["1"] == published
+        assert "1" in real_getter()
+    assert result.successful == (
+        set() if takeover == "source" else
+        {"1", "2"} if takeover == "unchanged" else {"2"}
+    )
+    assert {str(lid) for lid, _ in calls} == result.successful
+    assert set(app._st.last_applied_per_light) == result.successful
+
+
+@pytest.mark.asyncio
+async def test_queued_static_write_rejected_when_legacy_owner_registers_empty(engine):
+    """Registration without a notifier revokes queued writes, even when empty."""
+    from threading import Event
+
+    from backend.services.hue_service import HueService
+    from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+
+    hue = HueService("fake", "fake")
+    hue._connected = True
+    calls = []
+    hue._bridge = SimpleNamespace(set_light=lambda lid, cmd: calls.append((lid, cmd)))
+    boundary = LightingTransitionBoundary(hue)
+    hue.set_transition_boundary(boundary)
+
+    engine._current_mode = "watching"
+    engine._transition_boundary = boundary
+    app = engine._applicator
+    app._hue_getter = lambda: hue
+    app._transition_boundary = boundary
+    app._overrides._transition_boundary = boundary
+
+    entered, release = Event(), Event()
+    original_to_thread = asyncio.to_thread
+
+    async def pause_worker(fn, *args, **kwargs):
+        def worker():
+            entered.set()
+            assert release.wait(3)
+            return fn(*args, **kwargs)
+
+        return await original_to_thread(worker)
+
+    with patch("asyncio.to_thread", pause_worker):
+        task = asyncio.create_task(app.apply_per_light({"1": {"bri": 100}}))
+        try:
+            assert await original_to_thread(entered.wait, 2)
+            targets = {}
+            legacy_owner = SimpleNamespace(owned_light_targets=lambda: targets.copy())
+            engine.register_external_light_owner(legacy_owner)
+            targets["1"] = {"bri": 180}
+        finally:
+            release.set()
+        result = await task
+
+    assert calls == []
+    assert result.successful == set()
+    assert "1" not in app._st.last_applied_per_light
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["cancel", "error"])
+async def test_sleeping_privacy_retained_at_persistence_failure(engine, mock_ws, failure):
+    camera = CameraService(mock_ws, engine)
+    camera._cap = MagicMock()
+    handle = camera._cap
+    engine.set_camera_service(camera)
+    entered = asyncio.Event()
+
+    async def persist():
+        entered.set()
+        if failure == "error":
+            raise RuntimeError("persistence unavailable")
+        await asyncio.Future()
+
+    engine._persist_override_state = persist
+    task = asyncio.create_task(engine.set_manual_override("sleeping", source="api:test"))
+    await entered.wait()
+    if failure == "cancel":
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError if failure == "cancel" else RuntimeError):
+        await task
+    await asyncio.gather(*engine._sleep_privacy_tasks)
+    assert engine.current_mode == "sleeping"
+    assert camera._paused
+    assert camera._cap is None
+    handle.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_source_invalidation_revokes_planner_with_other_fused_zone(engine):
+    engine._current_mode = "relax"
+    engine._presence_fusion = SimpleNamespace(latest_zone=lambda: "couch")
+    engine._refresh_desk_authority_observation = MagicMock()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def plan(**kwargs):
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(should_apply=True)
+
+    engine._plan_living_room_atmosphere = plan
+    engine._apply_state = AsyncMock()
+    engine._effect_manager.replace_with_action = AsyncMock()
+    task = asyncio.create_task(engine._apply_mode("relax"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        revision = engine._mode_transition_revision
+        transient = engine._transition_boundary.authority.issue("screen_sync", ["2"])
+        engine.notify_presence_source_invalidated("desktop")
+        async with engine._transition_boundary.serialized():
+            assert engine._transition_boundary.authority.valid(transient)
+        assert engine.current_mode == "relax"
+        assert engine._mode_transition_revision == revision
+        assert engine._fixture_comfort_expiry_task is None
+    finally:
+        release.set()
+        await task
+    engine._apply_state.assert_not_awaited()
+    engine._effect_manager.replace_with_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_relax_recomposes_after_source_loss_during_planner(engine):
+    engine._current_mode = "relax"
+    engine._manual_override = True
+    engine._override_mode = "relax"
+    engine._override_source = "api:test"
+    engine._presence_fusion = SimpleNamespace(latest_zone=lambda: "couch")
+    engine._refresh_desk_authority_observation = MagicMock()
+    entered, release = asyncio.Event(), asyncio.Event()
+    plans = []
+
+    async def plan(**kwargs):
+        plans.append(engine._physical_source_revision)
+        if len(plans) == 1:
+            entered.set()
+            await release.wait()
+        return None
+
+    engine._plan_living_room_atmosphere = plan
+    engine._apply_state = AsyncMock()
+    engine._effect_manager.needs_reconcile = lambda desired: False
+    task = asyncio.create_task(engine._apply_mode("relax"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        engine.notify_presence_source_invalidated("desktop")
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 2)
+    assert len(plans) == 2
+    assert plans[1] == plans[0] + 1
+    engine._apply_state.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("wait_at", ["safety", "settle"])
+async def test_native_scene_source_fence_after_safety_settle(engine, manual, wait_at):
+    engine._current_mode = "relax"
+    if manual:
+        engine._manual_override = True
+        engine._override_mode = "relax"
+        engine._override_source = "api:test"
+    engine._presence_fusion = SimpleNamespace(latest_zone=lambda: "couch")
+    engine._refresh_desk_authority_observation = MagicMock()
+    engine._get_time_period = lambda now=None: "day"
+    engine._scene_overrides = {"relax": {"day": "native-scene"}}
+    engine._plan_living_room_atmosphere = AsyncMock(return_value=None)
+    engine.establish_effect_release = AsyncMock(return_value=True)
+    engine._hue_v2.connected = True
+    engine._hue_v2.stop_effect_all = AsyncMock(return_value=True)
+    engine._hue_v2.activate_scene = AsyncMock(return_value=True)
+    engine._get_desired_effect = lambda *args: None
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def settle(ids):
+        entered.set()
+        await release.wait()
+
+    if wait_at == "safety":
+        async def safety(*args):
+            await settle(set())
+            return True
+        engine.establish_effect_release = safety
+    else:
+        engine._transition_boundary.wait_for_settle = settle
+    task = asyncio.create_task(engine._apply_mode("relax"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        engine.notify_presence_source_invalidated("desktop")
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 2)
+    if manual:
+        engine._hue_v2.activate_scene.assert_awaited_once_with("native-scene")
+    else:
+        engine._hue_v2.stop_effect_all.assert_not_awaited()
+        engine._hue_v2.activate_scene.assert_not_awaited()

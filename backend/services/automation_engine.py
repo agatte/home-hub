@@ -65,9 +65,11 @@ from backend.services.automation_constants import (
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
 from backend.services.light_applicator import (
-    LightApplicator, LightApplyResult, mode_apply_epoch,
+    LightApplicator, LightApplyResult, mode_apply_epoch, mode_source_guard,
 )
-from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+from backend.services.lighting_transition_boundary import (
+    LightingTransitionBoundary, lighting_write_validator,
+)
 from backend.services.lighting_authority import LightingLease, LightingSemanticField
 from backend.services.light_override_manager import LightOverrideManager
 from backend.services.living_room_atmosphere import (
@@ -704,6 +706,8 @@ class AutomationEngine:
         # or by main.py boot if camera_enabled setting is true). Used by
         # _apply_lux_multiplier to read the smoothed ambient lux reading.
         self._camera_service = None
+        self._sleep_privacy_tasks: set[asyncio.Task] = set()
+        self._physical_source_revision = 0
         # Zone+posture → relax rule state. `_reclined_since` tracks the
         # dwell timer (set on first poll with bed+reclined, cleared when
         # conditions or gates break). `_last_fired_at` is the re-fire
@@ -2961,6 +2965,9 @@ class AutomationEngine:
 
     def notify_presence_source_invalidated(self, source: str) -> None:
         """Reconcile fixture comfort after source-qualified physical authority is revoked."""
+        # Revoke only source-derived mode work, synchronously and before any
+        # fused-zone early return. Manual/ScreenSync leases remain untouched.
+        self._physical_source_revision += 1
         # Source-local expiry must run even when another physical zone remains.
         self._refresh_desk_authority_observation(
             source_invalidated=(source == "desktop"),
@@ -3025,6 +3032,8 @@ class AutomationEngine:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._sleep_privacy_tasks:
+            await asyncio.gather(*self._sleep_privacy_tasks, return_exceptions=True)
 
     def _refresh_fixture_comfort_expiry_task(self) -> None:
         """Arm one recompose when a recent physical Desk lock becomes unknown."""
@@ -3871,6 +3880,10 @@ class AutomationEngine:
         self._mode_source = source
         self._mode_source_key = source_key
         self._last_activity = mode
+        # A committed detector Sleeping transition must close the camera even
+        # if subsequent lighting or callback fan-out is cancelled/superseded.
+        if mode == "sleeping" and old_mode != mode and self.current_mode == "sleeping":
+            self._retain_sleeping_camera_privacy()
         if (
             old_mode != mode or old_source_key != source_key
             or old_game != self._current_game
@@ -3954,6 +3967,10 @@ class AutomationEngine:
             self._override_source = None
             self._override_time = None
             transition_revision = self._mode_transition_revision
+            # The detector can become effective only after displacing a
+            # weaker autonomous override. Protect this Sleeping commit too.
+            if mode == "sleeping" and self.current_mode == "sleeping":
+                self._retain_sleeping_camera_privacy()
             await self._persist_override_state()
             # Fall through to normal mode-application path below — per-light
             # overrides are preserved (no _clear_per_light_overrides) because
@@ -4097,6 +4114,37 @@ class AutomationEngine:
             "included_in_fusion": False,
         }
 
+    def _retain_sleeping_camera_privacy(self) -> asyncio.Task | None:
+        """Reconcile committed Sleeping independently of the initiating caller.
+
+        This is a privacy lifecycle action, not an Activity fan-out callback.
+        In particular, lighting awaits, persistence failure, DND epochs and
+        cancellation must not leave the capture handle open after Sleeping.
+        """
+        if self.current_mode != "sleeping":
+            return None
+        camera = self._camera_service
+        privacy_callback = getattr(camera, "on_mode_change", None)
+        if not callable(privacy_callback):
+            return None
+
+        async def reconcile_privacy() -> None:
+            try:
+                await asyncio.wait_for(
+                    privacy_callback(
+                        "sleeping",
+                        owner_is_current=lambda: self.current_mode == "sleeping",
+                    ),
+                    timeout=15.0,
+                )
+            except Exception:
+                logger.exception("Sleeping camera privacy reconciliation failed")
+
+        task = asyncio.create_task(reconcile_privacy())
+        self._sleep_privacy_tasks.add(task)
+        task.add_done_callback(self._sleep_privacy_tasks.discard)
+        return task
+
     async def set_manual_override(self, mode: str, source: str = "internal") -> None:
         """Set a manual mode override from the dashboard.
 
@@ -4199,7 +4247,11 @@ class AutomationEngine:
             mode, source, prior_override, was_overridden,
         )
         transition_revision = self._mode_transition_revision
+        # Schedule before persistence: cancellation must not strand an open camera.
+        privacy_task = self._retain_sleeping_camera_privacy() if mode == "sleeping" else None
         await self._persist_override_state()
+        if privacy_task is not None:
+            await asyncio.shield(privacy_task)
         # Broadcast first so the UI updates immediately, then apply lights.
         # force_resend=True so any lights that were behind a per-light override
         # (now released) get a fresh write to the new mode's state.
@@ -5008,9 +5060,53 @@ class AutomationEngine:
         if inherited is not None and inherited != owner:
             logger.debug("Rejected superseded reapply owner")
             return
+        inherited_source = mode_source_guard.get()
+        if inherited_source is not None and not inherited_source():
+            return
+        inherited_write = lighting_write_validator.get()
         token = mode_apply_epoch.set(owner)
         try:
-            await self._apply_mode_under_owner(mode, force_resend=force_resend)
+            while True:
+                source_revision = self._physical_source_revision
+                # Explicit mapped scenes and Sleeping have stronger ownership
+                # than physical overlays. Static manual Activity still composes
+                # fresh fixture evidence and retries if planning lost its source.
+                source_dependent = mode != "sleeping" and not (
+                    self.override_user_owned
+                    and self._scene_overrides.get(mode, {}).get(self._get_time_period(self._now()))
+                )
+
+                def source_current():
+                    return (
+                        (inherited_source is None or inherited_source())
+                        and (not source_dependent or self._physical_source_revision == source_revision)
+                    )
+
+                def write_current():
+                    return (
+                        owner == (self._mode_transition_revision, self.effective_mode)
+                        and (inherited_write is None or inherited_write())
+                        and source_current()
+                        and not self._external_off_detected
+                        and not self._away_hold
+                    )
+
+                source_token = mode_source_guard.set(source_current)
+                write_token = lighting_write_validator.set(write_current)
+                try:
+                    await self._apply_mode_under_owner(mode, force_resend=force_resend)
+                finally:
+                    lighting_write_validator.reset(write_token)
+                    mode_source_guard.reset(source_token)
+                if (
+                    source_current() or not self.override_user_owned
+                    or owner != (self._mode_transition_revision, self.effective_mode)
+                    or self._external_off_detected or self._away_hold
+                    or (inherited_source is not None and not inherited_source())
+                ):
+                    break
+                # Re-enter the existing composer; never reuse the stale plan.
+                force_resend = True
         finally:
             mode_apply_epoch.reset(token)
 
@@ -5034,7 +5130,11 @@ class AutomationEngine:
         owner = mode_apply_epoch.get()
 
         def owner_is_current() -> bool:
-            return owner == (self._mode_transition_revision, self.effective_mode)
+            source_guard = mode_source_guard.get()
+            return (
+                owner == (self._mode_transition_revision, self.effective_mode)
+                and (source_guard is None or source_guard())
+            )
 
         if mode != "gaming" and self._screen_sync is not None:
             clear_gaming = getattr(
@@ -5165,6 +5265,8 @@ class AutomationEngine:
             if mode == "relax"
             else None
         )
+        if not owner_is_current():
+            return
         if atmosphere_plan is not None and atmosphere_plan.should_apply:
             desired_effect = preserve_atmosphere_effect_scope(desired_effect)
         if override_scene and self._hue_v2 and self._hue_v2.connected:
@@ -5919,13 +6021,17 @@ class AutomationEngine:
     def register_external_light_owner(self, owner: Any) -> None:
         """Register a direct bridge writer for final-apply protection."""
         if owner not in self._external_light_owners:
-            self._external_light_owners.append(owner)
             notifier = getattr(owner, "set_lighting_authority_notifier", None)
+            if not callable(notifier):
+                # Revoke pending writes before exposing a legacy owner: it
+                # cannot announce later acquisitions, even when empty now.
+                self._transition_boundary.authority.invalidate()
+            self._external_light_owners.append(owner)
             if callable(notifier):
                 notifier(self._transition_boundary.authority.invalidate)
-            getter = getattr(owner, "owned_light_targets", None)
-            if callable(getter):
-                self._transition_boundary.authority.invalidate(getter())
+                getter = getattr(owner, "owned_light_targets", None)
+                if callable(getter):
+                    self._transition_boundary.authority.invalidate(getter())
 
     def _active_external_light_owners(self) -> list[Any]:
         return [

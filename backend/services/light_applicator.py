@@ -47,6 +47,12 @@ mode_apply_epoch: ContextVar[tuple[int, str] | None] = ContextVar(
 )
 
 
+# Pure source-generation predicate captured before any mode planning awaits.
+mode_source_guard: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "homehub_mode_source_guard", default=None,
+)
+
+
 @dataclass
 class LightApplyResult:
     """Per-light outcome of one bridge application."""
@@ -218,10 +224,11 @@ class LightApplicator:
             if invalidate is not None:
                 invalidate(light_ids)
 
-    async def _write_many(self, writes, light_ids):
+    async def _write_many(self, writes, light_ids, *, static=False):
         # The bridge boundary evaluates this validator inside its delegated
         # mutation task, not merely before acquiring a serialization lock.
         # Non-mode writers retain existing protected-owner/lease semantics.
+        source_guard = mode_source_guard.get()
         owner = mode_apply_epoch.get()
         validator = None
         if owner is not None and self._owner_revision_getter is not None:
@@ -229,13 +236,46 @@ class LightApplicator:
 
             def validator():
                 return (
-                    not self._suppressed()
+                    (source_guard is None or source_guard())
+                    and not self._suppressed()
                     and self._owner_revision_getter() == revision
                     and self._current_mode_getter() == expected_mode
                 )
+        validators = None
+        if static:
+            # Capture before delegation, then recheck at executor entry as well.
+            # Effect-release writes deliberately retain their separate safety
+            # targets: applying the static protected filter there could prevent
+            # an acknowledged safe target from preceding effect shutdown.
+            authority = self._transition_boundary.authority
+            # Pruning getters run only on the event loop. Native owners publish
+            # subsequent acquisitions through the per-light authority notifier.
+            protected = self.protected_light_ids()
+            legacy_owner = any(
+                not callable(getattr(owner, "set_lighting_authority_notifier", None))
+                for owner in self._external_owners_getter()
+            )
+            validators = []
+            for light_id in light_ids:
+                lease = authority.issue("static", [light_id])
+
+                def valid(lid=light_id, captured=lease):
+                    return (
+                        (validator is None or validator())
+                        and authority.valid(captured)
+                        and (source_guard is None or source_guard())
+                        and lid not in protected
+                        and lid not in self._st.manual_light_overrides
+                        and lid not in self._st.transit_light_overrides
+                        # Legacy external writers cannot publish safe revocation.
+                        and not legacy_owner
+                    )
+
+                validators.append(valid)
         try:
             return await self._transition_boundary.write_many(
                 writes, light_ids=light_ids, validator=validator,
+                validators=validators,
             )
         except asyncio.CancelledError:
             for light_id in light_ids:
@@ -365,7 +405,7 @@ class LightApplicator:
         successful_ids: list[str] = []
         failed_ids: list[str] = []
         if tasks:
-            results = await self._write_many(tasks, changed_ids)
+            results = await self._write_many(tasks, changed_ids, static=True)
             successful_ids = [
                 light_id
                 for light_id, result in zip(changed_ids, results)

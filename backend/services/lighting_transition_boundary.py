@@ -117,6 +117,16 @@ class LightingTransitionBoundary:
             raise RuntimeError("Lighting write delegation requires the boundary")
 
         epoch = self._serialized_epoch
+        inherited_validator = lighting_write_validator.get()
+        local_validator = validator
+
+        def validator():
+            # Preserve the originating engine/source fence when a native
+            # scene/effect supplies its own lease validator after safety/settle.
+            return (
+                (inherited_validator is None or inherited_validator())
+                and (local_validator is None or local_validator())
+            )
 
         async def mutate():
             token = self._held.set(asyncio.current_task())
@@ -139,11 +149,15 @@ class LightingTransitionBoundary:
 
     async def write_many(
         self, writes: Iterable[Callable[[], Awaitable]], *,
-        light_ids=None, validator=None,
+        light_ids=None, validator=None, validators=None,
     ):
         """Parallel canonical writes with explicit, bounded lock delegation."""
+        writes = list(writes)
+        checks = [validator] * len(writes) if validators is None else list(validators)
+        if len(checks) != len(writes):
+            raise ValueError("Each write requires one validator")
         operations = [
-            self._delegate_write(write, validator=validator)
-            for write in writes
+            self._delegate_write(write, validator=check)
+            for write, check in zip(writes, checks)
         ]
         return await settle_lighting_io(asyncio.gather(*operations, return_exceptions=True))

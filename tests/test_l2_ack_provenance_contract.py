@@ -117,7 +117,7 @@ def app_fixture(hue, protected=(), cache=None, suppressed=False, replies=None):
     app._transition_boundary = SimpleNamespace(authority=Authority())
     app.invalidated = []
     app._invalidate_screen_sync_cache = lambda ids: app.invalidated.extend(ids)
-    async def write_many(tasks, ids):
+    async def write_many(tasks, ids, *, static=False):
         if replies is not None:
             return replies
         return await asyncio.gather(*(task() for task in tasks), return_exceptions=True)
