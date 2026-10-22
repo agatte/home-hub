@@ -260,6 +260,7 @@ async def preview_discovery(
         }
         if intent is not None:
             kwargs["intent"] = intent
+            kwargs["explicit_user_intent"] = True
         result = await discovery.preview(mode, **kwargs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -271,6 +271,7 @@ class MusicRequestService:
                 count=discovery_limit,
                 tracks_per_artist=tracks_per_artist,
                 intent=resolved.semantic_request,
+                explicit_user_intent=bool(resolved.semantic_request),
             )
 
         has_discovery = bool(discovery_result and discovery_result.clusters)

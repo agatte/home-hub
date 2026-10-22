@@ -1,6 +1,19 @@
 # HomeHub Obsidian Mirror Synchronization — Proposal
 
-> **Status:** design only, tracked by [#365](https://github.com/agatte/home-hub/issues/365). No recurring task, automatic Git update or host refresh is enabled.
+> **2026-10-21 live correction (#399):** the real Windows task is **enabled**
+> and physically fired at 11:00 ET, but returned code **2**. The sealed Vault
+> manifest still names the October 19 commit; successful unattended refresh is
+> **NOT accepted**. An original-bundle ctypes token-handle bug was reproduced
+> on Windows Sandbox. The replacement source is a **new immutable version**, not
+> an in-place repair of the original bundle or the existing task. Host installation
+> and action migration require separate explicit authorization and physical
+> acceptance. The older phase/status text below is historical proposal evidence.
+
+> **Status:** Read-only freshness and refresh-preview tools are merged via
+> [PR #377](https://github.com/agatte/home-hub/pull/377). Future notifications
+> and unattended refresh remain designs under [#365](https://github.com/agatte/home-hub/issues/365).
+> No recurring task, automatic Git update or host refresh is enabled.
+> **Current GitHub issue:** #365 open
 > **Source:** [KNOWLEDGE_WORKFLOW.md](KNOWLEDGE_WORKFLOW.md), [OBSIDIAN_PERSISTENT_VAULT.md](OBSIDIAN_PERSISTENT_VAULT.md), and the reviewed `scripts/manage_obsidian_vault.py` implementation.
 > **Authority:** GitHub tracked Markdown and issues, not Obsidian. [#358](https://github.com/agatte/home-hub/issues/358) owns normal Windows reboot durability acceptance.
 
@@ -44,11 +57,14 @@ py -3 scripts/check_obsidian_freshness.py --repo 'C:\Users\Anthony\Documents\hom
 
 Output is a single bounded JSON report with `checkout_head`, `vault_snapshot`, supplied `github_master` provenance, managed integrity, explicit pairwise `same`/`different`/`unknown`, and `refresh_authorized: false`. Exit 0 means three SHA values match **only the supplied reference**, 1 means mismatch or unknown, and 2 means a refused/error state (missing/tampered Vault, invalid SHA, unsafe path, unavailable Git). It checks neither Git ancestry nor worktree cleanliness, runtime deployment, Obsidian app closure, real Windows ACLs or reboot persistence; equal SHAs do not grant permission to refresh. Hash verification reads only `HomeHub Source`, never personal notes or `.obsidian`. No Git fetch/write, logging of credentials, background service, Vault mutation or retention action is included.
 
-## Phase B — proposed assisted refresh preview (Sandbox candidate only)
+## Phase B — merged read-only assisted refresh preview (no host refresh)
 
-Extend the **existing** `check_obsidian_freshness.py` with opt-in `--plan-refresh` for a **read-only, reviewable path list**. It must receive an independently verified GitHub SHA, require the checkout to equal that supplied SHA and be clean (including untracked files), confirm the sealed managed snapshot is hash-consistent, and verify the snapshot commit is an ancestor of checkout HEAD. Only compare `AGENTS.md` and regular `docs/**/*.md` tracked Git tree blobs. Output added/modified/removed paths and counts, never document contents or personal notes; do not open a network connection or update Git/Windows/Vault. A plan is **not** permission to run `manage_obsidian_vault.py --refresh`, even when labeled reviewable.
+[PR #377](https://github.com/agatte/home-hub/pull/377) extended the
+**existing** `check_obsidian_freshness.py` with opt-in `--plan-refresh`
+for a **read-only, reviewable path list**. It must receive an independently verified GitHub SHA, require the checkout to equal that supplied SHA and be clean (including untracked files), confirm the sealed managed snapshot is hash-consistent, and verify the snapshot commit is an ancestor of checkout HEAD. Only compare `AGENTS.md` and regular `docs/**/*.md` tracked Git tree blobs. Output added/modified/removed paths and counts, never document contents or personal notes; do not open a network connection or update Git/Windows/Vault. A plan is **not** permission to run `manage_obsidian_vault.py --refresh`, even when labeled reviewable.
 
-Example **synthetic fixture or separately authorized host operator** use (not authority to touch the real host):
+Example **synthetic fixture or separately authorized host operator** use
+(not authority to touch the real host):
 
 ~~~powershell
 py -3 scripts/check_obsidian_freshness.py --plan-refresh --repo '<already-verified-checkout>' --vault '<already-verified-existing-vault>' --github-head '<independently-verified-GitHub-master-SHA>'

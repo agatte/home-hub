@@ -141,6 +141,71 @@ class RecommendationService:
                 break
         return results
 
+    async def discover_mood_candidates(
+        self,
+        mood: str,
+        *,
+        count: int = 8,
+        tracks_per_artist: int = 3,
+    ) -> list[dict]:
+        """Bounded, opt-in Last.fm mood-tag discovery; never writes history.
+
+        This deliberate source differs from artist similarity. It checks the
+        exact iTunes catalog identity of returned artists/tracks, while final
+        semantic evidence and taste rejections remain the discovery layer's job.
+        """
+        if mood != "relax" or not self._lastfm_key:
+            return []
+        profile = await self._load_profile()
+        if profile is None:
+            return []
+        owned = {
+            str(artist.get("name") or "").strip().casefold()
+            for artist in profile.top_artists
+            if isinstance(artist, dict) and artist.get("name")
+        }
+        candidates: dict[str, dict] = {}
+        for tag in ("chillout", "mellow", "acoustic"):
+            artists = await self._query_lastfm_tag_artists(tag, limit=8)
+            for rank, name in enumerate(artists):
+                cleaned = str(name or "").strip()
+                key = cleaned.casefold()
+                if not key or key in owned or key in candidates:
+                    continue
+                candidates[key] = {
+                    "artist_name": cleaned,
+                    "seed_artist": f"tag:{tag}",
+                    # Ranking within this provider list, NOT taste similarity.
+                    "source_match": max(0.0, 0.75 - 0.035 * rank),
+                }
+        results: list[dict] = []
+        # Allow a bounded provider budget; slow individual catalog lookups must
+        # not consume the UI's entire request window or hide partial evidence.
+        deadline = asyncio.get_running_loop().time() + 4.0
+        for candidate in list(candidates.values())[:min(12, max(1, count + 3))]:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                tracks = await asyncio.wait_for(
+                    self._search_itunes_tracks(
+                        candidate["artist_name"], limit=tracks_per_artist,
+                    ),
+                    timeout=min(2.0, remaining),
+                )
+            except TimeoutError:
+                continue
+            if not tracks:
+                continue
+            results.append({
+                **candidate,
+                "source": "lastfm_mood_tag+itunes_search",
+                "tracks": tracks,
+            })
+            if len(results) >= max(1, count):
+                break
+        return results
+
     async def generate_recommendations(
         self, mode: str, count: int = 10
     ) -> list[dict]:
@@ -432,6 +497,37 @@ class RecommendationService:
 
             except Exception as e:
                 logger.error(f"Last.fm query failed for '{artist_name}': {e}")
+                return []
+
+    async def _query_lastfm_tag_artists(self, tag: str, *, limit: int = 8) -> list[str]:
+        """Retrieve bounded provider-named artists for a specific mood tag."""
+        async with self._api_sem:
+            try:
+                resp = await self._http.get(
+                    LASTFM_BASE,
+                    params={
+                        "method": "tag.gettopartists",
+                        "tag": tag,
+                        "api_key": self._lastfm_key,
+                        "format": "json",
+                        "limit": max(1, min(12, limit)),
+                    },
+                    timeout=3.0,
+                )
+                await asyncio.sleep(0.2)
+                if resp.status_code != 200:
+                    logger.warning("Last.fm mood-tag search failed for %s: %s", tag, resp.status_code)
+                    return []
+                rows = resp.json().get("topartists", {}).get("artist", [])
+                if not isinstance(rows, list):
+                    return []
+                return [
+                    name for row in rows[:max(1, min(12, limit))]
+                    if isinstance(row, dict)
+                    if (name := str(row.get("name") or "").strip())
+                ]
+            except Exception as exc:
+                logger.warning("Last.fm mood-tag search unavailable for %s: %s", tag, type(exc).__name__)
                 return []
 
     async def get_semantic_tags(

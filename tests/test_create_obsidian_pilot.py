@@ -119,3 +119,19 @@ def test_symlink_is_not_copied(repo, tmp_path):
     assert count == 4
     assert not (dest / "docs/LINKED_SECRET.md").exists()
     assert not (dest / ".env").exists()
+
+
+def test_generated_pages_are_exact_utf8_lf_bytes_on_all_platforms(repo, tmp_path):
+    """Generated pages must be byte-stable across Windows and POSIX."""
+    from create_obsidian_pilot import LANDING
+
+    dest = tmp_path / "stable-generated-pages"
+    sha, count = create(repo, dest)
+    assert (dest / "00-START-HERE.md").read_bytes() == LANDING.encode("utf-8")
+    expected_provenance = (
+        f"# Preview provenance\n\nSource Git commit: `{sha}`.\n\n"
+        f"Exported Git-tracked Markdown files: **{count}**.\n\n"
+        "This is an isolated copy, not a live-status verification.\n"
+    ).encode("utf-8")
+    assert (dest / "SNAPSHOT.md").read_bytes() == expected_provenance
+    assert b"\r" not in expected_provenance

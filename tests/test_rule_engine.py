@@ -382,11 +382,13 @@ class TestRuleCRUD:
 # Suggestions
 # ---------------------------------------------------------------------------
 
-async def _seed_rule(session_factory, predicted_mode: str = "gaming") -> int:
+async def _seed_rule(
+    session_factory, predicted_mode: str = "gaming", *, day_of_week: int = 0,
+) -> int:
     """Insert a LearnedRule + return its id. Day/hour are arbitrary; FK only."""
     async with session_factory() as session:
         rule = LearnedRule(
-            day_of_week=0, hour=12, predicted_mode=predicted_mode,
+            day_of_week=day_of_week, hour=12, predicted_mode=predicted_mode,
             confidence=0.85, sample_count=7,
         )
         session.add(rule)
@@ -550,13 +552,18 @@ class TestSuggestionPersistence:
     async def test_supersede_marks_earlier_pending(self, db_and_service):
         """Two pending rows can't coexist — earlier one gets superseded."""
         _, service, _, session_factory = db_and_service
-        rule_id_a = await _seed_rule(session_factory, predicted_mode="working")
+        now = datetime.now(TZ)
+        # Use a different weekday than the live time slot. The old fixed
+        # Monday/noon seed collided when CI ran on Monday at 12:xx Eastern.
+        rule_id_a = await _seed_rule(
+            session_factory, predicted_mode="working",
+            day_of_week=(now.weekday() + 1) % 7,
+        )
         first_id = await _seed_pending(
             session_factory, rule_id_a, predicted_mode="working",
         )
 
         # Inject a second rule for now's slot to force a fresh fire
-        now = datetime.now(TZ)
         async with session_factory() as session:
             session.add(LearnedRule(
                 day_of_week=now.weekday(), hour=now.hour,

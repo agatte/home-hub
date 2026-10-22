@@ -353,6 +353,41 @@ class SonosService:
                      'x-sonosapi-radio'})
 
     @staticmethod
+    def _stopped_http_music_metadata_matches(metadata, source_uri):
+        """Bind an HTTP source to its own DIDL music-track resource.
+
+        HTTP by itself is not a source category. A stale title, unrelated
+        metadata, or an arbitrary network stream must not allow an unload.
+        """
+        import xml.etree.ElementTree as ET
+
+        if (not isinstance(metadata, str) or not metadata
+                or len(metadata) > 65536):
+            return False
+        try:
+            root = ET.fromstring(metadata)
+        except ET.ParseError:
+            return False
+        for item in root.iter():
+            if item.tag.rsplit('}', 1)[-1] != 'item':
+                continue
+            children = list(item)
+            classes = [(child.text or '').strip() for child in children
+                       if child.tag.rsplit('}', 1)[-1] == 'class']
+            if classes != ['object.item.audioItem.musicTrack']:
+                continue
+            for child in children:
+                if (child.tag.rsplit('}', 1)[-1] != 'res'
+                        or (child.text or '').strip() != source_uri):
+                    continue
+                protocol = child.attrib.get('protocolInfo', '').split(':', 3)
+                if (len(protocol) == 4
+                        and protocol[0].lower() == 'http-get'
+                        and protocol[2].lower().startswith('audio/')):
+                    return True
+        return False
+
+    @staticmethod
     def prepare_stopped_eligible(evidence):
         """Allow explicit discard only for a stable, empty-queue stopped music source.
 
@@ -391,6 +426,15 @@ class SonosService:
             source = urlsplit(current_uri)
         except ValueError:
             return False
+        if source.scheme == 'http':
+            # The observed stopped source uses direct HTTP for a music track.
+            # Only trust it when CurrentURI, TrackURI, and an audio DIDL
+            # resource all identify the exact same track. Never allow generic
+            # HTTP streams, host-only URLs, or stale unrelated metadata.
+            return (bool(source.netloc) and bool(source.path.strip('/ '))
+                    and track_uri == current_uri
+                    and SonosService._stopped_http_music_metadata_matches(
+                        evidence.get('metadata'), current_uri))
         return (source.scheme in {'x-sonos-http', 'x-sonosapi-stream',
                                   'x-sonosapi-hls', 'x-sonosapi-radio'}
                 and bool(source.path.strip('/ ')))
@@ -415,6 +459,13 @@ class SonosService:
             return 'source_playing'
         if transport == 'STOPPED' and any(evidence.get(key) for key in (
                 'current_uri', 'queue_track_uri', 'title', 'metadata', 'media_metadata')):
+            # Diagnostic only: prove all other stopped-source conditions with a
+            # synthetic nonzero volume. Do not change eligibility or evidence.
+            if (type(evidence.get('volume')) is int
+                    and evidence['volume'] == 0
+                    and SonosService.prepare_stopped_eligible({
+                        **evidence, 'volume': 1})):
+                return 'source_volume_zero'
             return 'source_stopped_but_loaded'
         if evidence.get('play_mode') not in (None, 'NORMAL'):
             return 'source_play_mode_not_normal'
