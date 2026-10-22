@@ -1,8 +1,9 @@
 # HomeHub #399 — immutable scheduled mirror replacement release
 
-**Status:** source-only candidate, not installed or operationally accepted.
+**Status:** source correction merged by PR #420; existing-task migration adapter is a separately reviewed source-only Sandbox candidate. Neither the new bundle nor task action has been installed on Windows. Automatic sync is not operationally accepted.
 **Owner:** Project Admin; [issue #399](https://github.com/agatte/home-hub/issues/399).
-**Baseline:** GitHub `master` `5fbc1ddbe2d42d6a1540704b58da75a921b1e7f5`.
+**Fixed replacement bundle identifier:** `5fbc1ddbe2d42d6a1540704b58da75a921b1e7f5` (release baseline label).
+**Merged correction:** PR #420, `e5e99c204976668293172df67a93fa06343f40dc` (all post-merge CI jobs green).
 
 ## Why this release is necessary
 
@@ -35,6 +36,40 @@ Scheduler action traceback has been captured.
   It is **NOT a migration or installation command for the new version**.
   New release tests require fail-closed behavior on the newer launcher bytes.
 
+## Source-only existing-task migration candidate
+
+The native Windows `scripts/migrate_obsidian_mirror_task.ps1` adapter is OFF by
+default. `-Check` validates an exact staged replacement manifest SHA-256,
+the nine reviewed file hashes and pinned Python interpreter, original immutable
+bundle/manifest and launcher SHA-256, ordinary non-elevated interactive user,
+and the current exact Task Scheduler definition. It resolves principal and
+logon-trigger account-name/SID representations semantically (this mismatch
+previously caused false refusals). It does **not** modify Scheduler or Vault.
+
+`-Apply` additionally requires separate specific host approval. It re-reads
+the existing task and staged manifest, refuses any non-Ready/running task or
+imminent hourly trigger, and modifies only the existing task's Python
+`Exec` action fields in a detached definition. Exactly one native
+`RegisterTaskDefinition` call uses `TASK_UPDATE = 4` and
+`TASK_LOGON_INTERACTIVE_TOKEN = 3`, never CREATE or CREATE_OR_UPDATE;
+the current task's enabled state, triggers, principal and settings must
+read back unchanged, except for the verified new action fields. An uncertain
+result is a **STOP**, with no automatic retry/rollback, deletion or manual
+task run. This is an action-only procedure, not a new task registration.
+
+The native Scheduler may still race with a separate interactive sign-in.
+The hourly preflight reduces the known scheduled-trigger overlap risk but
+does not claim cross-process atomicity or solve malicious same-user changes
+(outside accepted Option A). Unexpected task/register semantics must fail
+closed and be investigated before any real-host installation.
+
+The adapter currently exists **only in Sandbox for review/testing**, and is
+not authorization to execute it on real Windows. The host-specific new manifest
+digest must be independently obtained from the approved exact bundle-staging
+procedure; no digest is guessed or generated from chat. The already-merged
+`package_obsidian_schedule.py` can exclusively stage an absent new version,
+but that is a **different real-host write approval** from task action migration.
+
 ## Remaining separate real-host authorization gates
 
 1. Before any host write, independently review the exact new package pins,
@@ -44,13 +79,13 @@ Scheduler action traceback has been captured.
    exact absent new directory; preserve the original bundle unchanged. Use
    the reviewed `package_obsidian_schedule.py` staging guard and independently
    verify every file plus the resulting host-specific manifest hash.
-3. Separately review an **action-only existing-task migration**. It must
-   confirm no running instance and original action/triggers/identity/settings,
-   then replace only the pinned Python action target/manifest anchor with the
-   independently verified new bundle. This is **not yet implemented** as a
-   reviewed host migration adapter. Do not use the old create-only registrar,
-   edit the task ad hoc, change XML without a full read-back, or disable/enable
-   the existing task speculatively.
+3. Separately review and merge the **Sandbox-only action-only migration
+   adapter** described above. It must confirm no running instance and original
+   action/triggers/identity/settings, then replace only the pinned Python
+   action target/manifest anchor with the independently verified new bundle.
+   Sandbox tests are not physical Task Scheduler acceptance. Do not use the
+   old create-only registrar, edit the task ad hoc, change XML without a
+   full read-back, or disable/enable the existing task speculatively.
 4. With explicit host mutation approval, execute exactly one bounded action
    migration under the ordinary interactive user; inspect registered task
    freshly. On unknown results, **STOP**, preserve evidence, do not retry,
