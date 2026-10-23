@@ -9662,3 +9662,426 @@ async def test_native_scene_source_fence_after_safety_settle(engine, manual, wai
     else:
         engine._hue_v2.stop_effect_all.assert_not_awaited()
         engine._hue_v2.activate_scene.assert_not_awaited()
+
+
+@pytest.fixture
+async def controlled_sleep_fade(engine, monkeypatch):
+    """Pause only fade sleeps; bridge writes and owner validation stay real."""
+    waits = asyncio.Queue()
+    real_sleep = asyncio.sleep
+
+    async def sleep(delay):
+        if asyncio.current_task() is engine._sleep_fade_task:
+            release = asyncio.Event()
+            await waits.put((delay, release))
+            await release.wait()
+        else:
+            await real_sleep(0)
+
+    monkeypatch.setattr("backend.services.automation_engine.asyncio.sleep", sleep)
+    engine._persist_override_state = AsyncMock()
+    engine._broadcast_mode = AsyncMock()
+    engine._dnd._persist = AsyncMock()
+    engine._transition_boundary.wait_for_settle = AsyncMock()
+    try:
+        yield waits
+    finally:
+        task = engine._sleep_fade_task
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["repeat", "dnd_enable", "dnd_clear"])
+@pytest.mark.parametrize("stage", ["hold", "dim", "off"])
+async def test_sleep_fade_new_owner_continues_without_relight(
+    engine, mock_hue, controlled_sleep_fade, replacement, stage,
+):
+    waits = controlled_sleep_fade
+    await engine.set_manual_override("sleeping", source="api:test")
+    delay, release = await asyncio.wait_for(waits.get(), 2)
+    assert delay == 2
+    assert engine._sleep_fade_steps[0][2] == 200  # Hue's 20-second manual slide.
+    assert all(light["bri"] == 20 for light in mock_hue._lights.values())
+    old_task = engine._sleep_fade_task
+    if stage != "hold":
+        release.set()
+        delay, release = await asyncio.wait_for(waits.get(), 2)
+        assert delay == 22
+        assert all(light["bri"] == 1 for light in mock_hue._lights.values())
+    if stage == "off":
+        release.set()
+        await old_task
+        assert all(not light["on"] for light in mock_hue._lights.values())
+    if replacement == "repeat":
+        await engine.set_manual_override("sleeping", source="api:test")
+    elif replacement == "dnd_enable":
+        await engine.enable_dnd(source="api:test")
+    else:
+        await engine.clear_dnd(source="api:test")
+    if stage == "off":
+        assert all(not light["on"] for light in mock_hue._lights.values())
+        assert engine._sleep_fade_task is old_task
+        return
+    assert old_task.cancelled()
+    new_task = engine._sleep_fade_task
+    assert new_task is not old_task
+    delay, release = await asyncio.wait_for(waits.get(), 2)
+    assert delay == (2 if stage == "hold" else 22)
+    # Same-owner periodic application preserves the task and current target.
+    await engine._apply_mode("sleeping", force_resend=True)
+    assert engine._sleep_fade_task is new_task
+    assert all(light["bri"] == (20 if stage == "hold" else 1)
+               for light in mock_hue._lights.values())
+    release.set()
+    if stage == "hold":
+        delay, release = await asyncio.wait_for(waits.get(), 2)
+        assert delay == 22
+        release.set()
+    await new_task
+    assert all(not light["on"] for light in mock_hue._lights.values())
+    assert engine._sleep_fade_steps == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("takeover", ["home", "away", "external_off", "aba"])
+async def test_sleep_fade_stale_owner_cannot_write(
+    engine, mock_hue, controlled_sleep_fade, takeover,
+):
+    await engine.set_manual_override("sleeping", source="api:test")
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    old_task = engine._sleep_fade_task
+    if takeover == "home":
+        await engine.set_manual_override("working", source="api:test")
+        assert old_task.cancelled()
+    elif takeover == "away":
+        engine._away_hold = True
+    elif takeover == "external_off":
+        engine._external_off_detected = True
+    else:
+        engine._override_mode = "working"
+        engine._override_mode = "sleeping"
+    before = {lid: light.copy() for lid, light in mock_hue._lights.items()}
+    release.set()
+    await asyncio.gather(old_task, return_exceptions=True)
+    assert mock_hue._lights == before
+
+
+@pytest.mark.asyncio
+async def test_sleep_fade_auto_contract_and_owner_continuation(
+    engine, mock_hue, controlled_sleep_fade,
+):
+    engine._current_mode = "sleeping"
+    await engine._apply_mode("sleeping")
+    original_steps = list(engine._sleep_fade_steps)
+    assert len(original_steps) == 7
+    assert all(step[0] == 100 for step in original_steps)
+    assert [step[1].get("bri") for step in original_steps] == [16, 13, 10, 6, 3, 1, None]
+    for index in range(7):
+        delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+        assert delay == 100
+        if index == 1:
+            old_task = engine._sleep_fade_task
+            await engine.enable_dnd(source="api:test")
+            assert old_task.cancelled()
+            assert engine._sleep_fade_steps == original_steps[1:]
+            delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+            assert delay == 100
+        release.set()
+    await engine._sleep_fade_task
+    assert all(not light["on"] for light in mock_hue._lights.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_mode", ["sleeping", "working", "auto"])
+async def test_sleep_fade_replacement_awaits_delegated_io(
+    engine, mock_hue, controlled_sleep_fade, new_mode,
+):
+    from backend.services.lighting_transition_boundary import settle_lighting_io
+
+    original_apply = engine._apply_state
+    entered, finish_io = asyncio.Event(), asyncio.Event()
+    pending = True
+    stale_results = []
+
+    async def apply(state, transitiontime=None):
+        nonlocal pending
+        if state.get("bri") == 1 and pending:
+            pending = False
+
+            async def delegated():
+                entered.set()
+                await finish_io.wait()
+                result = await original_apply(state, transitiontime)
+                stale_results.append(result)
+                return result
+
+            return await settle_lighting_io(delegated())
+        return await original_apply(state, transitiontime)
+
+    engine._apply_state = apply
+    await engine.set_manual_override("sleeping", source="api:test")
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    old_task = engine._sleep_fade_task
+    release.set()
+    await asyncio.wait_for(entered.wait(), 2)
+    replacement = asyncio.create_task(
+        engine.clear_override(source="api:test", user_requested_auto=True) if new_mode == "auto"
+        else engine.set_manual_override(new_mode, source="api:test")
+    )
+
+    async def wait_for_cancel():
+        while not old_task.cancelling():
+            await asyncio.sleep(0)
+
+    concurrent = None
+    try:
+        # Let the replacement reach cancellation of the pending fade.
+        await asyncio.wait_for(wait_for_cancel(), 2)
+        concurrent = (
+            asyncio.create_task(engine._apply_mode("sleeping"))
+            if new_mode == "sleeping" else None
+        )
+        assert not replacement.done()
+        assert all(light["bri"] == 20 for light in mock_hue._lights.values())
+    finally:
+        finish_io.set()
+    await replacement
+    if concurrent is not None:
+        await concurrent
+    assert old_task.cancelled()
+    assert len(stale_results) == 1
+    assert not stale_results[0].successful
+    if new_mode == "sleeping":
+        _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+        release.set()
+        _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+        release.set()
+        await engine._sleep_fade_task
+        assert all(not light["on"] for light in mock_hue._lights.values())
+    else:
+        assert engine._sleep_fade_steps is None
+        assert engine.effective_mode == ("general" if new_mode == "auto" else "working")
+        assert any(light["on"] for light in mock_hue._lights.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protection", ["manual", "external", "transit"])
+async def test_sleep_fade_continuation_preserves_per_light_owner(
+    engine, mock_hue, controlled_sleep_fade, protection,
+):
+    await engine.set_manual_override("sleeping", source="api:test")
+    await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    await engine.set_manual_override("sleeping", source="api:test")
+    if protection == "manual":
+        engine._applicator._overrides.mark_manual("1", {"bri": 20})
+    elif protection == "external":
+        engine.register_external_light_owner(SimpleNamespace(
+            owned_light_targets=lambda: {"1": {"bri": 20}},
+            set_lighting_authority_notifier=lambda callback: None,
+        ))
+    else:
+        engine._transit_light_overrides["1"] = engine._now() + timedelta(minutes=1)
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    release.set()
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    release.set()
+    await engine._sleep_fade_task
+    assert mock_hue._lights["1"]["on"]
+    assert mock_hue._lights["1"]["bri"] == 20
+    assert all(not light["on"] for lid, light in mock_hue._lights.items() if lid != "1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["failed", "partial", "deduplicated", "denied"])
+async def test_sleep_fade_requires_final_off_ack(
+    engine, mock_hue, controlled_sleep_fade, outcome,
+):
+    from backend.services.light_applicator import LightApplyResult
+
+    await engine.set_manual_override("sleeping", source="api:test")
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    release.set()
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    original = engine._apply_state
+    ids = set(mock_hue._lights)
+    if outcome == "partial":
+        engine._applicator._overrides.mark_manual("2", {"bri": 1})
+    result = LightApplyResult(
+        failed={"1"}, successful=ids - {"1", "2"},
+        skipped={"2"} if outcome == "partial" else set(),
+    ) if outcome != "deduplicated" else LightApplyResult(deduplicated=ids)
+    if outcome == "denied":
+        result = LightApplyResult(skipped=ids)
+    engine._apply_state = AsyncMock(return_value=result)
+    release.set()
+    if outcome == "deduplicated":
+        await engine._sleep_fade_task
+        assert engine._sleep_fade_steps == []
+        return
+    delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    assert delay == 5
+    assert len(engine._sleep_fade_steps) == 1
+    assert engine._sleep_fade_steps[0][1] == {"on": False}
+    engine._apply_state.assert_awaited_once_with({"on": False}, transitiontime=None)
+    # Repeated failures back off, retaining only the off target.
+    for expected in (10, 20, 30, 30):
+        release.set()
+        delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+        assert delay == expected
+    engine._apply_state = original
+    release.set()
+    await engine._sleep_fade_task
+    assert engine._sleep_fade_steps == []
+    assert all(not light["on"] for lid, light in mock_hue._lights.items()
+               if outcome != "partial" or lid != "2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["enable_dnd", "clear_dnd"])
+@pytest.mark.parametrize("failure", ["cancel", "error", "toggles", "home", "close"])
+async def test_sleep_fade_dnd_reconciliation_survives_caller(
+    engine, mock_hue, controlled_sleep_fade, operation, failure,
+):
+    await engine.set_manual_override("sleeping", source="api:test")
+    _, old_release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    entered, persist_release = asyncio.Event(), asyncio.Event()
+
+    async def persist():
+        entered.set()
+        await persist_release.wait()
+        if failure == "error":
+            raise RuntimeError("synthetic persistence failure")
+
+    engine._dnd._persist = persist
+    caller = asyncio.create_task(getattr(engine, operation)(source="api:test"))
+    await asyncio.wait_for(entered.wait(), 2)
+    if failure == "error":
+        persist_release.set()
+        with pytest.raises(RuntimeError, match="synthetic"):
+            await caller
+    else:
+        caller.cancel()
+        await asyncio.gather(caller, return_exceptions=True)
+    old_release.set()
+    if failure == "toggles":
+        engine._dnd._persist = AsyncMock()
+        await asyncio.gather(engine.enable_dnd(), engine.clear_dnd(), engine.enable_dnd())
+    if failure in {"home", "close"}:
+        if failure == "home":
+            await engine.set_manual_override("working", source="api:test")
+        else:
+            await engine.close()
+        before = {lid: light.copy() for lid, light in mock_hue._lights.items()}
+        await asyncio.gather(*engine._sleep_fade_reconcile_tasks)
+        assert mock_hue._lights == before
+        assert engine._sleep_fade_steps is None
+        return
+    await asyncio.gather(*engine._sleep_fade_reconcile_tasks)
+    # Obsolete cancelled holds can remain queued after rapid toggles.
+    while True:
+        delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+        release.set()
+        if delay == 22:
+            break
+    await engine._sleep_fade_task
+    assert engine.effective_mode == "sleeping"
+    assert engine._sleep_fade_steps == []
+    assert all(not light["on"] for light in mock_hue._lights.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("takeover", ["revision", "away", "external", "cancel"])
+async def test_sleep_fade_failed_retry_abstains_after_invalidation(
+    engine, controlled_sleep_fade, takeover,
+):
+    from backend.services.light_applicator import LightApplyResult
+
+    await engine.set_manual_override("sleeping", source="api:test")
+    _, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    engine._apply_state = AsyncMock(return_value=LightApplyResult(failed={"1"}))
+    release.set()
+    delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 2)
+    assert delay == 5
+    if takeover == "revision":
+        engine._mode_transition_revision += 1
+    elif takeover == "away":
+        engine._away_hold = True
+    elif takeover == "external":
+        engine._external_off_detected = True
+    else:
+        engine._sleep_fade_task.cancel()
+    release.set()
+    await asyncio.gather(engine._sleep_fade_task, return_exceptions=True)
+    assert engine._apply_state.await_count == 1
+    assert len(engine._sleep_fade_steps) == 2
+
+
+
+@pytest.mark.asyncio
+async def test_two_initial_sleeping_applies_install_only_one_fade(
+    engine, mock_hue, controlled_sleep_fade,
+):
+    """Both dim writes may settle, but only one mutable fade may be installed."""
+    engine._manual_override = True
+    engine._override_mode = "sleeping"
+    engine._override_source = "api:test"
+    engine._override_time = engine._now()
+    # Exercise the ordinary dim path; effect-release safety is validated
+    # separately and would abort before either parallel initial apply.
+    engine._effect_manager.needs_reconcile = lambda _desired: False
+    original_apply = engine._apply_state
+    both_initial = asyncio.Event()
+    release_initial = asyncio.Event()
+    completed_initial = 0
+
+    async def block_after_initial_dim(state, transitiontime=None):
+        nonlocal completed_initial
+        result = await original_apply(state, transitiontime)
+        if state.get("on") is True and state.get("bri") == 20:
+            completed_initial += 1
+            if completed_initial == 2:
+                both_initial.set()
+            await release_initial.wait()
+        return result
+
+    engine._apply_state = block_after_initial_dim
+    first = asyncio.create_task(engine._apply_mode("sleeping"))
+    second = asyncio.create_task(engine._apply_mode("sleeping"))
+    try:
+        await asyncio.wait_for(both_initial.wait(), 3)
+        release_initial.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 3)
+        assert completed_initial == 2
+        assert len(engine._sleep_fade_steps) == 2
+        fade = engine._sleep_fade_task
+        delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 3)
+        assert delay == 2
+        release.set()
+        delay, release = await asyncio.wait_for(controlled_sleep_fade.get(), 3)
+        assert delay == 22
+        assert len(engine._sleep_fade_steps) == 1
+        release.set()
+        await asyncio.wait_for(fade, 3)
+        assert engine._sleep_fade_task is fade
+        assert engine._sleep_fade_steps == []
+        assert all(not light["on"] for light in mock_hue._lights.values())
+    finally:
+        release_initial.set()
+        for task in (first, second):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_sleep_fade_auto_brightness_read_failure_keeps_fade(
+    engine, controlled_sleep_fade,
+):
+    engine._current_mode = "sleeping"
+    engine._hue.get_all_lights = AsyncMock(side_effect=OSError("offline"))
+    await engine._apply_mode("sleeping")
+    assert len(engine._sleep_fade_steps) == 7
+    assert engine._sleep_fade_steps[0][1]["bri"] == 66
+    assert engine._sleep_fade_steps[-1][1] == {"on": False}

@@ -667,6 +667,11 @@ class AutomationEngine:
 
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
+        self._sleep_fade_owner: tuple[int, str] | None = None
+        self._sleep_fade_reconcile_tasks: set[asyncio.Task] = set()
+        # Remaining acknowledged stages survive a Sleeping owner replacement.
+        # An empty list means completed: reselecting Sleeping must not relight.
+        self._sleep_fade_steps: list[tuple[float, dict[str, Any], int | None]] | None = None
         # One bounded timer releases the flicker-resistant Desk fixture ceiling
         # when physical localization stays unknown past its debounce window.
         self._fixture_comfort_expiry_task: Optional[asyncio.Task] = None
@@ -3024,10 +3029,15 @@ class AutomationEngine:
             task for task in (
                 self._fixture_comfort_expiry_task,
                 self._desk_authority_expiry_task,
+                self._sleep_fade_task,
+                *self._sleep_fade_reconcile_tasks,
             ) if task is not None and not task.done()
         ]
         self._fixture_comfort_expiry_task = None
         self._desk_authority_expiry_task = None
+        self._sleep_fade_task = None
+        self._sleep_fade_steps = None
+        self._sleep_fade_owner = None
         for task in tasks:
             task.cancel()
         if tasks:
@@ -3672,7 +3682,7 @@ class AutomationEngine:
             self._home_awake_confirmed = True
             if self._sleep_fade_task and not self._sleep_fade_task.done():
                 self._sleep_fade_task.cancel()
-                self._sleep_fade_task = None
+                # Retain the handle so the next apply can await delegated I/O.
             logger.info(
                 "Sleeping wake accepted from fresh interactive Desktop %s", mode,
             )
@@ -4386,7 +4396,7 @@ class AutomationEngine:
                     and not self._sleep_fade_task.done()
                 ):
                     self._sleep_fade_task.cancel()
-                    self._sleep_fade_task = None
+                    # The active-mode apply must still await this task's I/O.
                     logger.info(
                         "Sleep fade cancelled — explicit Auto wake requested"
                     )
@@ -4478,17 +4488,44 @@ class AutomationEngine:
         """Return DND state as a JSON-serializable dict for API responses."""
         return self._dnd.status()
 
+    def _retain_sleeping_fade(self) -> asyncio.Task | None:
+        """Transfer pending fade ownership even if the DND caller is cancelled."""
+        owner = (self._mode_transition_revision, self.effective_mode)
+        if owner[1] != "sleeping" or self._sleep_fade_steps is None:
+            return None
+
+        async def reconcile() -> None:
+            try:
+                if owner != (self._mode_transition_revision, self.effective_mode):
+                    return
+                await asyncio.wait_for(self._apply_mode("sleeping"), timeout=15.0)
+            except Exception:
+                logger.exception("Sleeping fade ownership reconciliation failed")
+
+        task = asyncio.create_task(reconcile())
+        self._sleep_fade_reconcile_tasks.add(task)
+        task.add_done_callback(self._sleep_fade_reconcile_tasks.discard)
+        return task
+
     async def enable_dnd(
         self, duration_minutes: int = 120, source: str = "internal",
     ) -> dict:
         """Activate DND for ``duration_minutes`` (clamped to [1, 720])."""
         self._mode_transition_revision += 1
-        return await self._dnd.enable(duration_minutes, source=source)
+        task = self._retain_sleeping_fade()
+        result = await self._dnd.enable(duration_minutes, source=source)
+        if task is not None:
+            await asyncio.shield(task)
+        return result
 
     async def clear_dnd(self, source: str = "internal") -> dict:
         """Clear DND immediately."""
         self._mode_transition_revision += 1
-        return await self._dnd.clear(source=source)
+        task = self._retain_sleeping_fade()
+        result = await self._dnd.clear(source=source)
+        if task is not None:
+            await asyncio.shield(task)
+        return result
 
     async def persist_manual_light_ownership(self) -> None:
         """Await durability after an async owner has acknowledged manual writes.
@@ -5156,11 +5193,19 @@ class AutomationEngine:
             )
             return
 
-        # Cancel any in-progress sleep fade if switching to an active mode
-        if mode != "sleeping" and self._sleep_fade_task and not self._sleep_fade_task.done():
-            self._sleep_fade_task.cancel()
-            self._sleep_fade_task = None
-            logger.info("Sleep fade cancelled — activity resumed")
+        if mode != "sleeping":
+            task = self._sleep_fade_task
+            self._sleep_fade_steps = None
+            self._sleep_fade_owner = None
+            if task and not task.done():
+                task.cancel()
+                # Hue cancellation waits for delegated writes to settle. Do not
+                # let an older fade race the new active-mode target.
+                await asyncio.gather(task, return_exceptions=True)
+                if not owner_is_current():
+                    return
+            if self._sleep_fade_task is task:
+                self._sleep_fade_task = None
 
         # Screen sync no longer has a start/stop loop — colors arrive via
         # POST /api/automation/screen-color and are gated by SCREEN_SYNC_MODES
@@ -5198,8 +5243,24 @@ class AutomationEngine:
         # bridge to 100% (same root cause as the mode-change flash documented
         # in _reconcile_effect).
         if mode == "sleeping":
-            if self._sleep_fade_task and not self._sleep_fade_task.done():
-                return  # Fade already in progress
+            task = self._sleep_fade_task
+            if task and not task.done():
+                if self._sleep_fade_owner == owner:
+                    return  # Normal reapply must not restart this owner.
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                if not owner_is_current():
+                    return
+                if self._sleep_fade_task is not task:
+                    return  # Another current apply already replaced it.
+            if self._sleep_fade_steps is not None:
+                # Resume only the remaining stages under this caller's token;
+                # never replay the ember target or a completed fade. A new
+                # owner restarts only the pending stage's hold, not prior stages.
+                if self._sleep_fade_steps:
+                    self._sleep_fade_owner = owner
+                    self._sleep_fade_task = asyncio.create_task(self._sleep_fade())
+                return
 
             # Apply dim initial target — deep ember at bri=20. 1s snap so the
             # first thing Anthony sees (already in bed) is sleep-friendly.
@@ -5226,6 +5287,34 @@ class AutomationEngine:
                 applied = await self._apply_state(initial_state, transitiontime=10)
                 await self._transition_boundary.wait_for_settle(applied.successful)
 
+            if not owner_is_current():
+                return
+            if self._manual_override:
+                planned_steps = [
+                    (2.0, {"on": True, "bri": 1, "hue": 5000, "sat": 254}, 200),
+                    (22, {"on": False}, None),
+                ]
+            else:
+                try:
+                    lights = await self._hue.get_all_lights()
+                except Exception:
+                    logger.debug("Sleep fade brightness read unavailable", exc_info=True)
+                    lights = []
+                if not owner_is_current():
+                    return
+                current_bri = lights[0].get("bri", 80) if lights else 80
+                planned_steps = [
+                    (100, {"on": True, "bri": max(1, int(current_bri - current_bri / 6 * i)),
+                           "hue": 6000, "sat": 200}, None)
+                    for i in range(1, 7)
+                ] + [(100, {"on": False}, None)]
+            # This final check and publication have no intervening await.
+            # Concurrent same-owner initial applies can both finish the dim
+            # write, but only one may install the mutable stage list/task.
+            if not owner_is_current() or self._sleep_fade_steps is not None:
+                return
+            self._sleep_fade_steps = planned_steps
+            self._sleep_fade_owner = owner
             self._sleep_fade_task = asyncio.create_task(self._sleep_fade())
             return
 
@@ -5799,48 +5888,39 @@ class AutomationEngine:
         Runs as a background task so it doesn't block the automation loop.
         Cancellable if the user wakes up (activity detector fires).
         """
+        steps = self._sleep_fade_steps
+        owner = mode_apply_epoch.get()
         try:
-            if self._manual_override:
-                # Manual: _apply_mode already set bri=20 deep ember. Brief hold
-                # so the dim start is visible, then smooth 20s slide to near-off,
-                # then off.
-                await asyncio.sleep(2.0)
+            retry_delay = None
+            while steps:
+                delay, state, transitiontime = steps[0]
+                await asyncio.sleep(delay if retry_delay is None else retry_delay)
+                if (
+                    owner != (self._mode_transition_revision, self.effective_mode)
+                    or steps is not self._sleep_fade_steps
+                    or self._external_off_detected or self._away_hold
+                ):
+                    return
                 self._invalidate_dedup_cache()
-                await self._apply_state(
-                    {"on": True, "bri": 1, "hue": 5000, "sat": 254},
-                    transitiontime=200,  # 20s
-                )
-                await asyncio.sleep(22)
-                self._invalidate_dedup_cache()
-                await self._apply_state({"on": False})
-                logger.info("Sleep fade complete (manual, ~24s)")
-                return
-
-            # Auto-detected: 10-minute gradual stepwise fade from the current
-            # bridge brightness. Use a conservative default if the bridge read
-            # fails so the fade still lands.
-            lights = await self._hue.get_all_lights()
-            current_bri = lights[0].get("bri", 80) if lights else 80
-            steps = 6
-            step_interval = 100  # 6 × 100s ≈ 10 min
-            bri_step = current_bri / steps
-
-            logger.info(
-                f"Sleep fade started: {current_bri} → off over ~10 minutes (auto)"
-            )
-
-            for i in range(1, steps + 1):
-                await asyncio.sleep(step_interval)
-                new_bri = max(1, int(current_bri - bri_step * i))
-                state = {"on": True, "bri": new_bri, "hue": 6000, "sat": 200}
-                self._invalidate_dedup_cache()
-                await self._apply_state(state)
-                logger.info(f"Sleep fade step {i}/{steps}: bri={new_bri}")
-
-            await asyncio.sleep(step_interval)
-            self._invalidate_dedup_cache()
-            await self._apply_state({"on": False})
-            logger.info("Sleep fade complete — lights off")
+                required = set(ALL_LIGHT_IDS) - self._protected_light_ids()
+                applied = await self._apply_state(state, transitiontime=transitiontime)
+                # A cancelled delegated write settles before cancellation is
+                # raised. Retrying this same target is safe; advancing early
+                # would lose a denied/unacknowledged off command.
+                if (
+                    owner != (self._mode_transition_revision, self.effective_mode)
+                    or steps is not self._sleep_fade_steps
+                    or self._external_off_detected or self._away_hold
+                ):
+                    return
+                fulfilled = applied.successful | applied.deduplicated
+                if applied.failed & required or not required <= fulfilled:
+                    # Keep the target pending without replaying earlier stages.
+                    retry_delay = min(30.0, (retry_delay or 2.5) * 2)
+                    continue
+                retry_delay = None
+                steps.pop(0)
+            logger.info("Sleep fade complete")
 
         except asyncio.CancelledError:
             logger.info("Sleep fade cancelled")
