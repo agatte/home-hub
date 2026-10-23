@@ -43,12 +43,14 @@ decisions, dependencies, operational lessons, and remaining gates so a fresh
 session can resume from GitHub/repo rather than chat history. Do not add a
 parallel agent-memory database or rewrite unrelated documentation.
 
-The Windows Obsidian `HomeHub Knowledge Vault` is a read-oriented, Git-SHA
-snapshot, **not** source authority or continuous assistant memory. Never edit
-its managed `HomeHub Source` directly, claim it auto-syncs, or refresh it
-without the guarded, separately authorized host procedure. Model-assisted
-summaries are advisory and must cite current evidence; local LLM experiments
-do not gain device, lifecycle, or host authority.
+The Windows Obsidian `HomeHub Knowledge Vault` is a read-oriented mirror of
+reviewed GitHub Markdown, not source authority or continuous assistant memory.
+The existing hourly-plus-login updater was operationally verified on October 22,
+2026 under #399/#422; consult their latest evidence before reporting current
+host status. Never edit managed `HomeHub Source` directly. Existing scheduled
+operation does not authorize a new manual refresh, task/bundle change or host
+action. Model-assisted summaries are advisory and must cite current evidence;
+local LLM experiments do not gain device, lifecycle or host authority.
 
 ## Model routing and delegation
 
