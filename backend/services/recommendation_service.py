@@ -151,8 +151,9 @@ class RecommendationService:
         """Bounded, opt-in Last.fm mood-tag discovery; never writes history.
 
         This deliberate source differs from artist similarity. It checks the
-        exact iTunes catalog identity of returned artists/tracks, while final
-        semantic evidence and taste rejections remain the discovery layer's job.
+        exact iTunes catalog identity of returned artists/tracks. Return a wider
+        pool (9-12 songs) for track-level mood qualification in the discovery
+        layer; artist tags only nominate candidates, never qualify songs.
         """
         if mood != "relax" or not self._lastfm_key:
             return []
@@ -189,7 +190,7 @@ class RecommendationService:
             try:
                 tracks = await asyncio.wait_for(
                     self._search_itunes_tracks(
-                        candidate["artist_name"], limit=tracks_per_artist,
+                        candidate["artist_name"], limit=min(12, max(9, tracks_per_artist)),
                     ),
                     timeout=min(2.0, remaining),
                 )

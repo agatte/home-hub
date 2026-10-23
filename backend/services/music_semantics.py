@@ -187,6 +187,51 @@ class LastFmSemanticAnalyzer:
     def enabled(self) -> bool:
         return bool(getattr(self._source, "enabled", False))
 
+    async def analyze_track_calm(
+        self, *, artist_name: str, track_name: str,
+    ) -> SemanticMusicMatch:
+        """Qualify calm from track tags only; never inherit an artist's mood."""
+        if not self.enabled or not track_name:
+            return SemanticMusicMatch(available=False)
+        rows = await self._source.get_semantic_tags(
+            artist_name, track_name=track_name, limit=15,
+        )
+        # Exact normalized labels avoid substring accidents such as "not calm"
+        # or "soft rock". Acoustic/instrumental alone do not establish calm.
+        positive = {
+            "calm", "calming", "relax", "relaxing", "relaxation", "soothing",
+            "peaceful", "chill", "chillout", "chill out", "ambient", "soft",
+            "mellow", "downtempo", "down tempo",
+        }
+        conflicting = {
+            "energetic", "high energy", "upbeat", "dance", "danceable", "edm",
+            "club", "party", "aggressive", "heavy metal", "hard rock", "fast",
+            "intense", "workout", "uptempo", "up tempo", "metal",
+            "not calm", "not relaxing", "speed metal", "power metal",
+            "viking metal", "folk metal", "arena rock", "powerful", "anthemic",
+            "energy", "uplifting", "feel good",
+        }
+        tags = tuple(
+            str(row.get("name") or "").strip()
+            for row in rows[:15] if isinstance(row, dict) and row.get("name")
+        )
+        normalized = {_normalize_tag(tag) for tag in tags}
+        if not positive.intersection(normalized) or conflicting.intersection(normalized):
+            return SemanticMusicMatch(available=False)
+        # Rank/count evidence, not a calibrated probability: even a top-ranked
+        # lone positive is modest support, and repeated labels add no evidence.
+        strengths = {}
+        for index, tag in enumerate(tags):
+            label = _normalize_tag(tag)
+            if label in positive:
+                strengths[label] = max(strengths.get(label, 0.0), 1 / (1 + 0.18 * index))
+        score = min(0.90, 0.45 * sum(strengths.values()))
+        return SemanticMusicMatch(
+            available=True, score=score, source="lastfm_track_tags",
+            matched_concepts=("calm",), tags=tags,
+            provenance=("lastfm_track_tags",),
+        )
+
     async def analyze(
         self,
         *,

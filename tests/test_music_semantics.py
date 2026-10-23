@@ -155,8 +155,6 @@ class MoodTagSource:
     enabled = True
 
     async def get_semantic_tags(self, artist_name, *, track_name=None, limit=20):
-        if track_name:
-            return []
         return (
             [{"name": "chillout"}, {"name": "ambient"}, {"name": "acoustic"}]
             if artist_name == "Gentle"
@@ -183,7 +181,7 @@ async def test_explicit_calming_ranks_verified_mood_tags_above_rock_adjacency():
     )
 
     assert [cluster.artist_name for cluster in ordinary.clusters] == ["Hard Rock", "Gentle"]
-    assert [cluster.artist_name for cluster in inferred.clusters] == ["Hard Rock", "Gentle"]
+    assert [cluster.artist_name for cluster in inferred.clusters] == ["Gentle", "Hard Rock"]
     assert [cluster.artist_name for cluster in calming.clusters] == ["Gentle"]
     assert calming.clusters[0].semantic_intent == "relax"
     assert set(calming.clusters[0].matched_semantics) & {"calm", "chill", "ambient", "acoustic"}
@@ -370,7 +368,7 @@ async def test_explicit_calm_slow_semantics_abstains(monkeypatch):
     class SlowSemantics:
         enabled = True
 
-        async def analyze(self, *, artist_name, track_name, intent):
+        async def analyze_track_calm(self, *, artist_name, track_name):
             await asyncio.sleep(0.05)
             return SemanticMusicMatch(
                 available=True, score=0.99, matched_concepts=("calm",),
@@ -456,3 +454,194 @@ async def test_recommendation_service_semantic_tags_are_cached(monkeypatch):
     assert http.calls[1]["method"] == "track.gettoptags"
     assert http.calls[1]["track"] == "Example Track"
     assert track == first
+
+
+class TrackMoodTags:
+    enabled = True
+
+    def __init__(self, tags):
+        self.tags = tags
+        self.calls = []
+
+    async def get_semantic_tags(self, artist_name, *, track_name=None, limit=20):
+        self.calls.append((artist_name, track_name))
+        if track_name is None:
+            return [{"name": "calm"}]
+        value = self.tags.get(track_name, [])
+        if isinstance(value, Exception):
+            raise value
+        return [{"name": tag} for tag in value]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tags", [
+    [], ["energetic"], ["calm", "dance"], ["not calm"], ["soft rock"],
+    ["acoustic"], ["instrumental"], ["mellow", "high-energy"],
+    ["calm", "speed metal"], ["mellow", "power metal"],
+    ["ambient", "viking metal"], ["soft", "folk metal"],
+    ["peaceful", "arena rock"], ["calm", "workout"],
+])
+async def test_artist_calm_never_qualifies_missing_or_conflicting_track_evidence(tags):
+    provider = TrackMoodTags({"Representative Track": tags})
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([_candidate("Artist")]),
+        taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(provider),
+    )
+    result = await service.preview("working", intent="calming", explicit_user_intent=True)
+    assert result.clusters == ()
+    assert provider.calls == [("Artist", "Representative Track")]
+    assert result.shadow and not result.actuation_allowed
+
+
+@pytest.mark.asyncio
+async def test_calm_selects_later_song_with_exact_metadata_and_output_limit():
+    candidate = _candidate("Artist")
+    template = candidate["tracks"][0]
+    names = ["Popular", "Unknown", "Failed", "Later", "Extra"]
+    candidate["tracks"] = [
+        {**template, "track_name": name, "provider_id": str(index)}
+        for index, name in enumerate(names)
+    ]
+    provider = TrackMoodTags({
+        "Popular": ["energetic"], "Failed": RuntimeError("offline"),
+        "Later": ["downtempo"], "Extra": ["mellow"],
+    })
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([candidate]), taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(provider),
+    )
+    result = await service.preview(
+        "working", intent="relax", explicit_user_intent=True, tracks_per_artist=1,
+    )
+    track, = result.clusters[0].tracks
+    assert (track.track_name, track.provider_id) == ("Later", "3")
+    assert track.album_name == "Album"
+    assert track.playback_capability == "metadata_only"
+    assert track.playback_reference is None
+    assert result.clusters[0].semantic_source == "lastfm_track_tags"
+    assert len(provider.calls) == 4
+    assert result.shadow and not result.actuation_allowed
+
+
+@pytest.mark.asyncio
+async def test_calm_global_tag_call_budget_and_deadline(monkeypatch):
+    import backend.services.music_discovery as module
+
+    candidate = _candidate("Artist")
+    candidate["tracks"] *= 20
+    provider = TrackMoodTags({})
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([candidate] * 6), taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(provider),
+    )
+    monkeypatch.setattr(module, "EXPLICIT_RELAX_TRACK_BUDGET", 4)
+    result = await service.preview("working", intent="calm", explicit_user_intent=True)
+    assert result.clusters == ()
+    assert len(provider.calls) == 4
+    provider.calls.clear()
+    monkeypatch.setattr(module, "EXPLICIT_RELAX_TRACK_WINDOW_SECONDS", 0)
+    result = await service.preview("working", intent="calm", explicit_user_intent=True)
+    assert result.clusters == ()
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phrase,explicit", [
+    (None, False), ("calming", False), ("calming while gaming", True),
+    ("not calming", True), ("energetic", True),
+])
+async def test_track_calm_filter_does_not_change_other_requests(phrase, explicit):
+    candidate = _candidate("Artist")
+    provider = TrackMoodTags({})
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([candidate]), taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(provider),
+    )
+    result = await service.preview("gaming", intent=phrase, explicit_user_intent=explicit)
+    assert result.clusters[0].tracks[0].track_name == "Representative Track"
+    assert result.clusters[0].semantic_source == "lastfm_top_tags"
+
+
+@pytest.mark.asyncio
+async def test_calm_grade_depends_on_positive_rank_and_count():
+    analyzer = LastFmSemanticAnalyzer(TrackMoodTags({
+        "Weak": ["rock"] * 14 + ["soft"],
+        "Strong": ["calm", "mellow", "ambient"],
+        "Exact": ["soft", "soft rock"],
+    }))
+    weak = await analyzer.analyze_track_calm(artist_name="Artist", track_name="Weak")
+    strong = await analyzer.analyze_track_calm(artist_name="Artist", track_name="Strong")
+    exact = await analyzer.analyze_track_calm(artist_name="Artist", track_name="Exact")
+    assert weak.available and exact.available
+    assert 0 < weak.score < strong.score < 1
+    assert weak.score < 0.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["rejected", "provider_id", "provider", "catalog_verified", "track_name"])
+async def test_calm_quota_counts_only_catalog_and_taste_accepted_tracks(invalid):
+    from backend.services.music_discovery import _empty_match
+    from dataclasses import replace
+
+    candidate = _candidate("Artist")
+    first = {**candidate["tracks"][0], "track_name": "Excluded"}
+    if invalid != "rejected":
+        first[invalid] = False if invalid == "catalog_verified" else " "
+    candidate["tracks"] = [first, {
+        **candidate["tracks"][0], "track_name": "Accepted", "provider_id": "later-id",
+    }]
+
+    class Snapshot:
+        def classify_candidate(self, item, *, mode):
+            match = _empty_match()
+            if item.title == "Excluded":
+                return replace(match, classification="rejected")
+            return match
+
+    class Taste:
+        async def snapshot(self):
+            return Snapshot()
+
+    provider = TrackMoodTags({"Excluded": ["calm", "ambient"], "Accepted": ["soft"]})
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([candidate]), taste_provider=Taste(),
+        semantic_analyzer=LastFmSemanticAnalyzer(provider),
+    )
+    result = await service.preview(
+        "working", intent="calm", explicit_user_intent=True, tracks_per_artist=1,
+    )
+    cluster, = result.clusters
+    track, = cluster.tracks
+    assert (track.track_name, track.provider_id) == ("Accepted", "later-id")
+    assert cluster.semantic_tags == ("soft",)
+    assert cluster.semantic_score == pytest.approx(0.45)
+    assert provider.calls == [("Artist", "Accepted")]
+
+
+@pytest.mark.asyncio
+async def test_calm_elapsed_window_bounds_slow_lookup(monkeypatch):
+    import asyncio
+    import backend.services.music_discovery as module
+
+    class SlowTags(TrackMoodTags):
+        async def get_semantic_tags(self, artist_name, *, track_name=None, limit=20):
+            self.calls.append((artist_name, track_name))
+            await asyncio.sleep(1)
+            return [{"name": "calm"}]
+
+    provider = SlowTags({})
+    candidate = _candidate("Artist")
+    candidate["tracks"] *= 12
+    service = MusicDiscoveryService(
+        source=FakeDiscoverySource([candidate]), taste_provider=EmptyTasteProvider(),
+        semantic_analyzer=LastFmSemanticAnalyzer(provider),
+    )
+    monkeypatch.setattr(module, "EXPLICIT_RELAX_TRACK_WINDOW_SECONDS", 0.04)
+    monkeypatch.setattr(module, "EXPLICIT_RELAX_SEMANTIC_TIMEOUT_SECONDS", 0.01)
+    start = asyncio.get_running_loop().time()
+    result = await service.preview("working", intent="calm", explicit_user_intent=True)
+    elapsed = asyncio.get_running_loop().time() - start
+    assert result.clusters == ()
+    assert 1 <= len(provider.calls) <= 4
+    assert 0.03 <= elapsed < 0.5

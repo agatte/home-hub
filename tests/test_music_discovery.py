@@ -295,7 +295,10 @@ async def test_recommendation_service_discovery_is_non_persisting_and_multi_trac
 
 
 @pytest.mark.asyncio
-async def test_explicit_mood_source_uses_tagged_artists_and_catalog_verified_tracks(monkeypatch):
+@pytest.mark.parametrize("requested,expected_limit", [(2, 9), (100, 12)])
+async def test_explicit_mood_source_uses_tagged_artists_and_catalog_verified_tracks(
+    monkeypatch, requested, expected_limit,
+):
     service = RecommendationService(lastfm_api_key="test-key")
     profile = SimpleNamespace(top_artists=[{"name": "Already Owned"}])
     tag_calls = []
@@ -313,7 +316,7 @@ async def test_explicit_mood_source_uses_tagged_artists_and_catalog_verified_tra
         }.get(tag, [])
 
     async def tracks(name, *, limit=3):
-        track_calls.append(name)
+        track_calls.append((name, limit))
         return [_track(name, "Quiet Song", f"{name}-123")][:limit]
 
     monkeypatch.setattr(service, "_load_profile", load_profile)
@@ -321,7 +324,7 @@ async def test_explicit_mood_source_uses_tagged_artists_and_catalog_verified_tra
     monkeypatch.setattr(service, "_search_itunes_tracks", tracks)
     try:
         mood_results = await service.discover_mood_candidates(
-            "relax", count=3, tracks_per_artist=2,
+            "relax", count=3, tracks_per_artist=requested,
         )
         ignored = await service.discover_mood_candidates(
             "energetic", count=3, tracks_per_artist=2,
@@ -333,7 +336,9 @@ async def test_explicit_mood_source_uses_tagged_artists_and_catalog_verified_tra
     assert [item["artist_name"] for item in mood_results] == [
         "Quiet", "Shared", "Mellow",
     ]
-    assert track_calls == ["Quiet", "Shared", "Mellow"]
+    assert track_calls == [
+        ("Quiet", expected_limit), ("Shared", expected_limit), ("Mellow", expected_limit),
+    ]
     assert all(item["source"] == "lastfm_mood_tag+itunes_search" for item in mood_results)
     assert all(item["seed_artist"].startswith("tag:") for item in mood_results)
     assert all(item["tracks"][0]["catalog_verified"] is True for item in mood_results)
