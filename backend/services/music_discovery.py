@@ -23,6 +23,8 @@ DISCOVERY_SOURCE_CACHE_TTL = timedelta(hours=1)
 EXPLICIT_RELAX_SEMANTIC_WEIGHT = 0.60
 EXPLICIT_RELAX_SOURCE_TIMEOUT_SECONDS = 14.0
 EXPLICIT_RELAX_SEMANTIC_TIMEOUT_SECONDS = 1.8
+EXPLICIT_RELAX_TRACK_BUDGET = 36
+EXPLICIT_RELAX_TRACK_WINDOW_SECONDS = 10.0
 
 
 class MusicDiscoverySource(Protocol):
@@ -152,6 +154,32 @@ def _empty_match() -> CandidateTasteMatch:
         negative_weight=0.0,
         sources=(),
     )
+
+
+def _qualified_track_taste(
+    raw_track: Any, *, artist_name: str, mode: str, snapshot: Any,
+) -> Optional[CandidateTasteMatch]:
+    """Shared catalog preconditions and taste gate before a song uses quota."""
+    if not isinstance(raw_track, dict):
+        return None
+    track_name = str(raw_track.get("track_name") or "").strip()
+    if (
+        not track_name
+        or not str(raw_track.get("provider_id") or "").strip()
+        or not str(raw_track.get("provider") or "").strip()
+        or not bool(raw_track.get("catalog_verified", True))
+    ):
+        return None
+    match = _empty_match()
+    if snapshot is not None:
+        match = snapshot.classify_candidate(
+            _TasteCandidate(
+                media_type="track", title=track_name,
+                metadata={"artist_name": artist_name, "track_name": track_name},
+            ),
+            mode=mode,
+        )
+    return None if match.classification == "rejected" else match
 
 
 class MusicDiscoveryService:
@@ -289,13 +317,54 @@ class MusicDiscoveryService:
             taste_note = f"taste snapshot unavailable: {type(exc).__name__}"
 
         clusters: list[DiscoveryArtistCluster] = []
+        # Retrieval has its own 14s cap; share a further 10s/36-call budget
+        # across all track checks, including cache hits and failed lookups.
+        track_deadline = (
+            asyncio.get_running_loop().time() + EXPLICIT_RELAX_TRACK_WINDOW_SECONDS
+        )
+        track_budget = EXPLICIT_RELAX_TRACK_BUDGET
         for candidate in raw:
+            track_semantics = None
+            if explicit_relax:
+                qualify = getattr(self._semantic_analyzer, "analyze_track_calm", None)
+                if not callable(qualify):
+                    continue
+                qualified = []
+                for track in (candidate.get("tracks") or [])[:12]:
+                    if _qualified_track_taste(
+                        track, artist_name=str(candidate.get("artist_name") or "").strip(),
+                        mode=mode, snapshot=snapshot,
+                    ) is None:
+                        continue
+                    remaining = track_deadline - asyncio.get_running_loop().time()
+                    if track_budget <= 0 or remaining <= 0:
+                        break
+                    track_budget -= 1
+                    try:
+                        match = await asyncio.wait_for(
+                            qualify(
+                                artist_name=candidate.get("artist_name", ""),
+                                track_name=str(track["track_name"]).strip(),
+                            ),
+                            timeout=min(EXPLICIT_RELAX_SEMANTIC_TIMEOUT_SECONDS, remaining),
+                        )
+                    except Exception:
+                        continue
+                    if match.available:
+                        qualified.append(track)
+                        track_semantics = track_semantics or match
+                    if len(qualified) >= max(1, min(12, tracks_per_artist)):
+                        break
+                if not qualified:
+                    continue
+                candidate = {**candidate, "tracks": qualified}
             cluster = await self._build_cluster(
                 candidate,
                 mode=mode,
                 policy=policy,
                 snapshot=snapshot,
                 semantic_intent=semantic_intent,
+                track_semantics=track_semantics,
                 explicit_intent=(
                     explicit_user_intent and bool(intent and intent.strip())
                 ),
@@ -339,6 +408,7 @@ class MusicDiscoveryService:
         snapshot: Any,
         semantic_intent: SemanticIntent,
         explicit_intent: bool = False,
+        track_semantics: Optional[SemanticMusicMatch] = None,
     ) -> Optional[DiscoveryArtistCluster]:
         artist_name = str(candidate.get("artist_name") or "").strip()
         seed_artist = str(candidate.get("seed_artist") or "").strip()
@@ -383,7 +453,10 @@ class MusicDiscoveryService:
             provider_id = str(raw_track.get("provider_id") or "").strip()
             provider = str(raw_track.get("provider") or "").strip()
             catalog_verified = bool(raw_track.get("catalog_verified", True))
-            if not track_name or not provider_id or not provider or not catalog_verified:
+            track_match = _qualified_track_taste(
+                raw_track, artist_name=artist_name, mode=mode, snapshot=snapshot,
+            )
+            if track_match is None:
                 continue
             resolved_playable = playable_tracks.get((provider, provider_id))
             if resolved_playable is not None and resolved_playable.playback_capable:
@@ -403,21 +476,6 @@ class MusicDiscoveryService:
                 playback_reason = str(
                     raw_track.get("playback_reason") or "no_exact_playable_provider_match"
                 )
-            track_match = _empty_match()
-            if snapshot is not None:
-                track_match = snapshot.classify_candidate(
-                    _TasteCandidate(
-                        media_type="track",
-                        title=track_name,
-                        metadata={
-                            "artist_name": artist_name,
-                            "track_name": track_name,
-                        },
-                    ),
-                    mode=mode,
-                )
-                if track_match.classification == "rejected":
-                    continue
             if track_match.classification == "exploratory":
                 exploratory_count += 1
             track_preferences.append(track_match.preference)
@@ -457,9 +515,9 @@ class MusicDiscoveryService:
             base_score += 0.08 * novelty_ratio
         base_score = max(0.0, min(1.0, base_score))
 
-        semantic_match = SemanticMusicMatch(available=False)
+        semantic_match = track_semantics or SemanticMusicMatch(available=False)
         analyzer = self._semantic_analyzer
-        if analyzer is not None and getattr(analyzer, "enabled", False):
+        if track_semantics is None and analyzer is not None and getattr(analyzer, "enabled", False):
             try:
                 semantic_coro = analyzer.analyze(
                     artist_name=artist_name,
