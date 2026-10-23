@@ -1,12 +1,20 @@
 # #370 all-day offline desk simulation and gap report
 
-Local, uncommitted evidence on `work/370-all-day-simulation-20261023`, starting
+Historical local preparation began on `work/370-all-day-simulation-20261023`, starting
 HEAD `fbd48c5f3f767ec8f1cc53b411f1a769cd3a2006`, tree
 `724f91e0d20e85df9e903e3e22148fa7a1180e0f`. Worktree:
 `C:/Work/home-hub-project/worktrees/desk-all-day-sim-370-20261023`.
 This report supersedes only the matrix methodology in the
 [October 10 handoff](DESK_COMFORT_SIMULATION_2026_10_10.md); its historical
-observations and validation remain historical. No publication or live acceptance.
+observations and validation remain historical.
+
+Current publication provenance as of 2026-10-23 (supplied task evidence; no network
+recheck): draft PR #387 includes this report at exact head
+`6c3f729d78da89f5e1d2d731c2bbd4f4f7d7b978`; CI #39980384544 is fully green.
+Published draft evidence is not deployment or physical acceptance. The additional
+owner-boundary and edge tests described below are local, uncommitted changes in
+`C:/Work/home-hub-project/worktrees/desk-370-owner-matrix-20261023` on that detached
+head; the published CI result does not validate these new changes.
 
 Authority: [PROJECT_SPEC.md desk visual comfort](PROJECT_SPEC.md) (2026-09-08 decision)
 and the supplied bounded task. The live #370 acceptance body was unavailable
@@ -33,6 +41,12 @@ This is an explicitly ordered subset, not an AutomationEngine replay. General
 composition, Working/day composition, Gaming Director variants, learner overlays,
 configured scenes, ownership leases, transition echoes, real frame dispatch/EMA,
 and true Hue writes are not reconstructed by concatenating these functions.
+A concrete General/clouds limitation: the harness resolves the authored Activity
+state then calls aesthetic `apply_weather_adjust`; ordinary production General
+schedule composition uses `_compose_general_state` without that exact transform.
+For day, zone=None, missing lux, clouds, harness L2 is brightness 161 / CT275,
+whereas named production General is brightness 190 / CT250. This projection is
+not the runtime General cloudy output; no policy correction is implied.
 Generic Gaming runtime ignores screen RGB; its authored table/envelope must not
 be mistaken for the game-aware runtime. Existing targeted tests exercise those
 boundaries separately, with mocks.
@@ -61,7 +75,11 @@ also conservatively rejects negative/nonfinite values/ages; this is not proof
 that every upstream ingestion path rejects them. The monitor hook independently
 requires finite age 0–30s and dark ratio at most 0.5. Its ramp is
 `round(base + (min(base, night) - base) × clamp(elapsed/1800, 0, 1))` after
-the hook's eligibility gates. Static freshness and monitor freshness differ.
+the hook's eligibility gates. Static freshness and monitor freshness differ. The unchanged grid samples ages
+0/301/missing, not exact edges. Separate tests now check the harness accepts
+exactly 300s and rejects >300s, and the unwired monitor accepts exactly 30s and
+darkness ratio 0.5, rejecting >30s or >0.5. These are scoped input/hook checks,
+not production ingestion freshness proof.
 
 Desk assumes already-fresh, source-qualified Desktop physical evidence. Unknown
 represents absent/stale/unqualified zone; Couch and Bed assume independently
@@ -88,6 +106,11 @@ raised by the cap, input immutability, rejected lux matching the neutral
 projection, non-Desk lux independence and real functional cloudy-weather effect.
 Watching/Gaming L5 envelope caps do not rise with ambient multipliers 0.6/1/1.5
 or clear/clouds weather and stay within Desk ceilings 90/75/60/40.
+Separate direct L2 floor/cap tests cover Watching/Gaming day/evening ambient
+multipliers 0.6/1/1.5 with clouds: mode-specific cloudy factors (Watching day/evening 1.04/1.00, Gaming
+day/evening 1.10/1.05), combined scaling capped at 1.40, integer
+truncation and [1,254] bounds. The matrix itself still uses multiplier 1; L5
+remains independently glare-bounded and excluded from ambient uplift.
 This does **not** claim ScreenSync always equals or dims the static L5 target:
 Watching/night static L5=12 whereas its envelope floor is 18.
 
@@ -155,6 +178,25 @@ and Away stale-write suppression are proven in the named paths. No universal
 DND/Away/Sleeping all-light suppression claim follows from this simulation.
 `TestDeskFixtureComfortIntegration` separately tests learner uplift capped at L5
 and retained physical-context protections through actual engine composition.
+
+### Additional local actual-boundary slice (2026-10-23)
+
+`test_queued_static_dispatch_preserves_new_l2_owner_and_writes_disjoint_l1`
+queues the real applicator behind `independent_blocker`, establishes manual L2,
+fresh desktop ScreenSync L2, or registered external protected L2 ownership,
+then releases serialization. It checks fake native Hue call history, untouched
+L2 bridge/cache state and eligible L1 successful write/cache update. ScreenSync
+ownership here is recorded source freshness, not a full accepted frame replay.
+The existing queued trial restore test now also covers external-off and asserts
+unchanged post-takeover static caches for every case, including scene, Away and Sleeping.
+Scene takeover uses the existing authority invalidation helper; it does not
+activate a user scene through its API. Existing transit/Rust regressions remain
+separate. No invented owner predicate or mocked guard return supplies rejection.
+
+These are independent narrow dispatch tests, not dispatch of the 4,032 pure
+projections or universal owner combinations. Remaining gaps include full frame
+acceptance, scene activation races, transition/echo reconciliation, full runtime
+General composition and physical calibration. DND remains policy-specific.
 
 ## Actionable counterexamples and remaining gates
 
@@ -265,8 +307,21 @@ now require `zone=desk`. These failed/interrupted experiments are not acceptance
 evidence. The initial no-autoload run warned about the missing asyncio plugin;
 final runs explicitly load it and emitted no warnings.
 
-Changed paths are only this report and `tests/test_desk_comfort_simulation.py`.
+Historical preparation changed only this report and `tests/test_desk_comfort_simulation.py`.
 No runtime code, secrets/configuration, production DB, devices, Host Bridge,
 services/tasks or Obsidian mirror were changed. No commit, push, PR, merge,
-deploy, installation, cleanup or worktree removal was performed. Handoff remains
-local and uncommitted; publishing and physical acceptance need separate authority.
+deploy, installation, cleanup or worktree removal was performed. That handoff was local and uncommitted at the time; the publication provenance
+above supersedes that delivery status. Physical acceptance remains separate.
+
+
+Local owner/edge follow-up validation (2026-10-23, detached base
+`6c3f729d78da89f5e1d2d731c2bbd4f4f7d7b978`): targeted final-write + simulation
+**120 passed in 12.65s**; the eight affected suite/class selections listed above
+**725 passed in 20.72s**, under the same offline guards. Matrix count remains
+44,352 labels / 4,032 projections. Ruff on both touched test files and
+`git diff --check` passed. Initial new assertions failed because Away intentionally
+clears caches and cloudy multipliers vary by Activity/period; assertions were
+corrected to compare post-takeover caches and the existing mode-specific factors.
+No backend policy was changed. This follow-up modifies exactly the two test files
+and this report; it remains uncommitted, with no network, device, deployment,
+service/task, Host Bridge or host/Vault actions.

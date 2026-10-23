@@ -275,3 +275,30 @@ def test_white_page_classifier_excludes_dark_and_chromatic_content():
     assert is_neutral_page(245, 245, 245)
     assert not is_neutral_page(20, 20, 20)
     assert not is_neutral_page(255, 190, 190)
+
+
+@pytest.mark.parametrize("multiplier", [0.6, 1, 1.5])
+@pytest.mark.parametrize("mode,period,weather_scale", [
+    ("watching", "day", 1.04), ("watching", "evening", 1.0),
+    ("gaming", "day", 1.10), ("gaming", "evening", 1.05),
+])
+def test_l2_ambient_floor_cap_scaling(mode, period, weather_scale, multiplier):
+    """Existing ordinal envelope, including truncation and combined 1.40 bound."""
+    sync = ScreenSyncService(hue_service=None, target_light_ids=["2", "5"])
+    scale = min(1.40, multiplier * weather_scale)
+    for lookup in (sync.get_floor, sync.get_cap):
+        base = lookup(mode, "2", "desk", None, period, 1, "clear")
+        assert lookup(mode, "2", "desk", None, period, multiplier, "clouds") == max(1, min(254, int(base * scale)))
+
+
+@pytest.mark.parametrize("age,expected", [(300, True), (300.001, False)])
+def test_harness_static_lux_freshness_boundary(age, expected):
+    assert qualified_lux(20, age, "bedroom") is expected
+
+
+@pytest.mark.parametrize("age,lux,expected", [(30, 45, 24), (30.001, 45, 38), (30, 45.001, 38)])
+def test_monitor_candidate_exact_age_and_darkness_edges(age, lux, expected):
+    assert twilight_monitor_target(
+        38, 24, seconds_after_sunset=1800, bedroom_lux=lux, baseline=90,
+        sample_age=age, qualified_desk=True, calibrated_bedroom=True,
+    ) == expected
