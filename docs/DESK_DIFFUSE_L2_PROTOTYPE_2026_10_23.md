@@ -95,3 +95,37 @@ with no production caller.
 No secrets/configuration, live producer, device, service/task, Host Bridge,
 Obsidian source or other worktree was modified. No install, fetch, commit, push,
 merge, deploy or destructive cleanup was performed.
+
+## October 23 canonical-contract reconciliation (offline, no activation)
+
+The separately prepared `desk_diffuse_eligibility.py` helper in the preserved,
+uncommitted `desk-370-eligibility-20261023` worktree overlaps this published
+resolver. **Do not wire or publish both.** For subsequent non-actuating tests
+and design, use only `resolve_desk_diffuse_l2_candidate` in the existing
+`desk_visual_comfort.py` module. The alternate remains intact as independently
+reviewed test evidence and is not deleted, cherry-picked, or silently merged.
+This is a narrow candidate consolidation, **not** approval of autonomous light
+brightening or a final user calibration/lighting product contract.
+
+| Disputed input | Narrow reconciliation |
+| --- | --- |
+| `house_state="home"` versus `"Home"` | Use canonical user-facing `Home`; unnormalized or unknown values abstain. No implicit lowercase acceptance. |
+| Weak `physical_zone="desk"` versus qualified source | Require explicitly qualified **fresh physical Desktop Desk** and eligible viewing. Raw processes, activity or generic camera cannot establish Desk. |
+| Generic fresh bedroom lux versus trusted lux | Require room-qualified, fresh, calibrated **bedroom** lux assertions; no inferred ratio or fabricated calibration. |
+| Upstream `dnd_policy_allows` versus DND veto | Retain unconditional DND abstention for this floor proposal pending an explicit owner-approved DND interaction policy. A claimed rebrightening right never overrides DND. |
+| L2 owner label `auto/manual_activity` versus current owner flags | Manual Activity selection alone is not a per-light veto, but no owner label grants write authority. Require affirmative rebrightening authority and reject per-light manual, scene, transit, protected, external and hard-off overrides. |
+| Blanket ScreenSync abstention versus owned-frame composition | Static branch abstains when ScreenSync owns L2. An owned ScreenSync branch may produce an **offline proposal** only after current lease and same-frame assertions. The real final serialized writer must revalidate. |
+| Eligibility-only versus bounded floor math | Keep the published single L2-only resolver with verified period-specific caller-supplied floor, original-on preservation and effective cap. No default brightness, no L5 uplift, no new actuator. |
+
+The dedicated `tests/test_desk_l2_contract_reconciliation.py` exercises
+these disagreements, including strict input types, owner overrides, ScreenSync
+lease/branch separation, cap/off boundaries and the intentional reused-snapshot
+race. A passing synthetic test establishes **only** purity and conservative
+behavior at the supplied boundary, not the trustworthiness of assertions,
+physical lux or a final dispatch fence.
+
+The following remain separate #370/#136/#244/#243 gates: an accepted
+calibrated L2/L5 screen-to-room floor, real sensor provenance/adapters,
+hysteresis/ramp behavior and same-frame ScreenSync/serialized-applicator
+ownership under cancellation/races. Until these pass, this policy has no
+runtime callsite, no Hue payload, and no permission to brighten a light.
