@@ -7,9 +7,13 @@ import time
 from typing import Any, Optional
 
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
-from backend.services.lighting_transition_boundary import settle_lighting_io
+from backend.services.lighting_transition_boundary import (
+    lighting_write_validator, settle_lighting_io,
+)
 
 logger = logging.getLogger("home_hub.hue")
+
+_WRITE_REVOKED = object()
 
 # Extra buffer (seconds) added to a transition's own duration before the
 # polling loop is allowed to broadcast again. Absorbs bridge processing lag.
@@ -106,10 +110,20 @@ class HueService:
     async def _safe_call(self, fn, *args, settle_mutation=False, **kwargs):
         """Run a sync bridge call in a thread under the circuit breaker."""
         if settle_mutation:
+            def guarded_call():
+                # to_thread copies the delegated task context. Recheck after
+                # breaker/task/executor waits, immediately before bridge entry.
+                # This cannot revoke a bridge call once it has started, nor make
+                # validation and invocation atomic with another thread.
+                validator = lighting_write_validator.get()
+                if validator is not None and not validator():
+                    return _WRITE_REVOKED
+                return fn(*args, **kwargs)
+
             async def settled_call():
                 # CircuitBreaker.wait_for may cancel on timeout. Keep its local
                 # worker inside the lighting fence until the thread really ends.
-                return await settle_lighting_io(asyncio.to_thread(fn, *args, **kwargs))
+                return await settle_lighting_io(asyncio.to_thread(guarded_call))
 
             # Caller cancellation can arrive while wait_for is itself waiting
             # for settled_call's timeout cleanup. Keep that outer breaker task
@@ -249,7 +263,11 @@ class HueService:
             if not command:
                 return False
 
-            await self._safe_call(self._bridge.set_light, lid, command, settle_mutation=True)
+            result = await self._safe_call(
+                self._bridge.set_light, lid, command, settle_mutation=True,
+            )
+            if result is _WRITE_REVOKED:
+                return False
             logger.info(f"Set light {light_id}: {command}")
 
             # Mark light in-flight so the polling loop doesn't broadcast
