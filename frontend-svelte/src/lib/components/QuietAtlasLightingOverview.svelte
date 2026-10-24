@@ -1,11 +1,16 @@
 <script>
-  import { lights } from '$lib/stores/lights.js'
   import { connected } from '$lib/stores/connection.js'
   import { automation, houseStateLabel, activityLabel, automationSourceLabel } from '$lib/stores/automation.js'
-  import { buildLightingOverview, selectQuickScenes } from '$lib/quietAtlas/lightingModel.js'
+  import { selectQuickScenes } from '$lib/quietAtlas/lightingModel.js'
 
   /** @type {Array<Record<string, any>>} */
   export let sceneList = []
+  /** @type {ReturnType<import('$lib/quietAtlas/lightingModel.js').buildLightingOverview>} */
+  export let groups = []
+  /** @type {'disconnected'|'unverified'|'recent-read'|'stale-read'} */
+  export let snapshotStatus = 'unverified'
+  /** @type {() => void} */
+  export let onRefreshLights = () => {}
   /** @type {string[]} Explicitly selected IDs; no favorites are persisted here. */
   export let favoriteSceneIds = []
   /** @type {boolean} */
@@ -19,7 +24,6 @@
   /** @type {(sceneId: string) => void} Parent owns existing authorized actuation. */
   export let onOpenScene = () => {}
 
-  $: groups = buildLightingOverview($lights, $connected)
   $: quickScenes = selectQuickScenes(sceneList, favoriteSceneIds)
   $: house = houseStateLabel($automation.house_state) || 'State unavailable'
   $: activity = activityLabel($automation.activity)
@@ -35,7 +39,15 @@
     <h1>{house}</h1>
     {#if activity}<p class="activity">{activity}</p>{/if}
     <p class="provenance">{owner}{dnd ? ' · Do Not Disturb' : ''}</p>
-    {#if !$connected}<p class="connection-warning" role="status">Connection unavailable. State and lighting information may be stale. Controls are disabled in this preview.</p>{/if}
+    {#if snapshotStatus === 'disconnected'}
+      <p class="connection-warning" role="status">Connection unavailable. Last lighting values are historical, not confirmed live. All lighting controls remain disabled.</p>
+    {:else if snapshotStatus === 'unverified'}
+      <p class="connection-warning" role="status">Lighting unverified. Waiting for a successful new light snapshot. Previously shown values may be historical.</p>
+    {:else if snapshotStatus === 'stale-read'}
+      <p class="connection-warning" role="status">Lighting read is stale. Previously received values may have changed. Individual fixture freshness is unknown.</p>
+    {:else}
+      <p class="snapshot-note" role="status">Light snapshot received recently. Individual fixture freshness is unverified; controls remain disabled.</p>
+    {/if}
   </div>
 
   <div class="section-heading">
@@ -43,7 +55,7 @@
       <div class="eyebrow">YOUR APARTMENT</div>
       <h2>Lighting</h2>
     </div>
-    <span class="section-caption">Tap an area for controls</span>
+    <button type="button" class="refresh-lights" on:click={onRefreshLights} aria-label="Refresh lighting snapshot">Refresh status</button>
   </div>
 
   <div class="groups">
@@ -58,7 +70,7 @@
         <span class="group-status" class:available={group.status === 'on'}>
           <span class="status-dot" aria-hidden="true"></span>
           {stateText[group.status]}
-          {#if $connected && group.status !== 'unknown' && group.status !== 'offline' && group.status !== 'partial'}
+          {#if snapshotStatus === 'recent-read' && group.status !== 'unknown' && group.status !== 'offline' && group.status !== 'partial'}
             <span class="count">· {group.onCount}/{group.total} on</span>
           {/if}
         </span>
@@ -99,9 +111,10 @@
   .activity { margin-top: 7px; color: #e3c6a3; font-size: 18px; }
   .provenance { color: #b8c6bb; font-size: 13px; margin-top: 16px; }
   .connection-warning { color: #f0d3a0; border-top: 1px solid #776241; margin-top: 16px; padding-top: 12px; font-size: 12px; line-height: 1.5; }
+  .snapshot-note { color: #b7d0b4; margin-top: 16px; font-size: 12px; }
+  .refresh-lights { flex: 0 0 auto; font-size: 12px; min-height: 44px; padding: 8px 11px; color: #c9e2c0; background: #203328; border: 1px solid #647d68; border-radius: 10px; }
   .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin: 28px 0 14px; }
   h2 { font-family: Georgia, serif; font-size: 29px; font-weight: 400; margin-top: 5px; }
-  .section-caption { font-size: 12px; color: #b8c6bb; text-align: right; }
   .groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   button { cursor: pointer; font: inherit; }
   button:focus-visible { outline: 3px solid #d2ebbe; outline-offset: 3px; }

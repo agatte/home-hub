@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { apiGet } from '$lib/api.js'
   import { connected } from '$lib/stores/connection.js'
-  import { lights } from '$lib/stores/lights.js'
+  import { newReadOnlySnapshot, connectionChanged, invalidateLightRead, beginLightRead, acceptLightRead, failLightRead, readStatus } from '$lib/quietAtlas/lightSnapshot.js'
   import { buildLightingOverview, normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
   import QuietAtlasLightingOverview from './QuietAtlasLightingOverview.svelte'
   import QuietAtlasGroupSheet from './QuietAtlasGroupSheet.svelte'
@@ -19,8 +19,82 @@
   let focusSceneId = null
   let inflight = false
   let isMounted = false
+  let lightReadFailures = 0
+  let nextAutomaticLightReadAt = 0
+  // Only the opt-in review reader is quiet; other error reporting is unchanged.
+  /** @type {Set<AbortController>} */
+  const lightReadControllers = new Set()
+  function abortPendingLightReads() {
+    for (const controller of lightReadControllers) controller.abort()
+    lightReadControllers.clear()
+  }
+  /** @param {AbortSignal} signal */
+  async function quietLightRead(signal) {
+    const response = await fetch('/api/lights', { signal })
+    if (!response.ok) throw new Error('Light read unavailable')
+    return response.json()
+  }
+  let snapshot = newReadOnlySnapshot()
+  let nowMs = Date.now()
+  $: snapshotStatus = readStatus(snapshot, nowMs)
+  // Groups and snapshot provenance derive from the SAME verified API response,
+  // never from the globally optimistic WebSocket light store.
+  $: groups = buildLightingOverview(/** @type {any} */ (snapshot.fixtures), snapshotStatus === 'recent-read')
 
-  $: groups = buildLightingOverview($lights, $connected)
+  async function refreshLights() {
+    if (!isMounted || !snapshot.connected || document.visibilityState !== 'visible') return
+    const next = beginLightRead(snapshot)
+    snapshot = next.state
+    if (!next.ticket) return
+    const ticket = next.ticket
+    const controller = new AbortController()
+    lightReadControllers.add(controller)
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000)
+    try {
+      const rows = await quietLightRead(controller.signal)
+      if (isMounted && snapshot.generation === ticket.generation && snapshot.requestId === ticket.requestId) {
+        nowMs = Date.now()
+        snapshot = acceptLightRead(snapshot, ticket, rows, nowMs)
+        // A completed but invalid response is a failed snapshot, not success.
+        if (snapshot.receivedAt === nowMs) {
+          lightReadFailures = 0
+          nextAutomaticLightReadAt = 0
+        } else {
+          lightReadFailures = Math.min(3, lightReadFailures + 1)
+          nextAutomaticLightReadAt = nowMs + 15000 * 2 ** lightReadFailures
+        }
+      }
+    } catch {
+      if (isMounted && snapshot.generation === ticket.generation && snapshot.requestId === ticket.requestId) {
+        nowMs = Date.now()
+        snapshot = failLightRead(snapshot, ticket)
+        lightReadFailures = Math.min(3, lightReadFailures + 1)
+        nextAutomaticLightReadAt = nowMs + 15000 * 2 ** lightReadFailures
+      }
+    } finally {
+      window.clearTimeout(timeoutId)
+      lightReadControllers.delete(controller)
+    }
+  }
+
+  /** @param {boolean} available */
+  function onConnectionChanged(available) {
+    if (!isMounted) return
+    abortPendingLightReads()
+    snapshot = connectionChanged(snapshot, available)
+    lightReadFailures = 0
+    nextAutomaticLightReadAt = 0
+    nowMs = Date.now()
+    if (available && document.visibilityState === 'visible') void refreshLights()
+  }
+
+  function onVisibilityChanged() {
+    if (!isMounted) return
+    abortPendingLightReads()
+    snapshot = invalidateLightRead(snapshot)
+    nowMs = Date.now()
+    if (document.visibilityState === 'visible' && snapshot.connected) void refreshLights()
+  }
   $: selectedGroup = selectedGroupId ? groups.find((g) => g.id === selectedGroupId) : null
 
   async function refreshScenes() {
@@ -40,7 +114,26 @@
     }
   }
 
-  onMount(() => { isMounted = true; refreshScenes(); return () => { isMounted = false } })
+  onMount(() => {
+    isMounted = true
+    const unsubscribe = connected.subscribe(onConnectionChanged)
+    document.addEventListener('visibilitychange', onVisibilityChanged)
+    const ageTimer = window.setInterval(() => { nowMs = Date.now() }, 1000)
+    // Poll for REST *read* provenance, never as a substitute for bulb telemetry.
+    const refreshTimer = window.setInterval(() => {
+      if (!snapshot.pending && snapshot.connected && document.visibilityState === 'visible' &&
+          Date.now() >= nextAutomaticLightReadAt) void refreshLights()
+    }, 15000)
+    void refreshScenes()
+    return () => {
+      isMounted = false
+      abortPendingLightReads()
+      unsubscribe()
+      document.removeEventListener('visibilitychange', onVisibilityChanged)
+      window.clearInterval(ageTimer)
+      window.clearInterval(refreshTimer)
+    }
+  })
 
   /** @param {string} id */
   function openGroup(id) { selectedGroupId = id }
@@ -53,7 +146,7 @@
 
 <div class="qa-experience">
   <div class="review-banner" role="note"><strong>Quiet Atlas · development review</strong> — This experimental route reads light and scene information but cannot turn on lights, change brightness, apply scenes, or alter automation.</div>
-  <QuietAtlasLightingOverview {sceneList} sceneLoading={scenesLoading} {sceneError}
+  <QuietAtlasLightingOverview {groups} {snapshotStatus} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
     onOpenGroup={openGroup} onBrowseScenes={browseScenes} onOpenScene={openSpecificScene} />
   <div class="secondary-links">
     <a href="/">Existing HomeHub Home</a>
@@ -62,7 +155,7 @@
   </div>
 </div>
 {#if selectedGroup}
-  <QuietAtlasGroupSheet group={selectedGroup} connected={$connected} onClose={() => selectedGroupId = null} />
+  <QuietAtlasGroupSheet group={selectedGroup} {snapshotStatus} onClose={() => selectedGroupId = null} />
 {/if}
 {#if sceneBrowserOpen}
   <QuietAtlasSceneBrowser {sceneList} loading={scenesLoading} error={sceneError} connected={$connected}

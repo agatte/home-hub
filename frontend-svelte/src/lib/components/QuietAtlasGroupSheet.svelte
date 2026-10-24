@@ -4,7 +4,8 @@
 
   /** Selected group returned by buildLightingOverview(). */
   export let group
-  export let connected = false
+  /** @type {'disconnected'|'unverified'|'recent-read'|'stale-read'} */
+  export let snapshotStatus = 'unverified'
   export let onClose = () => {}
 
   /** @type {HTMLElement | null} */
@@ -35,8 +36,8 @@
       <div><div class="overline">LIGHTING · FIXTURES</div><h2>{group.label}</h2></div>
       <button bind:this={closeButton} type="button" class="close" on:click={onClose} aria-label="Close lighting details">✕</button>
     </header>
-    {#if !connected}
-      <p class="caution" role="status">HomeHub is disconnected. Last reported values may be stale.</p>
+    {#if snapshotStatus !== 'recent-read'}
+      <p class="caution" role="status">Fixture values are historical, not confirmed live. Light snapshot: {snapshotStatus === 'disconnected' ? 'disconnected' : snapshotStatus === 'stale-read' ? 'stale' : 'unverified'}.</p>
     {:else if group.status === 'unknown' || group.status === 'partial' || group.status === 'offline'}
       <p class="caution" role="status">Not all fixture states are available. Unknown and offline lights cannot be assumed off.</p>
     {/if}
@@ -45,10 +46,10 @@
       {#each group.fixtures as fixture (fixture.id)}
         <article class="fixture">
           <div class="fixture-top">
-            <div><h3>{fixture.name}</h3><p class="sub">{fixtureStatusLabel(fixture)}</p></div>
-            <span class:lit={connected && fixture.on === true} class="bulb" aria-hidden="true">●</span>
+            <div><h3>{fixture.name}</h3><p class="sub">{snapshotStatus === 'recent-read' ? fixtureStatusLabel(fixture) : 'Last reported: ' + fixtureStatusLabel(fixture)}</p></div>
+            <span class:lit={snapshotStatus === 'recent-read' && fixture.on === true} class="bulb" aria-hidden="true">●</span>
           </div>
-          <label for={`fixture-brightness-${fixture.id}`}>Brightness <span>{connected && fixture.brightness !== null ? `${fixture.brightness}%` : 'Unavailable'}</span></label>
+          <label for={`fixture-brightness-${fixture.id}`}>Brightness <span>{snapshotStatus === 'recent-read' && fixture.brightness !== null ? `${fixture.brightness}%` : 'Unavailable'}</span></label>
           <input id={`fixture-brightness-${fixture.id}`} type="range" min="1" max="254" step="1"
             value={fixture.brightness === null ? 1 : Math.max(1, Math.min(254, Math.round(fixture.brightness * 2.54)))}
             disabled aria-label={`${fixture.name} brightness — read-only preview`} />
