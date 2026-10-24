@@ -22,8 +22,8 @@ describe('Quiet Atlas read-only lighting projection (#270)', () => {
       ['kitchen', ['3', '4']], ['plant', ['6']],
     ])
     const groups = buildLightingOverview({ '2': light('2', true), '5': light('5', false), '3': light('3', true), '4': light('4', false) })
-    expect(groups.find(({ id }) => id === 'bedroom').status).toBe('mixed')
-    expect(groups.find(({ id }) => id === 'kitchen').status).toBe('mixed')
+    expect(groups.find(({ id }) => id === 'bedroom')?.status).toBe('mixed')
+    expect(groups.find(({ id }) => id === 'kitchen')?.status).toBe('mixed')
     expect(groups.every(({ supportsGroupWrite }) => supportsGroupWrite === false)).toBe(true)
   })
 
@@ -44,8 +44,8 @@ describe('Quiet Atlas read-only lighting projection (#270)', () => {
   it('keeps the individual bedroom brightness levels separate', () => {
     const source = { '2': light('2', true, 254), '5': light('5', false, 25) }
     const bedroom = buildLightingOverview(source).find(({ id }) => id === 'bedroom')
-    expect(bedroom.fixtures.map(({ on }) => on)).toEqual([true, false])
-    expect(bedroom.fixtures.map(({ brightness }) => brightness)).toEqual([100, null])
+    expect(bedroom?.fixtures.map(({ on }) => on)).toEqual([true, false])
+    expect(bedroom?.fixtures.map(({ brightness }) => brightness)).toEqual([100, null])
     expect(source['2'].bri).toBe(254)
     expect(brightnessPercent(0)).toBeNull()
     expect(brightnessPercent(255)).toBeNull()
@@ -54,9 +54,9 @@ describe('Quiet Atlas read-only lighting projection (#270)', () => {
 
   it('places unknown newly discovered fixtures into read-only Other lights', () => {
     const groups = buildLightingOverview({ '6': light('6', false), '12': light('12', true) })
-    expect(groups.find(({ id }) => id === 'plant').status).toBe('off')
-    expect(groups.at(-1).fixtureIds).toEqual(['12'])
-    expect(groups.at(-1).supportsGroupWrite).toBe(false)
+    expect(groups.find(({ id }) => id === 'plant')?.status).toBe('off')
+    expect(groups.at(-1)?.fixtureIds).toEqual(['12'])
+    expect(groups.at(-1)?.supportsGroupWrite).toBe(false)
   })
 
   it('takes quick scenes only from the API, never from invented selections', () => {
