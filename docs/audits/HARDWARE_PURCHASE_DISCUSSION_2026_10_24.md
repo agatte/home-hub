@@ -2,7 +2,21 @@
 
 Status: research and provisional recommendation, not an accepted hardware selection or migration approval.
 
-## Confirmed operator priorities
+## Latest clarification and shopping pass — October 24 (supersedes provisional RAM-first direction below)
+
+Anthony is currently taking the Latitude on work trips. Local AI goals include editing code/running tests and a personalized Alexa/Home Hub assistant for moods and general questions. Therefore a dedicated always-home server is now the first purchase candidate, ahead of desktop RAM. The earlier RAM-first discussion below is retained as history. No hardware selected or ordered; no migration authorized.
+
+Complete configuration checks:
+- [HP EliteDesk 800 G6, i5-10500T, 32GB/512GB at REFURB.io](https://us.refurb.io/collections/32gb-ram-desktops/products/hp-elitedesk-800-g6-mini-desktop-i5-10500t-32gb-ram-512-gb-solid-state-drive-windows-11-pro-refurbished): $564 with advertised extra 13% off orders over $500, calculated $490.68 before tax. Promotion ends November 4, 2026; not checkout-verified. Page reports 104 in stock, free continental-US delivery, AC adapter and one-year parts/labor warranty. Wi-Fi not specified. Returns page: 30 days from purchase, 15% nondefective-return restocking fee.
+- [Same CPU/RAM/storage HP at Best Buy Marketplace](https://www.bestbuy.com/product/hp-elitedesk-800g6-mini-intel-i5-10500t-32gb-512gb-ssd-windows-11-pro-black/J39WY9H4HP/sku/10117534): $485, Add to cart and free shipping shown; seller CNB Computers USA Inc, 3.49/5 from 73 ratings, 90-day warranty. Displayed delivery ZIP was not Anthony's. Wi-Fi, exact adapter and seller-specific return details still need confirmation.
+- GMKtec first-party public product JSON confirmed US-plug complete variants available: [M2 Pro S](https://www.gmktec.com/products/intel-core%E2%84%A2-i7-1185g7-mini-pc-nucbox-m2-pro-s?variant=47321213567130), i7-1185G7, 32GB/1TB $579.99 (16GB/512GB $459.99); [M5 Ultra](https://www.gmktec.com/products/gmktec-nucbox-m5-ultra-amd-ryzen-7-7730u-mini-pc?variant=47330098151578), Ryzen 7730U, 32GB/1TB $599.99 (16GB/512GB $449.99); [M6 Ultra](https://www.gmktec.com/products/amd-ryzen-5-7640hs-mini-pc-nucbox-m6-ultra?variant=47330369405082), Ryzen 7640HS, 32GB/1TB $679.99 (16GB/512GB $499.99). These replace unverified complete-variant prices earlier. Product pages advertise one-year warranty and seven-day returns; no checkout shipping total verified.
+- Deluxe PCs M70q Gen 1 32GB/512GB $454.99: public product JSON says available=false. Exclude; page's mixed Add to cart/Sold Out text was not proof of stock. Also lacks Wi-Fi.
+- Micro Center lists M5 Ultra 32GB/1TB $699.99 and M3 Pro 32GB/1TB $749.99, pickup-only; no Indianapolis stock confirmed. Not value picks here.
+- eBay M2 Pro listings 168421486196 and 178517042083 were already SOLD; exclude.
+
+Assessment: REFURB.io HP is a plausible production-server candidate near $500 before tax, not an unconditional buy. Its warranty is more attractive than the cheaper Marketplace HP, but Wi-Fi and return costs matter. None is a proven fast all-local coding-agent plus production host. Keep model inference and isolated build/test resources separately budgeted; do not promise local LLM performance from RAM capacity alone. Current confirmed 32GB new units exceed the $500 budget. Network placement, replacement living-room camera and delivered total remain purchase gates.
+
+## Confirmed operator priorities (initial discussion)
 
 Anthony set a total next-purchase budget of $300–500. The Latitude already provides always-on Home Hub; keeping that capability and improving desktop performance both matter. First desired local AI use is coding and knowledge. Sensors, more microphones and cameras are future interests; counts, retention, voice expectations and offline requirements remain unspecified.
 
