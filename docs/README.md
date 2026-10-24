@@ -55,6 +55,8 @@ Use this page as the entry point for repository documentation.
 
 ## Incidents and audits
 
+- [`audits/HARDWARE_PURCHASE_DISCUSSION_2026_10_24.md`](audits/HARDWARE_PURCHASE_DISCUSSION_2026_10_24.md) — current purchase discussion checkpoint: $300–500 budget, desktop versus server priorities, local coding/knowledge AI goals, price evidence and unresolved questions; no hardware selected
+
 - [`audits/HOME_SERVER_PURCHASE_AUDIT_2026_09_29.md`](audits/HOME_SERVER_PURCHASE_AUDIT_2026_09_29.md) — preserved September 29 home-server/AI purchase research; historical pricing and proposed capacity, not a purchase or migration approval
 
 - [`audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md`](audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md) — dated read-only lighting ownership/lifecycle audit; preserves the strong central compositor findings, delayed/transient final-write gaps, rejected hypotheses, regression plan, and issue routing to #322/#323/#324
