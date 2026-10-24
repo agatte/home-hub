@@ -55,6 +55,8 @@ Use this page as the entry point for repository documentation.
 
 ## Incidents and audits
 
+- [`audits/HOME_SERVER_PURCHASE_AUDIT_2026_09_29.md`](audits/HOME_SERVER_PURCHASE_AUDIT_2026_09_29.md) — preserved September 29 home-server/AI purchase research; historical pricing and proposed capacity, not a purchase or migration approval
+
 - [`audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md`](audits/LIGHTING_AUTHORITY_AUDIT_2026_10_04.md) — dated read-only lighting ownership/lifecycle audit; preserves the strong central compositor findings, delayed/transient final-write gaps, rejected hypotheses, regression plan, and issue routing to #322/#323/#324
 - [`audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md`](audits/ARCHITECTURE_ORCHESTRATION_AUDIT_2026_09_22.md) — dated read-only Astra reconciliation of authority docs, relevant code surfaces, and all 77 open GitHub issues; preserves detailed findings, issue classifications, execution packets, and the original #240 follow-up brief
 - [`audits/REPLAY_ARCHITECTURE_2026_09_22.md`](audits/REPLAY_ARCHITECTURE_2026_09_22.md) — accepted Astra Medium design for #240's bounded deterministic navigation replay, including the evidence-capture gate, bundle/time/checkpoint contracts, structural no-actuation proof, and downstream Luna/Terra implementation slices
