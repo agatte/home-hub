@@ -50,6 +50,11 @@ export function shouldUseQuietAtlasShell(pathname, searchParams) {
   return searchParams?.get('shell') === 'quiet-atlas'
 }
 
+export function shouldShowGlobalErrorToast(pathname, searchParams) {
+  if (pathname.startsWith('/gameday/prototype')) return false
+  return !shouldUseQuietAtlasShell(pathname, searchParams)
+}
+
 export function withQuietAtlasShell(href) {
   const hashAt = href.indexOf('#')
   const hash = hashAt >= 0 ? href.slice(hashAt) : ''
