@@ -26,6 +26,8 @@ describe('Quiet Atlas shared shell navigation', () => {
   it('keeps current and future nav destinations mapped to existing routes', () => {
     expect(activeQuietAtlasSection('/quiet-atlas')).toBe('home')
     expect(activeQuietAtlasSection('/quiet-atlas', '#control')).toBe('control')
+    expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
+    expect(shouldUseQuietAtlasShell('/quiet-atlas/control', new URLSearchParams())).toBe(true)
     expect(activeQuietAtlasSection('/music')).toBe('music')
     expect(activeQuietAtlasSection('/analytics')).toBe('insights')
     expect(activeQuietAtlasSection('/settings')).toBe('more')
