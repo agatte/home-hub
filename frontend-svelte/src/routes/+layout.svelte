@@ -16,6 +16,8 @@
   import ErrorToast from '$lib/components/ErrorToast.svelte'
   import VitalStrip from '$lib/components/VitalStrip.svelte'
   import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
+  import QuietAtlasShell from '$lib/components/QuietAtlasShell.svelte'
+  import { shouldUseQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
 
   // SvelteKit passes these props to layout components; declaring them
   // silences Svelte's unknown-prop warnings.
@@ -32,13 +34,15 @@
   // bottom-tab nav via /guest/+layout@.svelte + GuestBottomNav.
   $: isGuestRoute = $page.url.pathname.startsWith('/guest')
   $: isGamedayPrototypeRoute = $page.url.pathname.startsWith('/gameday/prototype')
-  $: isIsolatedRoute = isGuestRoute || isGamedayPrototypeRoute
 
-  // /gameday goes edge-to-edge — the football field is the visual, so the
-  // generative ModeBackground is suppressed and the .app container loses
-  // its max-width + padding. Other chrome (FloatingNav, VitalStrip,
-  // ModeOverlay, NowPlayingChip) stays and layers over the field.
+  // /gameday keeps its edge-to-edge stadium layout and ignores the preview flag.
   $: isGamedayRoute = $page.url.pathname === '/gameday'
+
+  // Quiet Atlas is opt-in: its own route always uses the new shell; existing
+  // routes can preview it with ?shell=quiet-atlas without replacing their page.
+  // Guest and Game Day keep their purpose-built layouts.
+  $: isQuietAtlasShell = shouldUseQuietAtlasShell($page.url.pathname, $page.url.searchParams)
+  $: isIsolatedRoute = isGuestRoute || isGamedayPrototypeRoute || isQuietAtlasShell
 
   onMount(() => {
     let cleanupStores = null
@@ -86,9 +90,18 @@
   <NowPlayingIdle />
 {/if}
 
-<div class="app-shell" class:user-idle={$userIdle}>
-  <div class:app={!isGamedayRoute && !isGamedayPrototypeRoute} class:app-bleed={isGamedayRoute || isGamedayPrototypeRoute}>
-    <slot />
+<div class="app-shell" class:user-idle={$userIdle && !isQuietAtlasShell}>
+  <div
+    class:app={!isGamedayRoute && !isGamedayPrototypeRoute && !isQuietAtlasShell}
+    class:app-bleed={isGamedayRoute || isGamedayPrototypeRoute}
+  >
+    {#if isQuietAtlasShell}
+      <QuietAtlasShell>
+        <slot />
+      </QuietAtlasShell>
+    {:else}
+      <slot />
+    {/if}
     {#if $connectionLost && !isIsolatedRoute}
       <div class="reconnect-banner">Reconnecting to server...</div>
     {/if}

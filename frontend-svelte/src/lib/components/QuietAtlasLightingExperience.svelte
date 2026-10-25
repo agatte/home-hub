@@ -148,11 +148,6 @@
   <div class="review-banner" role="note"><strong>Quiet Atlas · development review</strong> — This experimental route reads light and scene information but cannot turn on lights, change brightness, apply scenes, or alter automation.</div>
   <QuietAtlasLightingOverview {groups} {snapshotStatus} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
     onOpenGroup={openGroup} onBrowseScenes={browseScenes} onOpenScene={openSpecificScene} />
-  <div class="secondary-links">
-    <a href="/">Existing HomeHub Home</a>
-    <a href="/music">Music</a>
-    <a href="/settings">Settings</a>
-  </div>
 </div>
 {#if selectedGroup}
   <QuietAtlasGroupSheet group={selectedGroup} {snapshotStatus} onClose={() => selectedGroupId = null} />
@@ -163,15 +158,10 @@
 {/if}
 
 <style>
-  .qa-experience { min-height: 100vh; max-width: 1100px; margin: 0 auto; padding: 20px clamp(14px, 4vw, 34px) 132px; box-sizing: border-box; }
+  .qa-experience { max-width: 1100px; margin: 0 auto; padding: 20px clamp(14px, 4vw, 34px) 36px; box-sizing: border-box; }
   .review-banner { border: 1px solid #7b6742; color: #efdfb7; background: #312a1b; border-radius: 13px; padding: 13px 16px; font-size: 13px; line-height: 1.55; margin: 0 0 19px; }
-  .secondary-links { display: flex; flex-wrap: wrap; gap: 17px; margin-top: 36px; }
-  /* This route is nested inside the root app stacking context; global chrome
-     would otherwise float in front of modal sheets on small screens. */
-  :global(body:has(.sheet-root) .floating-nav),
-  :global(body:has(.browser-root) .floating-nav),
-  :global(body:has(.sheet-root) .vital-strip),
-  :global(body:has(.browser-root) .vital-strip) { visibility: hidden; pointer-events: none; }
-  .secondary-links a { color: #bed9bb; min-height: 44px; display: inline-flex; align-items: center; }
-  a:focus-visible { outline: 3px solid #d8e6b8; outline-offset: 3px; }
+  @media (max-width: 760px) {
+    .qa-experience { padding: 10px clamp(12px, 4vw, 20px) 30px; }
+    .review-banner { padding: 9px 11px; font-size: 11.5px; line-height: 1.4; margin-bottom: 12px; }
+  }
 </style>
