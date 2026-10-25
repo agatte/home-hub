@@ -68,7 +68,7 @@
 </div>
 
 <style>
-  .sheet-root { position:fixed;inset:0;z-index:500;display:flex;align-items:flex-end;justify-content:center; }
+  .sheet-root { position:fixed;inset:0;z-index:510;display:flex;align-items:flex-end;justify-content:center; }
   .sheet-scrim { position:absolute;inset:0;border:0;background:rgba(4,10,8,.76);cursor:pointer; }
   .sheet { position:relative;box-sizing:border-box;outline:0;width:min(100%,620px);max-height:min(92dvh,900px);overflow:auto;overscroll-behavior:contain;background:#13221b;border:1px solid #526a56;border-radius:24px 24px 0 0;padding:24px 20px calc(26px + env(safe-area-inset-bottom,0px));color:#f2f0e8;box-shadow:0 0 60px #0008; }
   .sheet-header,.fixture-top { display:flex;justify-content:space-between;gap:16px;align-items:flex-start; }
