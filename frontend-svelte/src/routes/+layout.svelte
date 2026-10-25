@@ -17,7 +17,7 @@
   import VitalStrip from '$lib/components/VitalStrip.svelte'
   import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
   import QuietAtlasShell from '$lib/components/QuietAtlasShell.svelte'
-  import { shouldUseQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
+  import { shouldUseQuietAtlasShell, shouldShowGlobalErrorToast } from '$lib/quietAtlas/navigation.js'
 
   // SvelteKit passes these props to layout components; declaring them
   // silences Svelte's unknown-prop warnings.
@@ -120,6 +120,6 @@
        on / where ModeSuggestionCard owns the banner spot. -->
   <ModeSuggestionToast />
 {/if}
-{#if !isGamedayPrototypeRoute}
+{#if shouldShowGlobalErrorToast($page.url.pathname, $page.url.searchParams)}
   <ErrorToast />
 {/if}
