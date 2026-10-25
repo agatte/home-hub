@@ -3,6 +3,7 @@ import {
   MORE_DESTINATIONS,
   activeQuietAtlasSection,
   shouldUseQuietAtlasShell,
+  shouldShowGlobalErrorToast,
   withQuietAtlasShell,
 } from '../../src/lib/quietAtlas/navigation.js'
 
@@ -17,6 +18,14 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shouldUseQuietAtlasShell('/guest/wifi', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
   })
 
+  it('keeps global API error toasts off isolated review surfaces', () => {
+    expect(shouldShowGlobalErrorToast('/quiet-atlas/control', new URLSearchParams())).toBe(false)
+    expect(shouldShowGlobalErrorToast('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
+    expect(shouldShowGlobalErrorToast('/gameday/prototype', new URLSearchParams())).toBe(false)
+    expect(shouldShowGlobalErrorToast('/music', new URLSearchParams())).toBe(true)
+    expect(shouldShowGlobalErrorToast('/', new URLSearchParams())).toBe(true)
+  })
+
   it('preserves query strings and fragments when opting into the shell', () => {
     expect(withQuietAtlasShell('/music')).toBe('/music?shell=quiet-atlas')
     expect(withQuietAtlasShell('/settings?section=audio#top')).toBe('/settings?section=audio&shell=quiet-atlas#top')
@@ -26,6 +35,8 @@ describe('Quiet Atlas shared shell navigation', () => {
   it('keeps current and future nav destinations mapped to existing routes', () => {
     expect(activeQuietAtlasSection('/quiet-atlas')).toBe('home')
     expect(activeQuietAtlasSection('/quiet-atlas', '#control')).toBe('control')
+    expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
+    expect(shouldUseQuietAtlasShell('/quiet-atlas/control', new URLSearchParams())).toBe(true)
     expect(activeQuietAtlasSection('/music')).toBe('music')
     expect(activeQuietAtlasSection('/analytics')).toBe('insights')
     expect(activeQuietAtlasSection('/settings')).toBe('more')
