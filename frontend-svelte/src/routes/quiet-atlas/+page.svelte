@@ -12,5 +12,5 @@
 </main>
 
 <style>
-  .quiet-atlas-review { min-height: 100vh; background: #101a15; }
+  .quiet-atlas-review { background: #101a15; }
 </style>

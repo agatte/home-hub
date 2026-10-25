@@ -33,7 +33,7 @@
   const stateText = { stale: 'Connection lost', on: 'On', off: 'Off', mixed: 'Mixed', partial: 'Partially available', offline: 'Offline', unknown: 'Unavailable' }
 </script>
 
-<section class="quiet-atlas" aria-label="Home and lighting overview">
+<section id="control" class="quiet-atlas" aria-label="Home and lighting overview">
   <div class="context">
     <div class="eyebrow">HOMEHUB · {$connected ? 'CONNECTED' : 'NOT CONNECTED'}</div>
     <h1>{house}</h1>
@@ -104,6 +104,7 @@
 
 <style>
   .quiet-atlas { color: #eaeae4; font-family: system-ui, -apple-system, sans-serif; width: 100%; max-width: 100%; }
+  #control { scroll-margin-top: 20px; }
   .context { background: radial-gradient(ellipse at 88% 10%, rgba(130,157,110,.17), transparent 54%), #101b18; border: 1px solid #304238; border-radius: 24px; padding: 26px 24px; }
   .eyebrow { color: #9fb3a1; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
   h1, h2, p { margin: 0; }
@@ -134,6 +135,18 @@
   .scene-kind { font-size: 11px; color: #bac9ba; }
   .empty { border: 1px dashed #526057; border-radius: 12px; color: #bac9ba; font-size: 13px; padding: 18px; }
   @media(min-width: 900px) { .groups { grid-template-columns: repeat(4, minmax(0, 1fr)); } .scene-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-  @media(max-width: 350px) { .context { padding: 20px 16px; } .group { padding: 13px; } .group-name { font-size: 14px; } }
+  @media(max-width: 350px) { .context { padding: 16px 14px; } .group { padding: 12px; } .group-name { font-size: 14px; } }
+  @media(max-width: 760px) {
+    .context { padding: 16px 16px; border-radius: 20px; }
+    h1 { margin-top: 8px; font-size: clamp(32px, 8vw, 42px); }
+    .activity { margin-top: 5px; font-size: 16px; }
+    .provenance { margin-top: 9px; }
+    .connection-warning { margin-top: 10px; padding-top: 8px; }
+    .snapshot-note { margin-top: 8px; }
+    .section-heading { margin: 18px 0 8px; }
+    .presets-heading { margin-top: 18px; }
+    .group { min-height: 94px; padding: 14px; }
+    .group-name { font-size: 15px; }
+  }
   @media(prefers-reduced-motion: reduce) { .group { transition: none; } }
 </style>
