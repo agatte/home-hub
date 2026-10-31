@@ -50,8 +50,10 @@ def _fresh_sync(raw: Mapping[str, Any], collected_at: datetime | None) -> dict:
         and last is not None
         and timedelta(seconds=-2) <= collected_at - last <= timedelta(seconds=10)
     )
-    known_targets = isinstance(targets, list) and all(
-        isinstance(v, str) and v in _LIGHTS for v in targets
+    known_targets = (
+        isinstance(targets, list)
+        and bool(targets)
+        and all(isinstance(v, str) and v in _LIGHTS for v in targets)
     )
     qualified = (
         status.get("enabled_mode") is True
@@ -172,9 +174,19 @@ def compare_frames(frames: Any) -> dict[str, Any]:
         blockers.append("automation_status_missing")
     ss_before = _fresh_sync(first_raw, first_at)
     ss_after = _fresh_sync(last_raw, last_at)
+    before_color_at = _iso(_dict(first_raw.get("screen_sync_status")).get("last_color_at"))
+    after_color_at = _iso(_dict(last_raw.get("screen_sync_status")).get("last_color_at"))
+    color_time_ordered = (
+        before_color_at is not None
+        and after_color_at is not None
+        and before_color_at <= after_color_at
+    )
+    if ss_before["qualified_report"] and ss_after["qualified_report"] and not color_time_ordered:
+        blockers.append("screen_color_time_reversed")
     sync_continuous = (
         ss_before["qualified_report"]
         and ss_after["qualified_report"]
+        and color_time_ordered
         and ss_before["source"] == ss_after["source"]
         and ss_before["targets"] == ss_after["targets"]
     )

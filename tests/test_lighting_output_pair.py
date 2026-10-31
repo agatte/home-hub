@@ -381,3 +381,33 @@ def test_missing_pipeline_output_means_unverified_cache_not_device_failure():
     result = compare_frames(frames)
     assert light(result, "2")["actual_vs_automation_cache"] == "automation_cache_not_available"
     assert result["assurance"] == "non_atomic_correlation_not_causation_or_hue_ack"
+
+
+def test_empty_reported_sync_targets_do_not_qualify_owner():
+    frames = pair()
+    for frame in frames:
+        frame["snapshot"]["screen_sync_status"]["authoritative_targets"] = []
+    result = compare_frames(frames)
+    assert result["screen_sync"]["continuity_reported"] is False
+    assert all(
+        not x["qualified_report"]
+        for x in (result["screen_sync"]["before"], result["screen_sync"]["after"])
+    )
+    assert light(result, "2")["reported_provenance"] == "unverified_no_final_write_proven"
+
+
+def test_reversed_color_timestamps_abstain_even_when_individually_fresh():
+    frames = pair()
+    frames[0]["snapshot"]["screen_sync_status"]["last_color_at"] = (
+        BASE + timedelta(seconds=1)
+    ).isoformat()
+    frames[1]["snapshot"]["screen_sync_status"]["last_color_at"] = (
+        BASE - timedelta(seconds=1)
+    ).isoformat()
+    report = compare_frames(frames)
+    assert report["screen_sync"]["before"]["qualified_report"] is True
+    assert report["screen_sync"]["after"]["qualified_report"] is True
+    assert report["screen_sync"]["continuity_reported"] is False
+    assert "screen_color_time_reversed" in report["comparison_blockers"]
+    assert report["technical_findings"] == []
+    assert light(report, "2")["reported_provenance"] == "unverified_no_final_write_proven"
