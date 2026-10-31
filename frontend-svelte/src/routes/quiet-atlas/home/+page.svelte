@@ -1,8 +1,17 @@
 <script>
-  // #270: isolated visual review. No HomeHub stores, API reads, or device actions.
+  // #270: opt-in read-only review; HomeHub status comes only from guarded REST.
+  import { onMount } from 'svelte'
+  import { connected } from '$lib/stores/connection.js'
   import { controlGroupHref, CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
+  import {
+    newHomeContextSnapshot, homeContextConnectionChanged, invalidateHomeContextRead,
+    beginHomeContextRead, acceptHomeContextRead, failHomeContextRead, homeContextPresentation,
+  } from '$lib/quietAtlas/homeContextSnapshot.js'
   let daylight = false
   let sampleState = 'unavailable'
+  let contextSnapshot = newHomeContextSnapshot()
+  let contextNowMs = 0
+  $: contextDisplay = homeContextPresentation(contextSnapshot, contextNowMs)
 
   const groups = [
     { id: 'living', name: 'Living', detail: 'L1', label: 'Browse Living lights' },
@@ -35,17 +44,113 @@
   }
 
   $: example = examples[sampleState] ?? examples.unavailable
+
+  onMount(() => {
+    let mounted = true
+    /** @type {AbortController | null} */
+    let controller = null
+    let failures = 0
+    let nextPollAt = 0
+
+    function abortRead() {
+      controller?.abort()
+      controller = null
+    }
+
+    async function refreshContext() {
+      if (!mounted || !contextSnapshot.connected || document.visibilityState !== 'visible') return
+      const next = beginHomeContextRead(contextSnapshot)
+      contextSnapshot = next.state
+      if (!next.ticket) return
+      const ticket = next.ticket
+      controller = new AbortController()
+      const currentController = controller
+      const timeout = window.setTimeout(() => currentController.abort(), 8000)
+      nextPollAt = Date.now() + 30000
+      try {
+        const response = await fetch('/api/automation/status', { signal: currentController.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error('HomeHub status unavailable')
+        const body = await response.json()
+        if (!mounted) return
+        const confirmedAt = Date.now()
+        const accepted = acceptHomeContextRead(contextSnapshot, ticket, body, confirmedAt)
+        if (accepted !== contextSnapshot) {
+          contextSnapshot = accepted
+          contextNowMs = confirmedAt
+          if (!accepted.failed) {
+            failures = 0
+            nextPollAt = confirmedAt + 30000
+          } else {
+            failures = Math.min(3, failures + 1)
+            nextPollAt = confirmedAt + Math.min(120000, 15000 * 2 ** failures)
+          }
+        }
+      } catch {
+        if (!mounted) return
+        const failed = failHomeContextRead(contextSnapshot, ticket)
+        if (failed !== contextSnapshot) {
+          contextSnapshot = failed
+          contextNowMs = Date.now()
+          failures = Math.min(3, failures + 1)
+          nextPollAt = contextNowMs + Math.min(120000, 15000 * 2 ** failures)
+        }
+      } finally {
+        window.clearTimeout(timeout)
+        if (controller === currentController) controller = null
+      }
+    }
+
+    function connectionChanged(available) {
+      if (!mounted) return
+      abortRead()
+      const previous = contextSnapshot.connected
+      contextSnapshot = homeContextConnectionChanged(contextSnapshot, available)
+      contextNowMs = Date.now()
+      if (available && !previous && document.visibilityState === 'visible') {
+        failures = 0
+        nextPollAt = 0
+        void refreshContext()
+      }
+    }
+
+    function visibilityChanged() {
+      if (!mounted) return
+      abortRead()
+      contextSnapshot = invalidateHomeContextRead(contextSnapshot)
+      contextNowMs = Date.now()
+      if (document.visibilityState === 'visible' && contextSnapshot.connected) {
+        nextPollAt = 0
+        void refreshContext()
+      }
+    }
+
+    const unsubscribe = connected.subscribe(connectionChanged)
+    document.addEventListener('visibilitychange', visibilityChanged)
+    const ageTimer = window.setInterval(() => { contextNowMs = Date.now() }, 1000)
+    const pollTimer = window.setInterval(() => {
+      if (!contextSnapshot.pending && contextSnapshot.connected &&
+          document.visibilityState === 'visible' && Date.now() >= nextPollAt) void refreshContext()
+    }, 15000)
+    return () => {
+      mounted = false
+      abortRead()
+      unsubscribe()
+      document.removeEventListener('visibilitychange', visibilityChanged)
+      window.clearInterval(ageTimer)
+      window.clearInterval(pollTimer)
+    }
+  })
 </script>
 
 <svelte:head>
   <title>Home · Quiet Atlas design review | HomeHub</title>
-  <meta name="description" content="Isolated, read-only HomeHub Quiet Atlas × Daylight Home composition preview." />
+  <meta name="description" content="Read-only Quiet Atlas Home review with source-qualified HomeHub context and illustrative examples." />
 </svelte:head>
 
 <main class:daylight class="home-review" aria-label="Quiet Atlas Home design review">
   <div class="preview-ribbon">
     <span class="brand">QUIET ATLAS <span class="multiply">×</span> DAYLIGHT</span>
-    <span class="disclaimer">Illustrative design preview · not live HomeHub state</span>
+    <span class="disclaimer">Read-only review · context is HomeHub-reported; examples are illustrative</span>
     <button
       class="theme-toggle"
       type="button"
@@ -82,17 +187,17 @@
       <div class="world-bottom">
         <div class="readout">
           <span>HOUSE STATE</span>
-          <strong>Not connected</strong>
+          <strong>{contextDisplay.house}</strong>
         </div>
         <div class="readout">
           <span>ACTIVITY</span>
-          <strong>Not connected</strong>
+          <strong>{contextDisplay.activity}</strong>
         </div>
-        <div class="world-note">No presence, room or lighting state is inferred by this preview.</div>
+        <div class="world-note">{contextDisplay.note}</div>
       </div>
     </div>
-    <aside class="context-rail" aria-label="Recent context example">
-      <p class="rail-head">RECENT CONTEXT <span aria-hidden="true">—</span></p>
+    <aside class="context-rail" aria-label="Illustrative context examples">
+      <p class="rail-head">DESIGN EXAMPLES <span aria-hidden="true">—</span></p>
       <p class="rail-title">{example.title}</p>
       <p class="rail-description">{example.description}</p>
       <p class="rail-kind">{example.kind}</p>
@@ -130,7 +235,7 @@
     </div>
   </section>
 
-  <section class="mobile-context" aria-label="Recent context example">
+  <section class="mobile-context" aria-label="Illustrative context examples">
     <span class="mobile-context-kind">{example.kind}</span>
     <p><strong>{example.title}</strong> — {example.description}</p>
     <label for="mobile-review-state">Review example state</label>
@@ -198,7 +303,7 @@
   .readout {display:flex;flex-direction:column;gap:7px;min-width:124px;}
   .readout span {font-size:10px;letter-spacing:.13em;color:var(--muted);}
   .readout strong {font-size:15px;font-weight:600;}
-  .world-note {font-size:10px;color:var(--muted);margin-left:auto;max-width:170px;line-height:1.4;}
+  .world-note {font-size:10px;color:var(--muted);margin-left:auto;max-width:210px;line-height:1.4;}
   .context-rail {border-left:1px solid var(--line);background:color-mix(in srgb,var(--stage) 80%,var(--bg));padding:25px 22px 20px;display:flex;flex-direction:column;}
   .rail-head {font-size:10px;letter-spacing:.14em;color:var(--gold);font-weight:750;display:flex;justify-content:space-between;}
   .rail-title {font-size:20px;font-weight:600;letter-spacing:-.025em;line-height:1.2;margin:45px 0 10px;}
@@ -229,7 +334,7 @@
   .review-footer a {text-decoration:underline;}
   @media (max-width:960px) {
     .apartment-stage {grid-template-columns:minmax(0,1fr) 210px;}
-    .world-note {display:none;}
+    .world-note {max-width:100%;}
     .group {padding:10px;gap:7px;}
     .group-copy small {font-size:9px;}
   }
@@ -256,6 +361,7 @@
     .readout {min-width:0;flex:1;gap:4px;}
     .readout span {font-size:8px;}
     .readout strong {font-size:12px;}
+    .world-note {flex-basis:100%;margin-left:0;font-size:9px;line-height:1.25;}
     .context-rail {display:none;}
     .lighting-dock {margin-top:14px;}
     .dock-head {margin-bottom:9px;}
@@ -279,8 +385,13 @@
     .review-footer {font-size:9px;margin-top:14px;}
   }
   @media (max-width:360px) {
-    .world-message h2 {font-size:22px;}
-    .world {min-height:218px;}
+    .foreword {margin:9px 0 8px;}
+    .world-message {margin:10px 0;}
+    .world-message h2 {font-size:22px;margin-bottom:6px;}
+    .world {min-height:194px;padding:10px 13px 11px;}
+    .world-bottom {gap:8px;}
+    .world-note {line-height:1.2;}
+    .lighting-dock {margin-top:9px;}
     .browse-link {max-width:90px;text-align:right;}
     .group-arrow {display:none;}
     .scene-line small {max-width:165px;}
