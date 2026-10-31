@@ -1,6 +1,6 @@
 # Lighting comfort shadow diagnostic — October 31, 2026
 
-**Status: isolated, uncommitted, not deployed, no actuator caller.** Primary issue #244; dependencies #136/#370/#243/#131/#130. This is technical evidence triage, not a new lighting mode, policy, autonomous brightness floor, or comfort measurement.
+**Status: merged in PR #433 (master `7cd7d8f` on 2026-10-31); not deployed; no actuator caller.** Primary issue #244; dependencies #136/#370/#243/#131/#130. This is technical evidence triage, not a new lighting mode, policy, autonomous brightness floor, or comfort measurement.
 
 ## Purpose and evidence
 
