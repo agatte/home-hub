@@ -20,7 +20,11 @@ describe('Quiet Atlas shared shell navigation', () => {
 
   it('keeps global API error toasts off isolated review surfaces', () => {
     expect(shouldShowGlobalErrorToast('/quiet-atlas/control', new URLSearchParams())).toBe(false)
-    expect(shouldShowGlobalErrorToast('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
+    expect(shouldShowGlobalErrorToast('/quiet-atlas', new URLSearchParams())).toBe(false)
+    expect(shouldShowGlobalErrorToast('/quiet-atlas/home', new URLSearchParams())).toBe(false)
+    expect(shouldShowGlobalErrorToast('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
+    expect(shouldShowGlobalErrorToast('/analytics', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
+    expect(shouldShowGlobalErrorToast('/settings', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(shouldShowGlobalErrorToast('/gameday/prototype', new URLSearchParams())).toBe(false)
     expect(shouldShowGlobalErrorToast('/music', new URLSearchParams())).toBe(true)
     expect(shouldShowGlobalErrorToast('/', new URLSearchParams())).toBe(true)

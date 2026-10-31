@@ -52,7 +52,9 @@ export function shouldUseQuietAtlasShell(pathname, searchParams) {
 
 export function shouldShowGlobalErrorToast(pathname, searchParams) {
   if (pathname.startsWith('/gameday/prototype')) return false
-  return !shouldUseQuietAtlasShell(pathname, searchParams)
+  // Only the isolated, read-only Quiet Atlas previews suppress global error toasts.
+  // Functional opt-in Music, Insights, and Settings must retain failure visibility.
+  return !(pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/'))
 }
 
 export function withQuietAtlasShell(href) {
