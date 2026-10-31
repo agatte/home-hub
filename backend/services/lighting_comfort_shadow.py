@@ -20,7 +20,6 @@ PERIODS = ("day", "evening", "night", "late_night")
 MODES = ("general", "working", "watching", "gaming", "relax", "social", "cooking")
 # Screening thresholds, NOT comfort levels, safety floors, or actuation targets.
 _SCREENING_MAXIMUM = {"1": 65, "2": 75}
-_NON_AWAKE = {"away", "sleeping", "winding_down"}
 _PHYSICAL_ZONES = {"desk", "couch", "bed"}
 
 
@@ -173,6 +172,10 @@ def audit_snapshot(snapshot: Any) -> dict[str, Any]:
         global_blockers.append("dnd")
     if manual_mode:
         global_blockers.append("manual_activity_requires_review")
+    if not isinstance(status.get("manual_override"), bool):
+        global_blockers.append("manual_activity_ownership_unknown")
+    if status.get("automation_enabled") is not True:
+        global_blockers.append("automation_not_confirmed_enabled")
     if scene_override:
         global_blockers.append("explicit_scene")
     if not mode or not period:
@@ -244,6 +247,7 @@ def audit_snapshot(snapshot: Any) -> dict[str, Any]:
         if (
             identifier == "2"
             and mode == "watching"
+            and period in ("evening", "night", "late_night")
             and identifier in sync_ids
             and "low_observed_brightness_screening" in reasons
         ):

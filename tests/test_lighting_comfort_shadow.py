@@ -24,6 +24,7 @@ def snapshot(*, mode="watching", period="night", house="home", sync=False, desk=
             "house_state": house,
             "mode_source": "process",
             "manual_override": False,
+            "automation_enabled": True,
             "manual_light_overrides": [],
             "dnd_enabled": False,
             "secret": "MUST_NOT_EXPORT",
@@ -291,3 +292,27 @@ def test_operator_live_reader_uses_only_fixed_gets_without_proxy(monkeypatch):
     ]
     assert any(isinstance(h, cli.ProxyHandler) and h.proxies == {} for h in handlers)
     assert any(isinstance(h, cli._NoRedirect) for h in handlers)
+
+
+@pytest.mark.parametrize("unknown", ["manual_override", "automation_enabled"])
+def test_missing_manual_activity_or_automation_state_abstains(unknown):
+    value = snapshot(sync=False)
+    value["automation_status"].pop(unknown)
+    result = audit_snapshot(value)
+    assert result["review_candidates"] == []
+    if unknown == "manual_override":
+        assert "manual_activity_ownership_unknown" in result["global_blockers"]
+    else:
+        assert "automation_not_confirmed_enabled" in result["global_blockers"]
+
+
+def test_explicit_automation_disabled_abstains():
+    value = snapshot(sync=False)
+    value["automation_status"]["automation_enabled"] = False
+    result = audit_snapshot(value)
+    assert result["review_candidates"] == []
+
+
+def test_screen_sync_low_output_finding_is_after_dark_only():
+    report = audit_snapshot(snapshot(mode="watching", period="day", sync=True))
+    assert report["diagnostic_findings"] == []
