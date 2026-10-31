@@ -14,7 +14,9 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     for (const group of ['Living', 'Bedroom', 'Kitchen', 'Plant']) {
       expect(homeRoute).toContain("name: '" + group + "'")
     }
-    expect(homeRoute).toContain('href="/quiet-atlas/control"')
+    expect(homeRoute).toContain('href="/quiet-atlas/control"') // overview entry
+    expect(homeRoute).toContain('href={controlGroupHref(group.id)}')
+    expect(homeRoute).toContain('href={CONTROL_SCENES_HREF}')
     expect(homeRoute).toContain('href="/quiet-atlas"') // explicit legacy preview permalink
     expect(homeRoute).toContain('Browse scenes')
     expect(homeRoute).toContain('L2 · L5')

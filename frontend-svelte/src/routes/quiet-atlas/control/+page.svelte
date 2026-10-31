@@ -1,5 +1,8 @@
 <script>
   import QuietAtlasLightingExperience from '$lib/components/QuietAtlasLightingExperience.svelte'
+  import { page } from '$app/stores'
+  import { parseControlIntent } from '$lib/quietAtlas/navigation.js'
+  $: routeIntent = parseControlIntent($page.url.searchParams)
 </script>
 
 <svelte:head>
@@ -13,7 +16,7 @@
     <h1>Control</h1>
     <p class="intro">Lighting groups, individual fixtures, and scene library.</p>
   </header>
-  <QuietAtlasLightingExperience />
+  <QuietAtlasLightingExperience {routeIntent} />
 </main>
 
 <style>
