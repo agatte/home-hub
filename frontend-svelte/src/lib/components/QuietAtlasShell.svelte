@@ -9,7 +9,7 @@
   import { MORE_DESTINATIONS, activeQuietAtlasSection, withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
 
   const NAV_ITEMS = [
-    { id: 'home', label: 'Home', href: '/quiet-atlas', icon: Home },
+    { id: 'home', label: 'Home', href: '/quiet-atlas/home', icon: Home },
     { id: 'control', label: 'Control', href: '/quiet-atlas/control', icon: Sliders },
     { id: 'music', label: 'Music', href: withQuietAtlasShell('/music'), icon: Music },
     { id: 'insights', label: 'Insights', href: withQuietAtlasShell('/analytics'), icon: BarChart3 },
@@ -85,7 +85,7 @@
 
 <div class="qa-shell">
   <aside class="qa-sidebar" aria-label="HomeHub navigation">
-    <a class="qa-brand" href="/quiet-atlas" aria-label="HomeHub Quiet Atlas Home">
+    <a class="qa-brand" href="/quiet-atlas/home" aria-label="HomeHub Quiet Atlas Home">
       <span class="qa-brand-mark" aria-hidden="true">H</span>
       <span class="qa-brand-copy"><strong>HomeHub</strong><small>Quiet Atlas</small></span>
     </a>
@@ -127,7 +127,7 @@
 
   <div class="qa-main">
     <header class="qa-mobile-header">
-      <a class="qa-mobile-brand" href="/quiet-atlas" aria-label="HomeHub Quiet Atlas Home">
+      <a class="qa-mobile-brand" href="/quiet-atlas/home" aria-label="HomeHub Quiet Atlas Home">
         <span class="qa-brand-mark" aria-hidden="true">H</span>
         <span><strong>HomeHub</strong><small>Quiet Atlas</small></span>
       </a>

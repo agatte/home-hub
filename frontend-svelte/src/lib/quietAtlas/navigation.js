@@ -71,10 +71,8 @@ export function withQuietAtlasShell(href) {
 }
 
 export function activeQuietAtlasSection(pathname, hash = '') {
-  if (pathname === '/quiet-atlas/control' || hash === '#control') return 'control'
-  if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) {
-    return 'home'
-  }
+  if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control' || hash === '#control') return 'control'
+  if (pathname === '/quiet-atlas/home' || pathname.startsWith('/quiet-atlas/')) return 'home'
   if (pathname.startsWith('/music')) return 'music'
   if (pathname.startsWith('/analytics')) return 'insights'
   return 'more'

@@ -112,11 +112,11 @@
         <p class="eyebrow">THE EVERYDAY CONTROLS</p>
         <h2 id="lighting-title">Lighting, within reach.</h2>
       </div>
-      <a class="browse-link" href="/quiet-atlas">Open lighting review <span aria-hidden="true">↗</span></a>
+      <a class="browse-link" href="/quiet-atlas/control">Open Control review <span aria-hidden="true">↗</span></a>
     </div>
     <div class="groups" aria-label="Browse lighting groups">
       {#each groups as group}
-        <a href="/quiet-atlas" class="group" aria-label={group.label}>
+        <a href="/quiet-atlas/control" class="group" aria-label={group.label}>
           <span class="group-mark" aria-hidden="true"></span>
           <span class="group-copy"><strong>{group.name}</strong><small>{group.detail} · view lights</small></span>
           <span class="group-arrow" aria-hidden="true">↗</span>
@@ -125,7 +125,7 @@
     </div>
     <div class="scene-line">
       <span><strong>Scenes & presets</strong><small>Browse names from the existing read-only lighting review; no sample scenes are activated.</small></span>
-      <a href="/quiet-atlas">Browse scenes <span aria-hidden="true">↗</span></a>
+      <a href="/quiet-atlas/control">Browse scenes <span aria-hidden="true">↗</span></a>
     </div>
   </section>
 

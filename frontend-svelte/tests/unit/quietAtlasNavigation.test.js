@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import shellSource from '../../src/lib/components/QuietAtlasShell.svelte?raw'
+import homeSource from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
 import {
   MORE_DESTINATIONS,
   activeQuietAtlasSection,
@@ -30,6 +32,17 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shouldShowGlobalErrorToast('/', new URLSearchParams())).toBe(true)
   })
 
+  it('connects preview Home, Control, groups, and scene navigation without changing legacy URLs', () => {
+    expect(shellSource).toContain("id: 'home', label: 'Home', href: '/quiet-atlas/home'")
+    expect(shellSource).toContain("id: 'control', label: 'Control', href: '/quiet-atlas/control'")
+    expect(shellSource.match(/href="\/quiet-atlas\/home"/g)).toHaveLength(2)
+    expect(homeSource.match(/href="\/quiet-atlas\/control"/g)).toHaveLength(3)
+    expect(homeSource.match(/href="\/quiet-atlas"/g)).toHaveLength(1) // legacy permalink only
+    expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
+    expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
+    expect(activeQuietAtlasSection('/quiet-atlas')).toBe('control')
+  })
+
   it('preserves query strings and fragments when opting into the shell', () => {
     expect(withQuietAtlasShell('/music')).toBe('/music?shell=quiet-atlas')
     expect(withQuietAtlasShell('/settings?section=audio#top')).toBe('/settings?section=audio&shell=quiet-atlas#top')
@@ -37,7 +50,8 @@ describe('Quiet Atlas shared shell navigation', () => {
   })
 
   it('keeps current and future nav destinations mapped to existing routes', () => {
-    expect(activeQuietAtlasSection('/quiet-atlas')).toBe('home')
+    expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
+    expect(activeQuietAtlasSection('/quiet-atlas')).toBe('control')
     expect(activeQuietAtlasSection('/quiet-atlas', '#control')).toBe('control')
     expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
     expect(shouldUseQuietAtlasShell('/quiet-atlas/control', new URLSearchParams())).toBe(true)
