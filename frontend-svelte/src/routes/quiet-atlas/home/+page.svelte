@@ -1,13 +1,14 @@
 <script>
   // #270: isolated visual review. No HomeHub stores, API reads, or device actions.
+  import { controlGroupHref, CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   let daylight = false
   let sampleState = 'unavailable'
 
   const groups = [
-    { name: 'Living', detail: 'L1', label: 'Browse Living lights' },
-    { name: 'Bedroom', detail: 'L2 · L5', label: 'Browse Bedroom lights' },
-    { name: 'Kitchen', detail: 'L3 · L4', label: 'Browse Kitchen lights' },
-    { name: 'Plant', detail: 'L6', label: 'Browse Plant lighting' },
+    { id: 'living', name: 'Living', detail: 'L1', label: 'Browse Living lights' },
+    { id: 'bedroom', name: 'Bedroom', detail: 'L2 · L5', label: 'Browse Bedroom lights' },
+    { id: 'kitchen', name: 'Kitchen', detail: 'L3 · L4', label: 'Browse Kitchen lights' },
+    { id: 'plant', name: 'Plant', detail: 'L6', label: 'Browse Plant lighting' },
   ]
 
   const examples = {
@@ -116,7 +117,7 @@
     </div>
     <div class="groups" aria-label="Browse lighting groups">
       {#each groups as group}
-        <a href="/quiet-atlas/control" class="group" aria-label={group.label}>
+        <a href={controlGroupHref(group.id)} class="group" aria-label={group.label}>
           <span class="group-mark" aria-hidden="true"></span>
           <span class="group-copy"><strong>{group.name}</strong><small>{group.detail} · view lights</small></span>
           <span class="group-arrow" aria-hidden="true">↗</span>
@@ -125,7 +126,7 @@
     </div>
     <div class="scene-line">
       <span><strong>Scenes & presets</strong><small>Browse names from the existing read-only lighting review; no sample scenes are activated.</small></span>
-      <a href="/quiet-atlas/control">Browse scenes <span aria-hidden="true">↗</span></a>
+      <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
     </div>
   </section>
 

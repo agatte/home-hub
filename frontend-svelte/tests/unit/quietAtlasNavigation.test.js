@@ -36,7 +36,7 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shellSource).toContain("id: 'home', label: 'Home', href: '/quiet-atlas/home'")
     expect(shellSource).toContain("id: 'control', label: 'Control', href: '/quiet-atlas/control'")
     expect(shellSource.match(/href="\/quiet-atlas\/home"/g)).toHaveLength(2)
-    expect(homeSource.match(/href="\/quiet-atlas\/control"/g)).toHaveLength(3)
+    expect(homeSource.match(/href="\/quiet-atlas\/control"/g)).toHaveLength(1)
     expect(homeSource.match(/href="\/quiet-atlas"/g)).toHaveLength(1) // legacy permalink only
     expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
     expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')

@@ -1,3 +1,26 @@
+import { LIGHTING_GROUPS } from './lightingModel.js'
+
+const controlGroupIds = new Set(LIGHTING_GROUPS.map(({ id }) => id))
+export const CONTROL_SCENES_HREF = '/quiet-atlas/control?view=scenes'
+
+/** Return only navigation destinations for known, display-only fixture groups. */
+export function controlGroupHref(groupId) {
+  return controlGroupIds.has(groupId)
+    ? `/quiet-atlas/control?group=${encodeURIComponent(groupId)}`
+    : '/quiet-atlas/control'
+}
+
+/** Validate exactly one read-only detail target, never an arbitrary scene or device command. */
+export function parseControlIntent(searchParams) {
+  if (!searchParams || typeof searchParams.getAll !== 'function') return null
+  const groups = searchParams.getAll('group')
+  const views = searchParams.getAll('view')
+  if (groups.length + views.length !== 1) return null
+  if (groups.length === 1 && controlGroupIds.has(groups[0])) return `group:${groups[0]}`
+  if (views.length === 1 && views[0] === 'scenes') return 'scenes'
+  return null
+}
+
 export const MORE_DESTINATIONS = [
   {
     id: 'settings',
