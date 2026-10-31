@@ -50,6 +50,13 @@ export function shouldUseQuietAtlasShell(pathname, searchParams) {
   return searchParams?.get('shell') === 'quiet-atlas'
 }
 
+export function shouldShowGlobalErrorToast(pathname, searchParams) {
+  if (pathname.startsWith('/gameday/prototype')) return false
+  // Only the isolated, read-only Quiet Atlas previews suppress global error toasts.
+  // Functional opt-in Music, Insights, and Settings must retain failure visibility.
+  return !(pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/'))
+}
+
 export function withQuietAtlasShell(href) {
   const hashAt = href.indexOf('#')
   const hash = hashAt >= 0 ? href.slice(hashAt) : ''
@@ -64,8 +71,9 @@ export function withQuietAtlasShell(href) {
 }
 
 export function activeQuietAtlasSection(pathname, hash = '') {
+  if (pathname === '/quiet-atlas/control' || hash === '#control') return 'control'
   if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) {
-    return hash === '#control' ? 'control' : 'home'
+    return 'home'
   }
   if (pathname.startsWith('/music')) return 'music'
   if (pathname.startsWith('/analytics')) return 'insights'

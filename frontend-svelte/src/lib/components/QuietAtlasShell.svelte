@@ -10,7 +10,7 @@
 
   const NAV_ITEMS = [
     { id: 'home', label: 'Home', href: '/quiet-atlas', icon: Home },
-    { id: 'control', label: 'Control', href: '/quiet-atlas#control', icon: Sliders },
+    { id: 'control', label: 'Control', href: '/quiet-atlas/control', icon: Sliders },
     { id: 'music', label: 'Music', href: withQuietAtlasShell('/music'), icon: Music },
     { id: 'insights', label: 'Insights', href: withQuietAtlasShell('/analytics'), icon: BarChart3 },
   ]
