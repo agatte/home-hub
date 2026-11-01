@@ -7,6 +7,14 @@
     newHomeContextSnapshot, homeContextConnectionChanged, invalidateHomeContextRead,
     beginHomeContextRead, acceptHomeContextRead, failHomeContextRead, homeContextPresentation,
   } from '$lib/quietAtlas/homeContextSnapshot.js'
+  import {
+    newRecentActivityLog, recentActivityConnectionChanged, invalidateRecentActivity,
+    beginRecentActivityRead, acceptRecentActivityRead, failRecentActivityRead,
+    recentActivityPresentation, recentActivityTime,
+  } from '$lib/quietAtlas/recentActivityLog.js'
+  let activityLog = newRecentActivityLog()
+  let activityNowMs = 0
+  $: recentActivity = recentActivityPresentation(activityLog, activityNowMs)
   let daylight = false
   let sampleState = 'unavailable'
   let contextSnapshot = newHomeContextSnapshot()
@@ -51,10 +59,58 @@
     let controller = null
     let failures = 0
     let nextPollAt = 0
+    /** @type {AbortController | null} */
+    let activityController = null
+    let activityFailures = 0
+    let nextActivityPollAt = 0
 
     function abortRead() {
       controller?.abort()
       controller = null
+    }
+
+    function abortActivityRead() {
+      activityController?.abort()
+      activityController = null
+    }
+
+    async function refreshRecentActivity() {
+      if (!mounted || !activityLog.connected || document.visibilityState !== 'visible') return
+      const next = beginRecentActivityRead(activityLog)
+      activityLog = next.state
+      if (!next.ticket) return
+      const ticket = next.ticket
+      activityController = new AbortController()
+      const requestController = activityController
+      const timeout = window.setTimeout(() => requestController.abort(), 8000)
+      nextActivityPollAt = Date.now() + 60000
+      try {
+        const response = await fetch('/api/events/activity?days=1&limit=6&offset=0', {
+          signal: requestController.signal, cache: 'no-store',
+        })
+        if (!response.ok) throw new Error('Activity history unavailable')
+        const body = await response.json()
+        if (!mounted) return
+        const accepted = acceptRecentActivityRead(activityLog, ticket, body, Date.now())
+        if (accepted !== activityLog) {
+          activityLog = accepted
+          activityNowMs = Date.now()
+          activityFailures = accepted.failed ? Math.min(3, activityFailures + 1) : 0
+          nextActivityPollAt = activityNowMs + (accepted.failed ? 30000 * activityFailures : 60000)
+        }
+      } catch {
+        if (!mounted) return
+        const failed = failRecentActivityRead(activityLog, ticket)
+        if (failed !== activityLog) {
+          activityLog = failed
+          activityNowMs = Date.now()
+          activityFailures = Math.min(3, activityFailures + 1)
+          nextActivityPollAt = activityNowMs + Math.min(120000, 30000 * activityFailures)
+        }
+      } finally {
+        window.clearTimeout(timeout)
+        if (activityController === requestController) activityController = null
+      }
     }
 
     async function refreshContext() {
@@ -103,6 +159,15 @@
     function connectionChanged(available) {
       if (!mounted) return
       abortRead()
+      abortActivityRead()
+      const activityWasConnected = activityLog.connected
+      activityLog = recentActivityConnectionChanged(activityLog, available)
+      activityNowMs = Date.now()
+      if (available && !activityWasConnected && document.visibilityState === 'visible') {
+        activityFailures = 0
+        nextActivityPollAt = 0
+        void refreshRecentActivity()
+      }
       const previous = contextSnapshot.connected
       contextSnapshot = homeContextConnectionChanged(contextSnapshot, available)
       contextNowMs = Date.now()
@@ -116,6 +181,13 @@
     function visibilityChanged() {
       if (!mounted) return
       abortRead()
+      abortActivityRead()
+      activityLog = invalidateRecentActivity(activityLog)
+      activityNowMs = Date.now()
+      if (document.visibilityState === 'visible' && activityLog.connected) {
+        nextActivityPollAt = 0
+        void refreshRecentActivity()
+      }
       contextSnapshot = invalidateHomeContextRead(contextSnapshot)
       contextNowMs = Date.now()
       if (document.visibilityState === 'visible' && contextSnapshot.connected) {
@@ -126,14 +198,21 @@
 
     const unsubscribe = connected.subscribe(connectionChanged)
     document.addEventListener('visibilitychange', visibilityChanged)
-    const ageTimer = window.setInterval(() => { contextNowMs = Date.now() }, 1000)
+    const ageTimer = window.setInterval(() => {
+      contextNowMs = Date.now()
+      activityNowMs = contextNowMs
+    }, 1000)
     const pollTimer = window.setInterval(() => {
       if (!contextSnapshot.pending && contextSnapshot.connected &&
           document.visibilityState === 'visible' && Date.now() >= nextPollAt) void refreshContext()
+      if (!activityLog.pending && activityLog.connected &&
+          document.visibilityState === 'visible' && Date.now() >= nextActivityPollAt) void refreshRecentActivity()
     }, 15000)
     return () => {
       mounted = false
       abortRead()
+      abortActivityRead()
+      activityLog = invalidateRecentActivity(activityLog)
       unsubscribe()
       document.removeEventListener('visibilitychange', visibilityChanged)
       window.clearInterval(ageTimer)
@@ -235,6 +314,31 @@
     </div>
   </section>
 
+  <section class="recent-log" aria-labelledby="recent-log-title">
+    <div class="recent-log-head">
+      <div>
+        <p class="eyebrow">RECORDED / RECENT</p>
+        <h2 id="recent-log-title">What HomeHub logged.</h2>
+      </div>
+      <span>Last 24 hours · read-only</span>
+    </div>
+    {#if recentActivity.status === 'recent'}
+      <ol class="recent-log-events" aria-label="Recent recorded activities">
+        {#each recentActivity.items as entry (entry.key)}
+          <li>
+            <strong>{entry.label}</strong>
+            <time datetime={new Date(entry.timestamp).toISOString()}>{recentActivityTime(entry.timestamp)}</time>
+          </li>
+        {/each}
+      </ol>
+    {:else}
+      <p class="recent-log-status" role="status">{recentActivity.message}</p>
+    {/if}
+    <p class="recent-log-note">Event history, not confirmation of a person's presence, room, or current House State. Dates and times use this device's timezone.
+      <a href="/analytics?shell=quiet-atlas">View Insights ↗</a>
+    </p>
+  </section>
+
   <section class="mobile-context" aria-label="Illustrative context examples">
     <span class="mobile-context-kind">{example.kind}</span>
     <p><strong>{example.title}</strong> — {example.description}</p>
@@ -329,6 +433,17 @@
   .scene-line strong {font-size:13px;}
   .scene-line small {font-size:11px;color:var(--muted);line-height:1.4;}
   .scene-line a {color:var(--gold);white-space:nowrap;font-size:12px;padding:10px 0;}
+  .recent-log{margin-top:24px;padding:20px 23px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
+  .recent-log-head{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;}
+  .recent-log-head h2{font-size:22px;font-weight:600;letter-spacing:-.03em;margin:0;}
+  .recent-log-head>span{font-size:11px;color:var(--muted);}
+  .recent-log-events{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;margin:16px 0 9px;padding:0;gap:8px;}
+  .recent-log-events li{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;border-left:2px solid var(--gold);padding:6px 12px;min-width:0;}
+  .recent-log-events strong{font-size:13px;font-weight:600;}
+  .recent-log-events time{color:var(--muted);font-size:11px;}
+  .recent-log-status{font-size:13px;margin:16px 0 9px;color:var(--muted);}
+  .recent-log-note{font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.5;}
+  .recent-log-note a{color:var(--gold);text-decoration:underline;margin-left:10px;}
   .mobile-context {display:none;}
   .review-footer {display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;font-size:10px;color:var(--muted);margin-top:23px;}
   .review-footer a {text-decoration:underline;}
@@ -339,6 +454,11 @@
     .group-copy small {font-size:9px;}
   }
   @media (max-width:700px) {
+    .recent-log{padding:17px 4px;margin-top:16px;}
+    .recent-log-head h2{font-size:19px;}
+    .recent-log-events{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;}
+    .recent-log-events li{padding:6px 10px;}
+    .recent-log-note a{display:inline-block;margin:7px 0 0;}
     .home-review {padding:14px 13px 16px;}
     .preview-ribbon {gap:8px;font-size:10px;}
     .brand {font-size:9px;}
