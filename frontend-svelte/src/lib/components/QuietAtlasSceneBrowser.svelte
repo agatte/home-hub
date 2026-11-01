@@ -1,6 +1,7 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { filterScenes, normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
+  import { reviewSceneDraft } from '$lib/quietAtlas/controlDraft.js'
 
   export let sceneList = []
   export let loading = false
@@ -13,6 +14,11 @@
 
   let category = 'all'
   let search = ''
+  /** @type {string | null} */
+  let requestedReviewId = null
+  $: reviewedScene = reviewSceneDraft(requestedReviewId, sceneList, { connected, loading, error })
+  // Never resurrect a cached review after disconnect or a failed library read.
+  $: if (!connected || loading || error) requestedReviewId = null
   /** @type {HTMLElement | null} */
   let panel
   /** @type {HTMLButtonElement | null} */
@@ -20,6 +26,16 @@
   /** @type {HTMLElement | null} */
   let previousFocus
   $: visible = filterScenes(sceneList, { category, search })
+
+  async function dismissSceneReview() {
+    const id = requestedReviewId
+    requestedReviewId = null
+    await tick()
+    const review = [...(panel?.querySelectorAll('button.scene-review') ?? [])]
+      .find((button) => button instanceof HTMLButtonElement && button.dataset.sceneId === id)
+    if (review instanceof HTMLButtonElement && !review.disabled) review.focus()
+    else closeButton?.focus()
+  }
 
   const categories = [
     { id: 'all', label: 'All' }, { id: 'functional', label: 'Functional' },
@@ -68,13 +84,22 @@
             <article class="scene">
               <h3>{scene.name}</h3>
               <p>{scene.source === 'preset' ? (scene.category || 'Curated') : scene.source === 'bridge' ? 'Hue bridge · freshness unverified' : 'Custom scene'}</p>
-              <div class="disabled-note">Activation requires the existing HomeHub scene-control path.</div>
+              <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error}
+                on:click={() => requestedReviewId = scene.id}>Review preset impact</button>
             </article>
           {/each}
         </div>
       {:else}<p class="notice">No scenes match this selection.</p>{/if}
     {/if}
-    <p class="footer-note">Scene previews, timed Try It/cancel, custom editing, and effects remain in the existing Control experience until reviewed separately. No new scene writer is introduced here.</p>
+    {#if reviewedScene}
+      <div class="review-panel" role="status">
+        <strong>{reviewedScene.name} · review only</strong>
+        <p>{reviewedScene.description}</p>
+        <p>Activation would use HomeHub's existing guarded scene transition path, and may update manual light ownership. This list is not a current fixture manifest. No scene command has been sent.</p>
+        <button type="button" on:click={dismissSceneReview}>Dismiss review</button>
+      </div>
+    {/if}
+    <p class="footer-note">Scene activation, Try It/cancel, custom editing, and effects remain in the existing Control experience until reviewed separately. This preview sends no device commands.</p>
   </section>
 </div>
 <style>
@@ -89,7 +114,11 @@
   .filters button{flex:0 0 auto;border:1px solid #526656;border-radius:999px;background:#24362a;color:#d6e4d3;padding:10px 15px;min-height:44px;cursor:pointer;font-size:13px;}
   .filters button.active{background:#a7c4a0;color:#10221a;border-color:#a7c4a0;font-weight:700;}
   .scene-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.scene{border:1px solid #435c47;border-radius:14px;padding:15px;background:#213127;min-height:106px;box-sizing:border-box;}
-  .scene h3{font-size:15px;margin:0 0 8px;overflow-wrap:anywhere;}.scene p{font-size:12px;color:#c2cdbb;text-transform:capitalize;margin:0 0 14px;}.disabled-note{font-size:11px;color:#cab999;line-height:1.5;}
+  .scene h3{font-size:15px;margin:0 0 8px;overflow-wrap:anywhere;}.scene p{font-size:12px;color:#c2cdbb;text-transform:capitalize;margin:0 0 14px;}
+  .scene-review,.review-panel button{min-height:44px;border:1px solid #7b967c;border-radius:10px;background:#2a4534;color:#ecf1e5;padding:9px 11px;font-size:12px;cursor:pointer;}
+  .scene-review:disabled{opacity:.5;cursor:not-allowed;}
+  .review-panel{border:1px solid #a98e58;border-radius:14px;background:#392f21;color:#f1e3c4;margin:15px 0;padding:16px;}
+  .review-panel strong{font-size:15px;}.review-panel p{font-size:12px;line-height:1.55;}
   .notice,.warning{padding:15px;border:1px dashed #65816d;border-radius:12px;color:#bacfbe;}.warning{border-color:#a9895a;color:#f1d4a6;}.warning button{min-height:44px;padding:8px;border:1px solid #a9895a;color:#f1d4a6;background:none;cursor:pointer;}
   button:focus-visible,input:focus-visible{outline:3px solid #d1e9be;outline-offset:3px;}
   @media(min-width:800px){.browser-root{align-items:center}.browser{max-height:88dvh;border-radius:24px;padding:30px}.scene-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
