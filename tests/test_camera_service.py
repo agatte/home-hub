@@ -8,6 +8,7 @@ absent countdown, graceful degradation, and automation engine priority.
 
 import asyncio
 from collections import namedtuple
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1260,6 +1261,203 @@ class TestModeChangeCallback:
 # ---------------------------------------------------------------------------
 
 
+def _camera_owner_harness():
+    """Load actual callback methods without native/config imports or devices.
+
+    Also runnable by a standalone AST runner in the protected Windows Sandbox.
+    Ordinary pytest still imports the full module and exercises its wiring.
+    """
+    import ast
+    import logging
+    import threading
+    from pathlib import Path
+    from typing import Any, Callable, Optional
+
+    namespace = dict(
+        asyncio=asyncio, threading=threading, Any=Any, Callable=Callable,
+        Optional=Optional, logger=logging.getLogger("camera-owner-test"),
+        CAP_OPEN_WATCHDOG_SECONDS=2, POLL_INTERVAL=2,
+    )
+    root = Path(__file__).resolve().parents[1]
+    for filename, classname, methods in (
+        ("camera_service.py", "CameraService", {
+            "on_mode_change", "close", "_open_capture_async", "_release_capture", "_discard_capture",
+            "_capture_revision", "_capture_is_current", "_publish_capture",
+        }),
+        ("automation_engine.py", "AutomationEngine", {
+            "register_on_mode_change", "deregister_on_mode_change", "_mode_transition_is_current",
+            "_dispatch_mode_change_if_current", "_fire_mode_change_callbacks",
+        }),
+    ):
+        tree = ast.parse((root / "backend/services" / filename).read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == classname)
+        cls.body = [n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in methods]
+        exec(compile(ast.Module(body=[cls], type_ignores=[]), filename, "exec"), namespace)
+    camera = namespace["CameraService"]()
+    camera.__dict__.update(
+        _closed=False, _enabled=True, _paused=True, _mode_callback_revision=0,
+        _cap=None, _shadow_coordinator=None, _heartbeat=None, _source_trust=None,
+        _poll_task=None, _face_detector=None, _pose_landmarker=None,
+        _register_camera_sanity=lambda: None, _invalidate_live_detection_state=lambda: None,
+    )
+    engine = namespace["AutomationEngine"]()
+    engine.__dict__.update(
+        _mode_transition_revision=1, current_mode="working", _away_hold=False,
+        _host_return_hold=False, _external_off_detected=False,
+        _on_mode_change_callbacks=[], _owner_guard_callbacks=set(),
+    )
+    camera._automation = engine
+    engine.register_on_mode_change(camera.on_mode_change, with_owner_guard=True)
+    return camera, engine, namespace
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", ["sleeping", "manual", "activity", "aba", "pause", "close", "valid"])
+async def test_camera_owner_blocked_open(successor):
+    camera, engine, _ = _camera_owner_harness()
+    entered, release = asyncio.Event(), asyncio.Event()
+    cap = MagicMock()
+
+    async def open_capture(**kwargs):
+        entered.set()
+        await release.wait()
+        return cap
+
+    camera._open_capture_async = open_capture
+    task = asyncio.create_task(engine._dispatch_mode_change_if_current("working", 1))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if successor in {"sleeping", "manual", "activity", "aba"}:
+            engine._mode_transition_revision += 1
+            engine.current_mode = "sleeping" if successor == "sleeping" else "watching"
+            if successor == "aba":
+                engine._mode_transition_revision += 1
+                engine.current_mode = "working"
+            # Intentionally do NOT dispatch the newer consumer callback.
+        elif successor == "pause":
+            await camera.on_mode_change("sleeping")
+        elif successor == "close":
+            await camera.close()
+    finally:
+        release.set()
+        await task
+    if successor == "valid":
+        assert camera._cap is cap
+        cap.release.assert_not_called()
+    else:
+        assert camera._cap is None
+        cap.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("abandonment", ["cancel", "timeout"])
+async def test_camera_owner_late_executor_handle_is_released(abandonment):
+    import threading
+    camera, engine, namespace = _camera_owner_harness()
+    loop = asyncio.get_running_loop()
+    entered, closed = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    cap = MagicMock()
+    loop_thread = threading.get_ident()
+
+    def close_cap():
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(closed.set)
+
+    cap.release.side_effect = close_cap
+
+    def open_capture(old, admit_open):
+        assert admit_open()
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        return cap
+
+    camera._release_and_open = open_capture
+    real_wait_for = asyncio.wait_for
+    timed_out = asyncio.Event()
+
+    async def controlled_wait_for(awaitable, timeout):
+        # Deterministically expire the opener watchdog after the worker enters.
+        await entered.wait()
+        timed_out.set()
+        raise asyncio.TimeoutError
+
+    if abandonment == "timeout":
+        namespace["asyncio"] = SimpleNamespace(**{
+            **vars(asyncio), "wait_for": controlled_wait_for,
+        })
+    task = asyncio.create_task(camera.on_mode_change("working"))
+    try:
+        await real_wait_for(entered.wait(), 2)
+        if abandonment == "cancel":
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("Cancellation must propagate")
+        else:
+            await real_wait_for(timed_out.wait(), 2)
+            await task
+        assert camera._cap is None
+    finally:
+        release.set()
+        await real_wait_for(closed.wait(), 2)
+    cap.release.assert_called_once()
+    assert camera._cap is None
+
+
+@pytest.mark.asyncio
+async def test_camera_owner_registration_and_original_revision():
+    camera, engine, _ = _camera_owner_harness()
+    legacy = AsyncMock()
+    engine.register_on_mode_change(legacy)
+    camera._open_capture_async = AsyncMock(return_value=None)
+    await engine._dispatch_mode_change_if_current("working", 0)
+    camera._open_capture_async.assert_not_awaited()
+    await engine._dispatch_mode_change_if_current("working", 1)
+    legacy.assert_awaited_once_with("working")
+    engine.deregister_on_mode_change(camera.on_mode_change)
+    assert not engine._owner_guard_callbacks
+    assert engine._on_mode_change_callbacks == [legacy]
+
+
+@pytest.mark.asyncio
+async def test_camera_owner_completed_executor_cancellation_is_released():
+    """Cancel after worker completion but before the awaiting task receives it."""
+    import threading
+    camera, _, namespace = _camera_owner_harness()
+    loop = asyncio.get_running_loop()
+    closed = asyncio.Event()
+    cap = MagicMock()
+    loop_thread = threading.get_ident()
+
+    def close_cap():
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(closed.set)
+
+    cap.release.side_effect = close_cap
+    camera._release_and_open = lambda old, admit_open: cap
+
+    async def cancel_on_delivery(awaitable, timeout):
+        await awaitable
+        raise asyncio.CancelledError
+
+    namespace["asyncio"] = SimpleNamespace(**{
+        **vars(asyncio), "wait_for": cancel_on_delivery,
+    })
+    try:
+        await camera.on_mode_change("working")
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("Cancellation must propagate")
+    await asyncio.wait_for(closed.wait(), 2)
+    assert camera._cap is None
+    cap.release.assert_called_once()
+
+
 class TestGracefulDegradation:
     """Verify service handles missing camera/dependencies gracefully."""
 
@@ -1361,6 +1559,7 @@ class TestCaptureWatchdog:
         old handle was passed in for release.
         """
         service = _make_service()
+        service._enabled = True
         old_cap = MagicMock()
         service._cap = old_cap
         fresh_cap = MagicMock()
@@ -1385,6 +1584,7 @@ class TestCaptureWatchdog:
         correct degraded state until a later poll succeeds.
         """
         service = _make_service()
+        service._enabled = True
         old_cap = MagicMock()
         service._cap = old_cap
 
@@ -1940,3 +2140,290 @@ class TestYoloAuthoritySupportingLocalization:
         assert third["zone"] == "couch"
         assert third["authority_reason"] == "yolo_present"
         assert service._face_anchor_at == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["poll", "recovery", "poll_timeout", "start"])
+@pytest.mark.parametrize("successor", ["sleep", "close", "aba", "local_aba", "cancel", "replacement"])
+async def test_all_capture_publications_reject_late_open(path, successor, monkeypatch):
+    """Hold the actual opener worker at each caller; never touch a camera."""
+    import threading
+    from backend.services import camera_service as module
+
+    camera = _make_service(automation=SimpleNamespace(
+        current_mode="working", _mode_transition_revision=1,
+    ))
+    camera._enabled = path != "start"
+    camera._load_calibration = AsyncMock()
+    camera._process_frame = MagicMock(return_value=None)
+    camera._heartbeat = MagicMock()
+    old, late, replacement = MagicMock(), MagicMock(), MagicMock()
+    loop = asyncio.get_running_loop()
+    entered, disposed = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    loop_thread = threading.get_ident()
+
+    def open_capture():
+        assert threading.get_ident() != loop_thread
+        if path in {"recovery", "poll_timeout"}:
+            old.release.assert_called_once()
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return late
+
+    def dispose():
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(disposed.set)
+
+    late.release.side_effect = dispose
+    camera._open_capture = open_capture
+    slept = False
+    async def poll_sleep(_):
+        nonlocal slept
+        if slept:
+            await asyncio.Event().wait()
+        slept = True
+    monkeypatch.setattr(module, "asyncio", SimpleNamespace(**{
+        **vars(asyncio), "sleep": poll_sleep,
+    }))
+    if path == "poll_timeout":
+        camera._cap = old
+        camera._process_frame.side_effect = asyncio.TimeoutError
+    if path == "recovery":
+        camera._cap = old
+        coroutine = camera._recover_capture()
+    elif path == "start":
+        coroutine = camera.start()
+    else:
+        coroutine = camera.poll_loop()
+    task = asyncio.create_task(coroutine)
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if successor == "sleep":
+            camera._automation.current_mode = "sleeping"
+            await camera.on_mode_change("sleeping")
+        elif successor == "close":
+            await camera.close()
+        elif successor == "aba":
+            camera._automation._mode_transition_revision += 2
+            # Same mode, but a different owner; newer callback not yet delivered.
+        elif successor == "local_aba":
+            await camera.on_mode_change("sleeping")
+            camera._open_capture_async = AsyncMock(return_value=None)
+            await camera.on_mode_change("working")
+        elif successor == "cancel":
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        else:
+            camera._cap = replacement
+        release.set()
+        await asyncio.wait_for(disposed.wait(), 2)
+        if path not in {"poll", "poll_timeout"} and successor != "cancel":
+            await asyncio.wait_for(task, 2)
+        assert camera._cap is (replacement if successor == "replacement" else None)
+        late.release.assert_called_once()
+        if path == "poll_timeout":
+            camera._process_frame.assert_called_once()
+        else:
+            camera._process_frame.assert_not_called()
+        camera._load_calibration.assert_not_awaited()
+        if path in {"recovery", "poll_timeout"}:
+            old.release.assert_called_once()
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", ["sleep", "sleep_undelivered", "aba_undelivered", "close", "cancel", "unchanged"])
+async def test_recovery_rechecks_admission_after_blocked_release(successor):
+    """A release worker never initiates a stale open after privacy commits."""
+    import threading
+
+    camera = _make_service(automation=SimpleNamespace(
+        current_mode="working", _mode_transition_revision=1,
+    ))
+    camera._enabled = True
+    camera._cap = old = MagicMock()
+    fresh = MagicMock()
+    camera._open_capture = MagicMock(return_value=fresh)
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered, finished = asyncio.Event(), asyncio.Event()
+    unblock = threading.Event()
+    release_and_open = camera._release_and_open
+
+    def worker(old, admit_open):
+        try:
+            return release_and_open(old, admit_open)
+        finally:
+            loop.call_soon_threadsafe(finished.set)
+
+    camera._release_and_open = worker
+
+    def release_old():
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert unblock.wait(5)
+
+    old.release.side_effect = release_old
+    task = asyncio.create_task(camera._recover_capture())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert camera._cap is None
+        if successor.startswith("sleep"):
+            camera._automation.current_mode = "sleeping"
+            camera._automation._mode_transition_revision += 1
+            if successor == "sleep":
+                await camera.on_mode_change("sleeping")
+                assert camera._paused
+        elif successor == "aba_undelivered":
+            camera._automation._mode_transition_revision += 2
+        elif successor == "close":
+            await camera.close()
+        elif successor == "cancel":
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        unblock.set()
+        await asyncio.wait_for(finished.wait(), 2)
+        if successor != "cancel":
+            await asyncio.wait_for(task, 2)
+        old.release.assert_called_once()
+        if successor == "unchanged":
+            camera._open_capture.assert_called_once_with()
+            assert camera._cap is fresh
+        else:
+            camera._open_capture.assert_not_called()
+            assert camera._cap is None
+        fresh.release.assert_not_called()
+    finally:
+        unblock.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["frame", "timeout"])
+@pytest.mark.parametrize("successor", ["sleep", "aba", "close"])
+async def test_poll_discards_frame_or_timeout_after_privacy_transition(outcome, successor, monkeypatch):
+    """Pause at the real frame await and return a synthetic result or timeout."""
+    from backend.services import camera_service as module
+
+    camera = _make_service(automation=SimpleNamespace(
+        current_mode="working", _mode_transition_revision=1,
+    ))
+    camera._enabled = True
+    camera._cap = cap = MagicMock()
+    entered, release, delivered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    camera._process_frame = lambda: None
+    camera._recover_capture = AsyncMock()
+    camera._last_detection = "unknown"
+    observations = MagicMock()
+    camera.register_observation_callback(observations)
+    real_wait_for = asyncio.wait_for
+
+    async def frame_wait(awaitable, timeout):
+        if timeout != module.FRAME_READ_TIMEOUT_S:
+            return await real_wait_for(awaitable, timeout)
+        await awaitable
+        entered.set()
+        await release.wait()
+        delivered.set()
+        if outcome == "timeout":
+            raise asyncio.TimeoutError
+        return dict(status="present", confidence=0.99, source="yolo", ambient_lux=80)
+
+    slept = False
+    async def poll_sleep(_):
+        nonlocal slept
+        if slept:
+            await asyncio.Event().wait()
+        slept = True
+
+    monkeypatch.setattr(module, "asyncio", SimpleNamespace(**{
+        **vars(asyncio), "wait_for": frame_wait, "sleep": poll_sleep,
+    }))
+    task = asyncio.create_task(camera.poll_loop())
+    try:
+        await real_wait_for(entered.wait(), 2)
+        if successor == "sleep":
+            camera._automation.current_mode = "sleeping"
+            await camera.on_mode_change("sleeping")
+            cap.release.assert_called_once()
+        elif successor == "close":
+            await camera.close()
+        else:
+            camera._automation._mode_transition_revision += 2
+        release.set()
+        await real_wait_for(delivered.wait(), 2)
+        await asyncio.sleep(0)
+        assert camera._last_detection == "unknown"
+        observations.assert_not_called()
+        camera._recover_capture.assert_not_awaited()
+        camera._ws_manager.broadcast.assert_not_awaited()
+        camera._ml_logger.log_decision.assert_not_awaited()
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["calibration", "yolo"])
+@pytest.mark.parametrize("successor", ["sleep", "replacement", "cancel", "error", "released"])
+async def test_start_disposes_published_capture_on_initialization_rejection(stage, successor, monkeypatch):
+    """Startup owns its published handle until activation, even before callbacks register."""
+    from backend.services import camera_service as module
+
+    camera = _make_service(automation=SimpleNamespace(
+        current_mode="working", _mode_transition_revision=1,
+    ))
+    cap, replacement = MagicMock(), MagicMock()
+    camera._open_capture_async = AsyncMock(return_value=cap)
+    camera._heartbeat = MagicMock()
+    camera._register_camera_sanity = MagicMock()
+    camera._verify_model = MagicMock(return_value=True)
+    camera._download_model = MagicMock(side_effect=AssertionError("no downloads"))
+    monkeypatch.setattr(module, "MODEL_DIR", MagicMock())
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def pending():
+        entered.set()
+        await release.wait()
+        if successor == "error":
+            raise RuntimeError("synthetic initialization failure")
+
+    camera._load_calibration = pending if stage == "calibration" else AsyncMock()
+    camera._initialize_yolo_authority = pending if stage == "yolo" else AsyncMock()
+    task = asyncio.create_task(camera.start())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert camera._cap is cap
+        assert not camera._enabled
+        # Commit Sleeping without delivering the not-yet-registered callback.
+        camera._automation.current_mode = "sleeping"
+        camera._automation._mode_transition_revision += 1
+        if successor in {"replacement", "released"}:
+            # Model a newer owner having already disposed the old handle.
+            camera._cap = replacement if successor == "replacement" else None
+            await camera._discard_capture(cap)
+        if successor == "cancel":
+            task.cancel()
+        release.set()
+        if successor == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(RuntimeError) if successor == "error" and stage == "yolo" else nullcontext():
+                await asyncio.wait_for(task, 2)
+        assert camera._cap is (replacement if successor == "replacement" else None)
+        cap.release.assert_called_once()
+        replacement.release.assert_not_called()
+        assert not camera._enabled
+        camera._heartbeat.register.assert_not_called()
+        camera._register_camera_sanity.assert_not_called()
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

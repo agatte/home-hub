@@ -398,6 +398,8 @@ class CameraService:
 
         self._enabled = False
         self._paused = False  # Paused during sleeping mode
+        self._mode_callback_revision = 0
+        self._closed = False
         self._cap = None
         self._cap_lock = threading.Lock()  # Serializes poll-loop and snapshot reads
         self._face_detector = None
@@ -664,112 +666,123 @@ class CameraService:
         # off-loop so a wedged V4L2 open can't freeze the backend or park
         # spawn_camera_service (which the watchdog awaits).
         try:
-            self._cap = await self._open_capture_async()
-            if self._cap is None:
+            revision = self._capture_revision()
+            if not self._capture_is_current(revision, starting=True):
                 return
-            await self._load_calibration()
+            cap = await self._open_capture_async()
+            if not await self._publish_capture(cap, revision, starting=True):
+                return
         except Exception as exc:
             logger.error("Failed to open webcam: %s", exc, exc_info=True)
-            self._cap = None
             return
 
-        # Ensure face detection model is available
-        face_model_path = MODEL_DIR / MODEL_FILENAME
-        if not face_model_path.exists():
-            if not self._download_model(face_model_path, MODEL_URL, "face detection"):
-                if self._cap:
-                    self._cap.release()
-                    self._cap = None
+        activated = False
+        try:
+            try:
+                await self._load_calibration()
+            except Exception as exc:
+                logger.error("Failed to open webcam: %s", exc, exc_info=True)
+                return
+            if not self._capture_is_current(revision, starting=True):
                 return
 
-        # Verify model integrity against the pinned hash. Defends against
-        # silent CDN regressions (Google republishes `latest/`) and
-        # on-disk corruption. On mismatch, attempt ONE re-download in
-        # case the local file rotted; if the fresh download also fails
-        # to match, refuse to start — the camera lane stays cold and
-        # /health flips to degraded so the operator notices.
-        if not self._verify_model(
-            face_model_path, MODEL_URL, EXPECTED_FACE_MODEL_MD5,
-            "face detection",
-        ):
-            if self._cap:
-                self._cap.release()
-                self._cap = None
-            return
+            # Ensure face detection model is available
+            face_model_path = MODEL_DIR / MODEL_FILENAME
+            if not face_model_path.exists():
+                if not self._download_model(face_model_path, MODEL_URL, "face detection"):
+                    return
 
-        # Initialize MediaPipe Face Detection (Tasks API, v0.10.20+)
-        try:
-            BaseOptions = mp.tasks.BaseOptions
-            FaceDetector = mp.tasks.vision.FaceDetector
-            FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
+            # Verify model integrity against the pinned hash. Defends against
+            # silent CDN regressions (Google republishes `latest/`) and
+            # on-disk corruption. On mismatch, attempt ONE re-download in
+            # case the local file rotted; if the fresh download also fails
+            # to match, refuse to start — the camera lane stays cold and
+            # /health flips to degraded so the operator notices.
+            if not self._verify_model(
+                face_model_path, MODEL_URL, EXPECTED_FACE_MODEL_MD5,
+                "face detection",
+            ):
+                return
 
-            options = FaceDetectorOptions(
-                base_options=BaseOptions(model_asset_path=str(face_model_path)),
-                min_detection_confidence=MIN_FACE_CONFIDENCE,
-            )
-            self._face_detector = FaceDetector.create_from_options(options)
-        except Exception as exc:
-            logger.error(
-                "Failed to initialize MediaPipe face detection: %s",
-                exc,
-                exc_info=True,
-            )
-            if self._cap:
-                self._cap.release()
-                self._cap = None
-            return
+            # Initialize MediaPipe Face Detection (Tasks API, v0.10.20+)
+            try:
+                BaseOptions = mp.tasks.BaseOptions
+                FaceDetector = mp.tasks.vision.FaceDetector
+                FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
 
-        # Initialize MediaPipe Pose Landmarker (fallback for profile views).
-        # Best-effort: if this fails, we stay face-only.
-        pose_model_path = MODEL_DIR / POSE_MODEL_FILENAME
-        if not pose_model_path.exists():
-            if not self._download_model(pose_model_path, POSE_MODEL_URL, "pose"):
+                options = FaceDetectorOptions(
+                    base_options=BaseOptions(model_asset_path=str(face_model_path)),
+                    min_detection_confidence=MIN_FACE_CONFIDENCE,
+                )
+                self._face_detector = FaceDetector.create_from_options(options)
+            except Exception as exc:
+                logger.error(
+                    "Failed to initialize MediaPipe face detection: %s",
+                    exc,
+                    exc_info=True,
+                )
+                return
+
+            # Initialize MediaPipe Pose Landmarker (fallback for profile views).
+            # Best-effort: if this fails, we stay face-only.
+            pose_model_path = MODEL_DIR / POSE_MODEL_FILENAME
+            if not pose_model_path.exists():
+                if not self._download_model(pose_model_path, POSE_MODEL_URL, "pose"):
+                    logger.warning(
+                        "Pose model unavailable — continuing with face-only detection"
+                    )
+                    pose_model_path = None
+
+            # Verify pose model integrity. Unlike face, this is a soft fail
+            # — pose is a fallback for profile views, so a bad model means
+            # "stay face-only" rather than "refuse to start the service."
+            if pose_model_path is not None and not self._verify_model(
+                pose_model_path, POSE_MODEL_URL, EXPECTED_POSE_MODEL_MD5, "pose",
+            ):
                 logger.warning(
-                    "Pose model unavailable — continuing with face-only detection"
+                    "Pose model failed integrity check — staying face-only. "
+                    "The Latitude's corner geometry means face-only loses "
+                    "profile-view detection, but the desktop pc_agent's "
+                    "presence stream still covers attendance vetoes."
                 )
                 pose_model_path = None
 
-        # Verify pose model integrity. Unlike face, this is a soft fail
-        # — pose is a fallback for profile views, so a bad model means
-        # "stay face-only" rather than "refuse to start the service."
-        if pose_model_path is not None and not self._verify_model(
-            pose_model_path, POSE_MODEL_URL, EXPECTED_POSE_MODEL_MD5, "pose",
-        ):
-            logger.warning(
-                "Pose model failed integrity check — staying face-only. "
-                "The Latitude's corner geometry means face-only loses "
-                "profile-view detection, but the desktop pc_agent's "
-                "presence stream still covers attendance vetoes."
-            )
-            pose_model_path = None
+            if pose_model_path is not None:
+                try:
+                    PoseLandmarker = mp.tasks.vision.PoseLandmarker
+                    PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+                    pose_options = PoseLandmarkerOptions(
+                        base_options=BaseOptions(model_asset_path=str(pose_model_path)),
+                        num_poses=1,
+                        min_pose_detection_confidence=0.5,
+                        min_pose_presence_confidence=0.5,
+                        min_tracking_confidence=0.5,
+                    )
+                    self._pose_landmarker = PoseLandmarker.create_from_options(pose_options)
+                    logger.info("Pose landmarker initialized (fallback for face-miss frames)")
+                except Exception as exc:
+                    logger.warning(
+                        "Pose landmarker init failed — continuing with face-only: %s",
+                        exc,
+                    )
+                    self._pose_landmarker = None
 
-        if pose_model_path is not None:
-            try:
-                PoseLandmarker = mp.tasks.vision.PoseLandmarker
-                PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
-                pose_options = PoseLandmarkerOptions(
-                    base_options=BaseOptions(model_asset_path=str(pose_model_path)),
-                    num_poses=1,
-                    min_pose_detection_confidence=0.5,
-                    min_pose_presence_confidence=0.5,
-                    min_tracking_confidence=0.5,
-                )
-                self._pose_landmarker = PoseLandmarker.create_from_options(pose_options)
-                logger.info("Pose landmarker initialized (fallback for face-miss frames)")
-            except Exception as exc:
-                logger.warning(
-                    "Pose landmarker init failed — continuing with face-only: %s",
-                    exc,
-                )
-                self._pose_landmarker = None
+            await self._initialize_yolo_authority()
 
-        await self._initialize_yolo_authority()
-
-        self._enabled = True
-        if self._heartbeat is not None:
-            self._heartbeat.register("camera", float(POLL_INTERVAL))
-        self._register_camera_sanity()
-        logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
+            if not self._capture_is_current(revision, starting=True):
+                return
+            self._enabled = True
+            if self._heartbeat is not None:
+                self._heartbeat.register("camera", float(POLL_INTERVAL))
+            self._register_camera_sanity()
+            logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
+            activated = True
+        finally:
+            # A privacy transition/close may already have detached and released
+            # this handle. Never dispose a replacement owned by another attempt.
+            if not activated and self._cap is cap:
+                self._cap = None
+                await self._discard_capture(cap)
 
     async def _initialize_yolo_authority(self) -> None:
         """Initialize promoted YOLO authority without falling back to MediaPipe."""
@@ -1378,7 +1391,9 @@ class CameraService:
             logger.warning("Warm-up frame read failed: %s", exc)
         return cap
 
-    def _release_and_open(self, old: Optional[Any]) -> Optional[Any]:
+    def _release_and_open(
+        self, old: Optional[Any], admit_open: Callable[[], bool],
+    ) -> Optional[Any]:
         """Sync: release a prior handle (if any), then open a fresh one.
 
         Runs entirely in an executor thread (see ``_open_capture_async``)
@@ -1392,6 +1407,10 @@ class CameraService:
                 old.release()
             except Exception as exc:
                 logger.warning("Camera release before reopen failed: %s", exc)
+        # Release may have blocked across a privacy/lifecycle transition.
+        # Admission must happen after release, before any native open/read.
+        if not admit_open():
+            return None
         return self._open_capture()
 
     async def _open_capture_async(self, *, release_first: Optional[Any] = None) -> Optional[Any]:
@@ -1406,12 +1425,72 @@ class CameraService:
         callers hand off a prior handle so the release also happens off-loop.
         """
         loop = asyncio.get_event_loop()
+        # Cancellation cannot stop an executor syscall. Transfer ownership
+        # under a thread lock so a late result is released by that worker even
+        # if the event loop has already stopped. A completed-but-undelivered
+        # result is instead handed to a release worker by the abandoning task.
+        handoff_lock = threading.Lock()
+        abandoned = False
+        pending = None
+        revision = self._capture_revision()
+        starting = not self._enabled
+
+        def admit_open():
+            # Read engine/service ownership only on its event loop, including
+            # committed revisions whose mode callback has not been delivered.
+            # Event publishes the answer across threads. A stopped/stalled loop
+            # fails closed; a late answer has no engine or disposal side effects.
+            answered = threading.Event()
+            admitted = False
+
+            def validate():
+                nonlocal admitted
+                with handoff_lock:
+                    admitted = not abandoned and self._capture_is_current(
+                        revision, starting=starting,
+                    )
+                answered.set()
+
+            try:
+                loop.call_soon_threadsafe(validate)
+            except RuntimeError:  # loop already closed
+                return False
+            # Successful validation is the admission point. Transitions after
+            # admission cannot retroactively cancel a native open; publication
+            # and abandoned-result disposal still reject/release its result.
+            return answered.wait(CAP_OPEN_WATCHDOG_SECONDS) and admitted
+
+        def open_owned():
+            nonlocal pending
+            cap = self._release_and_open(release_first, admit_open)
+            with handoff_lock:
+                discard = abandoned
+                if not discard:
+                    pending = cap
+            if discard and cap is not None:
+                self._release_capture(cap)
+
+        def abandon():
+            nonlocal abandoned, pending
+            with handoff_lock:
+                abandoned = True
+                cap, pending = pending, None
+            if cap is not None:
+                loop.run_in_executor(None, self._release_capture, cap)
+
+        worker = loop.run_in_executor(None, open_owned)
+        # Retrieve exceptions even when the awaiting task was cancelled.
+        worker.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         try:
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, self._release_and_open, release_first),
-                timeout=CAP_OPEN_WATCHDOG_SECONDS,
-            )
+            await asyncio.wait_for(asyncio.shield(worker), timeout=CAP_OPEN_WATCHDOG_SECONDS)
+            with handoff_lock:
+                cap, pending = pending, None
+            return cap
+        except asyncio.CancelledError:
+            abandon()
+            raise
         except asyncio.TimeoutError:
+            abandon()
             logger.warning(
                 "Camera open exceeded %.0fs watchdog — treating as unavailable "
                 "(V4L2 likely wedged; an executor thread may be parked on the "
@@ -1419,6 +1498,47 @@ class CameraService:
                 CAP_OPEN_WATCHDOG_SECONDS,
             )
             return None
+
+    @staticmethod
+    def _release_capture(cap: Any) -> None:
+        """Executor-only disposal, including abandoned late open results."""
+        try:
+            cap.release()
+        except Exception:
+            logger.exception("Discarded camera capture release failed")
+
+    async def _discard_capture(self, cap: Any) -> None:
+        if cap is None:
+            return
+        release = asyncio.get_running_loop().run_in_executor(None, self._release_capture, cap)
+        try:
+            await asyncio.wait_for(asyncio.shield(release), timeout=CAP_OPEN_WATCHDOG_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning("Discarded camera capture release exceeded watchdog; worker still owns handle")
+
+    def _capture_revision(self) -> tuple:
+        # Include engine ownership even before its newer callback is dispatched.
+        return (
+            self._mode_callback_revision,
+            getattr(self._automation, "_mode_transition_revision", None),
+        )
+
+    def _capture_is_current(self, revision: tuple, *, starting: bool = False) -> bool:
+        return (
+            not self._closed and not self._paused
+            and (starting or self._enabled)
+            and self._automation.current_mode != "sleeping"
+            and revision == self._capture_revision()
+        )
+
+    async def _publish_capture(self, cap: Any, revision: tuple, *, starting: bool = False) -> bool:
+        # No await between validation and assignment. Rejected handles retain
+        # exactly one disposal owner, including cancellation during disposal.
+        if not self._capture_is_current(revision, starting=starting) or self._cap is not None:
+            await self._discard_capture(cap)
+            return False
+        self._cap = cap
+        return cap is not None
 
     async def _recover_capture(self) -> None:
         """Release and reopen the capture handle from the asyncio thread.
@@ -1434,10 +1554,13 @@ class CameraService:
         ``None`` and ``_process_frame`` short-circuits at its top-of-function
         guard until a future iteration succeeds.
         """
+        revision = self._capture_revision()
+        if not self._capture_is_current(revision):
+            return
         old = self._cap
         self._cap = None
-        self._cap = await self._open_capture_async(release_first=old)
-        if self._cap is None:
+        cap = await self._open_capture_async(release_first=old)
+        if not await self._publish_capture(cap, revision):
             logger.warning("Camera reopen during recovery failed; will retry next poll")
         else:
             logger.info("Camera capture recovered after watchdog timeout")
@@ -1450,7 +1573,7 @@ class CameraService:
             try:
                 await asyncio.sleep(POLL_INTERVAL)
 
-                if not self._enabled or self._paused:
+                if not self._capture_is_current(self._capture_revision()):
                     continue
 
                 # Recover capture handle here rather than ticking heartbeat
@@ -1460,17 +1583,16 @@ class CameraService:
                 # locked V4L2 handle.
                 if self._cap is None:
                     try:
-                        self._cap = await self._open_capture_async()
+                        revision = self._capture_revision()
+                        cap = await self._open_capture_async()
+                        if not await self._publish_capture(cap, revision):
+                            self._clear_pending_zone_candidacy("capture unavailable")
+                            continue
                     except Exception:
                         self._clear_pending_zone_candidacy(
                             "capture reopen failure",
                         )
                         raise
-                    if self._cap is None:
-                        self._clear_pending_zone_candidacy(
-                            "capture unavailable",
-                        )
-                        continue
                     logger.info("Camera capture reopened by poll loop")
 
                 if self._heartbeat is not None:
@@ -1482,12 +1604,15 @@ class CameraService:
                 # all stop ticking when this await never returns). On timeout
                 # we release/reopen the capture handle and resume polling;
                 # the orphan executor thread will exit when its read unblocks.
+                revision = self._capture_revision()
                 try:
                     result = await asyncio.wait_for(
                         loop.run_in_executor(None, self._process_frame),
                         timeout=FRAME_READ_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
+                    if not self._capture_is_current(revision):
+                        continue
                     self._clear_pending_zone_candidacy("frame read timeout")
                     logger.warning(
                         "Camera frame read exceeded %.1fs — releasing and "
@@ -1499,6 +1624,8 @@ class CameraService:
                 except Exception:
                     self._clear_pending_zone_candidacy("frame processing failure")
                     raise
+                if not self._capture_is_current(revision):
+                    continue
                 if result is None:
                     self._clear_pending_zone_candidacy("no frame result")
                     continue
@@ -1577,6 +1704,8 @@ class CameraService:
                 ):
                     bs_ts = self._last_detection_at
                     for cb in list(self._blendshape_callbacks):
+                        if not self._capture_is_current(revision):
+                            break
                         try:
                             res = cb(blendshapes, confidence, bs_ts)
                             if asyncio.iscoroutine(res):
@@ -1585,6 +1714,8 @@ class CameraService:
                             logger.exception(
                                 "blendshape callback raised — ignoring"
                             )
+                if not self._capture_is_current(revision):
+                    continue
                 # Run zone + posture hysteresis — may commit new committed values.
                 # `present_observed` lets the hysteresis distinguish "user
                 # absent this frame" (don't refresh stale commits) from
@@ -1641,6 +1772,8 @@ class CameraService:
                             "failed to dispatch presence observation"
                         )
 
+                if not self._capture_is_current(revision):
+                    continue
                 # The engine's source-qualified state machine must see the
                 # committed observation before the generic overlay repaint;
                 # otherwise an idle couch commit can flash idle before relax.
@@ -1649,6 +1782,8 @@ class CameraService:
                     posture_before=posture_before,
                 )
 
+                if not self._capture_is_current(revision):
+                    continue
                 # Compute the lux multiplier once — used by fusion factors,
                 # the ML logger below, and the WebSocket broadcast at the end.
                 current_multiplier = 1.0
@@ -1733,8 +1868,12 @@ class CameraService:
                             pose_landmark_count,
                             ambient_lux,
                         )
+                    if not self._capture_is_current(revision):
+                        continue
                     if reading is not None and self._occupancy_observation_callbacks:
                         for cb in list(self._occupancy_observation_callbacks):
+                            if not self._capture_is_current(revision):
+                                break
                             try:
                                 result = cb(reading)
                                 if inspect.isawaitable(result):
@@ -1763,6 +1902,8 @@ class CameraService:
                             ABSENT_THRESHOLD * POLL_INTERVAL,
                         )
 
+                if not self._capture_is_current(revision):
+                    continue
                 # Log ML decision
                 if self._ml_logger and status in ("present", "absent"):
                     mode = "idle"
@@ -1787,6 +1928,8 @@ class CameraService:
                         ),
                     )
 
+                if not self._capture_is_current(revision):
+                    continue
                 # Broadcast status via WebSocket (multiplier already computed above)
                 await self._ws_manager.broadcast(
                     "camera_update",
@@ -2587,11 +2730,17 @@ class CameraService:
 
         return jpeg
 
-    async def on_mode_change(self, new_mode: str) -> None:
+    async def on_mode_change(
+        self, new_mode: str, *, owner_is_current: Optional[Callable[[], bool]] = None,
+    ) -> None:
         """Mode-change callback — pause polling during sleeping mode.
 
         Pausing turns off the camera (LED goes dark) for sleep privacy.
         """
+        if self._closed or (owner_is_current is not None and not owner_is_current()):
+            return
+        self._mode_callback_revision += 1
+        revision = self._mode_callback_revision
         if new_mode == "sleeping":
             if not self._paused:
                 self._paused = True
@@ -2639,7 +2788,20 @@ class CameraService:
                 # /dev/video0 across the sleep cycle.
                 old = self._cap
                 self._cap = None
-                self._cap = await self._open_capture_async(release_first=old)
+                capture_revision = self._capture_revision()
+                cap = await self._open_capture_async(release_first=old)
+                # No await between this check and publication. The engine
+                # predicate retains the original owner, including same-mode
+                # ABA; local lifecycle gates also protect direct callers.
+                if (
+                    self._closed or not self._enabled or self._paused or self._cap is not None
+                    or revision != self._mode_callback_revision
+                    or (owner_is_current is not None and not owner_is_current())
+                ):
+                    await self._discard_capture(cap)
+                    return
+                if not await self._publish_capture(cap, capture_revision):
+                    return
                 if self._cap is not None:
                     logger.info("Camera resumed after sleeping mode")
                 else:
@@ -2653,6 +2815,7 @@ class CameraService:
         race with the old loop's next iteration.
         """
         self._enabled = False
+        self._closed = True
         if self._shadow_coordinator is not None:
             self._shadow_coordinator.stop()
         if self._heartbeat is not None:
@@ -2827,7 +2990,7 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
         }
 
     app.state.camera_service = camera
-    automation.register_on_mode_change(camera.on_mode_change)
+    automation.register_on_mode_change(camera.on_mode_change, with_owner_guard=True)
     automation.set_camera_service(camera)
     # Re-wire the rest of the subscriber set so a respawn restores all
     # context (zone enrichment on activity_events rows, presence-aware
