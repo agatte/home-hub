@@ -1,7 +1,10 @@
 # #431 — private Daily Tracks artist-label/day histogram operator packet
 
-**Status (2026-10-31): PREPARED, synthetic-tested only. NOT yet operator-run
-against real private Apple data and NOT a reviewed or authorized taste import.**
+**Status (2026-11-01): The operator previously completed a local-only,
+aggregate-only run and shared anonymous counts; the code remains offline
+and does NOT constitute consent to a taste import, account sync or production
+use. This version's updated dependency pins have not been rerun on private
+data and require independent review.**
 
 This is an **opt-in, local-only, read-only anonymous feasibility audit** of
 the existing separately extracted `Apple Music - Play History Daily Tracks.csv`.
@@ -16,7 +19,8 @@ Implementation files (all under `backend/services` in isolated #431 worktree):
 | --- | --- |
 | `apple_music_artist_local_audit.py` | `DDE9CF79CE9495E55D7E3900E47BCE293D5B3BAE6CA7994BCE19DC05F78BA900` |
 | `apple_music_artist_familiarity_preview.py` | `427699DABC46391DD664C9A6280201044DBC4A71F19B9DCFAC91C5A51F7ED76F` |
-| `apple_music_daily_join_audit.py` (shared bounded CSV parser) | `77079D06331E417F5BC10E3C7951A201FB0CFC7FFB201F40B4ACA1D0B60E9CE0` |
+| `apple_music_daily_join_audit.py` (join auditor) | `DB7EA46CF68938F73F33B301547327593FE20D20AA5146B3B85793A3765165B6` |
+| `apple_music_csv_record_budget.py` (shared bounded parser) | `E02788CA4ABEEAD3D136AFF0FAC67061E4F45AD0BFDD8C483A55930F5B7ABA9D` |
 
 ## Future optional real-PC operator run — **requires separate user opt-in**
 
@@ -33,7 +37,8 @@ an execution-policy adjustment, or a HomeHub import.
     $pins = [ordered]@{
         'apple_music_artist_local_audit.py' = 'DDE9CF79CE9495E55D7E3900E47BCE293D5B3BAE6CA7994BCE19DC05F78BA900'
         'apple_music_artist_familiarity_preview.py' = '427699DABC46391DD664C9A6280201044DBC4A71F19B9DCFAC91C5A51F7ED76F'
-        'apple_music_daily_join_audit.py' = '77079D06331E417F5BC10E3C7951A201FB0CFC7FFB201F40B4ACA1D0B60E9CE0'
+        'apple_music_daily_join_audit.py' = 'DB7EA46CF68938F73F33B301547327593FE20D20AA5146B3B85793A3765165B6'
+        'apple_music_csv_record_budget.py' = 'E02788CA4ABEEAD3D136AFF0FAC67061E4F45AD0BFDD8C483A55930F5B7ABA9D'
     }
     foreach ($filename in $pins.Keys) {
         $scriptFile = Join-Path $root $filename

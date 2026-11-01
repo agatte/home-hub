@@ -199,3 +199,35 @@ Linux CI and fresh independent review; earlier operator-local results were
 produced with older pinned versions and must not be represented as having
 been verified using the new parser. The standalone Daily Tracks artist
 exposure reader remains unchanged and hash-pinned separately.
+
+
+## Nov 1 second Codex review findings — next correction (conditional merge BLOCKED)
+
+Independent Codex review of PR #439 at `c6ba1f2ccbec8f4702da58e5fc643bfe9c0e45e1`
+**completed with two new P2 findings**; the first three are not
+automatically accepted merely because a follow-up review occurred:
+1. The schema preflight's earlier physical-newline presence test did
+   not prove completion of a logical CSV header containing quoted
+   newlines. A cutoff at byte 32,768 could accept a truncated final
+   field and hide a malformed UTF-8 continuation beyond the sample.
+   Fix: keep incremental UTF-8 decoding but, after the parser consumes
+   its first logical CSV record, require that its actual final consumed
+   physical line ends with CR/LF when the sample does not reach EOF.
+   The parser's consumed source offset, not any earlier newline,
+   determines completion. Synthetic adversarial multiline-header and
+   valid multiline-header/data-boundary cases were added.
+2. `docs/APPLE_MUSIC_ARTIST_LOCAL_OPERATOR_431.md` still pinned an
+   obsolete hash for `apple_music_daily_join_audit.py`; the current
+   shared `apple_music_csv_record_budget.py` was not included in that
+   operator pin set. This prevented legitimate operator invocation.
+   The operator guide now verifies both current SHA-256 values.
+   The Daily Tracks schema preflight runbook pin is also updated to
+   match the amended schema probe.
+
+These corrections are local and have **not** been applied to any private
+CSV. The previously run Daily Tracks artist reader remains unchanged at
+SHA256 `DDE9CF79CE9495E55D7E3900E47BCE293D5B3BAE6CA7994BCE19DC05F78BA900`.
+The review's five P2 findings and the separate retention/identity/
+Apple-Sonos product gates must remain auditable. Prior GitHub CI and
+review results were against earlier commits. Do not merge or deploy
+before the new head is green and independent review outcomes are checked.

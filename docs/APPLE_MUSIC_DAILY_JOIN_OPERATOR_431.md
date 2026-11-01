@@ -43,7 +43,7 @@ column names, metadata values, or a song/artist row.
 ```powershell
 & {
     $probe = 'C:\Users\Anthony\Documents\home-hub-project\worktrees\apple-history-inspector-431\backend\services\apple_music_export_schema_probe.py'
-    $pin = 'E0F19FEF13F128B34BF4C9C0F1C51218DD2001B68718A867A0B405A12943ABAF'
+    $pin = 'C770D0BE0D14710396965B124AF89E07FFC952363077CF2EF66BE99B45239D2B'
     if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) { throw 'Schema probe missing. Stop.' }
     if ((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -ne $pin) { throw 'Schema probe differs from tested version. Stop.' }
     $budget = Join-Path (Split-Path -Parent $probe) 'apple_music_csv_record_budget.py'

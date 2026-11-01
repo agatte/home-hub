@@ -103,3 +103,40 @@ def test_oversized_header_column_count_is_rejected_without_echo(tmp_path):
     with pytest.raises(HeaderRejected) as error:
         inspect_header(path)
     assert "PRIVATE" not in str(error.value)
+
+
+def test_quoted_newline_does_not_make_truncated_header_complete(tmp_path):
+    # A newline inside a quoted header field cannot establish that the
+    # *logical* header ends within the 32 KiB sample.
+    prefix = (b'\xef\xbb\xbf"private\nfield",' +
+              ",".join(DAILY).encode("ascii") + b",")
+    filler = bytearray(prefix)
+    while len(filler) + 6001 < 32000:
+        filler.extend(b"Q" * 6000 + b",")
+    remaining = 32767 - len(filler)
+    assert 0 < remaining <= 8192
+    filler.extend(b"R" * remaining + b"\xc3")
+    assert len(filler) == 32768
+    # Malformed byte outside sample must not be ignored as data, because
+    # the sampled first logical header never ended.
+    path = tmp_path / "partial-private-header.csv"
+    path.write_bytes(bytes(filler) + b"\xff,tail\r\n")
+    with pytest.raises(HeaderRejected) as error:
+        inspect_header(path)
+    assert "private" not in str(error.value).lower()
+
+
+def test_complete_multiline_header_accepts_split_utf8_data_row(tmp_path):
+    header = (b'\xef\xbb\xbf"private\nfield",' +
+              ",".join(DAILY).encode("ascii") + b"\r\n")
+    filler = bytearray(header)
+    row = b"A - C,20260101,1,1000\r\n"
+    while len(filler) + len(row) < 32738:
+        filler.extend(row)
+    remaining = 32767 - len(filler) - 4
+    assert 0 <= remaining < 8192
+    filler.extend(b"B - " + b"x" * remaining + b"\xc3\xa9,20260101,1,1000\r\n")
+    assert filler[32767] == 0xC3
+    path = tmp_path / "valid-multiline-header.csv"
+    path.write_bytes(bytes(filler))
+    assert inspect_header(path)["classification"] == "daily_tracks"

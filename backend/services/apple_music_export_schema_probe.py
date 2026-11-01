@@ -78,22 +78,29 @@ def inspect_header(path: Path) -> dict:
             if not 0 < metadata.st_size <= MAX_FILE_BYTES:
                 raise HeaderRejected("CSV file size unsupported")
             fragment = source.read(MAX_HEADER_BYTES)
-        # Non-final UTF-8 decoding ignores an incomplete trailing sequence
-        # from a data row, but still rejects malformed header bytes.
-        if (metadata.st_size > len(fragment)
-                and b"\n" not in fragment and b"\r" not in fragment):
-            raise HeaderRejected("CSV header exceeds sample budget")
+        # Incomplete trailing UTF-8 is tolerated only if the *logical*
+        # header is provably complete in this bounded sample. A physical
+        # newline could be inside a quoted header; see the check below.
+        # Malformed encoding within the sampled header still fails closed.
         decoder = codecs.getincrementaldecoder("utf-8-sig")("strict")
         text = decoder.decode(fragment, final=metadata.st_size <= len(fragment))
         csv.field_size_limit(8192)
+        buffer = io.StringIO(text, newline="")
         reader = csv.reader(
-            BoundedCsvLines(io.StringIO(text, newline=""),
-                            max_columns=MAX_HEADER_FIELDS, max_field=8192),
+            BoundedCsvLines(buffer, max_columns=MAX_HEADER_FIELDS,
+                            max_field=8192),
             strict=True,
         )
         header = next(reader, [])
         if not header:
             raise HeaderRejected("CSV header is missing")
+        # csv.reader can accept a truncated *unquoted* final field as EOF.
+        # Verify its actual consumed physical line ended before the
+        # sampling boundary, not merely that some earlier newline exists.
+        if metadata.st_size > len(fragment):
+            consumed = buffer.tell()
+            if not consumed or text[consumed - 1] not in "\r\n":
+                raise HeaderRejected("CSV header exceeds sample budget")
         return classify_header(header)
     except HeaderRejected:
         raise
