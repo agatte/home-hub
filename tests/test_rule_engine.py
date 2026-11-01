@@ -137,16 +137,21 @@ class TestRuleGeneration:
         _, service, _, session_factory = db_and_service
         now = datetime.now(timezone.utc)
         target = now.replace(minute=30, second=0, microsecond=0) + timedelta(hours=5)
+        # Recur by Indianapolis wall time. Subtracting weeks from UTC timestamps
+        # shifts the local hour across DST and splits a single learned-rule slot.
+        local_target = target.astimezone(TZ)
         async with session_factory() as session:
             for i in range(3):
+                weekly_target = (local_target - timedelta(weeks=i)).astimezone(timezone.utc)
                 session.add(ActivityEvent(
-                    timestamp=target - timedelta(weeks=i),
+                    timestamp=weekly_target,
                     mode="working", previous_mode="idle",
                     source="process", duration_seconds=3600,
                 ))
             for i in range(10):
+                weekly_target = (local_target - timedelta(weeks=i)).astimezone(timezone.utc)
                 session.add(ActivityEvent(
-                    timestamp=target - timedelta(weeks=i, seconds=(i + 1) * 2),
+                    timestamp=weekly_target - timedelta(seconds=(i + 1) * 2),
                     mode="idle", previous_mode="working",
                     source="process", duration_seconds=60,
                 ))
@@ -163,6 +168,24 @@ class TestRuleGeneration:
         assert matching[0]["predicted_mode"] == "working"
         assert matching[0]["confidence"] == 100  # 3 working / 3 non-skip = 100%
         assert matching[0]["sample_count"] == 3  # skip modes excluded from count
+
+    @pytest.mark.parametrize("anchor_utc", [
+        datetime(2026, 11, 2, 0, 30, tzinfo=timezone.utc),  # EST fall-back
+        datetime(2026, 3, 9, 0, 30, tzinfo=timezone.utc),   # EDT spring-forward
+    ])
+    def test_weekly_rule_fixture_preserves_local_slot_across_dst(self, anchor_utc):
+        """Weekly recurrence stays in one Indianapolis day/hour across DST."""
+        local_anchor = anchor_utc.astimezone(TZ)
+        instants = [
+            (local_anchor - timedelta(weeks=i)).astimezone(timezone.utc)
+            for i in range(3)
+        ]
+        slots = {
+            (value.astimezone(TZ).weekday(), value.astimezone(TZ).hour)
+            for value in instants
+        }
+        assert slots == {(local_anchor.weekday(), local_anchor.hour)}
+        assert len({value.astimezone(TZ).utcoffset() for value in instants}) == 2
 
     async def test_ambient_noise_downweighted_so_process_signal_wins(self, db_and_service):
         """Per-source weighting should let a process-driven working signal

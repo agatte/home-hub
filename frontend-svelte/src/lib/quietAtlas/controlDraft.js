@@ -1,4 +1,4 @@
-import { LIGHTING_GROUPS, normalizeSceneList } from './lightingModel.js'
+import { LIGHTING_GROUPS, normalizeSceneList, brightnessPercent } from './lightingModel.js'
 
 // Drafts explain existing HomeHub command contracts; this module grants no
 // write permission and performs no network or device actions.
@@ -34,7 +34,35 @@ export function reviewBrightnessDraft(fixture, snapshotStatus, proposedPercent) 
   }
 }
 
-/** Scene listing metadata is not an effect manifest, readiness or permission.
+/** The scene list includes configured targets for curated and custom scenes,
+ * but these are *declarations*, never current bulb state or execution authority.
+ * Malformed/partial data must be labelled unknown, not silently omitted.
+ * @param {unknown} raw
+ * @returns {Array<{id:string,label:string,power:string,brightness:string}> | null} */
+export function declaredSceneTargets(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const states = /** @type {Record<string, any>} */ (raw).lights
+  if (!states || typeof states !== 'object' || Array.isArray(states)) return null
+  const ids = Object.keys(states)
+  if (!ids.length || ids.length > 32 || ids.some((id) => !/^[1-9][0-9]{0,3}$/.test(id))) return null
+  const rows = []
+  for (const id of ids.sort((a, b) => Number(a) - Number(b))) {
+    const state = states[id]
+    if (!state || typeof state !== 'object' || Array.isArray(state) ||
+        typeof state.on !== 'boolean') return null
+    const percent = state.on && state.bri != null ? brightnessPercent(state.bri) : null
+    if (state.on && state.bri != null && percent == null) return null
+    rows.push({
+      id,
+      label: KNOWN_FIXTURES.has(id) ? `L${id}` : `Unmapped light ${id}`,
+      power: state.on ? 'On' : 'Off',
+      brightness: state.on ? (percent == null ? 'unspecified' : `${percent}%`) : 'not applicable',
+    })
+  }
+  return rows
+}
+
+/** Scene listing metadata is not proof of actual device effects, readiness or permission.
  * @param {string | null} sceneId
  * @param {unknown} sceneList
  * @param {{connected:boolean,loading:boolean,error:string}} status */
@@ -43,12 +71,15 @@ export function reviewSceneDraft(sceneId, sceneList, status) {
       status.loading || status.error) return null
   const scene = normalizeSceneList(sceneList).find((item) => item.id === sceneId)
   if (!scene) return null
+  const raw = Array.isArray(sceneList) ? sceneList.find((item) =>
+    item?.id === scene.id && item?.source === scene.source) : null
+  const declaredTargets = scene.source === 'bridge' ? null : declaredSceneTargets(raw)
   return {
-    id: scene.id, name: scene.name, source: scene.source,
+    id: scene.id, name: scene.name, source: scene.source, declaredTargets,
     description: scene.source === 'bridge'
       ? 'A Hue bridge scene can affect multiple lights; its exact fixture manifest is not available from this list.'
-      : scene.source === 'custom'
-        ? 'A saved custom scene can affect multiple fixtures; this list does not verify its current targets.'
-        : 'A curated HomeHub scene can affect multiple fixtures and existing manual lighting ownership.',
+      : declaredTargets
+        ? `This ${scene.source === 'custom' ? 'custom scene' : 'HomeHub preset'} declares ${declaredTargets.length} fixture targets. Protected-light and effect handling may change the actual outcome.`
+        : `This ${scene.source === 'custom' ? 'custom scene' : 'HomeHub preset'} did not provide a valid per-light declaration. Actual effect targets remain unknown.`,
   }
 }

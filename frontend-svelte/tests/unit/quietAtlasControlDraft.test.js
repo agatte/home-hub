@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { describeFixture, buildLightingOverview } from '../../src/lib/quietAtlas/lightingModel.js'
-import { canDraftBrightness, reviewBrightnessDraft, reviewSceneDraft } from '../../src/lib/quietAtlas/controlDraft.js'
+import { canDraftBrightness, reviewBrightnessDraft, reviewSceneDraft, declaredSceneTargets } from '../../src/lib/quietAtlas/controlDraft.js'
 import groupSheet from '../../src/lib/components/QuietAtlasGroupSheet.svelte?raw'
 import sceneBrowser from '../../src/lib/components/QuietAtlasSceneBrowser.svelte?raw'
 import experience from '../../src/lib/components/QuietAtlasLightingExperience.svelte?raw'
@@ -62,6 +62,45 @@ describe('Quiet Atlas reviewed, strictly local future control intents', () => {
     expect(reviewSceneDraft('golden_hour', [], sceneStatus)).toBeNull()
   })
 
+  it('shows only declared curated/custom scene targets, never inventing actual light state or native scope', () => {
+    const configured = [
+      { id: 'warm', source: 'preset', display_name: 'Warm', lights: {
+        '5': { on: true, bri: 64, ct: 430 }, '2': { on: false }, '3': { on: true, bri: 180 },
+      } },
+      { id: 'custom_12', source: 'custom', display_name: 'Custom', lights: {
+        '7': { on: true, bri: 100 }, '1': { on: false },
+      } },
+      { id: 'native-id', source: 'bridge', display_name: 'Native', lights: {
+        '1': { on: true, bri: 200 },
+      } },
+    ]
+    const preset = reviewSceneDraft('warm', configured, sceneStatus)
+    expect(preset?.declaredTargets).toEqual([
+      { id: '2', label: 'L2', power: 'Off', brightness: 'not applicable' },
+      { id: '3', label: 'L3', power: 'On', brightness: '71%' },
+      { id: '5', label: 'L5', power: 'On', brightness: '25%' },
+    ])
+    expect(preset?.description).toContain('declares 3 fixture targets')
+    expect(reviewSceneDraft('custom_12', configured, sceneStatus)?.declaredTargets).toEqual([
+      { id: '1', label: 'L1', power: 'Off', brightness: 'not applicable' },
+      { id: '7', label: 'Unmapped light 7', power: 'On', brightness: '39%' },
+    ])
+    expect(reviewSceneDraft('native-id', configured, sceneStatus)?.declaredTargets).toBeNull()
+    expect(reviewSceneDraft('native-id', configured, sceneStatus)?.description).toContain('not available')
+    for (const bad of [null, [], {}, { lights: {} }, { lights: { '0': { on: true } } },
+      { lights: { '2': { bri: 100 } } }, { lights: { '2': { on: true, bri: 999 } } },
+      { lights: { '2': { on: false }, '3': null } },
+      { lights: { '__proto__': { on: true } } }]) {
+      expect(declaredSceneTargets(bad)).toBeNull()
+    }
+    expect(declaredSceneTargets({ lights: { '2': { on: true } } })).toEqual([
+      { id: '2', label: 'L2', power: 'On', brightness: 'unspecified' },
+    ])
+    const broken = reviewSceneDraft('bad', [{ id:'bad',source:'preset',display_name:'Bad',lights:{'2':{on:true,bri:-1}} }], sceneStatus)
+    expect(broken?.declaredTargets).toBeNull()
+    expect(broken?.description).toContain('unknown')
+  })
+
   it('keeps actuation disabled while making drafts reviewable and clearly non-sending', () => {
     expect(groupSheet).toContain('reviewBrightnessDraft(fixture, snapshotStatus')
     expect(groupSheet).toContain('Review adjustment')
@@ -74,8 +113,14 @@ describe('Quiet Atlas reviewed, strictly local future control intents', () => {
     expect(sceneBrowser).toContain('on:click={dismissSceneReview}')
     expect(sceneBrowser).toContain('if (!connected || loading || error) requestedReviewId = null')
     expect(sceneBrowser).toContain('No scene command has been sent.')
+    expect(sceneBrowser).toContain('Declared scene light targets')
+    expect(sceneBrowser).toContain('not measured fixture states or guaranteed applied results')
     expect(sceneBrowser).toContain('reviewSceneDraft(')
     expect(experience).toContain('cannot turn on lights, change brightness, apply scenes')
+    expect(experience).toContain('sceneGeneration += 1')
+    expect(experience).toContain('generation === sceneGeneration')
+    expect(experience).toContain('invalidateScenes()')
+    expect(experience).toContain('sceneReceivedAt > 30000')
     for (const source of [groupSheet, sceneBrowser, experience]) {
       expect(source).not.toMatch(/\b(apiPut|apiPost|optimisticLightPatch|setLight|activateScene)\s*\(/)
       expect(source).not.toMatch(/fetch\s*\([^\n]*(?:method:\s*['"](?:POST|PUT|PATCH|DELETE))/)

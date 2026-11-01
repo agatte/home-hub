@@ -95,7 +95,17 @@
       <div class="review-panel" role="status">
         <strong>{reviewedScene.name} · review only</strong>
         <p>{reviewedScene.description}</p>
-        <p>Activation would use HomeHub's existing guarded scene transition path, and may update manual light ownership. This list is not a current fixture manifest. No scene command has been sent.</p>
+        {#if reviewedScene.declaredTargets}
+          <div class="declared-scope">
+            <p><strong>Saved scene declaration · {reviewedScene.declaredTargets.length} lights</strong></p>
+            <ul aria-label="Declared scene light targets">
+              {#each reviewedScene.declaredTargets as target (target.id)}
+                <li>{target.label}: {target.power}{target.power === 'On' ? ` · ${target.brightness}` : ''}</li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+        <p>These are saved targets, not measured fixture states or guaranteed applied results. HomeHub's protected-light, scene and effect rules may change the final outcome. Activation requires the separately reviewed safety path. No scene command has been sent.</p>
         <button type="button" on:click={dismissSceneReview}>Dismiss review</button>
       </div>
     {/if}
@@ -119,6 +129,9 @@
   .scene-review:disabled{opacity:.5;cursor:not-allowed;}
   .review-panel{border:1px solid #a98e58;border-radius:14px;background:#392f21;color:#f1e3c4;margin:15px 0;padding:16px;}
   .review-panel strong{font-size:15px;}.review-panel p{font-size:12px;line-height:1.55;}
+  .declared-scope{border:1px solid #8a7754;border-radius:10px;padding:10px 13px;margin:12px 0;background:#2c2c22;}
+  .declared-scope ul{margin:9px 0 4px;padding-left:19px;display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:7px 18px;}
+  .declared-scope li{font-size:12px;line-height:1.45;color:#eadfca;}
   .notice,.warning{padding:15px;border:1px dashed #65816d;border-radius:12px;color:#bacfbe;}.warning{border-color:#a9895a;color:#f1d4a6;}.warning button{min-height:44px;padding:8px;border:1px solid #a9895a;color:#f1d4a6;background:none;cursor:pointer;}
   button:focus-visible,input:focus-visible{outline:3px solid #d1e9be;outline-offset:3px;}
   @media(min-width:800px){.browser-root{align-items:center}.browser{max-height:88dvh;border-radius:24px;padding:30px}.scene-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
