@@ -1,12 +1,41 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { fixtureStatusLabel } from '$lib/quietAtlas/lightingModel.js'
+  import { canDraftBrightness, reviewBrightnessDraft } from '$lib/quietAtlas/controlDraft.js'
 
   /** Selected group returned by buildLightingOverview(). */
   export let group
   /** @type {'disconnected'|'unverified'|'recent-read'|'stale-read'} */
   export let snapshotStatus = 'unverified'
   export let onClose = () => {}
+
+  /** @type {Record<string,number>} */
+  let draftPercents = {}
+  /** @type {string | null} */
+  let selectedFixtureId = null
+  $: selectedFixture = group.fixtures.find((item) => item.id === selectedFixtureId)
+  $: reviewedDraft = selectedFixture
+    ? reviewBrightnessDraft(selectedFixture, snapshotStatus, draftPercents[selectedFixture.id])
+    : null
+  // A REST receipt is not telemetry authority. Drop old local choices whenever
+  // that receipt becomes stale or the connection is unavailable.
+  $: if (snapshotStatus !== 'recent-read') { draftPercents = {}; selectedFixtureId = null }
+
+  /** @param {string} fixtureId @param {number} percent */
+  function updateDraft(fixtureId, percent) {
+    draftPercents = { ...draftPercents, [fixtureId]: percent }
+    selectedFixtureId = null
+  }
+
+  async function dismissBrightnessReview() {
+    const id = selectedFixtureId
+    selectedFixtureId = null
+    await tick()
+    const review = [...(panel?.querySelectorAll('button.review') ?? [])]
+      .find((button) => button instanceof HTMLButtonElement && button.dataset.fixtureId === id)
+    if (review instanceof HTMLButtonElement && !review.disabled) review.focus()
+    else closeButton?.focus()
+  }
 
   /** @type {HTMLElement | null} */
   let panel
@@ -49,10 +78,14 @@
             <div><h3>{fixture.name}</h3><p class="sub">{snapshotStatus === 'recent-read' ? fixtureStatusLabel(fixture) : 'Last reported: ' + fixtureStatusLabel(fixture)}</p></div>
             <span class:lit={snapshotStatus === 'recent-read' && fixture.on === true} class="bulb" aria-hidden="true">●</span>
           </div>
-          <label for={`fixture-brightness-${fixture.id}`}>Brightness <span>{snapshotStatus === 'recent-read' && fixture.brightness !== null ? `${fixture.brightness}%` : 'Unavailable'}</span></label>
-          <input id={`fixture-brightness-${fixture.id}`} type="range" min="1" max="254" step="1"
-            value={fixture.brightness === null ? 1 : Math.max(1, Math.min(254, Math.round(fixture.brightness * 2.54)))}
-            disabled aria-label={`${fixture.name} brightness — read-only preview`} />
+          <label for={`fixture-brightness-${fixture.id}`}>Draft brightness <span>{canDraftBrightness(fixture, snapshotStatus) ? `${draftPercents[fixture.id] ?? fixture.brightness}%` : 'Unavailable'}</span></label>
+          <input id={`fixture-brightness-${fixture.id}`} type="range" min="1" max="100" step="1"
+            value={draftPercents[fixture.id] ?? fixture.brightness ?? 1}
+            disabled={!canDraftBrightness(fixture, snapshotStatus)}
+            on:input={(event) => updateDraft(fixture.id, Number(event.currentTarget.value))}
+            aria-label={`Draft ${fixture.name} brightness percentage — no command sent`} />
+          <button type="button" class="review" data-fixture-id={fixture.id} disabled={!reviewBrightnessDraft(fixture, snapshotStatus, draftPercents[fixture.id])}
+            on:click={() => selectedFixtureId = fixture.id}>Review adjustment</button>
           <div class="palette-label">Color &amp; temperature</div>
           <div class="palette" role="group" aria-label={`Color options for ${fixture.name} unavailable in read-only review`}>
             <span class="swatch warm"></span><span class="swatch neutral"></span><span class="swatch cool"></span><span class="swatch lavender"></span>
@@ -60,7 +93,15 @@
         </article>
       {/each}
     </div>
-    <p class="readonly" role="note">Review-only screen. Brightness, color and power commands are deliberately disabled until the existing HomeHub lighting ownership and actuation path is connected and verified.</p>
+    {#if reviewedDraft}
+      <div class="draft-summary" role="status">
+        <strong>Proposed adjustment · not sent</strong>
+        <p>{reviewedDraft.name}: {reviewedDraft.fromPercent}% → {reviewedDraft.toPercent}% (Hue brightness {reviewedDraft.proposedBri}/254).</p>
+        <p>Future Apply must use the existing per-light manual-ownership path, recheck actual fixture availability, and refetch after acknowledgement. No group command is implied.</p>
+        <button type="button" class="dismiss-review" on:click={dismissBrightnessReview}>Dismiss review</button>
+      </div>
+    {/if}
+    <p class="readonly" role="note">You can draft an adjustment for a currently reported, reachable, on fixture. Nothing is sent to HomeHub. Power, color and actual Apply are unavailable pending the separately reviewed actuation path.</p>
     {#if group.id === 'kitchen'}
       <p class="pair">The kitchen pendants operate together in functional activities, but may differ in custom or atmospheric scenes. Their actual states are shown separately.</p>
     {/if}
@@ -83,6 +124,12 @@
   .bulb{color:#607967;font-size:21px;} .bulb.lit{color:#d9b77a;text-shadow:0 0 15px #b58d54;}
   label {display:flex;justify-content:space-between;font-size:12px;color:#d9e3d8;margin-top:19px;}
   input[type=range] {width:100%;margin:12px 0;accent-color:#a8c4a2;} input:disabled {opacity:.55;}
+  .review,.dismiss-review {min-height:44px;padding:10px 14px;border:1px solid #77907a;border-radius:10px;background:#253d2f;color:#edf1e7;font:inherit;font-size:12px;cursor:pointer;}
+  .review:disabled {opacity:.5;cursor:not-allowed;}
+  .draft-summary {border:1px solid #b49d69;background:#352e21;border-radius:14px;margin-top:16px;padding:14px;color:#f2e6c6;}
+  .draft-summary strong {display:block;font-size:14px;}
+  .draft-summary p {font-size:12px;line-height:1.5;margin:9px 0;}
+  .dismiss-review {background:#443828;border-color:#a99467;}
   .palette-label {font-size:12px;color:#b3c5b6;margin:3px 0 9px;}
   .palette{display:flex;gap:10px;opacity:.52;}
   .swatch {width:31px;height:31px;border-radius:50%;border:1px solid #ffffff55;}
