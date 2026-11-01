@@ -66,7 +66,8 @@ def summarize_artist_join_coverage(
 
         # One daily string might split multiple ways into observed titles.
         # Abstain for all implicated titles; do not choose a delimiter casually.
-        if len(possibilities) > 1:
+        if possibilities and (len(possibilities) > 1
+                              or text.count(SEPARATOR) > 1):
             ambiguous_titles.update(song for song, _ in possibilities)
         elif possibilities:
             song, artist = next(iter(possibilities))

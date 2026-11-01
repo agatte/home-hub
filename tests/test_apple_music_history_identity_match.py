@@ -79,3 +79,19 @@ def test_oversized_values_refuse_provisional_join():
     )
     assert result["blank_or_invalid_event_titles"] == 1
     assert result.get("provisional_artist_event_rows", 0) == 0
+
+
+def test_single_known_suffix_still_abstains_on_multiple_delimiters():
+    result = summarize_artist_join_coverage(
+        ["C"], ["A - B - C"],
+    )
+    assert result["ambiguous_artist_event_rows"] == 1
+    assert result.get("provisional_artist_event_rows", 0) == 0
+
+
+def test_ambiguous_suffix_revokes_other_provisional_same_title():
+    result = summarize_artist_join_coverage(
+        ["C"], ["A - B - C", "Verified Only By Text - C"],
+    )
+    assert result["ambiguous_artist_event_rows"] == 1
+    assert result.get("provisional_artist_event_rows", 0) == 0

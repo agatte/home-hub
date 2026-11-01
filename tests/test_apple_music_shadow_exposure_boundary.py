@@ -22,6 +22,7 @@ from backend.services.music_taste import build_music_taste_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 APPLE_MODULES = (
+    "apple_music_csv_record_budget.py",
     "apple_music_daily_join_audit.py",
     "apple_music_artist_local_audit.py",
     "apple_music_artist_familiarity_preview.py",
@@ -44,6 +45,7 @@ _ALLOWED_IMPORTS = frozenset({
 })
 _ALLOWED_APPLE_IMPORTS = frozenset({
     "apple_music_artist_familiarity_preview", "apple_music_daily_join_audit",
+    "apple_music_csv_record_budget",
 })
 
 

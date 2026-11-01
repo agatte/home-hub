@@ -6,12 +6,18 @@ the filename, path, header values, rows or any personal metadata.
 from __future__ import annotations
 
 import argparse
+import codecs
 import csv
 import io
 import json
 import os
 import stat
 from pathlib import Path
+
+if __package__:
+    from .apple_music_csv_record_budget import BoundedCsvLines
+else:  # Operator CLI executed directly by Python.
+    from apple_music_csv_record_budget import BoundedCsvLines
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_HEADER_BYTES = 32 * 1024
@@ -72,10 +78,19 @@ def inspect_header(path: Path) -> dict:
             if not 0 < metadata.st_size <= MAX_FILE_BYTES:
                 raise HeaderRejected("CSV file size unsupported")
             fragment = source.read(MAX_HEADER_BYTES)
-        # Do not attempt an unbounded/partially sampled quoted header.
-        text = fragment.decode("utf-8-sig")
+        # Non-final UTF-8 decoding ignores an incomplete trailing sequence
+        # from a data row, but still rejects malformed header bytes.
+        if (metadata.st_size > len(fragment)
+                and b"\n" not in fragment and b"\r" not in fragment):
+            raise HeaderRejected("CSV header exceeds sample budget")
+        decoder = codecs.getincrementaldecoder("utf-8-sig")("strict")
+        text = decoder.decode(fragment, final=metadata.st_size <= len(fragment))
         csv.field_size_limit(8192)
-        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+        reader = csv.reader(
+            BoundedCsvLines(io.StringIO(text, newline=""),
+                            max_columns=MAX_HEADER_FIELDS, max_field=8192),
+            strict=True,
+        )
         header = next(reader, [])
         if not header:
             raise HeaderRejected("CSV header is missing")

@@ -176,3 +176,26 @@ requested reviewer or completed review. **Independent review remains
 unverified and outstanding.** After publishing the correction, verify
 exact head, all Linux CI checks and actual reviewer comments. Do not
 merge or deploy on an earlier head's green result.
+
+
+## Nov 1 Codex review correction (prepared, subject to fresh CI)
+
+A direct Codex Code Review of PR #439 found potential CSV-record memory
+amplification from extreme comma counts. A shared, offline-only
+`backend/services/apple_music_csv_record_budget.py` now bounds physical
+line reads, cumulative logical CSV records, and unquoted columns before
+Python's `csv.reader` allocates row fields. Quote escapes, quoted commas,
+quoted newlines and 256-column normal rows remain supported in synthetic
+tests. Both the Daily Tracks join and Play Activity readers use it.
+The schema preflight also uses it for safe header parsing and incremental
+UTF-8 decoding to tolerate split trailing multibyte data-row content.
+A separate artist-join diagnostic now abstains on **any** description with
+more than one ` - ` delimiter, even when only one title suffix is observed.
+No private export was re-read to test these corrections.
+
+New inspector/checker SHA pins and shared helper SHA are explicitly checked
+in the operator commands. These versioned scripts are pending full
+Linux CI and fresh independent review; earlier operator-local results were
+produced with older pinned versions and must not be represented as having
+been verified using the new parser. The standalone Daily Tracks artist
+exposure reader remains unchanged and hash-pinned separately.

@@ -9,7 +9,7 @@ to automatic Apple account sync.**
 ## Source and verification
 
 - Script: `backend/services/apple_music_daily_join_audit.py`
-- SHA-256: `77079D06331E417F5BC10E3C7951A201FB0CFC7FFB201F40B4ACA1D0B60E9CE0`
+- SHA-256: `DB7EA46CF68938F73F33B301547327593FE20D20AA5146B3B85793A3765165B6`
 - Inputs: `Apple Music - Play History Daily Tracks.csv` and
   `Apple Music Play Activity.csv`, separately selected as already extracted
   local CSVs. No ZIP enumeration, archive scanning or uploading.
@@ -43,9 +43,12 @@ column names, metadata values, or a song/artist row.
 ```powershell
 & {
     $probe = 'C:\Users\Anthony\Documents\home-hub-project\worktrees\apple-history-inspector-431\backend\services\apple_music_export_schema_probe.py'
-    $pin = 'BE68DD7ACC47E60B5BB5621C9B389478880381C337523F7CA126113A40ACE972'
+    $pin = 'E0F19FEF13F128B34BF4C9C0F1C51218DD2001B68718A867A0B405A12943ABAF'
     if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) { throw 'Schema probe missing. Stop.' }
     if ((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -ne $pin) { throw 'Schema probe differs from tested version. Stop.' }
+    $budget = Join-Path (Split-Path -Parent $probe) 'apple_music_csv_record_budget.py'
+    if (-not (Test-Path -LiteralPath $budget -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $budget -Algorithm SHA256).Hash -ne 'E02788CA4ABEEAD3D136AFF0FAC67061E4F45AD0BFDD8C483A55930F5B7ABA9D') { throw 'Unverified CSV limiter. Stop.' }
     if (-not $dailyCsv -or -not (Test-Path -LiteralPath $dailyCsv -PathType Leaf)) { throw 'Previous CSV selection is unavailable. Stop.' }
     & (Get-Command python.exe -ErrorAction Stop).Source $probe $dailyCsv
     if ($LASTEXITCODE -ne 0) { throw 'Header classification was rejected. Stop.' }
@@ -70,9 +73,12 @@ They are not a signed .ps1 or executable install.
 ```powershell
 & {
 $tool = 'C:\Users\Anthony\Documents\home-hub-project\worktrees\apple-history-inspector-431\backend\services\apple_music_daily_join_audit.py'
-$expected = '77079D06331E417F5BC10E3C7951A201FB0CFC7FFB201F40B4ACA1D0B60E9CE0'
+$expected = 'DB7EA46CF68938F73F33B301547327593FE20D20AA5146B3B85793A3765165B6'
 if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw 'Audit script unavailable. Stop.' }
 if ((Get-FileHash -LiteralPath $tool -Algorithm SHA256).Hash -ne $expected) { throw 'Audit version mismatch. Stop.' }
+$budget = Join-Path (Split-Path -Parent $tool) 'apple_music_csv_record_budget.py'
+if (-not (Test-Path -LiteralPath $budget -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $budget -Algorithm SHA256).Hash -ne 'E02788CA4ABEEAD3D136AFF0FAC67061E4F45AD0BFDD8C483A55930F5B7ABA9D') { throw 'Unverified CSV limiter. Stop.' }
 Add-Type -AssemblyName System.Windows.Forms
 $pick = New-Object System.Windows.Forms.OpenFileDialog
 $pick.Filter = 'CSV (*.csv)|*.csv'
@@ -110,6 +116,8 @@ If the scanner rejects the schema, send only its fixed error message.
 - Only after schema/coverage evidence should a separate, consented, reversible
   identity-normalization and canonical taste-preview packet be developed.
 
-Independent Codex review remains blocked by 401 authentication and is **not
-passed**. Commit/push/PR/merge, any persistent taste data ingestion, Sonos
-actions, production deployment and token changes remain separate gates.
+Codex independently reviewed PR #439 at `acc6c9e` and found three
+P2 issues; the fixes are being verified. A fresh review of the corrected
+head and Linux CI are required. This read-only operator diagnostic is
+not permission to import Apple taste evidence, change Sonos, or deploy.
+Merge and production actions remain separate gates.

@@ -325,3 +325,12 @@ def test_multiple_source_dates_never_escape_aggregate_report(tmp_path):
         assert date_label not in encoded
     assert "earliest_date" not in encoded
     assert "latest_date" not in encoded
+
+
+def test_huge_empty_column_count_rejected_before_csv_row_allocates(tmp_path):
+    path = make_csv(tmp_path, [])
+    with path.open("a", encoding="utf-8") as writer:
+        writer.write("PRIVATE_TOO_MANY_COLUMNS," + "," * 200_000 + "\n")
+    with pytest.raises(InspectionError) as error:
+        inspect(path)
+    assert "PRIVATE" not in str(error.value)

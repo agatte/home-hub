@@ -171,3 +171,20 @@ def test_utc_normalization_before_day_join(tmp_path):
     ])
     counts = analyze(daily, play)["summary"]
     assert counts["play_end_same_date_provisional"] == 1
+
+
+def test_extreme_comma_row_rejected_without_early_csv_allocation(tmp_path):
+    path = _daily(tmp_path, [])
+    with path.open("a", encoding="utf-8") as writer:
+        writer.write("PRIVATE_EXCESSIVE_CELLS," + "," * 200_000 + "\n")
+    with pytest.raises(AuditRejected) as error:
+        analyze(path)
+    assert "PRIVATE" not in str(error.value)
+
+
+def test_csv_quoted_comma_in_private_unused_column_still_allowed(tmp_path):
+    rows = [["Artist - Moonlight", "2026-01-01", "1", "1000",
+             "secret, quoted", "private"]]
+    result = analyze(_daily(tmp_path, rows))
+    assert result["summary"]["daily_rows"] == 1
+    assert "secret" not in repr(result)

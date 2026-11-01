@@ -14,7 +14,7 @@ Latitude or Sonos service. The operator controls any local invocation.
 - Synthetic stress: 69,918 rows, 93.21 MiB, generated and parsed in 5.59 seconds
   in Windows Sandbox. This does **not** establish correctness for Apple's real
   schema or duplicate-session semantics.
-- Inspector SHA-256: `853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7`
+- Inspector SHA-256: `E25BFC34A3A33A1B0135F772D116179DB971991E352E8DFAB4F67A167D0D21DA`
   after the privacy correction. The operator launcher checks this hash
   before any file picker. This is NOT the separate Daily Tracks reader hash.
 - A separate Codex reviewer task failed **before analysis**, due to a 401
@@ -38,7 +38,10 @@ Use direct Python with a fresh hash check for the updated diagnostic:
 
 ```powershell
 $scanner = 'C:\Users\Anthony\Documents\home-hub-project\worktrees\apple-history-inspector-431\backend\services\apple_music_history_inspector.py'
-if ((Get-FileHash -LiteralPath $scanner -Algorithm SHA256).Hash -ne '853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7') { throw 'Inspector changed; stop.' }
+if ((Get-FileHash -LiteralPath $scanner -Algorithm SHA256).Hash -ne 'E25BFC34A3A33A1B0135F772D116179DB971991E352E8DFAB4F67A167D0D21DA') { throw 'Inspector changed; stop.' }
+$budget = Join-Path (Split-Path -Parent $scanner) 'apple_music_csv_record_budget.py'
+if (-not (Test-Path -LiteralPath $budget -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $budget -Algorithm SHA256).Hash -ne 'E02788CA4ABEEAD3D136AFF0FAC67061E4F45AD0BFDD8C483A55930F5B7ABA9D') { throw 'CSV limiter changed; stop.' }
 if (-not $csvPath -or -not (Test-Path -LiteralPath $csvPath -PathType Leaf)) { throw 'Select the CSV locally as in the first run.' }
 & (Get-Command python.exe -ErrorAction Stop).Source $scanner $csvPath
 ```

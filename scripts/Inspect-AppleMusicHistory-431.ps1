@@ -3,12 +3,18 @@
 # This script is NEVER invoked by HomeHub, Codex, Sandbox automation or services.
 $ErrorActionPreference = 'Stop'
 $scanner = Join-Path (Split-Path -Parent $PSScriptRoot) 'backend\services\apple_music_history_inspector.py'
-$expected = '853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7'
+$expected = 'E25BFC34A3A33A1B0135F772D116179DB971991E352E8DFAB4F67A167D0D21DA'
 if (-not (Test-Path -LiteralPath $scanner -PathType Leaf)) {
     throw 'Reviewed inspector is unavailable.'
 }
 if ((Get-FileHash -LiteralPath $scanner -Algorithm SHA256).Hash -ne $expected) {
     throw 'Inspector SHA-256 changed; reviewed version must be revalidated.'
+}
+$budget = Join-Path (Split-Path -Parent $scanner) 'apple_music_csv_record_budget.py'
+$budgetPin = 'E02788CA4ABEEAD3D136AFF0FAC67061E4F45AD0BFDD8C483A55930F5B7ABA9D'
+if (-not (Test-Path -LiteralPath $budget -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $budget -Algorithm SHA256).Hash -ne $budgetPin) {
+    throw 'CSV record budget dependency differs from the reviewed version.'
 }
 $python = Get-Command python.exe -ErrorAction SilentlyContinue
 if (-not $python) { throw 'A normal Python 3 interpreter is required.' }

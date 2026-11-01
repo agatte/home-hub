@@ -80,3 +80,26 @@ def test_csv_header_quoted_comma_is_supported_without_leaks(tmp_path):
 def test_header_direct_function_does_not_return_unknown_names():
     report = classify_header(["PRIVATE_NAME", "Track Name"])
     assert "PRIVATE_NAME" not in repr(report)
+
+
+def test_utf8_split_at_sample_end_after_complete_valid_header(tmp_path):
+    header = ("\ufeff" + ",".join(DAILY) + "\r\n").encode("utf-8")
+    row = b"A - C,20260101,1,1000\r\n"
+    blob = bytearray(header)
+    while len(blob) + len(row) < 32738:
+        blob.extend(row)
+    remaining = 32767 - len(blob) - 4
+    assert 0 <= remaining < 8190
+    blob.extend(b"B - " + b"x" * remaining + b"\xc3\xa9,20260101,1,1000\r\n")
+    assert blob[32767] == 0xC3 and blob[32768] == 0xA9
+    path = tmp_path / "synthetic.csv"
+    path.write_bytes(bytes(blob))
+    assert inspect_header(path)["classification"] == "daily_tracks"
+
+
+def test_oversized_header_column_count_is_rejected_without_echo(tmp_path):
+    path = tmp_path / "columns.csv"
+    path.write_bytes(b"PRIVATE," + b"," * 12000 + b"\n")
+    with pytest.raises(HeaderRejected) as error:
+        inspect_header(path)
+    assert "PRIVATE" not in str(error.value)

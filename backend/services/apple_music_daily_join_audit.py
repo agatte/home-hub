@@ -17,6 +17,11 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+if __package__:
+    from .apple_music_csv_record_budget import BoundedCsvLines
+else:  # Direct operator-only Python invocation; no HomeHub app dependencies.
+    from apple_music_csv_record_budget import BoundedCsvLines
+
 MAX_BYTES = 100 * 1024 * 1024
 MAX_ROWS = 250_000
 MAX_COLUMNS = 256
@@ -69,7 +74,11 @@ def _csv_rows(path: Path, required: frozenset[str]):
                 encoding="utf-8-sig", newline="",
             ) as stream:
                 csv.field_size_limit(MAX_FIELD)
-                reader = csv.reader(stream, strict=True)
+                reader = csv.reader(
+                    BoundedCsvLines(stream, max_columns=MAX_COLUMNS,
+                                    max_field=MAX_FIELD),
+                    strict=True,
+                )
                 header = next(reader, [])
                 if (len(header) > MAX_COLUMNS
                         or len(header) != len(set(header))
