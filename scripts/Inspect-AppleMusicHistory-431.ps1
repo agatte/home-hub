@@ -3,7 +3,7 @@
 # This script is NEVER invoked by HomeHub, Codex, Sandbox automation or services.
 $ErrorActionPreference = 'Stop'
 $scanner = Join-Path (Split-Path -Parent $PSScriptRoot) 'backend\services\apple_music_history_inspector.py'
-$expected = 'E12F8E3A9F6107CDC4D27AF6774982077DB5C36B747981D00F018CDFD1EA8073'
+$expected = '853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7'
 if (-not (Test-Path -LiteralPath $scanner -PathType Leaf)) {
     throw 'Reviewed inspector is unavailable.'
 }

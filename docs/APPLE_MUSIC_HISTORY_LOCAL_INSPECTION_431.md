@@ -2,18 +2,21 @@
 
 **Status: first user-initiated, private Windows-local inspection completed successfully.**
 No private CSV was transferred. The identity-quality diagnostic is a follow-up
-read-only operator run, and is not a persistent import. The Python inspector and
-PowerShell launcher remain **uncommitted local Sandbox worktree candidates**.
-Neither is running as a HomeHub, Windows host, Latitude or Sonos service.
+read-only operator run, and is not a persistent import. The Python inspector and PowerShell launcher are **review candidates in
+HomeHub PR #439**, not deployed or running as a HomeHub, Windows host,
+Latitude or Sonos service. The operator controls any local invocation.
 
 ## Reviewed development evidence
 
-- Synthetic suite: 37 passing tests at 2026-10-31; Ruff and compile checks pass.
+- Synthetic inspector suite: **38 passing tests** after a privacy correction on
+  2026-10-31; Ruff and compile checks pass. Full PR CI needs revalidation
+  after the amended candidate is published.
 - Synthetic stress: 69,918 rows, 93.21 MiB, generated and parsed in 5.59 seconds
   in Windows Sandbox. This does **not** establish correctness for Apple's real
   schema or duplicate-session semantics.
-- Inspector SHA-256: `E12F8E3A9F6107CDC4D27AF6774982077DB5C36B747981D00F018CDFD1EA8073`
-  after this review. The operator launcher checks this hash before any file picker.
+- Inspector SHA-256: `853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7`
+  after the privacy correction. The operator launcher checks this hash
+  before any file picker. This is NOT the separate Daily Tracks reader hash.
 - A separate Codex reviewer task failed **before analysis**, due to a 401
   authentication error; this is **not independent approval**.
 - Runtime only uses Python standard library. No imports from HomeHub models,
@@ -35,7 +38,7 @@ Use direct Python with a fresh hash check for the updated diagnostic:
 
 ```powershell
 $scanner = 'C:\Users\Anthony\Documents\home-hub-project\worktrees\apple-history-inspector-431\backend\services\apple_music_history_inspector.py'
-if ((Get-FileHash -LiteralPath $scanner -Algorithm SHA256).Hash -ne 'E12F8E3A9F6107CDC4D27AF6774982077DB5C36B747981D00F018CDFD1EA8073') { throw 'Inspector changed; stop.' }
+if ((Get-FileHash -LiteralPath $scanner -Algorithm SHA256).Hash -ne '853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7') { throw 'Inspector changed; stop.' }
 if (-not $csvPath -or -not (Test-Path -LiteralPath $csvPath -PathType Leaf)) { throw 'Select the CSV locally as in the first run.' }
 & (Get-Command python.exe -ErrorAction Stop).Source $scanner $csvPath
 ```

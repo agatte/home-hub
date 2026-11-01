@@ -826,3 +826,40 @@ Git integration authorization. Product gates for per-artist exposure
 identity, user consent, retention/withdrawal, Apple/Sonos overlap and
 canonical taste remain OPEN. Do not request any new private CSV scan,
 and do not allow exposure counts to imply likes or affect playback.
+
+
+## Published PR #439 independent-review continuation: exact-date output leak (Oct 31)
+
+**Direct privacy finding / bounded remediation, pending publication at this
+checkpoint:** The Play Activity inspector's otherwise aggregate-only report
+included `utc_coverage.earliest_date` and
+`utc_coverage.latest_date` derived from real source timestamps.
+Although not individual playback records, those were *exact personal
+calendar dates*, contradicting the claim that no source dates leave the
+reader. The output field is **removed entirely**, as are the in-memory
+min/max trackers; the aggregate `counts.valid_timestamps` still shows
+date parsing coverage without disclosing when listening occurred.
+Synthetic regression tests now reject a source-day/date-range leak for
+multiple distinct timestamp dates and preserve no-source-text output.
+
+The checksum-pinned **Play Activity** inspector (distinct from the
+Daily Tracks artist/day reader) now has SHA-256
+`853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7`;
+its Windows operator script and read-only runbook hash pins were
+updated together. Do not use old pins for this inspector. The separate
+**Daily Tracks** operator reader remains byte-for-byte unchanged at
+`DDE9CF79CE9495E55D7E3900E47BCE293D5B3BAE6CA7994BCE19DC05F78BA900`.
+No private Apple CSV scan was performed for this correction.
+
+**Independent reviewer attempt:** GitHub documentation specifies
+`copilot-pull-request-reviewer[bot]` as the REST review-request identity.
+A bounded API request on ready-for-review PR #439 returned a successful
+PR result, but GitHub still showed **no requested reviewer in normalized
+metadata, no submitted reviews and no review threads** at subsequent
+poll. Therefore no actual independent review or acceptance can be
+claimed. Do not merge based on this request alone.
+
+Product and integration safety gates remain open: source-scoped
+provisional labels are not verified artist identities or liking;
+no Apple/Sonos independent session proof; no canonical taste model,
+MusicBandit, production or playback changes; no merge/deploy authority.

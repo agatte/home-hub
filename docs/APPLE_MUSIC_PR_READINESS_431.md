@@ -149,3 +149,30 @@ unpublished offline feasibility lane. Next actual blocker is **independent
 review**, not a missing Apple date format or a request for more CSV
 extraction. The real-history date grammar and aggregate results have
 already been verified by the operator.
+
+
+## Exact-date privacy correction after initial green PR head (Oct 31)
+
+The first published PR #439 head `7640f56cafb328c44063c1e7bae8297407d4b415`
+passed the three GitHub Actions jobs. A *subsequent direct review*
+found a real privacy defect: `apple_music_history_inspector.py` returned
+the exact earliest/latest UTC source calendar dates in `utc_coverage`.
+Those fields are removed from the forthcoming correction; fixed aggregate
+`counts.valid_timestamps` remains. This invalidates any claim that the
+initial head is final privacy-reviewed code. Synthetic multi-date
+regression and updated SHA pins cover the fix.
+
+Keep the Play Activity inspector checksum in
+`scripts/Inspect-AppleMusicHistory-431.ps1` and
+`docs/APPLE_MUSIC_HISTORY_LOCAL_INSPECTION_431.md` identical to the
+corrected source SHA-256
+`853BBAB8C98B47AF4ACF52C87FB0BF3F569ED2DC9DEE12853F9F1DE8E6AA78D7`.
+The independently pinned Daily Tracks artist/day reader hash remains
+`DDE9CF79CE9495E55D7E3900E47BCE293D5B3BAE6CA7994BCE19DC05F78BA900`.
+
+A GitHub Copilot review-request API action was attempted using GitHub's
+documented bot identity, but subsequent GitHub metadata showed no
+requested reviewer or completed review. **Independent review remains
+unverified and outstanding.** After publishing the correction, verify
+exact head, all Linux CI checks and actual reviewer comments. Do not
+merge or deploy on an earlier head's green result.

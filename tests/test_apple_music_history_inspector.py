@@ -37,9 +37,9 @@ def test_natural_completion_and_repeat_is_stable(tmp_path):
     assert expected["counts"]["duplicate_event_ids"] == 1
     assert expected["counts"]["distinct_event_ids"] == 1
     assert expected["non_persistent_evidence_candidates"]["completion_candidate"] == 1
-    assert expected["utc_coverage"] == {
-        "earliest_date": "2025-02-03", "latest_date": "2025-02-03"
-    }
+    assert expected["counts"]["valid_timestamps"] == 2
+    assert "utc_coverage" not in expected
+    assert "2025-02-03" not in repr(expected)
     assert "PRIVATE_" not in repr(expected)
     assert "Invented Track" not in repr(expected)
     assert "synthetic-provider-1" not in repr(expected)
@@ -104,7 +104,8 @@ def test_invalid_time_and_missing_ids(tmp_path):
     result = inspect(make_csv(tmp_path, [row]))
     assert result["counts"]["missing_event_ids"] == 1
     assert result["counts"]["invalid_timestamps"] == 1
-    assert result["utc_coverage"]["earliest_date"] is None
+    assert result["counts"].get("valid_timestamps", 0) == 0
+    assert "utc_coverage" not in result
     assert "PRIVATE_INVALID_TIMESTAMP" not in repr(result)
 
 
@@ -308,3 +309,19 @@ def test_different_provider_ids_same_label_are_distinct(tmp_path):
     quality = report["provider_identity_quality"]
     assert quality["distinct_provider_ids_on_play_end"] == 2
     assert quality["provider_ids_with_multiple_title_album_labels"] == 0
+
+
+def test_multiple_source_dates_never_escape_aggregate_report(tmp_path):
+    first = BASE.copy()
+    second = BASE.copy()
+    second[0] = "synthetic-2"
+    second[2] = "2023-01-02T23:59:59Z"
+    second[3] = "2023-01-03T00:03:59Z"
+    report = inspect(make_csv(tmp_path, [first, second]))
+    assert report["counts"]["valid_timestamps"] == 4
+    assert "utc_coverage" not in report
+    encoded = repr(report)
+    for date_label in ("2023-01-02", "2023-01-03", "2025-02-03"):
+        assert date_label not in encoded
+    assert "earliest_date" not in encoded
+    assert "latest_date" not in encoded

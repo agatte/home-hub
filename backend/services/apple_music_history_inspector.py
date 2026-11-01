@@ -149,8 +149,6 @@ def inspect(path: Path, *, max_bytes: int = MAX_BYTES,
     metadata_only_labels: set[bytes] = set()
     # A conflicting duplicate revokes earlier diagnostic evidence.
     seen_ids: dict[bytes, tuple[bytes | None, str, bytes | None]] = {}
-    min_time: datetime | None = None
-    max_time: datetime | None = None
     scanned_characters = 0
 
     try:
@@ -322,10 +320,6 @@ def inspect(path: Path, *, max_bytes: int = MAX_BYTES,
                     raw_time = get(name)
                     if parsed:
                         counts["valid_timestamps"] += 1
-                        if min_time is None or parsed < min_time:
-                            min_time = parsed
-                        if max_time is None or parsed > max_time:
-                            max_time = parsed
                     elif raw_time:
                         counts["invalid_timestamps"] += 1
             counts["distinct_event_ids"] = len(seen_ids)
@@ -394,10 +388,6 @@ def inspect(path: Path, *, max_bytes: int = MAX_BYTES,
             "non_persistent_evidence_candidates": dict(sorted(evidence_counts.items())),
             "anonymous_provider_candidate_buckets": provider_rollup,
             "provider_identity_quality": identity_quality,
-            "utc_coverage": {
-                "earliest_date": min_time.date().isoformat() if min_time else None,
-                "latest_date": max_time.date().isoformat() if max_time else None,
-            },
             "warnings": [
                 "Counts are events, not independent plays or confirmed preferences.",
                 "Candidate evidence is not identity/session-deduplicated against Apple or Sonos.",
