@@ -23,7 +23,10 @@
   let sceneBrowserOpen = false
   /** @type {string | null} */
   let focusSceneId = null
-  let inflight = false
+  // Scene reads must be tied to the current connected/visible generation.
+  // A stale GET may finish after reconnect; it must never repopulate review state.
+  let sceneGeneration = 0
+  let sceneReceivedAt = 0
   let isMounted = false
   let lightReadFailures = 0
   let nextAutomaticLightReadAt = 0
@@ -83,23 +86,40 @@
     }
   }
 
+  function invalidateScenes() {
+    sceneGeneration += 1
+    sceneList = []
+    sceneReceivedAt = 0
+    scenesLoading = false
+    sceneError = ''
+  }
+
   /** @param {boolean} available */
   function onConnectionChanged(available) {
     if (!isMounted) return
     abortPendingLightReads()
+    // Every connection boundary revokes earlier scene results and reviews.
+    invalidateScenes()
     snapshot = connectionChanged(snapshot, available)
     lightReadFailures = 0
     nextAutomaticLightReadAt = 0
     nowMs = Date.now()
-    if (available && document.visibilityState === 'visible') void refreshLights()
+    if (available && document.visibilityState === 'visible') {
+      void refreshLights()
+      void refreshScenes()
+    }
   }
 
   function onVisibilityChanged() {
     if (!isMounted) return
     abortPendingLightReads()
+    invalidateScenes()
     snapshot = invalidateLightRead(snapshot)
     nowMs = Date.now()
-    if (document.visibilityState === 'visible' && snapshot.connected) void refreshLights()
+    if (document.visibilityState === 'visible' && snapshot.connected) {
+      void refreshLights()
+      void refreshScenes()
+    }
   }
   // Reconcile direct links and browser history without inventing a write-capable group.
   // Local overview sheets are still usable when there is no route target.
@@ -112,19 +132,28 @@
   $: selectedGroup = selectedGroupId ? groups.find((g) => g.id === selectedGroupId) : null
 
   async function refreshScenes() {
-    if (inflight) return
-    inflight = true
+    if (!isMounted || !snapshot.connected || document.visibilityState !== 'visible') return
+    const generation = ++sceneGeneration
     scenesLoading = true
+    sceneList = []
+    sceneReceivedAt = 0
     sceneError = ''
     try {
       const result = await apiGet('/api/scenes')
       if (!Array.isArray(result?.scenes)) throw new Error('Scene response unavailable')
-      if (isMounted) sceneList = result.scenes
+      if (isMounted && snapshot.connected && generation === sceneGeneration &&
+          document.visibilityState === 'visible') {
+        sceneList = result.scenes
+        sceneReceivedAt = Date.now()
+      }
     } catch {
-      if (isMounted) { sceneList = []; sceneError = 'Could not load the HomeHub scene library.' }
+      if (isMounted && generation === sceneGeneration) {
+        sceneList = []
+        sceneReceivedAt = 0
+        sceneError = 'Could not load the HomeHub scene library.'
+      }
     } finally {
-      inflight = false
-      if (isMounted) scenesLoading = false
+      if (isMounted && generation === sceneGeneration) scenesLoading = false
     }
   }
 
@@ -138,9 +167,9 @@
       if (!snapshot.pending && snapshot.connected && document.visibilityState === 'visible' &&
           Date.now() >= nextAutomaticLightReadAt) void refreshLights()
     }, 15000)
-    void refreshScenes()
     return () => {
       isMounted = false
+      invalidateScenes()
       abortPendingLightReads()
       unsubscribe()
       document.removeEventListener('visibilitychange', onVisibilityChanged)
@@ -166,7 +195,11 @@
   }
   /** @param {string | null} [id] */
   function openScenes(id = null) { focusSceneId = id; sceneBrowserOpen = true }
-  function browseScenes() { openScenes(); if (sceneError) refreshScenes() }
+  function browseScenes() {
+    openScenes()
+    if (sceneError || (!scenesLoading && snapshot.connected &&
+        (!sceneReceivedAt || Date.now() - sceneReceivedAt > 30000))) void refreshScenes()
+  }
   /** @param {string} id */
   function openSpecificScene(id) { if (normalizeSceneList(sceneList).some((s) => s.id === id)) openScenes(id) }
 </script>
