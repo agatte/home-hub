@@ -27,7 +27,7 @@ FAMILIARITY_NEUTRAL = frozenset({
 })
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class ApplePreviewEvent:
     """In-memory normalized input. Never serialize this object or log it.
 
@@ -49,6 +49,10 @@ class ApplePreviewEvent:
     cross_source_proof: str = "unknown"
     source: str = SOURCE
     event_type: str = "PLAY_END"
+
+    def __repr__(self) -> str:
+        """Never echo source IDs, dates, reasons or fields in diagnostics."""
+        return "ApplePreviewEvent(<redacted>)"
 
 
 class PreviewRejected(ValueError):
