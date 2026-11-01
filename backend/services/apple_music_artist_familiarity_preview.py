@@ -25,7 +25,7 @@ SOURCE = "apple_daily_tracks"
 FORMAT = "apple_artist_label_day_shadow_v1"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class DailyArtistObservation:
     """Only four allowlisted Daily Tracks columns; never serialize the object."""
 
@@ -34,6 +34,10 @@ class DailyArtistObservation:
     play_count: int
     duration_ms: int
     source: str = SOURCE
+
+    def __repr__(self) -> str:
+        """Never disclose private artist/date or raw source values in diagnostics."""
+        return "DailyArtistObservation(<redacted>)"
 
 
 class ArtistPreviewRejected(ValueError):
