@@ -93,8 +93,10 @@ export function withQuietAtlasShell(href) {
   return base + hash
 }
 
-export function activeQuietAtlasSection(pathname, hash = '') {
-  if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control' || hash === '#control') return 'control'
+// Route identity outranks an arbitrary fragment. A Music/Settings #control anchor
+// must not highlight the Control destination in the shared preview shell.
+export function activeQuietAtlasSection(pathname) {
+  if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/home' || pathname.startsWith('/quiet-atlas/')) return 'home'
   if (pathname.startsWith('/music')) return 'music'
   if (pathname.startsWith('/analytics')) return 'insights'
