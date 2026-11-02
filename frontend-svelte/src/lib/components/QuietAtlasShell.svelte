@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { page } from '$app/stores'
   import {
     Home, Sliders, Music, BarChart3, MoreHorizontal, X, ArrowUpRight,
@@ -24,7 +24,7 @@
     guest: Users,
   }
 
-  $: activeSection = activeQuietAtlasSection($page.url.pathname, $page.url.hash)
+  $: activeSection = activeQuietAtlasSection($page.url.pathname)
   $: destinations = MORE_DESTINATIONS.map((item) => ({
     ...item,
     href: item.shell ? withQuietAtlasShell(item.href) : item.href,
@@ -52,6 +52,18 @@
       })
     }
   }
+
+  // Any route transition, including browser Back/Forward, must dismiss More.
+  // No restore-focus to a button on a route being replaced.
+  onMount(() => {
+    let previousRoute = null
+    const unsubscribe = page.subscribe(({ url }) => {
+      const route = url.pathname + url.search + url.hash
+      if (previousRoute !== null && route !== previousRoute && moreOpen) closeMore(false)
+      previousRoute = route
+    })
+    return unsubscribe
+  })
 
   /** @param {KeyboardEvent} event */
   function handleKeydown(event) {
