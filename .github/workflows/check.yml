@@ -64,6 +64,7 @@ jobs:
           tests/test_desk_source_publication_adversarial.py
           tests/test_decision_clock.py
           tests/test_circuit_breaker_skip.py
+          tests/test_effect_transition_boundary.py
 
   frontend:
     runs-on: ubuntu-latest

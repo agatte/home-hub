@@ -64,7 +64,7 @@ async def test_effect_to_static_waits_for_writes_and_physical_settle():
     task = asyncio.create_task(
         manager.reconcile(None, establish_safety=establish)
     )
-    await settle_entered.wait()
+    await asyncio.wait_for(settle_entered.wait(), timeout=3.0)
 
     assert events == ["write:1", "write:2", "settle_started"]
     assert "no_effect" not in events
@@ -123,8 +123,11 @@ async def test_sleeping_release_waits_for_acknowledged_transition_deadlines():
         events.append("fade")
 
     engine._sleep_fade = fade
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "sleeping"
+    assert engine.effective_mode == "sleeping"
     task = asyncio.create_task(engine._apply_mode("sleeping", force_resend=True))
-    await settle_entered.wait()
+    await asyncio.wait_for(settle_entered.wait(), timeout=3.0)
 
     assert set(writes) == {"1", "2", "3"}
     assert all(state["bri"] == 20 for state in writes.values())
@@ -310,8 +313,11 @@ async def test_sleeping_release_blocks_screen_sync_through_no_effect():
     )
     engine._sleep_fade = AsyncMock()
 
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "sleeping"
+    assert engine.effective_mode == "sleeping"
     sleeping = asyncio.create_task(engine._apply_mode("sleeping"))
-    await settle_entered.wait()
+    await asyncio.wait_for(settle_entered.wait(), timeout=3.0)
     screen = asyncio.create_task(
         sync.apply_color("2", 255, 0, 0, mode="watching"),
     )
@@ -374,6 +380,9 @@ async def test_sleeping_release_reestablishes_transit_targets_without_clearing_o
     mock_hue_v2.stop_effect_all = stop_all
     engine._sleep_fade = AsyncMock()
 
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "sleeping"
+    assert engine.effective_mode == "sleeping"
     await engine._apply_mode("sleeping", force_resend=True)
     await engine._sleep_fade_task
 
@@ -407,6 +416,9 @@ async def test_failed_sleeping_safety_write_aborts_release_and_retries(
     mock_hue_v2.stop_effect_all = AsyncMock(return_value=True)
     engine._sleep_fade = AsyncMock()
 
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "sleeping"
+    assert engine.effective_mode == "sleeping"
     await engine._apply_mode("sleeping", force_resend=True)
 
     mock_hue.wait_for_transition_settle.assert_not_awaited()
@@ -484,6 +496,9 @@ async def test_failed_required_safety_write_aborts_release_and_stays_retryable(
         return light_id != "3"
 
     mock_hue.set_light = fail_l3
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "watching"
+    assert engine.effective_mode == "watching"
     await engine._apply_mode("watching", force_resend=True)
 
     mock_hue_v2.stop_effect_all.assert_not_awaited()
@@ -524,6 +539,9 @@ async def test_transit_protected_gaming_to_watching_reestablishes_held_targets(
     mock_hue_v2.set_effect = AsyncMock(return_value=True)
     engine._transition_boundary.wait_for_settle = AsyncMock()
 
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "watching"
+    assert engine.effective_mode == "watching"
     await engine._apply_mode("watching", force_resend=True)
 
     by_id = {light_id: state for light_id, state in calls}
@@ -610,7 +628,7 @@ async def test_transition_lock_blocks_periodic_and_screen_writers_without_deadlo
     transition = asyncio.create_task(
         manager.reconcile(None, establish_safety=establish),
     )
-    await settle_entered.wait()
+    await asyncio.wait_for(settle_entered.wait(), timeout=3.0)
     periodic = asyncio.create_task(
         engine._apply_per_light(
             {"2": {"on": True, "bri": 80, "ct": 400}},
@@ -839,6 +857,9 @@ async def test_august_3_254_fixture_never_exposes_unprotected_transit_lamps(
     mock_hue_v2.set_effect = AsyncMock(return_value=True)
     engine._transition_boundary.wait_for_settle = AsyncMock()
 
+    # The guarded writer may act only for the already-selected effective mode.
+    engine._current_mode = "watching"
+    assert engine.effective_mode == "watching"
     await engine._apply_mode("watching", force_resend=True)
 
     assert exposed_254 == []
