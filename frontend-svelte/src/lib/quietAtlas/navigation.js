@@ -66,6 +66,18 @@ export const MORE_DESTINATIONS = [
   },
 ]
 
+// Only explicitly enumerated, read-only review routes may suppress global error toasts.
+// Future functional routes fail open to the normal error display.
+const READ_ONLY_PREVIEW_PATHS = new Set([
+  '/quiet-atlas', '/quiet-atlas/home', '/quiet-atlas/control',
+  '/quiet-atlas/insights', '/quiet-atlas/settings',
+])
+
+/** @param {string} pathname */
+export function isQuietAtlasReadOnlyPreview(pathname) {
+  return READ_ONLY_PREVIEW_PATHS.has(pathname)
+}
+
 export function shouldUseQuietAtlasShell(pathname, searchParams) {
   if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) return true
   if (pathname === '/gameday' || pathname.startsWith('/gameday/') ||
@@ -77,7 +89,7 @@ export function shouldShowGlobalErrorToast(pathname, searchParams) {
   if (pathname.startsWith('/gameday/prototype')) return false
   // Only the isolated, read-only Quiet Atlas previews suppress global error toasts.
   // Functional opt-in Music, Insights, and Settings must retain failure visibility.
-  return !(pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/'))
+  return !isQuietAtlasReadOnlyPreview(pathname)
 }
 
 export function withQuietAtlasShell(href) {
