@@ -34,7 +34,7 @@ describe('Quiet Atlas opt-in Insights archetype', () => {
     expect(route).toContain('Why that state?')
     expect(route).toContain('What actually changed?')
     expect(route).toContain('not source-qualified in this preview')
-    expect(route).toContain('does not reconstruct')
+    expect(route).toContain('Neither report reconstructs sensor inputs')
     expect(route).toContain('not confirmation of a person, room, current House State')
     expect(route).not.toMatch(/\b(apiPost|apiPut|activateScene|setLight|hueWrite)\s*\(/)
   })
