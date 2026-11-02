@@ -410,6 +410,93 @@
     .qa-more-intro { font-size: 12px; }
     .qa-more-link { min-height: 66px; }
   }
+  /* Preview-only Daylight coordination. Scoped to the opted-in Home page:
+     no global theme, route persistence, or change to legacy/product surfaces. */
+  :global(.qa-shell:has(.home-review.daylight)) {
+    color: #263a2d;
+    background: radial-gradient(ellipse at 68% 0%, rgba(176,151,103,.12), transparent 46%), #eeeee6;
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-sidebar {
+    border-right-color: rgba(58,87,63,.17);
+    background: rgba(245,245,236,.94);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-brand,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-brand { color: #263a2d; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-brand-mark {
+    color: #38543b; background: linear-gradient(145deg,#e4e9dd,#d4dfd0); border-color: #9cb49d;
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-brand-copy small,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-brand small,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-rail-kicker,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-nav-hint { color: #5b705e; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav a,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav button,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav a,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav button { color: #536b59; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav a:hover,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav button:hover {
+    color: #263a2d; background: rgba(83,121,80,.09);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav a.active,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav button.active,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav a.active,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav button.active {
+    color: #25452b;
+    background: rgba(91,135,88,.16);
+    border-color: rgba(61,104,65,.25);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-sidebar-footer {
+    border-top-color: rgba(58,87,63,.15);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-sidebar-status strong { color: #304b36; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-sidebar-status small { color: #627564; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-connection-dot { background: #879a88; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-connection-dot.online {
+    background: #4e8757; box-shadow: 0 0 10px rgba(78,135,87,.2);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-preview-badge {
+    color: #76562c; background: #f3e7cb; border-color: rgba(133,98,46,.35);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-header {
+    border-bottom-color: rgba(58,87,63,.17);
+    background: rgba(244,245,234,.95);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav {
+    border-top-color: rgba(58,87,63,.2);
+    background: rgba(244,245,234,.97);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-panel {
+    color: #263a2d; background: #f5f5ec; border-color: rgba(58,87,63,.25);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-kicker,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-link > :last-child { color: #5a795c; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-header h2 { color: #263a2d; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-intro,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-copy small,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-note { color: #556c5b; }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-link {
+    border-color: rgba(58,87,63,.16); background: rgba(99,134,91,.07);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-link:hover {
+    border-color: rgba(58,87,63,.32); background: rgba(99,134,91,.12);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-icon {
+    color: #32543a; background: rgba(99,134,91,.16);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-close-more {
+    color: #32543a; border-color: rgba(58,87,63,.25); background: rgba(99,134,91,.1);
+  }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-note { border-top-color: rgba(58,87,63,.16); }
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav a:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-nav button:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav a:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-desktop-nav button:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-panel a:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-panel button:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-brand:focus-visible,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-mobile-brand:focus-visible {
+    outline-color: #845e2e;
+  }
   @media (prefers-reduced-motion: reduce) {
     .qa-desktop-nav a, .qa-desktop-nav button, .qa-mobile-nav a, .qa-mobile-nav button,
     .qa-more-link { transition: none; }
