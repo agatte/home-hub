@@ -24,6 +24,9 @@ export function validateWeatherReport(input) {
   }
 }
 
+/** @returns {{connected:boolean,generation:number,requestId:number,pending:boolean,
+ *   reported:{temp:number,feelsLike:number|null,description:string,city:string}|null,
+ *   receivedAt:number|null,failed:boolean}} */
 export function newWeatherSnapshot() {
   return { connected: false, generation: 0, requestId: 0, pending: false,
     reported: null, receivedAt: null, failed: false }
