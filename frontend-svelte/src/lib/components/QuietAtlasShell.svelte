@@ -12,7 +12,7 @@
     { id: 'home', label: 'Home', href: '/quiet-atlas/home', icon: Home },
     { id: 'control', label: 'Control', href: '/quiet-atlas/control', icon: Sliders },
     { id: 'music', label: 'Music', href: withQuietAtlasShell('/music'), icon: Music },
-    { id: 'insights', label: 'Insights', href: withQuietAtlasShell('/analytics'), icon: BarChart3 },
+    { id: 'insights', label: 'Insights', href: '/quiet-atlas/insights', icon: BarChart3 },
   ]
 
   const MORE_ICONS = {
