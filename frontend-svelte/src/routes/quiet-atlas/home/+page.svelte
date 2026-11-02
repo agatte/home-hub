@@ -307,7 +307,7 @@
       <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
         {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
       </button>
-      <a class="rail-footer" href="/analytics?shell=quiet-atlas">View Insights <span aria-hidden="true">↗</span></a>
+      <a class="rail-footer" href="/quiet-atlas/insights">View Insights <span aria-hidden="true">↗</span></a>
     </aside>
   </section>
 
@@ -355,7 +355,7 @@
       <p class="recent-log-status" role="status">{recentActivity.message}</p>
     {/if}
     <p class="recent-log-note">Event history, not confirmation of a person's presence, room, or current House State. Dates and times use this device's timezone.
-      <a href="/analytics?shell=quiet-atlas">View Insights ↗</a>
+      <a href="/quiet-atlas/insights">View Insights ↗</a>
     </p>
   </section>
 
@@ -381,7 +381,7 @@
     <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
       {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
     </button>
-    <a href="/analytics?shell=quiet-atlas">Open Insights ↗</a>
+    <a href="/quiet-atlas/insights">Open Insights ↗</a>
   </section>
 
   <footer class="review-footer">

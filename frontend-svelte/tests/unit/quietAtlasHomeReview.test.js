@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import homeRoute from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
+import insightsRoute from '../../src/routes/quiet-atlas/insights/+page.svelte?raw'
 
 describe('Quiet Atlas opt-in Home composition contract', () => {
   it('separates qualified live REST context from illustrative design examples', () => {
@@ -49,5 +50,16 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain(':focus-visible')
     expect(homeRoute).toContain('max-width:700px')
     expect(homeRoute).toContain('max-width:360px')
+  })
+
+  it('routes all Home Insights entry points to the redesigned opt-in review', () => {
+    // Desktop source rail, recent activity section, and mobile summary agree.
+    expect(homeRoute.match(/href="\/quiet-atlas\/insights"/g)).toHaveLength(3)
+    expect(homeRoute).not.toContain('href="/analytics?shell=quiet-atlas"')
+    expect(homeRoute).toContain('View Insights')
+    expect(homeRoute).toContain('Open Insights')
+    // Advanced tools are still one clearly labeled link away from Insights.
+    expect(insightsRoute).toContain('href="/analytics?shell=quiet-atlas"')
+    expect(insightsRoute).toContain('href="/quiet-atlas/home"')
   })
 })
