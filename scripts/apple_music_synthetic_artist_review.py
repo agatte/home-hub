@@ -101,115 +101,134 @@ def create_demo_window():
 
     # Validate synthetic aggregate before allocating any visible Tk window.
     session = LocalArtistReviewDemo(demo=True)
-    root = tk.Tk()
-    root.title("HomeHub | Apple history review (SYNTHETIC DEMO)")
-    root.geometry("920x575")
-    root.minsize(760, 490)
-    root.configure(bg="#101721")
+    root = None
+    try:
+        root = tk.Tk()
+        root.title("HomeHub | Apple history review (SYNTHETIC DEMO)")
+        root.geometry("920x575")
+        root.minsize(760, 490)
+        root.configure(bg="#101721")
 
-    style = ttk.Style(root)
-    style.theme_use("clam")
-    style.configure(
-        "Review.Treeview", background="#192330", foreground="#f0f4f8",
-        fieldbackground="#192330", rowheight=31, borderwidth=0
-    )
-    style.map("Review.Treeview", background=[("selected", "#345677")])
-    style.configure("Review.Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        style = ttk.Style(root)
+        style.theme_use("clam")
+        style.configure(
+            "Review.Treeview", background="#192330", foreground="#f0f4f8",
+            fieldbackground="#192330", rowheight=31, borderwidth=0
+        )
+        style.map("Review.Treeview", background=[("selected", "#345677")])
+        style.configure("Review.Treeview.Heading", font=("Segoe UI", 10, "bold"))
 
-    title = tk.Label(
-        root, text="Apple listening history  |  SYNTHETIC DEMO",
-        bg="#101721", fg="#f5f7fb", font=("Segoe UI", 17, "bold")
-    )
-    title.pack(anchor="w", padx=24, pady=(20, 5))
-    tk.Label(
-        root,
-        text=("Fictional labels only. No Apple export is opened. Artist-label "
-              "days are exposure, NOT liking, identity proof or playback sessions."),
-        bg="#101721", fg="#c3d0de", font=("Segoe UI", 10),
-        wraplength=850, justify="left"
-    ).pack(anchor="w", padx=24, pady=(0, 9))
+        title = tk.Label(
+            root, text="Apple listening history  |  SYNTHETIC DEMO",
+            bg="#101721", fg="#f5f7fb", font=("Segoe UI", 17, "bold")
+        )
+        title.pack(anchor="w", padx=24, pady=(20, 5))
+        tk.Label(
+            root,
+            text=("Fictional labels only. No Apple export is opened. Artist-label "
+                  "days are exposure, NOT liking, identity proof or playback sessions."),
+            bg="#101721", fg="#c3d0de", font=("Segoe UI", 10),
+            wraplength=850, justify="left"
+        ).pack(anchor="w", padx=24, pady=(0, 9))
 
-    summary = session.summary
-    tk.Label(
-        root,
-        name="synthetic_summary",
-        text=(f"HomeHub aggregate preview: {summary.artist_label_days} "
-              f"artist-label days, {summary.provisional_labels} provisional "
-              f"labels; {summary.excluded_ambiguous_rows} ambiguous "
-              "demo rows excluded."),
-        bg="#101721", fg="#abcde0", font=("Segoe UI", 10, "bold"),
-        wraplength=850, justify="left"
-    ).pack(anchor="w", padx=24, pady=(0, 12))
+        summary = session.summary
+        tk.Label(
+            root,
+            name="synthetic_summary",
+            text=(f"HomeHub aggregate preview: {summary.artist_label_days} "
+                  f"artist-label days, {summary.provisional_labels} provisional "
+                  f"labels; {summary.excluded_ambiguous_rows} ambiguous "
+                  "demo rows excluded."),
+            bg="#101721", fg="#abcde0", font=("Segoe UI", 10, "bold"),
+            wraplength=850, justify="left"
+        ).pack(anchor="w", padx=24, pady=(0, 12))
 
-    columns = ("label", "band", "source", "decision")
-    table = ttk.Treeview(
-        root, columns=columns, show="headings", selectmode="browse",
-        style="Review.Treeview"
-    )
-    for key, text, width in (
-        ("label", "Unverified artist label", 250),
-        ("band", "Days with a label (demo)", 160),
-        ("source", "Source", 150),
-        ("decision", "Local review (not identity proof)", 230),
-    ):
-        table.heading(key, text=text)
-        table.column(key, width=width, stretch=(key == "label"))
-    table.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        columns = ("label", "band", "source", "decision")
+        table = ttk.Treeview(
+            root, columns=columns, show="headings", selectmode="browse",
+            style="Review.Treeview"
+        )
+        for key, text, width in (
+            ("label", "Unverified artist label", 250),
+            ("band", "Days with a label (demo)", 160),
+            ("source", "Source", 150),
+            ("decision", "Local review (not identity proof)", 230),
+        ):
+            table.heading(key, text=text)
+            table.column(key, width=width, stretch=(key == "label"))
+        table.pack(fill="both", expand=True, padx=24, pady=(0, 12))
 
-    for i, label, band, source, decision in session.rows():
-        table.insert("", "end", iid=str(i),
-                     values=(label, band.replace("_", " "), source, decision))
+        for i, label, band, source, decision in session.rows():
+            table.insert("", "end", iid=str(i),
+                         values=(label, band.replace("_", " "), source, decision))
 
-    actions = tk.Frame(root, bg="#101721")
-    actions.pack(fill="x", padx=24, pady=(0, 8))
+        actions = tk.Frame(root, bg="#101721")
+        actions.pack(fill="x", padx=24, pady=(0, 8))
 
-    def selected_index() -> int | None:
-        chosen = table.selection()
-        return int(chosen[0]) if chosen else None
+        def selected_index() -> int | None:
+            chosen = table.selection()
+            return int(chosen[0]) if chosen else None
 
-    def mark(decision: str) -> None:
-        index = selected_index()
-        if index is None:
-            return
-        session.decide(index, decision)
-        table.set(str(index), "decision", decision)
+        def mark(decision: str) -> None:
+            index = selected_index()
+            if index is None:
+                return
+            session.decide(index, decision)
+            table.set(str(index), "decision", decision)
 
-    for caption, decision in (
-        ("Needs verification", "Needs verification"),
-        ("Reject label", "Reject label"),
-        ("Reset to unreviewed", "Unreviewed"),
-    ):
-        ttk.Button(actions, text=caption,
-                   command=lambda d=decision: mark(d)).pack(
-                       side="left", padx=(0, 8)
-                   )
+        for caption, decision in (
+            ("Needs verification", "Needs verification"),
+            ("Reject label", "Reject label"),
+            ("Reset to unreviewed", "Unreviewed"),
+        ):
+            ttk.Button(actions, text=caption,
+                       command=lambda d=decision: mark(d)).pack(
+                           side="left", padx=(0, 8)
+                       )
 
-    def discard_and_close() -> None:
-        if not session.discarded:
+        def discard_and_close() -> None:
+            if session.discarded:
+                return
             session.discard()
-        children = table.get_children()
-        if children:
-            table.delete(*children)
-        root.destroy()
+            children = table.get_children()
+            if children:
+                table.delete(*children)
+            root.destroy()
 
-    ttk.Button(actions, text="Discard and close",
-               command=discard_and_close).pack(side="right")
-    root.protocol("WM_DELETE_WINDOW", discard_and_close)
-    footer = tk.Label(
-        root, name="safety_footer",
-        text=("No save/export/import, background task, provider login, "
-              "recommendation changes or Sonos actions. "
-              "Selections vanish when this window is closed."),
-        bg="#101721", fg="#9caec0", font=("Segoe UI", 9),
-        wraplength=850, justify="left"
-    )
-    # Reserve bottom space before allocating the expandable table.
-    table.pack_forget()
-    actions.pack_forget()
-    footer.pack(side="bottom", fill="x", padx=24, pady=(4, 13))
-    actions.pack(side="bottom", fill="x", padx=24, pady=(0, 8))
-    table.pack(fill="both", expand=True, padx=24, pady=(0, 12))
-    return root, session, table, discard_and_close
+        ttk.Button(actions, text="Discard and close",
+                   command=discard_and_close).pack(side="right")
+        root.protocol("WM_DELETE_WINDOW", discard_and_close)
+
+        def on_destroy(event) -> None:
+            if event.widget is root:
+                session.discard()
+
+        root.bind("<Destroy>", on_destroy, add="+")
+        footer = tk.Label(
+            root, name="safety_footer",
+            text=("No save/export/import, background task, provider login, "
+                  "recommendation changes or Sonos actions. "
+                  "Selections vanish when this window is closed."),
+            bg="#101721", fg="#9caec0", font=("Segoe UI", 9),
+            wraplength=850, justify="left"
+        )
+        # Reserve bottom space before allocating the expandable table.
+        table.pack_forget()
+        actions.pack_forget()
+        footer.pack(side="bottom", fill="x", padx=24, pady=(4, 13))
+        actions.pack(side="bottom", fill="x", padx=24, pady=(0, 8))
+        table.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        return root, session, table, discard_and_close
+    except BaseException:
+        # Preserve the creation/setup exception even if Tk cleanup also fails.
+        session.discard()
+        if root is not None:
+            try:
+                root.destroy()
+            except BaseException:
+                pass
+        raise
+
 
 
 class _DemoOnlyArgumentParser(argparse.ArgumentParser):
