@@ -113,6 +113,10 @@ class PresenceFusion:
         self._clock = clock or SystemDecisionClock(
             utc_now_fn=lambda: datetime.now(timezone.utc),
         )
+        from threading import RLock
+
+        self._physical_source_gate = RLock()
+        self._physical_source_generations: dict[str, int] = {}
         self._incident_capture = incident_capture
         self._readings: dict[str, PresenceReading] = {}
         # Stamp the last source that confirmed at-desk so dashboards
@@ -130,6 +134,41 @@ class PresenceFusion:
         # Positive reacquisition requires an observed apartment-level absence
         # edge first. Source startup/silence alone is not permission to relight.
         self._last_global_absence_observed_at: Optional[datetime] = None
+
+    def physical_source_acceptance_gate(self):
+        """Synchronize a short synchronous evidence check and acceptance commit.
+
+        Read source identity, generation, freshness and all conflicting sources
+        inside this scope. Publication and invalidation use this same instance
+        RLock. Never run callbacks, logging, I/O, awaits or worker rendezvous
+        here. Capture wall clock before acquisition; time-sampling public
+        queries reject calls inside an outer gate. Use explicit-now private
+        predicates or immutable readings for acceptance. This is infrastructure only; it does not authorize a Hue write.
+        Constructor-bypassing legacy AST fixtures remain usable without a gate.
+        """
+        from contextlib import nullcontext
+
+        return getattr(self, "_physical_source_gate", nullcontext())
+    def _sample_utc_now(self) -> datetime:
+        """Invoke the injectable clock only outside the source gate.
+
+        Outer acceptance callers capture time before acquisition and use
+        explicit-now private predicates or immutable readings inside it.
+        """
+        gate = getattr(self, "_physical_source_gate", None)
+        if gate is not None and gate._is_owned():
+            raise RuntimeError("capture wall clock before entering physical source gate")
+        return self._clock.utc_now()
+    def physical_source_generation(self, source: str) -> int:
+        """Source-local revision, including equal captures and absent removal.
+
+        Pair with the original immutable reading under the acceptance gate;
+        a retained reading alone cannot detect removal/reinsert ABA.
+        """
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            return getattr(self, "_physical_source_generations", {}).get(source, 0)
 
     def set_navigation_incident_capture(self, capture: object | None) -> None:
         """Attach or detach the passive navigation evidence recorder."""
@@ -160,83 +199,104 @@ class PresenceFusion:
             logger.debug("ignoring non-physical legacy media reading")
             return
         self._capture_call("record_fusion_ingest", reading)
-        prior = self._readings.get(reading.source)
-        if prior is not None and reading.captured_at < prior.captured_at:
-            prior_skew_s = (
-                prior.captured_at - self._clock.utc_now()
-            ).total_seconds()
-            if prior_skew_s <= FUTURE_SKEW_TOLERANCE_S:
-                # Out-of-order arrival (clock skew, network reorder) — drop
-                # rather than overwrite fresher state with stale data.
-                return
-            # The STORED reading is future-stamped — invalid by
-            # construction (a fast source clock that has since been
-            # corrected, e.g. fresh-CMOS after the 2026-06-07 mobo swap).
-            # Without this branch every honest report looks out-of-order
-            # and the source wedges until real time catches up; replace
-            # the bad reading instead.
+        from contextlib import nullcontext
+
+        # One wall-clock snapshot before publication and all nested predicates.
+        now = getattr(self, "_sample_utc_now", self._clock.utc_now)()
+
+        def strong_presence_at_snapshot(now: datetime) -> bool:
+            return any(
+                (now - current.captured_at).total_seconds() <= STRONG_PRESENCE_FRESHNESS_S
+                and self._is_strongly_present(current)
+                for current in self._readings.values()
+            )
+
+        future_skew_s = None
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            prior = self._readings.get(reading.source)
+            if prior is not None and reading.captured_at < prior.captured_at:
+                prior_skew_s = (
+                    prior.captured_at - now
+                ).total_seconds()
+                if prior_skew_s <= FUTURE_SKEW_TOLERANCE_S:
+                    # Out-of-order arrival (clock skew, network reorder) — drop
+                    # rather than overwrite fresher state with stale data.
+                    return
+                # The STORED reading is future-stamped — invalid by
+                # construction (a fast source clock that has since been
+                # corrected, e.g. fresh-CMOS after the 2026-06-07 mobo swap).
+                # Without this branch every honest report looks out-of-order
+                # and the source wedges until real time catches up; replace
+                # the bad reading instead.
+                future_skew_s = prior_skew_s
+            had_strong_presence = strong_presence_at_snapshot(now)
+            self._readings[reading.source] = reading
+            generations = self.__dict__.setdefault("_physical_source_generations", {})
+            generations[reading.source] = generations.get(reading.source, 0) + 1
+            has_strong_presence = strong_presence_at_snapshot(now)
+            reading_age_s = (now - reading.captured_at).total_seconds()
+            reading_is_fresh = (
+                -FUTURE_SKEW_TOLERANCE_S
+                <= reading_age_s
+                <= STRONG_PRESENCE_FRESHNESS_S
+            )
+            reading_is_strong = reading_is_fresh and self._is_strongly_present(reading)
+
+            if (
+                not has_strong_presence
+                and reading_is_fresh
+                and reading.face_present is False
+            ):
+                # Record only an explicit trusted negative observation. Weak or
+                # ambiguous positive evidence is abstention, not apartment absence,
+                # and must never create a later relight edge.
+                self._last_global_absence_observed_at = reading.captured_at
+            elif (
+                not had_strong_presence
+                and has_strong_presence
+                and reading_is_strong
+                and self._last_global_absence_observed_at is not None
+                and 0 <= (
+                    reading.captured_at - self._last_global_absence_observed_at
+                ).total_seconds() <= STRONG_PRESENCE_FRESHNESS_S
+            ):
+                self._last_strong_reacquisition_source = reading.source
+                self._last_strong_reacquisition_at = reading.captured_at
+                self._last_global_absence_observed_at = None
+
+            if self._is_at_desk(reading):
+                self._last_at_desk_source = reading.source
+                self._last_at_desk_at = reading.captured_at
+            elif self._last_at_desk_at is not None:
+                # Heal a future-stamped high-water mark even when the current
+                # reading is non-confirming — otherwise ``seconds_since_at_desk``
+                # reads negative ("just confirmed") with nobody at the desk
+                # until real time catches up to the bad stamp. Clamping to now
+                # preserves the stamp's intent (confirmed as recently as
+                # possible) and lets the gate age out naturally.
+                if (
+                    self._last_at_desk_at - now
+                ).total_seconds() > FUTURE_SKEW_TOLERANCE_S:
+                    self._last_at_desk_at = now
+        if future_skew_s is not None:
             logger.warning(
                 "replacing future-stamped %s reading (+%.0fs ahead of "
                 "server) with current observation",
-                reading.source, prior_skew_s,
+                reading.source, future_skew_s,
             )
-        had_strong_presence = self.is_strongly_present_any()
-        self._readings[reading.source] = reading
-        has_strong_presence = self.is_strongly_present_any()
-        now = self._clock.utc_now()
-        reading_age_s = (now - reading.captured_at).total_seconds()
-        reading_is_fresh = (
-            -FUTURE_SKEW_TOLERANCE_S
-            <= reading_age_s
-            <= STRONG_PRESENCE_FRESHNESS_S
-        )
-        reading_is_strong = reading_is_fresh and self._is_strongly_present(reading)
-
-        if (
-            not has_strong_presence
-            and reading_is_fresh
-            and reading.face_present is False
-        ):
-            # Record only an explicit trusted negative observation. Weak or
-            # ambiguous positive evidence is abstention, not apartment absence,
-            # and must never create a later relight edge.
-            self._last_global_absence_observed_at = reading.captured_at
-        elif (
-            not had_strong_presence
-            and has_strong_presence
-            and reading_is_strong
-            and self._last_global_absence_observed_at is not None
-            and 0 <= (
-                reading.captured_at - self._last_global_absence_observed_at
-            ).total_seconds() <= STRONG_PRESENCE_FRESHNESS_S
-        ):
-            self._last_strong_reacquisition_source = reading.source
-            self._last_strong_reacquisition_at = reading.captured_at
-            self._last_global_absence_observed_at = None
-
-        if self._is_at_desk(reading):
-            self._last_at_desk_source = reading.source
-            self._last_at_desk_at = reading.captured_at
-        elif self._last_at_desk_at is not None:
-            # Heal a future-stamped high-water mark even when the current
-            # reading is non-confirming — otherwise ``seconds_since_at_desk``
-            # reads negative ("just confirmed") with nobody at the desk
-            # until real time catches up to the bad stamp. Clamping to now
-            # preserves the stamp's intent (confirmed as recently as
-            # possible) and lets the gate age out naturally.
-            now = self._clock.utc_now()
-            if (
-                self._last_at_desk_at - now
-            ).total_seconds() > FUTURE_SKEW_TOLERANCE_S:
-                self._last_at_desk_at = now
 
     def invalidate_source(self, source: str) -> None:
         """Discard one source's live reading without touching other sources."""
         self._capture_call("record_fusion_invalidation", source)
-        self._readings.pop(source, None)
-        if self._last_at_desk_source == source:
-            self._last_at_desk_source = None
-            self._last_at_desk_at = None
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            self._readings.pop(source, None)
+            generations = self.__dict__.setdefault("_physical_source_generations", {})
+            generations[source] = generations.get(source, 0) + 1
+            if self._last_at_desk_source == source:
+                self._last_at_desk_source = None
+                self._last_at_desk_at = None
 
     # ------------------------------------------------------------------
     # Attendance queries
