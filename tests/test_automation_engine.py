@@ -2373,6 +2373,9 @@ class TestApplyModeDedup:
         )
 
     async def test_force_resend_true_writes_after_no_state_change(self, engine, mock_hue):
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "working"
+        assert engine.effective_mode == "working"
         await engine._apply_mode("working", force_resend=True)
         calls = self._wrap_set_light(mock_hue)
         # force_resend=True bypasses dedup even when state hasn't changed.
@@ -2479,6 +2482,9 @@ class TestApplyModeDedup:
         engine._screen_sync = sync
         engine._get_time_period = lambda now=None: "night"
 
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "watching"
+        assert engine.effective_mode == "watching"
         await engine._apply_mode("watching", force_resend=True)
 
         assert sync.calls
@@ -2508,6 +2514,9 @@ class TestApplyModeDedup:
         sync = _FakeScreenSync()
         engine._screen_sync = sync
 
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "watching"
+        assert engine.effective_mode == "watching"
         await engine._apply_mode("watching", force_resend=True)
 
         mode, period, states = sync.calls[-1]
@@ -6554,6 +6563,9 @@ class TestDeskFixtureComfortIntegration:
             face_present=True, face_confidence=0.9, detection_source="face",
             zone="desk", posture="upright",
         ))
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = mode
+        assert engine.effective_mode == mode
         await engine._apply_mode(mode)
         assert mock_hue._lights["5"]["bri"] == 90
 
@@ -6843,6 +6855,9 @@ class TestDeskFixtureComfortIntegration:
         )
 
         assert engine._fixture_comfort_zone() is None
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "gaming"
+        assert engine.effective_mode == "gaming"
         await engine._apply_mode("gaming", force_resend=True)
         assert mock_hue._lights["5"]["bri"] > 90
 
