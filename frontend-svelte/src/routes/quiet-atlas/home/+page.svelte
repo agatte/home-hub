@@ -2,6 +2,7 @@
   // #270: opt-in read-only review; HomeHub status comes only from guarded REST.
   import { onMount } from 'svelte'
   import { connected } from '$lib/stores/connection.js'
+  import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
   import { controlGroupHref, CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import {
     newHomeContextSnapshot, homeContextConnectionChanged, invalidateHomeContextRead,
@@ -333,6 +334,8 @@
       <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
     </div>
   </section>
+
+  <QuietAtlasEnvironment />
 
   <section class="recent-log" aria-labelledby="recent-log-title">
     <div class="recent-log-head">
