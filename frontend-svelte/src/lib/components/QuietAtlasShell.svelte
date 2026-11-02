@@ -6,7 +6,7 @@
     Settings, BookOpen, Brain, Building2, Trophy, Users,
   } from 'lucide-svelte'
   import { connected } from '$lib/stores/connection.js'
-  import { MORE_DESTINATIONS, activeQuietAtlasSection, withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
+  import { MORE_DESTINATIONS, activeQuietAtlasSection, isQuietAtlasReadOnlyPreview, withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
 
   const NAV_ITEMS = [
     { id: 'home', label: 'Home', href: '/quiet-atlas/home', icon: Home },
@@ -25,6 +25,7 @@
   }
 
   $: activeSection = activeQuietAtlasSection($page.url.pathname)
+  $: readOnlyPreview = isQuietAtlasReadOnlyPreview($page.url.pathname)
   $: destinations = MORE_DESTINATIONS.map((item) => ({
     ...item,
     href: item.shell ? withQuietAtlasShell(item.href) : item.href,
@@ -132,7 +133,7 @@
       <span class:online={$connected} class="qa-connection-dot" aria-hidden="true"></span>
       <span class="qa-sidebar-status">
         <strong>{$connected ? 'Connected' : 'Waiting for connection'}</strong>
-        <small>Read-only design preview</small>
+        <small>{readOnlyPreview ? 'Read-only design preview' : 'Existing HomeHub tools · changes possible'}</small>
       </span>
     </div>
   </aside>
@@ -143,7 +144,7 @@
         <span class="qa-brand-mark" aria-hidden="true">H</span>
         <span><strong>HomeHub</strong><small>Quiet Atlas</small></span>
       </a>
-      <span class="qa-preview-badge">Design preview</span>
+      <span class="qa-preview-badge" class:functional={!readOnlyPreview}>{readOnlyPreview ? 'Read-only preview' : 'Functional HomeHub tools'}</span>
     </header>
 
     <div class="qa-shell-content">
@@ -305,6 +306,7 @@
   .qa-shell-content { min-width: 0; width: 100%; max-width: 1600px; margin: 0 auto; }
   .qa-mobile-header, .qa-mobile-nav { display: none; }
   .qa-preview-badge { color: #e4d2a7; border: 1px solid rgba(199,169,106,.32); background: rgba(94,73,38,.22); border-radius: 999px; padding: 7px 10px; font-size: 10px; font-weight: 700; letter-spacing: .06em; white-space: nowrap; }
+  .qa-preview-badge.functional { color: #d4e4d1; border-color: rgba(166,194,160,.34); background: rgba(70,102,78,.24); }
   .qa-mobile-nav a, .qa-mobile-nav button {
     display: flex;
     flex-direction: column;

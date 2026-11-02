@@ -7,6 +7,7 @@ import {
   shouldUseQuietAtlasShell,
   shouldShowGlobalErrorToast,
   withQuietAtlasShell,
+  isQuietAtlasReadOnlyPreview,
 } from '../../src/lib/quietAtlas/navigation.js'
 
 describe('Quiet Atlas shared shell navigation', () => {
@@ -30,6 +31,23 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shouldShowGlobalErrorToast('/gameday/prototype', new URLSearchParams())).toBe(false)
     expect(shouldShowGlobalErrorToast('/music', new URLSearchParams())).toBe(true)
     expect(shouldShowGlobalErrorToast('/', new URLSearchParams())).toBe(true)
+  })
+
+  it('labels only known read-only reviews as previews and keeps functional warnings visible', () => {
+    for (const route of [
+      '/quiet-atlas', '/quiet-atlas/home', '/quiet-atlas/control',
+      '/quiet-atlas/insights', '/quiet-atlas/settings',
+    ]) {
+      expect(isQuietAtlasReadOnlyPreview(route)).toBe(true)
+      expect(shouldShowGlobalErrorToast(route, new URLSearchParams())).toBe(false)
+    }
+    for (const route of ['/music', '/settings', '/journal', '/personality', '/quiet-atlas/future-functional']) {
+      expect(isQuietAtlasReadOnlyPreview(route)).toBe(false)
+      expect(shouldShowGlobalErrorToast(route, new URLSearchParams('shell=quiet-atlas'))).toBe(true)
+    }
+    expect(shellSource).toContain('readOnlyPreview = isQuietAtlasReadOnlyPreview($page.url.pathname)')
+    expect(shellSource).toContain("'Read-only design preview' : 'Existing HomeHub tools · changes possible'")
+    expect(shellSource).toContain("'Read-only preview' : 'Functional HomeHub tools'")
   })
 
   it('connects preview Home, Control, groups, and scene navigation without changing legacy URLs', () => {
