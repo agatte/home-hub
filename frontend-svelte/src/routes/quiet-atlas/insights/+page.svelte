@@ -3,6 +3,7 @@
   // A logged activity is not a current activity, presence, room, or causal trace.
   import { onMount } from 'svelte'
   import { connected } from '$lib/stores/connection.js'
+  import InsightsContextReadout from '$lib/components/InsightsContextReadout.svelte'
   import {
     newRecentActivityLog, recentActivityConnectionChanged, invalidateRecentActivity,
     beginRecentActivityRead, acceptRecentActivityRead, failRecentActivityRead,
@@ -122,8 +123,10 @@
   <header class="insights-hero">
     <p class="eyebrow">THE HOUSE, EXPLAINED WITH CARE</p>
     <h1>Follow the evidence.<br /><em>Not the guesswork.</em></h1>
-    <p class="intro">HomeHub makes decisions from signals. This first Insights study shows what was <strong>recorded</strong>; it does not reconstruct the signals, confidence, or reasons behind those decisions.</p>
+    <p class="intro">HomeHub makes decisions from signals. This Insights study separates HomeHub's current <strong>REST-reported context</strong> from recorded history. Neither report reconstructs sensor inputs, confidence, or reasons for automation decisions.</p>
   </header>
+
+  <InsightsContextReadout />
 
   <div class="insights-grid">
     <section class="record" aria-labelledby="record-title">

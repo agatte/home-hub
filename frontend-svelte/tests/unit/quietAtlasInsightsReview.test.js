@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
 import route from '../../src/routes/quiet-atlas/insights/+page.svelte?raw'
+import readout from '../../src/lib/components/InsightsContextReadout.svelte?raw'
 import shell from '../../src/lib/components/QuietAtlasShell.svelte?raw'
 import {
   activeQuietAtlasSection, shouldShowGlobalErrorToast, shouldUseQuietAtlasShell,
@@ -9,6 +10,11 @@ import {
   newRecentActivityLog, recentActivityConnectionChanged, beginRecentActivityRead,
   acceptRecentActivityRead, recentActivityPresentation,
 } from '../../src/lib/quietAtlas/recentActivityLog.js'
+import {
+  newHomeContextSnapshot, homeContextConnectionChanged, beginHomeContextRead,
+  acceptHomeContextRead, failHomeContextRead, invalidateHomeContextRead,
+  homeContextPresentation,
+} from '../../src/lib/quietAtlas/homeContextSnapshot.js'
 
 describe('Quiet Atlas opt-in Insights archetype', () => {
   it('is its own read-only route and preserves functional Analytics', () => {
@@ -65,5 +71,41 @@ describe('Quiet Atlas opt-in Insights archetype', () => {
       '@media(max-width:880px)', '@media(max-width:480px)',
       'prefers-reduced-motion:reduce', 'Dates and times use this device',
     ]) expect(route).toContain(literal)
+  })
+})
+
+describe('Quiet Atlas Insights source-qualified current context', () => {
+  it('reuses guarded Home context without claiming room or automation causation', () => {
+    expect(route).toContain('InsightsContextReadout')
+    expect(readout).toContain("fetch('/api/automation/status'")
+    expect(readout).toContain("cache: 'no-store'")
+    expect(readout).toContain('homeContextPresentation(snapshot, nowMs)')
+    expect(readout).toContain('invalidateHomeContextRead(snapshot)')
+    expect(readout).toContain('REST receipt is not source-sensor freshness')
+    expect(readout).toContain('CONTEXT NOT VERIFIED')
+    expect(readout).not.toMatch(/\b(apiPost|apiPut|activateScene|setLight|hueWrite)\s*\(/)
+    expect(compile(readout, { filename: 'InsightsContextReadout.svelte', generate: 'dom', css: 'external' }).warnings).toEqual([])
+  })
+
+  it('only shows valid recent reports, revokes disconnect/late replies, never projects stale state', () => {
+    const online = homeContextConnectionChanged(newHomeContextSnapshot(), true)
+    const { state, ticket } = beginHomeContextRead(online)
+    const valid = { house_state: 'home', activity: 'working' }
+    const fresh = acceptHomeContextRead(state, ticket, valid, 1000)
+    expect(homeContextPresentation(fresh, 1001)).toMatchObject({
+      status: 'recent', house: 'Home', activity: 'Working',
+    })
+    expect(homeContextPresentation(fresh, 46002)).toMatchObject({
+      status: 'stale', house: 'Unverified', activity: 'Unverified',
+    })
+    const disconnected = homeContextConnectionChanged(state, false)
+    expect(acceptHomeContextRead(disconnected, ticket, valid, 2000)).toBe(disconnected)
+    expect(homeContextPresentation(disconnected, 2000).status).toBe('disconnected')
+    const invisible = invalidateHomeContextRead(state)
+    expect(acceptHomeContextRead(invisible, ticket, valid, 2000)).toBe(invisible)
+    const failure = failHomeContextRead(state, ticket)
+    expect(homeContextPresentation(failure, 2000).status).toBe('unavailable')
+    const invalid = acceptHomeContextRead(state, ticket, { house_state: 'home' }, 2000)
+    expect(homeContextPresentation(invalid, 2000).status).toBe('unavailable')
   })
 })
