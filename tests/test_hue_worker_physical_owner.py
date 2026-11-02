@@ -155,7 +155,6 @@ class WorkerPhysicalOwner(unittest.IsolatedAsyncioTestCase):
         e = object.__new__(engine_type)
         e._manual_override = False
         e._current_mode = 'gaming'
-        e._mode_transition_revision = 7
         e._mode_source_key = 'process:desktop'
         e._desk_activity_owner = (7, 'gaming', 'process:desktop')
         e._presence_fusion = fusion
@@ -163,6 +162,11 @@ class WorkerPhysicalOwner(unittest.IsolatedAsyncioTestCase):
         e._away_hold = e._host_return_hold = e._external_off_detected = False
         e._last_process_semantic_by_device = {}
         e.is_dnd_active = lambda: False
+        # Constructor-bypassing fixture: initialize all semantic fields before
+        # freezing the owner revision. The real engine's semantic descriptors
+        # intentionally publish newer epochs on assignment under pytest.
+        e._mode_transition_revision = 7
+        self.assertEqual(e._mode_transition_revision, 7)
         def loop_now():
             self.assertEqual(get_ident(), loop_thread)
             self.assertFalse(fusion._physical_source_gate._is_owned())

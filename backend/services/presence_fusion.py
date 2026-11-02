@@ -149,6 +149,7 @@ class PresenceFusion:
         from contextlib import nullcontext
 
         return getattr(self, "_physical_source_gate", nullcontext())
+
     def _sample_utc_now(self) -> datetime:
         """Invoke the injectable clock only outside the source gate.
 
@@ -159,6 +160,7 @@ class PresenceFusion:
         if gate is not None and gate._is_owned():
             raise RuntimeError("capture wall clock before entering physical source gate")
         return self._clock.utc_now()
+
     def physical_source_generation(self, source: str) -> int:
         """Source-local revision, including equal captures and absent removal.
 
@@ -285,6 +287,7 @@ class PresenceFusion:
                 reading.source, future_skew_s,
             )
 
+
     def invalidate_source(self, source: str) -> None:
         """Discard one source's live reading without touching other sources."""
         self._capture_call("record_fusion_invalidation", source)
@@ -309,21 +312,27 @@ class PresenceFusion:
         Bed form is retained for backward compatibility with old recordings and
         tests, even though the relocated Latitude no longer emits Bed.
         """
-        now = self._clock.utc_now()
-        for reading in self._readings.values():
-            if (now - reading.captured_at).total_seconds() > max_age_s:
-                continue
-            if reading.zone != "bed":
-                continue
-            if reading.source == "desktop":
-                if reading.detection_source == "pose":
+        now = self._sample_utc_now()
+        return self._physical_says_bed_at(max_age_s, now=now)
+
+    def _physical_says_bed_at(self, max_age_s: int, *, now: datetime) -> bool:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            for reading in self._readings.values():
+                if (now - reading.captured_at).total_seconds() > max_age_s:
+                    continue
+                if reading.zone != "bed":
+                    continue
+                if reading.source == "desktop":
+                    if reading.detection_source == "pose":
+                        return True
+                elif reading.source == "latitude":
+                    if reading.face_present:
+                        return True
+                elif self._is_strongly_present(reading):
                     return True
-            elif reading.source == "latitude":
-                if reading.face_present:
-                    return True
-            elif self._is_strongly_present(reading):
-                return True
-        return False
+            return False
 
     def is_at_desk_fresh(self, max_age_s: int = DEFAULT_FRESHNESS_S) -> bool:
         """True iff any source has a fresh at-desk confirmation.
@@ -342,18 +351,24 @@ class PresenceFusion:
         Cross-source veto: see ``_physical_says_bed`` — when a physical source
         positively localizes the user to Bed, desktop face_present is vetoed.
         """
-        now = self._clock.utc_now()
-        any_at_desk = False
-        for reading in self._readings.values():
-            if (now - reading.captured_at).total_seconds() > max_age_s:
-                continue
-            if self._is_at_desk(reading):
-                any_at_desk = True
-        if any_at_desk and self._physical_says_bed(max_age_s):
-            # Geometric impossibility: a physical source says Bed while another
-            # reading says Desk. Bed localization vetoes at-desk.
-            return False
-        return any_at_desk
+        now = self._sample_utc_now()
+        return self._is_at_desk_fresh_at(max_age_s, now=now)
+
+    def _is_at_desk_fresh_at(self, max_age_s: int = DEFAULT_FRESHNESS_S, *, now: datetime) -> bool:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            any_at_desk = False
+            for reading in self._readings.values():
+                if (now - reading.captured_at).total_seconds() > max_age_s:
+                    continue
+                if self._is_at_desk(reading):
+                    any_at_desk = True
+            if any_at_desk and self._physical_says_bed_at(max_age_s, now=now):
+                # Geometric impossibility: a physical source says Bed while another
+                # reading says Desk. Bed localization vetoes at-desk.
+                return False
+            return any_at_desk
 
     def freshest_strong_presence(
         self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
@@ -366,16 +381,23 @@ class PresenceFusion:
         example LEAVE followed by a camera-confirmed guest still inside) can
         compare the returned ``captured_at`` with their lifecycle timestamp.
         """
-        now = self._clock.utc_now()
-        candidates = [
-            reading
-            for reading in self._readings.values()
-            if (now - reading.captured_at).total_seconds() <= max_age_s
-            and self._is_strongly_present(reading)
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda reading: reading.captured_at)
+        now = self._sample_utc_now()
+        return self._freshest_strong_presence_at(max_age_s, now=now)
+
+    def _freshest_strong_presence_at(
+        self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S, *, now: datetime) -> Optional[PresenceReading]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            candidates = [
+                reading
+                for reading in self._readings.values()
+                if (now - reading.captured_at).total_seconds() <= max_age_s
+                and self._is_strongly_present(reading)
+            ]
+            if not candidates:
+                return None
+            return max(candidates, key=lambda reading: reading.captured_at)
 
     def is_strongly_present_any(
         self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
@@ -404,17 +426,25 @@ class PresenceFusion:
         lighting reacquisition from steady presence while the user may have
         intentionally turned every light off.
         """
-        if not isinstance(reading, PresenceReading):
-            return False
-        if (
-            self._last_strong_reacquisition_source != reading.source
-            or self._last_strong_reacquisition_at != reading.captured_at
-        ):
-            return False
-        age_s = (self._clock.utc_now() - reading.captured_at).total_seconds()
-        return age_s <= STRONG_PRESENCE_FRESHNESS_S and self._is_strongly_present(
-            reading
-        )
+        now = self._sample_utc_now()
+        return self._is_strong_presence_reacquisition_at(reading, now=now)
+
+    def _is_strong_presence_reacquisition_at(
+        self, reading: PresenceReading, *, now: datetime) -> bool:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            if not isinstance(reading, PresenceReading):
+                return False
+            if (
+                self._last_strong_reacquisition_source != reading.source
+                or self._last_strong_reacquisition_at != reading.captured_at
+            ):
+                return False
+            age_s = (now - reading.captured_at).total_seconds()
+            return age_s <= STRONG_PRESENCE_FRESHNESS_S and self._is_strongly_present(
+                reading
+            )
 
     def is_present_within_seconds(self, window_s: int) -> bool:
         """True iff any source had a present reading inside ``window_s``.
@@ -425,15 +455,21 @@ class PresenceFusion:
         zone / posture (Latitude commits imply recent presence by
         construction).
         """
-        now = self._clock.utc_now()
-        for reading in self._readings.values():
-            if (now - reading.captured_at).total_seconds() > window_s:
-                continue
-            if reading.face_present:
-                return True
-            if reading.zone is not None or reading.posture is not None:
-                return True
-        return False
+        now = self._sample_utc_now()
+        return self._is_present_within_seconds_at(window_s, now=now)
+
+    def _is_present_within_seconds_at(self, window_s: int, *, now: datetime) -> bool:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            for reading in self._readings.values():
+                if (now - reading.captured_at).total_seconds() > window_s:
+                    continue
+                if reading.face_present:
+                    return True
+                if reading.zone is not None or reading.posture is not None:
+                    return True
+            return False
 
     def seconds_since_at_desk(self) -> Optional[float]:
         """Age (seconds) of the most recent at-desk confirmation, or None.
@@ -454,11 +490,18 @@ class PresenceFusion:
         the desk" recency for a stationary-zone gate, and the Bed veto is intentionally omitted here because callers need raw
         recency; current-zone consumers separately see Desktop Bed.
         """
-        if self._last_at_desk_at is None:
-            return None
-        return (
-            self._clock.utc_now() - self._last_at_desk_at
-        ).total_seconds()
+        now = self._sample_utc_now()
+        return self._seconds_since_at_desk_at(now=now)
+
+    def _seconds_since_at_desk_at(self, *, now: datetime) -> Optional[float]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            if self._last_at_desk_at is None:
+                return None
+            return (
+                now - self._last_at_desk_at
+            ).total_seconds()
 
     def get_at_desk_attribution(self) -> Optional[str]:
         """Most recent source to confirm at-desk, or None if stale.
@@ -469,16 +512,23 @@ class PresenceFusion:
         would otherwise read ``at_desk=False, at_desk_source="desktop"``,
         which is incoherent.
         """
-        if self._last_at_desk_at is None:
-            return None
-        age = (
-            self._clock.utc_now() - self._last_at_desk_at
-        ).total_seconds()
-        if age > DEFAULT_FRESHNESS_S:
-            return None
-        if self._physical_says_bed(DEFAULT_FRESHNESS_S):
-            return None
-        return self._last_at_desk_source
+        now = self._sample_utc_now()
+        return self._get_at_desk_attribution_at(now=now)
+
+    def _get_at_desk_attribution_at(self, *, now: datetime) -> Optional[str]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            if self._last_at_desk_at is None:
+                return None
+            age = (
+                now - self._last_at_desk_at
+            ).total_seconds()
+            if age > DEFAULT_FRESHNESS_S:
+                return None
+            if self._physical_says_bed_at(DEFAULT_FRESHNESS_S, now=now):
+                return None
+            return self._last_at_desk_source
 
     # ------------------------------------------------------------------
     # Merged zone/posture
@@ -494,52 +544,68 @@ class PresenceFusion:
         calibrated pose-only ``bed`` are peer physical observations. If both
         are simultaneously strong, the fresher capture wins.
         """
-        candidates: list[tuple[datetime, str]] = []
-        lat = self._readings.get("latitude")
-        if (
-            lat is not None
-            and lat.zone is not None
-            and self._fresh(lat, max_age_s)
-            and self._is_strongly_present(lat)
-        ):
-            candidates.append((lat.captured_at, lat.zone))
+        now = self._sample_utc_now()
+        return self._latest_zone_at(max_age_s, now=now)
 
-        desktop = self._readings.get("desktop")
-        if desktop is not None and self._fresh(desktop, max_age_s):
-            if desktop.zone == "bed" and desktop.detection_source == "pose":
-                candidates.append((desktop.captured_at, "bed"))
-            elif desktop.zone == "desk" and desktop.face_present:
-                candidates.append((desktop.captured_at, "desk"))
-            elif (
-                desktop.zone is None
-                and desktop.face_present
-                and desktop.detection_source is None
+    def _latest_zone_at(
+        self, max_age_s: int = DEFAULT_FRESHNESS_S, *, now: datetime) -> Optional[str]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            candidates: list[tuple[datetime, str]] = []
+            lat = self._readings.get("latitude")
+            if (
+                lat is not None
+                and lat.zone is not None
+                and self._fresh(lat, max_age_s, now=now)
+                and self._is_strongly_present(lat)
             ):
-                # Backward compatibility with pre-zone desktop agents only.
-                candidates.append((desktop.captured_at, "desk"))
+                candidates.append((lat.captured_at, lat.zone))
 
-        if candidates:
-            return max(candidates, key=lambda item: item[0])[1]
-        return None
+            desktop = self._readings.get("desktop")
+            if desktop is not None and self._fresh(desktop, max_age_s, now=now):
+                if desktop.zone == "bed" and desktop.detection_source == "pose":
+                    candidates.append((desktop.captured_at, "bed"))
+                elif desktop.zone == "desk" and desktop.face_present:
+                    candidates.append((desktop.captured_at, "desk"))
+                elif (
+                    desktop.zone is None
+                    and desktop.face_present
+                    and desktop.detection_source is None
+                ):
+                    # Backward compatibility with pre-zone desktop agents only.
+                    candidates.append((desktop.captured_at, "desk"))
+
+            if candidates:
+                return max(candidates, key=lambda item: item[0])[1]
+            return None
 
     def latest_strong_zone(
         self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
     ) -> Optional[str]:
         """Fresh strong physical zone, excluding legacy streaming hints."""
-        candidates: list[tuple[datetime, str]] = []
-        for source in ("latitude", "desktop"):
-            reading = self._readings.get(source)
-            if (
-                reading is None
-                or reading.zone is None
-                or not self._fresh(reading, max_age_s)
-                or not self._is_strongly_present(reading)
-            ):
-                continue
-            candidates.append((reading.captured_at, reading.zone))
-        if not candidates:
-            return None
-        return max(candidates, key=lambda item: item[0])[1]
+        now = self._sample_utc_now()
+        return self._latest_strong_zone_at(max_age_s, now=now)
+
+    def _latest_strong_zone_at(
+        self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S, *, now: datetime) -> Optional[str]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            candidates: list[tuple[datetime, str]] = []
+            for source in ("latitude", "desktop"):
+                reading = self._readings.get(source)
+                if (
+                    reading is None
+                    or reading.zone is None
+                    or not self._fresh(reading, max_age_s, now=now)
+                    or not self._is_strongly_present(reading)
+                ):
+                    continue
+                candidates.append((reading.captured_at, reading.zone))
+            if not candidates:
+                return None
+            return max(candidates, key=lambda item: item[0])[1]
 
     def latest_posture(
         self, max_age_s: int = DEFAULT_FRESHNESS_S,
@@ -564,28 +630,35 @@ class PresenceFusion:
         the subject head-on at high confidence; the Latitude sees a
         three-quarter profile at 2-3m.
         """
-        now = self._clock.utc_now()
-        desktop = self._readings.get("desktop")
-        if (
-            desktop is not None
-            and desktop.posture in ("upright", "slouched")
-            and self._fresh(desktop, max_age_s)
-        ):
-            return desktop.posture
+        now = self._sample_utc_now()
+        return self._latest_posture_at(max_age_s, now=now)
 
-        # Fall back to most-recent fresh non-None across all sources.
-        candidates: list[tuple[float, str]] = []
-        for reading in self._readings.values():
-            if reading.posture is None:
-                continue
-            age = (now - reading.captured_at).total_seconds()
-            if age > max_age_s:
-                continue
-            candidates.append((age, reading.posture))
-        if not candidates:
-            return None
-        candidates.sort()  # smallest age first
-        return candidates[0][1]
+    def _latest_posture_at(
+        self, max_age_s: int = DEFAULT_FRESHNESS_S, *, now: datetime) -> Optional[str]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            desktop = self._readings.get("desktop")
+            if (
+                desktop is not None
+                and desktop.posture in ("upright", "slouched")
+                and self._fresh(desktop, max_age_s, now=now)
+            ):
+                return desktop.posture
+
+            # Fall back to most-recent fresh non-None across all sources.
+            candidates: list[tuple[float, str]] = []
+            for reading in self._readings.values():
+                if reading.posture is None:
+                    continue
+                age = (now - reading.captured_at).total_seconds()
+                if age > max_age_s:
+                    continue
+                candidates.append((age, reading.posture))
+            if not candidates:
+                return None
+            candidates.sort()  # smallest age first
+            return candidates[0][1]
 
     def get_source_reading(self, source: str) -> Optional[PresenceReading]:
         """Return the latest immutable reading for one named source.
@@ -595,7 +668,10 @@ class PresenceFusion:
         Freshness remains the caller's responsibility because each policy has
         its own window.
         """
-        return self._readings.get(source)
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            return self._readings.get(source)
 
 
     # ------------------------------------------------------------------
@@ -604,34 +680,47 @@ class PresenceFusion:
 
     def get_sources(self) -> dict[str, dict]:
         """Per-source state — for ``/api/camera/status`` + dashboards."""
-        now = self._clock.utc_now()
-        out: dict[str, dict] = {}
-        for source, reading in self._readings.items():
-            age_s = (now - reading.captured_at).total_seconds()
-            out[source] = {
-                "last_at": reading.captured_at.isoformat(),
-                "age_s": round(age_s, 1),
-                "fresh": age_s <= DEFAULT_FRESHNESS_S,
-                "face_present": reading.face_present,
-                "face_confidence": reading.face_confidence,
-                "detection_source": reading.detection_source,
-                "zone": reading.zone,
-                "posture": reading.posture,
-                "posture_confidence": reading.posture_confidence,
-                "pose_visible_landmarks": reading.pose_visible_landmarks,
-            }
-        return out
+        now = self._sample_utc_now()
+        return self._get_sources_at(now=now)
+
+    def _get_sources_at(self, *, now: datetime) -> dict[str, dict]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            out: dict[str, dict] = {}
+            for source, reading in self._readings.items():
+                age_s = (now - reading.captured_at).total_seconds()
+                out[source] = {
+                    "last_at": reading.captured_at.isoformat(),
+                    "age_s": round(age_s, 1),
+                    "fresh": age_s <= DEFAULT_FRESHNESS_S,
+                    "face_present": reading.face_present,
+                    "face_confidence": reading.face_confidence,
+                    "detection_source": reading.detection_source,
+                    "zone": reading.zone,
+                    "posture": reading.posture,
+                    "posture_confidence": reading.posture_confidence,
+                    "pose_visible_landmarks": reading.pose_visible_landmarks,
+                }
+            return out
 
     def get_status(self) -> dict:
         """Aggregate snapshot — included in ``/api/camera/status`` payloads."""
-        return {
-            "at_desk_fresh": self.is_at_desk_fresh(),
-            "at_desk_source": self.get_at_desk_attribution(),
-            "strongly_present": self.is_strongly_present_any(),
-            "zone": self.latest_zone(),
-            "posture": self.latest_posture(),
-            "sources": self.get_sources(),
-        }
+        now = self._sample_utc_now()
+        return self._get_status_at(now=now)
+
+    def _get_status_at(self, *, now: datetime) -> dict:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            return {
+                "at_desk_fresh": self._is_at_desk_fresh_at(now=now),
+                "at_desk_source": self._get_at_desk_attribution_at(now=now),
+                "strongly_present": self._freshest_strong_presence_at(now=now) is not None,
+                "zone": self._latest_zone_at(now=now),
+                "posture": self._latest_posture_at(now=now),
+                "sources": self._get_sources_at(now=now),
+            }
 
     def as_fusion_factor(self) -> Optional[dict]:
         """Return a ``ConfidenceFusion``-ready factor entry naming the
@@ -643,45 +732,60 @@ class PresenceFusion:
         the analytics constellation. The ``fusion-lane-auditor`` agent
         keys on this to assert both sources are contributing.
         """
-        now = self._clock.utc_now()
-        # Wider window than STRONG_PRESENCE_FRESHNESS_S because this is
-        # for lane attribution, not real-time gating: 30s catches the
-        # desktop 2s cadence even after a single missed POST.
-        active = sorted(
-            source
-            for source, reading in self._readings.items()
-            if (now - reading.captured_at).total_seconds() <= 30.0
-        )
-        if not active:
-            return None
-        return {
-            "key": "presence_sources",
-            "label": "Presence sources",
-            "value": ",".join(active),
-            "display": ", ".join(active),
-            "impact": 0.4,
-            "stale": False,
-        }
+        now = self._sample_utc_now()
+        return self._as_fusion_factor_at(now=now)
+
+    def _as_fusion_factor_at(self, *, now: datetime) -> Optional[dict]:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            # Wider window than STRONG_PRESENCE_FRESHNESS_S because this is
+            # for lane attribution, not real-time gating: 30s catches the
+            # desktop 2s cadence even after a single missed POST.
+            active = sorted(
+                source
+                for source, reading in self._readings.items()
+                if (now - reading.captured_at).total_seconds() <= 30.0
+            )
+            if not active:
+                return None
+            return {
+                "key": "presence_sources",
+                "label": "Presence sources",
+                "value": ",".join(active),
+                "display": ", ".join(active),
+                "impact": 0.4,
+                "stale": False,
+            }
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _fresh(self, reading: PresenceReading, max_age_s: int) -> bool:
+    def _fresh(self, reading: PresenceReading, max_age_s: int, *, now: Optional[datetime] = None) -> bool:
+        if now is None:
+            now = self._sample_utc_now()
         age = (
-            self._clock.utc_now() - reading.captured_at
+            now - reading.captured_at
         ).total_seconds()
         return age <= max_age_s
 
     def _desktop_at_desk_fresh(self, max_age_s: int) -> bool:
-        desk = self._readings.get("desktop")
-        if desk is None or not self._fresh(desk, max_age_s):
-            return False
-        if desk.zone == "bed":
-            return False
-        if desk.zone == "desk":
-            return True
-        return desk.detection_source is None and bool(desk.face_present)
+        now = self._sample_utc_now()
+        return self._desktop_at_desk_fresh_at(max_age_s, now=now)
+
+    def _desktop_at_desk_fresh_at(self, max_age_s: int, *, now: datetime) -> bool:
+        from contextlib import nullcontext
+
+        with getattr(self, "_physical_source_gate", nullcontext()):
+            desk = self._readings.get("desktop")
+            if desk is None or not self._fresh(desk, max_age_s, now=now):
+                return False
+            if desk.zone == "bed":
+                return False
+            if desk.zone == "desk":
+                return True
+            return desk.detection_source is None and bool(desk.face_present)
 
     @staticmethod
     def _is_at_desk(reading: PresenceReading) -> bool:
