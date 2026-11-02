@@ -64,11 +64,12 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(activeQuietAtlasSection('/music')).toBe('music')
     expect(activeQuietAtlasSection('/analytics')).toBe('insights')
     expect(activeQuietAtlasSection('/settings')).toBe('more')
+    expect(activeQuietAtlasSection('/quiet-atlas/settings')).toBe('more')
     expect(MORE_DESTINATIONS.map(({ href }) => href)).toEqual([
-      '/settings', '/journal', '/personality', '/', '/gameday', '/guest',
+      '/quiet-atlas/settings', '/journal', '/personality', '/', '/gameday', '/guest',
     ])
     expect(MORE_DESTINATIONS.filter((item) => item.shell).map((item) => item.href)).toEqual([
-      '/settings', '/journal', '/personality',
+      '/journal', '/personality',
     ])
   })
 })
