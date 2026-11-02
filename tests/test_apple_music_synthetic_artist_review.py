@@ -162,25 +162,118 @@ def test_cli_rejects_private_file_arguments_without_launch(monkeypatch):
     assert error.value.code == 2
 
 
-def test_tk_discard_clears_display_and_in_memory_session():
-    pytest.importorskip("tkinter")  # CI Python may not include optional Tk
+@pytest.fixture
+def demo_window(monkeypatch):
+    tk = pytest.importorskip("tkinter")
     try:
-        from tkinter import TclError
-        root, session, table, close = ui.create_demo_window()
-    except TclError:
-        pytest.skip("Tk display unavailable")
+        root = tk.Tk()
+    except tk.TclError as error:
+        message = str(error).lower()
+        if ("no display name and no $display environment variable" in message
+                or "couldn't connect to display" in message):
+            pytest.skip("Tk display unavailable")
+        raise
     try:
         root.withdraw()
-        assert len(table.get_children()) == 5
-        footer = root.nametowidget(".safety_footer")
-        assert "Selections vanish" in footer.cget("text")
-        assert footer.pack_info()["side"] == "bottom"
-        close()
-        assert session.discarded
-        assert session.rows() == ()
+        monkeypatch.setattr(tk, "Tk", lambda: root)
+        # Setup exceptions must fail, even when they are TclError.
+        yield ui.create_demo_window()
     finally:
-        if not session.discarded:
-            close()
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
+
+
+def assert_closed(session, table):
+    from tkinter import TclError
+
+    assert session.discarded
+    assert session.rows() == ()
+    assert session.summary is None
+    with pytest.raises(ValueError, match="already discarded"):
+        session.decide(0, "Reject label")
+    with pytest.raises(TclError):
+        table.get_children()
+
+
+def test_tk_discard_clears_display_and_in_memory_session(demo_window):
+    root, session, table, close = demo_window
+    assert len(table.get_children()) == 5
+    footer = root.nametowidget(".safety_footer")
+    assert "Selections vanish" in footer.cget("text")
+    assert footer.pack_info()["side"] == "bottom"
+    close()
+    assert_closed(session, table)
+    close()
+    assert_closed(session, table)
+
+
+def test_tk_registered_window_manager_close(demo_window):
+    root, session, table, close = demo_window
+    session.decide(0, "Reject label")
+    handler = root.protocol("WM_DELETE_WINDOW")
+    assert handler
+    root.tk.call(handler)
+    assert_closed(session, table)
+    close()
+
+
+def test_tk_external_destroy_discards_session(demo_window):
+    root, session, table, close = demo_window
+    session.decide(0, "Needs verification")
+    # Child destruction alone must not discard the root's session.
+    root.nametowidget(".safety_footer").destroy()
+    assert not session.discarded
+    root.destroy()
+    assert_closed(session, table)
+    close()
+
+
+@pytest.mark.parametrize("destroy_fails", [False, True])
+@pytest.mark.parametrize("stage", ["title", "style"])
+def test_setup_failure_discards_session_and_destroys_root(
+    monkeypatch, destroy_fails, stage,
+):
+    tk = pytest.importorskip("tkinter")
+    from tkinter import ttk
+
+    session = ui.LocalArtistReviewDemo(demo=True)
+    failure = tk.TclError("injected setup failure")
+
+    class Root:
+        destroy_calls = 0
+
+        def title(self, *args):
+            if stage == "title":
+                raise failure
+
+        def geometry(self, *args, **kwargs):
+            pass
+
+        minsize = geometry
+        configure = geometry
+
+        def destroy(self):
+            self.destroy_calls += 1
+            if destroy_fails:
+                raise tk.TclError("injected cleanup failure")
+
+    root = Root()
+    monkeypatch.setattr(ui, "LocalArtistReviewDemo", lambda **kwargs: session)
+    monkeypatch.setattr(tk, "Tk", lambda: root)
+
+    def fail_style(*args):
+        raise failure
+
+    monkeypatch.setattr(ttk, "Style", fail_style)
+    with pytest.raises(tk.TclError) as error:
+        ui.create_demo_window()
+    assert error.value is failure
+    assert root.destroy_calls == 1
+    assert session.discarded
+    assert session.rows() == ()
+    assert session.summary is None
 
 
 def test_failed_aggregate_cannot_open_a_window(monkeypatch):
