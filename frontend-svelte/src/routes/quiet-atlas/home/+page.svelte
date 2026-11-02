@@ -16,6 +16,9 @@
   let activityNowMs = 0
   $: recentActivity = recentActivityPresentation(activityLog, activityNowMs)
   let daylight = false
+  // Product-facing Home defaults to source-qualified context, not sample cards.
+  // Illustrative cases remain an explicit, reversible design-review mode.
+  let reviewExamples = false
   let sampleState = 'unavailable'
   let contextSnapshot = newHomeContextSnapshot()
   let contextNowMs = 0
@@ -275,18 +278,35 @@
         <div class="world-note">{contextDisplay.note}</div>
       </div>
     </div>
-    <aside class="context-rail" aria-label="Illustrative context examples">
-      <p class="rail-head">DESIGN EXAMPLES <span aria-hidden="true">—</span></p>
-      <p class="rail-title">{example.title}</p>
-      <p class="rail-description">{example.description}</p>
-      <p class="rail-kind">{example.kind}</p>
-      <label class="sample-label" for="sample-state">Review an example state</label>
-      <select id="sample-state" bind:value={sampleState}>
-        <option value="unavailable">Unavailable</option>
-        <option value="stale">Stale light reading</option>
-        <option value="empty">Empty history</option>
-        <option value="attention">Manual ownership</option>
-      </select>
+    <aside class="context-rail" aria-label="Source-qualified HomeHub context">
+      {#if reviewExamples}
+        <p class="rail-head">DESIGN EXAMPLES <span aria-hidden="true">—</span></p>
+        <p class="rail-title">{example.title}</p>
+        <p class="rail-description">{example.description}</p>
+        <p class="rail-kind">{example.kind}</p>
+        <label class="sample-label" for="sample-state">Illustrative context examples</label>
+        <select id="sample-state" bind:value={sampleState}>
+          <option value="unavailable">Unavailable</option>
+          <option value="stale">Stale light reading</option>
+          <option value="empty">Empty history</option>
+          <option value="attention">Manual ownership</option>
+        </select>
+      {:else}
+        <p class="rail-head">HOMEHUB CONTEXT <span aria-hidden="true">—</span></p>
+        {#if contextDisplay.status === 'recent'}
+          <p class="rail-title">HomeHub reports {contextDisplay.house}</p>
+          <p class="rail-description">Reported Activity: {contextDisplay.activity}</p>
+          <p class="rail-kind">RECENT REST REPORT</p>
+        {:else}
+          <p class="rail-title">Current context not verified</p>
+          <p class="rail-description">{contextDisplay.note}</p>
+          <p class="rail-kind">NO RECENT VERIFIED REPORT</p>
+        {/if}
+        <p class="rail-provenance">{contextDisplay.note}. A REST response is not sensor freshness or room-location evidence.</p>
+      {/if}
+      <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
+        {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
+      </button>
       <a class="rail-footer" href="/analytics?shell=quiet-atlas">View Insights <span aria-hidden="true">↗</span></a>
     </aside>
   </section>
@@ -339,16 +359,28 @@
     </p>
   </section>
 
-  <section class="mobile-context" aria-label="Illustrative context examples">
-    <span class="mobile-context-kind">{example.kind}</span>
-    <p><strong>{example.title}</strong> — {example.description}</p>
-    <label for="mobile-review-state">Review example state</label>
-    <select id="mobile-review-state" bind:value={sampleState}>
-      <option value="unavailable">Unavailable</option>
-      <option value="stale">Stale light reading</option>
-      <option value="empty">Empty history</option>
-      <option value="attention">Manual ownership</option>
-    </select>
+  <section class="mobile-context" aria-label="HomeHub context and review">
+    {#if reviewExamples}
+      <span class="mobile-context-kind">DESIGN EXAMPLE · {example.kind}</span>
+      <p><strong>{example.title}</strong> — {example.description}</p>
+      <label for="mobile-review-state">Review example state</label>
+      <select id="mobile-review-state" bind:value={sampleState}>
+        <option value="unavailable">Unavailable</option>
+        <option value="stale">Stale light reading</option>
+        <option value="empty">Empty history</option>
+        <option value="attention">Manual ownership</option>
+      </select>
+    {:else}
+      <span class="mobile-context-kind">HOMEHUB CONTEXT</span>
+      {#if contextDisplay.status === 'recent'}
+        <p><strong>{contextDisplay.house}</strong> · Reported Activity: {contextDisplay.activity}. {contextDisplay.note}.</p>
+      {:else}
+        <p><strong>Context not verified.</strong> {contextDisplay.note}.</p>
+      {/if}
+    {/if}
+    <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
+      {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
+    </button>
     <a href="/analytics?shell=quiet-atlas">Open Insights ↗</a>
   </section>
 
@@ -414,6 +446,8 @@
   .rail-description {font-size:12px;line-height:1.55;color:var(--muted);}
   .rail-kind {font-size:11px;color:var(--gold);margin-bottom:24px;}
   .sample-label {font-size:10px;color:var(--muted);margin-top:auto;margin-bottom:8px;}
+  .rail-provenance {font-size:10px;line-height:1.5;color:var(--muted);margin-top:auto;}
+  .review-toggle {display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin-top:12px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:transparent;color:var(--gold);text-align:center;cursor:pointer;font-size:11px;}
   .context-rail select {padding:9px;background:var(--deep);border:1px solid var(--line);border-radius:7px;color:var(--ink);width:100%;min-height:38px;}
   .rail-footer {display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:14px;margin-top:18px;font-size:12px;}
   .lighting-dock {margin-top:25px;}
@@ -502,6 +536,7 @@
     .mobile-context label {font-size:9px;}
     .mobile-context select {min-height:34px;max-width:145px;min-width:0;flex:1;border:1px solid var(--line);border-radius:6px;color:var(--ink);background:var(--stage);padding:5px;}
     .mobile-context a {margin-left:auto;color:var(--gold);}
+    .mobile-context .review-toggle {margin-top:0;font-size:10px;flex:0 0 auto;}
     .review-footer {font-size:9px;margin-top:14px;}
   }
   @media (max-width:360px) {
