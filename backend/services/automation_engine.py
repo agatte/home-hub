@@ -2941,7 +2941,7 @@ class AutomationEngine:
         """Refresh only an actively registered camera owner, never music."""
         camera = getattr(self, "_camera_service", None)
         callback = getattr(camera, "on_mode_change", None)
-        if callback is None or callback not in self._owner_guard_callbacks:
+        if callback is None or callback not in self._on_mode_change_callbacks:
             return
         if not self._camera_mode_owner_is_current(mode, revision):
             return
@@ -2949,16 +2949,25 @@ class AutomationEngine:
         def owner_is_current() -> bool:
             return self._camera_mode_owner_is_current(mode, revision)
 
+        # Existing CameraService registrations accept (mode), not a keyword
+        # lease. They still need a bounded refresh, including on Sleeping exit.
+        # Only opt-in guarded collaborators accept owner_is_current; never
+        # pass an unknown keyword or silently skip a registered camera.
+        guarded = callback in self._owner_guard_callbacks
         try:
             if mode == "sleeping":
-                # Enter the callback in this task: wait_for's child-task handoff
-                # would let a suppression epoch revoke sleep before closure.
-                # CameraService detaches the handle before its bounded release.
-                await callback(mode, owner_is_current=owner_is_current)
+                # Release the handle synchronously in this task. An unguarded
+                # camera still gets the revision/raw-mode check above.
+                if guarded:
+                    await callback(mode, owner_is_current=owner_is_current)
+                else:
+                    await callback(mode)
             else:
-                await asyncio.wait_for(
-                    callback(mode, owner_is_current=owner_is_current), timeout=15.0,
+                operation = (
+                    callback(mode, owner_is_current=owner_is_current)
+                    if guarded else callback(mode)
                 )
+                await asyncio.wait_for(operation, timeout=15.0)
         except asyncio.TimeoutError:
             logger.warning("Desk handoff camera owner refresh timed out")
         except Exception:
