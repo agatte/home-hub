@@ -9,6 +9,13 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain('{contextDisplay.house}')
     expect(homeRoute).toContain('{contextDisplay.activity}')
     expect(homeRoute).toContain('DESIGN EXAMPLES')
+    expect(homeRoute).toContain('HOMEHUB CONTEXT')
+    expect(homeRoute).toContain('let reviewExamples = false')
+    expect(homeRoute).toContain("{#if contextDisplay.status === 'recent'}")
+    expect(homeRoute).toContain('Current context not verified')
+    expect(homeRoute).toContain('RECENT REST REPORT')
+    expect(homeRoute).toContain('REST response is not sensor freshness or room-location evidence')
+    expect(homeRoute).toContain('aria-pressed={reviewExamples}')
     expect(homeRoute).toContain('SPATIAL PLACEHOLDER · NOT A FLOOR PLAN')
   })
 
@@ -36,6 +43,8 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     for (const state of ['unavailable', 'stale', 'empty', 'attention']) {
       expect(homeRoute).toContain(state + ': {')
     }
+    expect(homeRoute).toContain("{reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}")
+    expect(homeRoute).toContain('min-height:44px')
     expect(homeRoute).toContain('prefers-reduced-motion:reduce')
     expect(homeRoute).toContain(':focus-visible')
     expect(homeRoute).toContain('max-width:700px')
