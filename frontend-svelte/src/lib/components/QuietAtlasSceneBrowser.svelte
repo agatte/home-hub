@@ -47,7 +47,9 @@
   function handleKeys(event) {
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
     if (event.key !== 'Tab' || !panel) return
-    const tabbable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), a[href]')].filter((element) => element instanceof HTMLElement)
+    const tabbable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]')]
+      .filter((element) => element instanceof HTMLElement)
+      .filter((element) => element.getClientRects().length > 0)
     const first = tabbable[0], last = tabbable[tabbable.length - 1]
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
@@ -70,6 +72,12 @@
     {#if !connected}<p class="warning" role="status">HomeHub is disconnected. Previously fetched scenes may be stale.</p>{/if}
     <label for="qa-scene-search">Search scenes</label>
     <input id="qa-scene-search" class="search" type="search" bind:value={search} placeholder="Name of a scene" />
+    <label class="mobile-category-label" for="qa-scene-category">Scene category</label>
+    <select id="qa-scene-category" class="mobile-category-select" bind:value={category}>
+      {#each categories as cat (cat.id)}
+        <option value={cat.id}>{cat.label}</option>
+      {/each}
+    </select>
     <div class="filters" role="group" aria-label="Scene categories">
       {#each categories as cat (cat.id)}
         <button type="button" class:active={category === cat.id} aria-pressed={category === cat.id} on:click={() => category = cat.id}>{cat.label}</button>
@@ -120,6 +128,7 @@
   h2{font:normal 34px Georgia,serif;margin:5px 0 14px;}.close{width:44px;height:44px;border:1px solid #536b59;border-radius:50%;background:#253b2d;color:#fff;cursor:pointer;}
   .copy,.footer-note{color:#b9cabd;font-size:13px;line-height:1.5;margin:0 0 18px;}.footer-note{margin-top:20px;}
   label{display:block;color:#dde9d9;font-size:12px;margin:0 0 7px;}.search{width:100%;height:46px;box-sizing:border-box;border:1px solid #5b7962;border-radius:10px;background:#223328;color:#fff;padding:0 14px;font:inherit;font-size:15px;}
+  .mobile-category-label,.mobile-category-select{display:none;}
   .filters{display:flex;gap:7px;overflow-x:auto;margin:17px 0;padding:1px 0 10px;scrollbar-width:thin;}
   .filters button{flex:0 0 auto;border:1px solid #526656;border-radius:999px;background:#24362a;color:#d6e4d3;padding:10px 15px;min-height:44px;cursor:pointer;font-size:13px;}
   .filters button.active{background:#a7c4a0;color:#10221a;border-color:#a7c4a0;font-weight:700;}
@@ -136,4 +145,21 @@
   button:focus-visible,input:focus-visible{outline:3px solid #d1e9be;outline-offset:3px;}
   @media(min-width:800px){.browser-root{align-items:center}.browser{max-height:88dvh;border-radius:24px;padding:30px}.scene-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
   @media(max-width:340px){.scene-grid{grid-template-columns:1fr;}}
+  /* A category picker replaces horizontal chip scrolling on phone-sized screens. */
+  @media(max-width:700px){
+    .browser { min-width:0; width:100%; max-height:95dvh; border-radius:20px 20px 0 0; padding:19px 16px calc(24px + env(safe-area-inset-bottom,0px)); }
+    .browser h2 { font-size:29px; }
+    .mobile-category-label { display:block; margin-top:14px; }
+    .mobile-category-select { display:block; box-sizing:border-box; width:100%; min-height:48px; padding:10px 14px; border:1px solid #719479; border-radius:11px; background:#223328; color:#f1f1e8; font:inherit; font-size:16px; }
+    .filters { display:none; }
+    .scene-grid { grid-template-columns:minmax(0,1fr); gap:10px; }
+    .scene { min-width:0; min-height:98px; padding:15px; }
+    .scene h3 { font-size:17px; line-height:1.25; }
+    .scene p { line-height:1.45; }
+    .scene-review { min-height:48px; width:100%; font-size:14px; }
+    .review-panel { overflow-wrap:anywhere; }
+    .declared-scope ul { grid-template-columns:minmax(0,1fr); }
+    .footer-note { line-height:1.6; }
+  }
+  .mobile-category-select:focus-visible{outline:3px solid #d1e9be;outline-offset:3px;}
 </style>
