@@ -75,8 +75,11 @@
   }
 
   @media (max-width: 600px) {
-    .settings-row:not(.stacked) {
-      flex-wrap: wrap;
-    }
+    .settings-row:not(.stacked) {flex-direction:column;align-items:stretch;gap:10px}
+    .settings-row {min-width:0;padding:15px 4px}
+    .row-info {min-width:0;gap:5px}
+    .row-label {font-size:15px;line-height:1.35;color:var(--text-primary,#e8eee4)}
+    .row-hint {font-size:13px;line-height:1.5;color:var(--text-muted,#aebfb0)}
+    .row-control {box-sizing:border-box;width:100%;min-width:0;justify-content:flex-start;flex-wrap:wrap;gap:10px}
   }
 </style>
