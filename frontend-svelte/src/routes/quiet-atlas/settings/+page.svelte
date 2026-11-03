@@ -3,6 +3,9 @@
   // All existing configuration stays on the functional /settings route.
   import { withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
 
+  /** @type {string | null} */
+  let expandedGroup = 'behavior'
+
   const GROUPS = [
     {
       id: 'behavior',
@@ -56,7 +59,7 @@
   <header class="hero">
     <div class="hero-copy">
       <p class="eyebrow">A quieter way into the machinery</p>
-      <h1>Keep the details <em>close, not loud.</em></h1>
+      <h1><span class="desktop-heading">Keep the details <em>close, not loud.</em></span><span class="phone-heading">Settings, <em>made simple.</em></span></h1>
       <p class="intro">Find the existing HomeHub configuration by purpose. This page shows no live settings or device state and changes nothing itself.</p>
     </div>
     <div class="hero-aside" role="note">
@@ -73,8 +76,23 @@
           <span class="ordinal">{group.index} / CONFIGURATION</span>
           <h2 id={'settings-' + group.id}>{group.title}</h2>
           <p>{group.note}</p>
+          <button
+            class="mobile-group-toggle"
+            type="button"
+            aria-controls={'settings-links-' + group.id}
+            aria-expanded={expandedGroup === group.id}
+            on:click={() => expandedGroup = expandedGroup === group.id ? null : group.id}
+          >
+            <span class="mobile-group-copy"><strong>{group.title}</strong><small>{group.note}</small></span>
+            <span class="mobile-group-indicator" aria-hidden="true">{expandedGroup === group.id ? '−' : '+'}</span>
+          </button>
         </div>
-        <nav class="section-links" aria-label={group.title}>
+        <nav
+          id={'settings-links-' + group.id}
+          class="section-links"
+          class:mobile-collapsed={expandedGroup !== group.id}
+          aria-label={group.title}
+        >
           {#each group.items as item (item.id)}
             <a class="setting-link" href={withQuietAtlasShell('/settings?section=' + item.id)} aria-label={'Open current ' + item.label + ' settings'}>
               <span class="link-copy"><strong>{item.label}</strong><small>{item.detail}</small></span>
@@ -93,6 +111,7 @@
 </main>
 
 <style>
+  .phone-heading,.mobile-group-toggle {display:none}
   .settings-review {--ink:#e8eee4;--muted:#a6b9aa;--line:rgba(198,222,199,.16);--gold:#dec69a;color:var(--ink);background:radial-gradient(ellipse at 80% -8%,rgba(143,157,103,.14),transparent 47%),#101b15;min-height:100%;padding:clamp(22px,3vw,42px) clamp(17px,4vw,56px) 56px;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
   .settings-review * {box-sizing:border-box}
   .settings-review a {color:inherit;text-decoration:none}
@@ -126,6 +145,38 @@
   .footer p {max-width:710px;margin:0}
   .footer a {display:inline-flex;gap:12px;align-items:center;white-space:nowrap;min-height:44px;font-weight:600;color:var(--ink)}
   @media(max-width:900px){.hero{grid-template-columns:minmax(0,1fr);gap:24px}.hero-aside{max-width:none}.group{grid-template-columns:minmax(0,1fr);gap:22px}.section-lead p{max-width:560px}}
-  @media(max-width:600px){.settings-review{padding:18px 17px 35px}.topline{font-size:9px;gap:9px}.review-label{font-size:8px}.hero{padding:38px 0 31px;gap:28px}.eyebrow{margin-bottom:16px}h1{font-size:clamp(34px,9vw,47px);margin-bottom:15px}.intro{font-size:12px;line-height:1.7}.hero-aside{padding-left:14px}.group{padding:28px 0 27px}.section-links{grid-template-columns:1fr}.setting-link{min-height:64px;padding:11px 2px}.link-copy strong{font-size:13px}.section-lead h2{font-size:27px;margin:10px 0 8px}.footer{align-items:flex-start;flex-direction:column;margin-top:23px}}
+  @media(max-width:600px){
+    .settings-review {padding:16px 16px calc(40px + env(safe-area-inset-bottom,0px));min-width:0}
+    .topline {font-size:10px;gap:9px;line-height:1.4;padding-bottom:13px}
+    .review-label {font-size:9px}
+    .hero {padding:24px 0 22px;gap:17px}
+    .eyebrow {margin-bottom:10px}
+    .desktop-heading {display:none}
+    .phone-heading {display:inline}
+    h1 {font-size:clamp(31px,8vw,38px);line-height:1.13;margin-bottom:10px}
+    .intro {font-size:13px;line-height:1.55}
+    .hero-aside {padding:12px 14px;background:rgba(222,198,154,.045);border:1px solid var(--line);border-radius:14px}
+    .hero-aside p {font-size:12px;line-height:1.5;margin:7px 0 10px}
+    .aside-kicker {font-size:10px}
+    .all-settings {box-sizing:border-box;display:flex;justify-content:space-between;min-height:48px;width:100%;font-size:13px}
+    .group {display:block;padding:15px 0 14px;min-width:0}
+    .section-lead {padding:0}
+    .section-lead>h2,.section-lead>p {display:none}
+    .ordinal {font-size:10px;letter-spacing:.12em}
+    .mobile-group-toggle {display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:76px;margin-top:7px;padding:12px 14px;background:linear-gradient(110deg,rgba(143,164,117,.12),rgba(103,130,98,.05));border:1px solid var(--line);border-radius:14px;text-align:left;color:var(--ink);font:inherit;cursor:pointer}
+    .mobile-group-copy {display:flex;flex-direction:column;gap:5px;min-width:0}
+    .mobile-group-copy strong {font-size:16px;font-weight:650;line-height:1.25}
+    .mobile-group-copy small {font-size:12px;color:var(--muted);line-height:1.45}
+    .mobile-group-indicator {font-size:23px;color:var(--gold);flex:0 0 20px;text-align:center}
+    .mobile-group-toggle:focus-visible {outline:3px solid #d5e7bd;outline-offset:3px}
+    .section-links {grid-template-columns:minmax(0,1fr);gap:0;padding:4px 4px 0 11px}
+    .section-links.mobile-collapsed {display:none}
+    .setting-link {box-sizing:border-box;min-height:64px;padding:10px 5px}
+    .link-copy strong {font-size:15px}
+    .link-copy small {font-size:12px}
+    .link-icon {font-size:19px}
+    .footer {align-items:flex-start;flex-direction:column;margin-top:20px;gap:12px;font-size:12px}
+    .footer a {font-size:13px}
+  }
   @media(prefers-reduced-motion:reduce){.setting-link,.all-settings{scroll-behavior:auto}}
 </style>
