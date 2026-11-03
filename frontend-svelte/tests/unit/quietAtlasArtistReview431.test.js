@@ -63,7 +63,8 @@ describe('#431 Quiet Atlas fictional artist identity preview', () => {
   it('uses only the human-approved noncircular Listening Room artwork', () => {
     expect(review).toContain('src="/design-review/artist-light-waves-431.png"')
     expect(review).toContain('alt="" aria-hidden="true"')
-    const png = readFileSync(new URL('../../static/design-review/artist-light-waves-431.png', import.meta.url))
+    // Vitest rewrites import.meta.url to a virtual module URL; use its frontend test cwd.
+    const png = readFileSync('static/design-review/artist-light-waves-431.png')
     expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
     expect(png.readUInt32BE(16)).toBe(178)
     expect(png.readUInt32BE(20)).toBe(178)
