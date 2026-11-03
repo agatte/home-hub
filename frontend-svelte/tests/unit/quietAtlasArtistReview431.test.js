@@ -1,4 +1,6 @@
+// @ts-ignore -- Node test-runtime built-in; frontend svelte-check has no Node types.
 import { createHash } from 'node:crypto'
+// @ts-ignore -- Node test-runtime built-in; frontend svelte-check has no Node types.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
