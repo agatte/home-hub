@@ -135,5 +135,16 @@
   .context-value strong {font:400 clamp(25px,3.4vw,39px)/1.14 Georgia,"Times New Roman",serif;overflow-wrap:anywhere;}
   .context-note {color:#a6b9aa;max-width:800px;margin:0;font-size:11px;line-height:1.7;}
   .context-readout:not([data-status="recent"]) .context-value strong {color:#acb8a9;}
-  @media(max-width:480px){.context-caption{flex-direction:column;gap:12px}.context-status{align-self:flex-start}.context-values{gap:14px;margin:18px 0 15px}.context-value strong{font-size:clamp(21px,6.2vw,28px)}}
+  @media(max-width:480px){
+    .context-readout {margin:0 0 22px;padding:14px 0 16px;}
+    .context-caption {flex-direction:column;gap:9px;}
+    .context-eyebrow {font-size:10px;margin-bottom:6px;}
+    h2 {font-size:25px;}
+    .context-status {align-self:flex-start;font-size:10px;line-height:1.3;padding:7px 10px;}
+    .context-values {gap:12px;margin:15px 0 12px;}
+    .context-value {gap:6px;}
+    .context-value span {font-size:10px;line-height:1.3;}
+    .context-value strong {font-size:clamp(21px,6.2vw,28px);}
+    .context-note {font-size:12px;line-height:1.55;}
+  }
 </style>
