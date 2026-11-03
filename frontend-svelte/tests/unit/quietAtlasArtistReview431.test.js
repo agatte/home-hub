@@ -71,6 +71,23 @@ describe('#431 Quiet Atlas fictional artist identity preview', () => {
     expect(review).not.toContain('class="disc"')
   })
 
+  it('uses one container-relative scale and no decorative action arrows', () => {
+    expect(review).toContain('max-width: 1160px')
+    expect(review).toContain('--rail-width: clamp(')
+    expect(review).toContain('--art-width: clamp(')
+    expect(review).toContain('--read-width: clamp(')
+    expect(review).toContain('grid-template-columns: minmax(0, 1fr) var(--rail-width)')
+    expect(review).toContain('max-width: var(--read-width)')
+    expect(review).toContain('width: min(100%, var(--art-width))')
+    expect(review).toContain('max-height: clamp(')
+    expect(review).toContain('overflow-y: auto')
+    expect(review).toContain('max-height: none; overflow: visible;')
+    expect(review).not.toContain('↗')
+    expect(review).not.toContain('←')
+    expect(review).not.toContain('→')
+    expect(review).not.toContain('↻')
+  })
+
   it('compiles both actual Svelte pages without warnings and provides responsive keyboard UI', () => {
     for (const [name, source] of [['Music review', landing], ['Fictional artist review', review]]) {
       const compiled = compile(source, {
@@ -78,12 +95,13 @@ describe('#431 Quiet Atlas fictional artist identity preview', () => {
       })
       expect(compiled.warnings).toEqual([])
     }
-    expect(review).toContain('@media(max-width:700px)')
-    expect(review).toContain('@media(max-width:360px)')
-    expect(review).toContain('@media(prefers-reduced-motion:reduce)')
+    expect(review).toContain('container-type: inline-size')
+    expect(review).toContain('@container (max-width: 800px)')
+    expect(review).toContain('@container (max-width: 420px)')
+    expect(review).toContain('@media (prefers-reduced-motion: reduce)')
     expect(review).toContain('event.key === \'Escape\'')
-    expect(review).toContain('min-height:44px')
-    expect(review).toContain('min-height:52px')
+    expect(review).toMatch(/min-height:\s*44px/)
+    expect(review).toMatch(/min-height:\s*52px/)
     expect(review).toContain('focus-visible')
   })
 })
