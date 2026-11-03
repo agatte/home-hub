@@ -120,9 +120,9 @@
       </SettingRow>
       <SettingRow label="Manual override timeout" hint="How long a manual mode choice sticks before auto-detection resumes">
         <div class="stepper">
-          <SettingButton variant="ghost" on:click={() => stepHours(-1)}>−</SettingButton>
+          <SettingButton variant="ghost" ariaLabel="Decrease manual override timeout" on:click={() => stepHours(-1)}>−</SettingButton>
           <span class="stepper-val">{autoConfig.override_timeout_hours}h</span>
-          <SettingButton variant="ghost" on:click={() => stepHours(1)}>+</SettingButton>
+          <SettingButton variant="ghost" ariaLabel="Increase manual override timeout" on:click={() => stepHours(1)}>+</SettingButton>
         </div>
       </SettingRow>
     </SettingGroup>
@@ -313,5 +313,16 @@
     font-family: var(--font-body);
     font-size: 12px;
     color: var(--text-muted);
+  }
+
+  @media (max-width: 600px) {
+    .stepper { box-sizing: border-box; display: grid; grid-template-columns: 52px minmax(0, 1fr) 52px; gap: 9px; align-items: center; width: 100%; min-width: 0; }
+    .stepper :global(.settings-btn) { box-sizing: border-box; width: 100%; min-height: 52px; padding: 9px; font-size: 19px; }
+    .stepper-val { min-width: 0; font-size: 17px; text-align: center; }
+    .source-list { box-sizing: border-box; justify-content: flex-start; width: 100%; min-width: 0; gap: 8px; }
+    .source-chip { display: inline-flex; align-items: center; min-height: 32px; max-width: 100%; padding: 6px 10px; font-size: 12px; line-height: 1.3; overflow-wrap: anywhere; }
+    .value-chip { box-sizing: border-box; max-width: 100%; flex-wrap: wrap; padding: 8px 11px; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+    .value-sub { overflow-wrap: anywhere; }
+    .muted-hint { margin: 2px 0; font-size: 13px; line-height: 1.5; }
   }
 </style>
