@@ -347,7 +347,8 @@
     border: 1px solid rgba(190,215,188,.2);
     border-radius: 24px;
     color: #e9ece4;
-    background: #142019;
+    --qa-more-surface: #142019;
+    background: var(--qa-more-surface);
     box-shadow: 0 24px 80px rgba(0,0,0,.42);
   }
   .qa-more-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -408,12 +409,34 @@
       left: 0;
       width: 100%;
       max-height: min(82dvh, 720px);
-      padding: 22px 18px calc(20px + env(safe-area-inset-bottom, 0px));
+      padding: 0 18px calc(20px + env(safe-area-inset-bottom, 0px));
+      scroll-padding-top: 88px;
       border-radius: 24px 24px 0 0;
       border-bottom: 0;
     }
-    .qa-more-intro { font-size: 12px; }
-    .qa-more-link { min-height: 66px; }
+    .qa-more-header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      margin: 0 -18px;
+      padding: 19px 18px 13px;
+      border-bottom: 1px solid rgba(190,215,188,.14);
+      background: var(--qa-more-surface);
+    }
+    .qa-more-header h2 { font-size: clamp(25px, 7.8vw, 30px); }
+    .qa-close-more { flex: 0 0 48px; width: 48px; height: 48px; }
+    .qa-more-intro { margin: 14px 0 16px; font-size: 12px; line-height: 1.6; }
+    .qa-more-list { gap: 10px; }
+    .qa-more-link {
+      grid-template-columns: 40px minmax(0, 1fr) 18px;
+      gap: 10px;
+      min-height: 72px;
+      padding: 12px 10px;
+    }
+    .qa-more-icon { width: 40px; height: 40px; }
+    .qa-more-copy strong { font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+    .qa-more-copy small { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .qa-more-note { font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   }
   /* Preview-only Daylight coordination. Scoped to the opted-in Home page:
      no global theme, route persistence, or change to legacy/product surfaces. */
@@ -471,7 +494,8 @@
     background: rgba(244,245,234,.97);
   }
   :global(.qa-shell:has(.home-review.daylight)) .qa-more-panel {
-    color: #263a2d; background: #f5f5ec; border-color: rgba(58,87,63,.25);
+    --qa-more-surface: #f5f5ec;
+    color: #263a2d; background: var(--qa-more-surface); border-color: rgba(58,87,63,.25);
   }
   :global(.qa-shell:has(.home-review.daylight)) .qa-more-kicker,
   :global(.qa-shell:has(.home-review.daylight)) .qa-more-link > :last-child { color: #5a795c; }
