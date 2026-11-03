@@ -97,7 +97,7 @@
 <svelte:window on:keydown={handleKeydown} />
 
 <div class="qa-shell">
-  <aside class="qa-sidebar" aria-label="HomeHub navigation">
+  <aside class="qa-sidebar" aria-label="HomeHub navigation" inert={moreOpen}>
     <a class="qa-brand" href="/quiet-atlas/home" aria-label="HomeHub Quiet Atlas Home">
       <span class="qa-brand-mark" aria-hidden="true">H</span>
       <span class="qa-brand-copy"><strong>HomeHub</strong><small>Quiet Atlas</small></span>
@@ -138,7 +138,7 @@
     </div>
   </aside>
 
-  <div class="qa-main">
+  <div class="qa-main" inert={moreOpen}>
     <header class="qa-mobile-header">
       <a class="qa-mobile-brand" href="/quiet-atlas/home" aria-label="HomeHub Quiet Atlas Home">
         <span class="qa-brand-mark" aria-hidden="true">H</span>
@@ -152,7 +152,7 @@
     </div>
   </div>
 
-  <nav class="qa-mobile-nav" aria-label="Primary navigation">
+  <nav class="qa-mobile-nav" aria-label="Primary navigation" inert={moreOpen}>
     {#each NAV_ITEMS as item (item.id)}
       <a
         href={item.href}
@@ -331,6 +331,8 @@
   .qa-desktop-nav a:focus-visible, .qa-desktop-nav button:focus-visible,
   .qa-more-panel a:focus-visible, .qa-more-panel button:focus-visible,
   .qa-brand:focus-visible, .qa-mobile-brand:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 3px; }
+  /* Keep the page beneath the open More dialog stationary without mutable body styles. */
+  :global(body:has(.qa-more-panel)) { overflow: hidden; }
   .qa-more-scrim { position: fixed; inset: 0; z-index: 600; border: 0; background: rgba(3,8,5,.72); backdrop-filter: blur(7px); }
   .qa-more-panel {
     position: fixed;
@@ -340,6 +342,7 @@
     bottom: 24px;
     width: min(460px, calc(100vw - 48px));
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 24px;
     border: 1px solid rgba(190,215,188,.2);
     border-radius: 24px;

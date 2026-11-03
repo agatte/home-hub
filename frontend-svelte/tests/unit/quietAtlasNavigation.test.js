@@ -50,6 +50,19 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shellSource).toContain("'Read-only preview' : 'Functional HomeHub tools'")
   })
 
+  it('keeps More a real modal across mobile and desktop without locking scrolling after close', () => {
+    expect(shellSource).toContain('<aside class="qa-sidebar" aria-label="HomeHub navigation" inert={moreOpen}>')
+    expect(shellSource).toContain('<div class="qa-main" inert={moreOpen}>')
+    expect(shellSource).toContain('<nav class="qa-mobile-nav" aria-label="Primary navigation" inert={moreOpen}>')
+    expect(shellSource).toContain('role="dialog"')
+    expect(shellSource).toContain('aria-modal="true"')
+    expect(shellSource).toContain('overscroll-behavior: contain;')
+    expect(shellSource).toContain(':global(body:has(.qa-more-panel)) { overflow: hidden; }')
+    expect(shellSource).toContain("if (previousRoute !== null && route !== previousRoute && moreOpen) closeMore(false)")
+    expect(shellSource).toContain('if (returnFocus?.isConnected) returnFocus.focus()')
+    expect(shellSource).toContain('max-height: min(82dvh, 720px);')
+  })
+
   it('connects preview Home, Control, groups, and scene navigation without changing legacy URLs', () => {
     expect(shellSource).toContain("id: 'home', label: 'Home', href: '/quiet-atlas/home'")
     expect(shellSource).toContain("id: 'control', label: 'Control', href: '/quiet-atlas/control'")
