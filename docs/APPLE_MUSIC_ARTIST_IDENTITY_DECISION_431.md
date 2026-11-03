@@ -73,6 +73,7 @@ Neither C nor D is accepted by this work. Current real input remains private;
 no file picker, source discovery, storage, host administration, or device write
 is part of this contract.
 
-Review these synthetic files and validation results first. Commit, push, and
-draft PR creation each remain behind the next explicit authorization gate;
-nothing is published by this task.
+This contract is proposed in draft PR #460 for Linux CI and independent
+privacy review. Source integration, merge, production deployment, catalog
+lookup, retention and recommendation use remain separately gated; publishing
+the draft does not authorize any of them.

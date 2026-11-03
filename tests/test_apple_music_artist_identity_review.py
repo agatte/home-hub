@@ -160,6 +160,22 @@ def test_hostile_source_object_equality_never_escapes_or_impersonates():
             assert "private-value" not in repr(result)
 
 
+def test_uninitialized_exact_dataclasses_fail_closed_without_partial_counts():
+    row = observation()
+    malformed = (
+        object.__new__(contract.LabelReview),
+        replace(row, exposure=object.__new__(contract.SourceLabelExposure)),
+        replace(row, references=(object.__new__(contract.CatalogArtistReference),)),
+    )
+    for bad in malformed:
+        for batch in ((bad,), (row, bad), (bad, row)):
+            result = contract.evaluate_artist_identity_review(batch)
+            values = dict(result.counts)
+            assert values["invalid_input_abstain"] == 1
+            assert sum(values.values()) == 1
+            assert result.preference_effect == result.rank_effect == 0
+
+
 def test_bounds_and_empty_batch():
     row = observation()
     assert sum(counts().values()) == 0

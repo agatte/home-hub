@@ -194,7 +194,7 @@ def evaluate_artist_identity_review(rows: tuple[LabelReview, ...]) -> AggregateR
             else:
                 status = _status(group[0])
             counts[status] += 1
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         counts = dict.fromkeys(STATUSES, 0)
         counts["invalid_input_abstain"] = 1
     return AggregateReview(tuple(counts.items()))
