@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte'
   import { page } from '$app/stores'
   import { goto } from '$app/navigation'
   import {
@@ -46,20 +45,12 @@
   /** @type {string} */
   let activeId = 'overview'
 
-  // Sync activeId from ?section=X on mount and whenever the URL changes.
+  // The URL owns the selected section, including Back/Forward to a missing
+  // or invalid ?section=. Never leave a stale section visible for another URL.
   $: {
     const fromUrl = $page.url.searchParams.get('section')
-    if (fromUrl && SECTIONS.some((s) => s.id === fromUrl)) {
-      activeId = fromUrl
-    }
+    activeId = fromUrl && SECTIONS.some((s) => s.id === fromUrl) ? fromUrl : 'overview'
   }
-
-  onMount(() => {
-    const fromUrl = $page.url.searchParams.get('section')
-    if (fromUrl && SECTIONS.some((s) => s.id === fromUrl)) {
-      activeId = fromUrl
-    }
-  })
 
   /** @param {string} id */
   function select(id) {
