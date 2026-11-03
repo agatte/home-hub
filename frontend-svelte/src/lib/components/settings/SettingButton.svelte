@@ -103,4 +103,18 @@
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
+
+  @media (max-width: 600px) {
+    .settings-btn {
+      box-sizing: border-box;
+      min-width: 44px;
+      min-height: 48px;
+      padding: 11px 15px;
+      font-size: 14px;
+      line-height: 1.35;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .settings-btn:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 2px; }
+  }
 </style>

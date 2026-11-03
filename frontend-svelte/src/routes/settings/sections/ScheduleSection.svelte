@@ -117,9 +117,9 @@
 
       <SettingRow label="Morning ramp" hint="How long to brighten from dim warm to full">
         <div class="stepper">
-          <SettingButton variant="ghost" on:click={() => stepRamp(-1)}>−</SettingButton>
+          <SettingButton variant="ghost" title="Shorten morning ramp" on:click={() => stepRamp(-1)}>−</SettingButton>
           <span class="stepper-val">{currentSchedule.ramp_duration_minutes}m</span>
-          <SettingButton variant="ghost" on:click={() => stepRamp(1)}>+</SettingButton>
+          <SettingButton variant="ghost" title="Lengthen morning ramp" on:click={() => stepRamp(1)}>+</SettingButton>
         </div>
       </SettingRow>
 
@@ -149,6 +149,7 @@
     <SettingGroup title="Morning routine" hint="Weather + traffic TTS on Sonos. Weekdays only (Mon–Fri).">
       <SettingRow label="Enabled" hint="Play the morning briefing at the scheduled time">
         <SettingToggle
+          label="Morning routine enabled"
           checked={!!routineConfig.enabled}
           onChange={(v) => saveRoutineConfig({ enabled: v })}
         />
@@ -239,5 +240,16 @@
     min-width: 44px;
     text-align: center;
     font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 600px) {
+    .day-tabs { box-sizing: border-box; align-self: stretch; width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .day-tab { min-width: 0; min-height: 48px; padding: 10px 12px; font-size: 15px; }
+    .day-tab:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 2px; }
+    .time-input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 48px; padding: 11px 13px; font-size: 16px; }
+    .time-input:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 2px; }
+    .stepper { width: 100%; min-width: 0; display: grid; grid-template-columns: 52px minmax(0, 1fr) 52px; gap: 9px; align-items: center; }
+    .stepper :global(.settings-btn) { box-sizing: border-box; width: 100%; min-height: 48px; padding: 8px; font-size: 19px; }
+    .stepper-val { min-width: 0; font-size: 17px; }
   }
 </style>
