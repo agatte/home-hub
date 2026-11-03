@@ -246,7 +246,7 @@
   <header class="foreword">
     <div>
       <p class="eyebrow">HOME / OVERVIEW</p>
-      <h1>The apartment, <em>at ease.</em></h1>
+      <h1><span class="desktop-home-heading">The apartment, <em>at ease.</em></span><span class="mobile-home-heading">Home, <em>within reach.</em></span></h1>
       <p class="subhead">A quieter way to understand home, then change what matters.</p>
     </div>
     <a class="apartment-link" href="/" aria-label="Open existing Apartment and household tools">
@@ -254,6 +254,47 @@
       Apartment & household tools <span aria-hidden="true">↗</span>
     </a>
   </header>
+
+  <section class="phone-status" aria-label="Reported HomeHub status">
+    <div class="phone-status-header">
+      <span>HOMEHUB / REPORTED CONTEXT</span>
+      <strong class:unverified={contextDisplay.status !== 'recent'}>{contextDisplay.status === 'recent' ? 'Recent report' : 'Not verified'}</strong>
+    </div>
+    <div class="phone-status-grid">
+      <div><span>HOUSE STATE</span><strong>{contextDisplay.house}</strong></div>
+      <div><span>ACTIVITY</span><strong>{contextDisplay.activity}</strong></div>
+    </div>
+    <p>{contextDisplay.note}. A recent REST response is not proof of sensor freshness or room location.</p>
+  </section>
+
+  <section class="phone-actions" aria-labelledby="phone-lighting-title">
+    <div class="phone-actions-head">
+      <span class="eyebrow">YOUR LIGHTING / QUICK ACCESS</span>
+      <h2 id="phone-lighting-title">Choose your space.</h2>
+      <p>Open a room or explore scenes. These new Control screens are read-only design reviews, not light switches yet.</p>
+    </div>
+    <nav class="phone-rooms" aria-label="Browse lighting by room">
+      {#each groups as group (group.id)}
+        <a href={controlGroupHref(group.id)} class="phone-room" aria-label={group.label}>
+          <span class="phone-room-icon" aria-hidden="true"></span>
+          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail} · Browse fixtures</small></span>
+          <span class="phone-room-arrow" aria-hidden="true">↗</span>
+        </a>
+      {/each}
+    </nav>
+    <a class="phone-scenes" href={CONTROL_SCENES_HREF}>
+      <span><strong>Scenes &amp; presets</strong><small>Browse available names · no activation</small></span>
+      <span aria-hidden="true">↗</span>
+    </a>
+    <a class="phone-functional-handoff" href="/">Open current functional HomeHub <span aria-hidden="true">↗</span></a>
+  </section>
+
+  <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
+    <span>THE APARTMENT / 02</span>
+    <h2 id="phone-apartment-title">Your place, beyond the controls.</h2>
+    <p>The detailed Apartment Canvas is being developed separately. Keep the current Apartment and household tools available while the physical view is refined.</p>
+    <a href="/">Open Apartment &amp; household tools <span aria-hidden="true">↗</span></a>
+  </section>
 
   <section class="apartment-stage" aria-labelledby="apartment-stage-title">
     <div class="world">
@@ -413,6 +454,7 @@
     --bg:#eeeee6; --stage:#e0e5d8; --deep:#d5dfd3; --line:rgba(45,77,55,.18);
     --ink:#263a2d; --muted:#5b6d5f; --gold:#805f37; --glow:rgba(177,152,112,.14);
   }
+  .mobile-home-heading,.phone-status,.phone-actions,.phone-apartment-entry {display:none;}
   button,select { font:inherit; }
   button, a, select { -webkit-tap-highlight-color:transparent; }
   a { color:inherit;text-decoration:none; }
@@ -541,6 +583,52 @@
     .mobile-context a {margin-left:auto;color:var(--gold);}
     .mobile-context .review-toggle {margin-top:0;font-size:10px;flex:0 0 auto;}
     .review-footer {font-size:9px;margin-top:14px;}
+    /* Phone has its own information hierarchy, not a scaled desktop stage. */
+    .desktop-home-heading {display:none;}
+    .mobile-home-heading {display:inline;}
+    .phone-status,.phone-actions,.phone-apartment-entry {display:block;min-width:0;}
+    .apartment-stage,.lighting-dock {display:none;}
+    .foreword {margin:18px 0 16px;}
+    .foreword h1 {font-size:clamp(30px,8vw,38px);line-height:1.12;}
+    .foreword .subhead {font-size:13px;line-height:1.45;}
+    .phone-status {border:1px solid var(--line);border-radius:16px;background:linear-gradient(135deg,var(--stage),var(--deep));padding:15px;margin-bottom:20px;}
+    .phone-status-header {display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--gold);font-size:10px;font-weight:700;letter-spacing:.08em;}
+    .phone-status-header strong {font-size:10px;letter-spacing:0;text-align:right;color:var(--muted);}
+    .phone-status-header .unverified {color:var(--gold);}
+    .phone-status-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:15px 0 11px;}
+    .phone-status-grid>div {min-width:0;display:flex;flex-direction:column;gap:6px;}
+    .phone-status-grid>div+div {border-left:1px solid var(--line);padding-left:14px;}
+    .phone-status-grid span {font-size:10px;letter-spacing:.09em;color:var(--muted);}
+    .phone-status-grid strong {font-size:18px;line-height:1.25;font-weight:650;overflow-wrap:anywhere;}
+    .phone-status p {font-size:12px;color:var(--muted);line-height:1.55;margin:0;}
+    .phone-actions {margin-bottom:20px;}
+    .phone-actions-head .eyebrow {font-size:10px;margin:0 0 8px;}
+    .phone-actions-head h2 {font-size:27px;font-weight:590;line-height:1.12;margin:0 0 8px;}
+    .phone-actions-head p {font-size:12px;color:var(--muted);line-height:1.55;margin:0 0 14px;}
+    .phone-rooms {display:grid;grid-template-columns:minmax(0,1fr);gap:9px;}
+    .phone-room {display:flex;align-items:center;gap:15px;min-height:76px;box-sizing:border-box;min-width:0;padding:10px 15px;border-radius:14px;border:1px solid var(--line);background:linear-gradient(115deg,var(--stage),var(--deep));}
+    .phone-room-icon {width:16px;height:16px;flex:0 0 16px;border:2px solid var(--gold);border-radius:5px;transform:rotate(45deg);}
+    .phone-room-copy {display:flex;flex-direction:column;gap:5px;min-width:0;flex:1;}
+    .phone-room-copy strong {font-size:16px;font-weight:640;line-height:1.15;}
+    .phone-room-copy small {font-size:12px;line-height:1.35;color:var(--muted);white-space:normal;}
+    .phone-room-arrow {color:var(--gold);font-size:21px;flex:0 0 auto;}
+    .phone-scenes {min-height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:13px;margin-top:11px;padding:11px 15px;border:1px solid var(--line);border-radius:14px;background:rgba(210,183,136,.07);}
+    .phone-scenes>span:first-child {display:flex;flex-direction:column;gap:5px;min-width:0;}
+    .phone-scenes strong {font-size:16px;font-weight:640;}
+    .phone-scenes small {font-size:12px;color:var(--muted);line-height:1.4;}
+    .phone-scenes>span:last-child {color:var(--gold);font-size:21px;}
+    .phone-functional-handoff {min-height:50px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);color:var(--gold);font-size:13px;font-weight:650;}
+    .phone-apartment-entry {padding:21px 16px;margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:radial-gradient(ellipse at 95% -10%,var(--glow),transparent 70%),var(--deep);}
+    .phone-apartment-entry>span {font-size:10px;font-weight:700;color:var(--gold);letter-spacing:.13em;}
+    .phone-apartment-entry h2 {font-size:23px;font-weight:560;line-height:1.2;margin:10px 0;}
+    .phone-apartment-entry p {font-size:12px;line-height:1.6;color:var(--muted);margin-bottom:12px;}
+    .phone-apartment-entry a {min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--gold);font-size:13px;font-weight:650;border-top:1px solid var(--line);padding-top:11px;}
+    /* Even secondary review controls must remain usable by touch. */
+    .theme-toggle {min-height:44px;font-size:12px;padding:9px 12px;}
+    .mobile-context select {min-height:44px;font-size:12px;}
+    .mobile-context .review-toggle {min-height:44px;font-size:12px;}
+    .mobile-context a {min-height:44px;display:inline-flex;align-items:center;font-size:12px;}
+    .review-footer {font-size:11px;line-height:1.5;}
   }
   @media (max-width:360px) {
     .foreword {margin:9px 0 8px;}

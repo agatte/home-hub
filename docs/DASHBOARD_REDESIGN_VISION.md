@@ -96,6 +96,28 @@ Both experiences use the same state and component language, but the hierarchy, n
 
 Desktop/kiosk can show apartment, context, and time/history concurrently. Mobile should prioritize immediate context, the apartment, and the next relevant action, with deeper information progressively disclosed.
 
+## Mobile-first completion and release sequence — accepted 2026-11-02
+
+**Accepted priority:** Complete a genuinely designed iPhone/mobile UI first, finish the rest of the Quiet Atlas × Daylight app-wide redesign second, verify the combined product on real phone and desktop/kiosk third, and only then propose a separately approved Latitude release. **After** that release, proceed to smarter HomeHub notifications (existing #51/#291 security dependencies), followed by iPhone Shortcuts and possible native widgets. This is **development sequencing**, not permission to merge, deploy, restart production, change credentials or send device commands.
+
+Mobile is a distinct composition, not desktop components scaled or stacked into a phone. The user's current most frequent phone task is changing lighting, but future use can include house status, history, music, and other activities. The first phone screen should therefore feature source-qualified House State/Activity and immediately discoverable lighting groups and presets without making unrelated functionality disappear.
+
+**Mobile acceptance requirements:**
+
+- No forced horizontal **page** scroll at 320, 360 or 390 CSS pixels; accommodate iPhone portrait, landscape, notches/home indicator, dynamic text, safe areas, and the installed web-app experience. Vertical scrolling may be natural and intentional.
+- Readable text and appropriately sized, finger-friendly controls; primary tap targets approximately 44 CSS pixels or greater. No cramped desktop-style settings tables, micro-buttons or horizontally scrolling control strips.
+- Phone-native information architecture across Home, Control, scenes/presets, Settings, Music, Insights/history and More. Advanced diagnostics remain easy to find but never dominate the primary Home screen.
+- Context and lights/scenes must be truthfully labeled by freshness, evidence and authority. A REST receipt is not proof of bridge freshness, physical room presence, bulb reachability or permission to actuate.
+- Robust loading, empty, disconnected, stale, failed, DND/Sleeping/Travel/protected-control, reduced-motion, focus, VoiceOver and keyboard behavior; no silent failures.
+- **Usable functional lighting** is an acceptance gate for replacing the everyday production interface. Read-only group/scene previews are insufficient on their own. No direct UI-side group fan-out or optimistic write: resolve the separately proposed `docs/QUIET_ATLAS_CONTROL_ACTUATION_PLAN.md` writer, ownership, transition, idempotency and freshness contracts with Lighting & Atmosphere / House State before enabling any new one-shot action. Bedroom L2/L5 must remain individually governed.
+- Real mounted Svelte application tests, visual review on the user's actual iPhone and kiosk/desktop, accessibility/performance, and an explicit release candidate review are required. Green Linux unit tests and static responsive fixtures cannot substitute for physical acceptance.
+
+**Integration boundaries:** Maintain the separately evidence-controlled Apartment Canvas (#192) and the ongoing desk lighting comfort work (#244/#370). Do not silently absorb Apple Music #431, music policy #254, notifications or Shortcut external-action authentication into a pure redesign slice. Existing functional pages remain available until deliberately migrated and verified.
+
+**Release gate:** Before a separate deployment authorization, compare the exact reviewed GitHub source to the Latitude's actual deployed SHA and inventory every intervening change, including unrelated master commits, configuration/migrations and startup effects. Prepare rollback and acceptance checks; use only `scripts/deploy.sh` for an authorized rollout. “Deploy the redesign when finished” is a roadmap choice, not standing authority to deploy an unknown future revision.
+
+**Current implementation status:** The opt-in Quiet Atlas routes are design studies. Mobile-first Home/lighting design slices must be treated as reversible proposals until real-device review. A genuinely mobile Home layout may place direct room and preset navigation ahead of the full desktop Apartment stage while preserving access to #192; this particular composition is still subject to visual and functional acceptance.
+
 ## Visual references and what they mean
 
 These references describe **principles**, not artwork to reproduce.
