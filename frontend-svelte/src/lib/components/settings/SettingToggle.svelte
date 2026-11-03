@@ -95,4 +95,16 @@
     min-width: 26px;
     text-align: left;
   }
+
+  @media (max-width: 600px) {
+    .settings-toggle {
+      box-sizing: border-box;
+      min-width: 88px;
+      min-height: 48px;
+      padding: 10px 4px;
+      gap: 12px;
+      font-size: 13px;
+    }
+    .settings-toggle:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 2px; border-radius: 8px; }
+  }
 </style>

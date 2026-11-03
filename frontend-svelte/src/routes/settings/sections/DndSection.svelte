@@ -205,4 +205,16 @@
     font-size: 12px;
     color: var(--danger);
   }
+
+  @media (max-width: 600px) {
+    .dnd-card { box-sizing: border-box; min-width: 0; padding: 15px; gap: 16px; }
+    .status-headline { font-family: var(--font-body); font-size: 22px; line-height: 1.25; letter-spacing: 0; }
+    .status-sub { font-size: 14px; line-height: 1.55; }
+    .duration-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .duration-pill { box-sizing: border-box; min-width: 0; min-height: 52px; padding: 12px 8px; font-size: 15px; line-height: 1.3; white-space: normal; }
+    .duration-pill:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 2px; }
+    .action-row { width: 100%; min-width: 0; }
+    .action-row :global(.settings-btn) { width: 100%; min-height: 52px; font-size: 15px; }
+    .error { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+  }
 </style>
