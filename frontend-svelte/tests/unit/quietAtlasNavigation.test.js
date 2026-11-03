@@ -36,7 +36,7 @@ describe('Quiet Atlas shared shell navigation', () => {
   it('labels only known read-only reviews as previews and keeps functional warnings visible', () => {
     for (const route of [
       '/quiet-atlas', '/quiet-atlas/home', '/quiet-atlas/control',
-      '/quiet-atlas/insights', '/quiet-atlas/settings',
+      '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
     ]) {
       expect(isQuietAtlasReadOnlyPreview(route)).toBe(true)
       expect(shouldShowGlobalErrorToast(route, new URLSearchParams())).toBe(false)
@@ -66,6 +66,7 @@ describe('Quiet Atlas shared shell navigation', () => {
   it('connects preview Home, Control, groups, and scene navigation without changing legacy URLs', () => {
     expect(shellSource).toContain("id: 'home', label: 'Home', href: '/quiet-atlas/home'")
     expect(shellSource).toContain("id: 'control', label: 'Control', href: '/quiet-atlas/control'")
+    expect(shellSource).toContain("id: 'music', label: 'Music', href: '/quiet-atlas/music'")
     expect(shellSource.match(/href="\/quiet-atlas\/home"/g)).toHaveLength(2)
     expect(shellSource).toContain('if (previousRoute !== null && route !== previousRoute && moreOpen) closeMore(false)')
     expect(shellSource).toContain('return unsubscribe')
@@ -91,6 +92,8 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(activeQuietAtlasSection('/analytics', '#control')).toBe('insights')
     expect(activeQuietAtlasSection('/settings', '#control')).toBe('more')
     expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
+    expect(activeQuietAtlasSection('/quiet-atlas/music')).toBe('music')
+    expect(shouldUseQuietAtlasShell('/quiet-atlas/music', new URLSearchParams())).toBe(true)
     expect(shouldUseQuietAtlasShell('/quiet-atlas/control', new URLSearchParams())).toBe(true)
     expect(activeQuietAtlasSection('/music')).toBe('music')
     expect(activeQuietAtlasSection('/analytics')).toBe('insights')

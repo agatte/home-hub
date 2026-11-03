@@ -70,7 +70,7 @@ export const MORE_DESTINATIONS = [
 // Future functional routes fail open to the normal error display.
 const READ_ONLY_PREVIEW_PATHS = new Set([
   '/quiet-atlas', '/quiet-atlas/home', '/quiet-atlas/control',
-  '/quiet-atlas/insights', '/quiet-atlas/settings',
+  '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
 ])
 
 /** @param {string} pathname */
@@ -111,6 +111,7 @@ export function activeQuietAtlasSection(pathname, _hash = '') {
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/insights') return 'insights'
   if (pathname === '/quiet-atlas/settings') return 'more'
+  if (pathname === '/quiet-atlas/music') return 'music'
   if (pathname === '/quiet-atlas/home' || pathname.startsWith('/quiet-atlas/')) return 'home'
   if (pathname.startsWith('/music')) return 'music'
   if (pathname.startsWith('/analytics')) return 'insights'
