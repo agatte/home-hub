@@ -138,5 +138,17 @@
   .pair{color:#b7c9b9;}
   button:focus-visible {outline:3px solid #d7e7bc;outline-offset:3px;}
   @media(min-width:800px){.sheet-root{align-items:center}.sheet{border-radius:24px;padding:30px;max-height:82dvh}.fixtures{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  /* Thumb-friendly local draft affordances, not a new physical writer. */
+  @media(max-width:700px){
+    .sheet { min-width:0; width:100%; max-height:94dvh; padding:19px 16px calc(26px + env(safe-area-inset-bottom,0px)); }
+    .sheet h2 { font-size:30px; }
+    .fixture { min-width:0; padding:15px; }
+    .fixture h3 { overflow-wrap:anywhere; }
+    .fixture label { font-size:14px; line-height:1.5; gap:8px; flex-wrap:wrap; }
+    .fixture input[type=range] { box-sizing:border-box; min-height:44px; margin:10px 0; }
+    .review,.dismiss-review { box-sizing:border-box; width:100%; min-height:48px; font-size:14px; }
+    .readonly,.pair { font-size:13px; line-height:1.6; }
+    .draft-summary { overflow-wrap:anywhere; }
+  }
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
 </style>

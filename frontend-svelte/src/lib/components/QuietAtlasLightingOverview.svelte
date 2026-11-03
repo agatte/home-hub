@@ -50,6 +50,11 @@
     {/if}
   </div>
 
+  <button type="button" class="mobile-presets-shortcut" on:click={onBrowseScenes}>
+    <span><strong>Browse presets</strong><small>Review scenes · no activation</small></span>
+    <span aria-hidden="true">↗</span>
+  </button>
+
   <div class="section-heading">
     <div>
       <div class="eyebrow">YOUR APARTMENT</div>
@@ -104,6 +109,7 @@
 
 <style>
   .quiet-atlas { color: #eaeae4; font-family: system-ui, -apple-system, sans-serif; width: 100%; max-width: 100%; }
+  .mobile-presets-shortcut { display:none; }
   #control { scroll-margin-top: 20px; }
   .context { background: radial-gradient(ellipse at 88% 10%, rgba(130,157,110,.17), transparent 54%), #101b18; border: 1px solid #304238; border-radius: 24px; padding: 26px 24px; }
   .eyebrow { color: #9fb3a1; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
@@ -147,6 +153,32 @@
     .presets-heading { margin-top: 18px; }
     .group { min-height: 94px; padding: 14px; }
     .group-name { font-size: 15px; }
+  }
+  /* A phone-native Control layout: room selection first, full-width tappable rows.
+     These are read-only detail destinations, not broadcast light switches. */
+  @media(max-width:700px) {
+    .quiet-atlas { min-width:0; }
+    .context { padding:14px 15px; border-radius:16px; }
+    .mobile-presets-shortcut { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:64px; text-align:left; padding:12px 16px; margin:14px 0 3px; border:1px solid #6a775d; border-radius:14px; background:#233127; color:#efe5c9; }
+    .mobile-presets-shortcut>span:first-child { display:flex; flex-direction:column; gap:5px; min-width:0; }
+    .mobile-presets-shortcut strong { font-size:16px; }
+    .mobile-presets-shortcut small { color:#d1cfb8; font-size:12px; }
+    .mobile-presets-shortcut>span:last-child { font-size:22px; }
+    .context h1 { font-size:26px; margin-top:7px; }
+    .context .activity { font-size:14px; }
+    .context .provenance { font-size:12px; line-height:1.5; }
+    .section-heading { align-items:center; margin:19px 0 11px; }
+    .section-heading h2 { font-size:27px; line-height:1.18; }
+    .groups,.scene-row { grid-template-columns:minmax(0,1fr); gap:9px; }
+    .group { box-sizing:border-box; min-height:76px; padding:12px 16px; border-radius:14px; gap:9px; }
+    .group-name { font-size:16px; line-height:1.25; }
+    .group-status { font-size:13px; line-height:1.3; }
+    .count { font-size:12px; }
+    .scene { box-sizing:border-box; min-height:68px; padding:12px 16px; display:flex; flex-direction:row; align-items:center; gap:12px; overflow-wrap:anywhere; }
+    .scene>span:first-child { font-size:15px; min-width:0; }
+    .scene-kind { font-size:12px; flex:0 0 auto; }
+    .browse,.refresh-lights { min-height:44px; }
+    .empty,.snapshot-note,.connection-warning { line-height:1.55; }
   }
   @media(prefers-reduced-motion: reduce) { .group { transition: none; } }
 </style>
