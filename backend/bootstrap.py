@@ -1323,7 +1323,7 @@ async def lifespan(app: FastAPI):
             await camera_service.start()
             if camera_service.enabled:
                 app.state.camera_service = camera_service
-                automation.register_on_mode_change(camera_service.on_mode_change)
+                automation.register_on_mode_change(camera_service.on_mode_change, with_owner_guard=True)
                 automation.set_camera_service(camera_service)
                 event_logger.set_camera_service(camera_service)
                 ambient_sound.set_camera_service(camera_service)

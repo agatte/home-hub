@@ -525,6 +525,51 @@ async def post_desktop_lux(payload: DesktopLuxReading, request: Request) -> dict
     return {"status": "ok"}
 
 
+@router.get(
+    "/desktop/l2-observation-readiness",
+    dependencies=[Depends(require_api_key_strict)],
+)
+async def get_desktop_l2_observation_readiness(request: Request, response: Response) -> dict:
+    """Read named Desktop/Latitude and bedroom-lux snapshots; never actuate.
+
+    Diagnostic only: a named source tag and existing calibration baseline are
+    NOT authenticated physical-device provenance or an accepted L2 comfort
+    floor. In particular, this cannot grant a static or ScreenSync write lease.
+    Strict camera API-key authorization applies to non-localhost callers,
+    even on the private LAN; existing camera routes retain their own policy.
+    """
+    from backend.services.desk_l2_observation_readiness import (
+        assess_desk_l2_observations,
+    )
+    from backend.services.lux_channel import LuxChannel
+    from backend.services.presence_fusion import PresenceFusion
+
+    fusion = getattr(request.app.state, "presence", None)
+    channel = getattr(request.app.state, "bedroom_lux", None)
+    desktop = latitude = None
+    if isinstance(fusion, PresenceFusion):
+        desktop = fusion.get_source_reading("desktop")
+        latitude = fusion.get_source_reading("latitude")
+    if not isinstance(channel, LuxChannel):
+        channel = None
+
+    response.headers["Cache-Control"] = "no-store"
+    readiness = assess_desk_l2_observations(
+        desktop=desktop,
+        latitude=latitude,
+        bedroom_channel=channel,
+        now=datetime.now(timezone.utc),
+    )
+    return {
+        "status": "ok",
+        "scope": "advisory_observation_only",
+        "desktop_observation_ready": readiness.desktop_observation_ready,
+        "bedroom_sample_ready": readiness.bedroom_sample_ready,
+        "reasons": list(readiness.reasons),
+        "lighting_authorized": readiness.authorizes_lighting,
+    }
+
+
 @router.get("/desktop/lux", dependencies=[Depends(require_api_key)])
 async def get_desktop_lux(request: Request) -> dict:
     """Bedroom lux channel snapshot (ema / baseline / freshness).

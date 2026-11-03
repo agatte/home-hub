@@ -21,7 +21,9 @@ from backend.services.light_state_calculator import (
     AUTOMATIC_EFFECT_LIGHT_IDS,
     EFFECT_AUTO_MAP,
 )
-from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+from backend.services.lighting_transition_boundary import (
+    LightingTransitionBoundary, lighting_write_validator,
+)
 
 logger = logging.getLogger("home_hub.automation.effects")
 
@@ -178,9 +180,13 @@ class EffectManager:
 
         checkpoint = self._publish_transition_checkpoint("effect_reconcile")
         authority = self._transition_boundary.authority
+        owner_is_current = lighting_write_validator.get()
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return (
+                    (owner_is_current is None or owner_is_current())
+                    and authority.valid(checkpoint)
+                )
             if not current():
                 return False
 
@@ -266,10 +272,14 @@ class EffectManager:
         required = self.release_light_ids()
         checkpoint = self._publish_transition_checkpoint("scene_transition")
         authority = self._transition_boundary.authority
+        owner_is_current = lighting_write_validator.get()
 
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return (
+                    (owner_is_current is None or owner_is_current())
+                    and authority.valid(checkpoint)
+                )
             if not current():
                 return False
             if before_transition is not None:
@@ -352,9 +362,13 @@ class EffectManager:
         required = {str(light_id)}
         checkpoint = self._publish_transition_checkpoint("effect_reconcile_light")
         authority = self._transition_boundary.authority
+        owner_is_current = lighting_write_validator.get()
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return (
+                    (owner_is_current is None or owner_is_current())
+                    and authority.valid(checkpoint)
+                )
             if not current():
                 return False
             safety_result = await establish_safety(required)
@@ -380,9 +394,13 @@ class EffectManager:
             return True
         checkpoint = self._publish_transition_checkpoint("effect_stop_all")
         authority = self._transition_boundary.authority
+        owner_is_current = lighting_write_validator.get()
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return (
+                    (owner_is_current is None or owner_is_current())
+                    and authority.valid(checkpoint)
+                )
             if not current():
                 return False
             stopped = await self._mutate(
