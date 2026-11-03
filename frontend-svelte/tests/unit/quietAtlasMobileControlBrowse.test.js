@@ -28,6 +28,8 @@ describe('Quiet Atlas phone-first read-only Control browse (#461)', () => {
     expect(scenes).toContain('{#each categories as cat (cat.id)}')
     expect(scenes).toContain('<option value={cat.id}>{cat.label}</option>')
     expect(scenes).toContain('on:click={() => category = cat.id}')
+    expect(scenes).toContain("select:not(:disabled)")
+    expect(scenes).toContain('element.getClientRects().length > 0')
     expect(scenes).toContain('.filters { display:none; }')
     expect(scenes).toContain('.scene-grid { grid-template-columns:minmax(0,1fr); gap:10px; }')
     expect(scenes).toContain('.scene-review { min-height:48px; width:100%;')
