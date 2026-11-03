@@ -144,4 +144,11 @@
     color: var(--text-muted);
     line-height: 1.5;
   }
+
+  @media (max-width: 600px) {
+    .status-pill { box-sizing: border-box; min-height: 32px; padding: 6px 12px; font-size: 13px; line-height: 1.4; }
+    .value-pill { box-sizing: border-box; min-width: 0; max-width: 100%; padding: 8px 11px; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+    .value-pill.mono { font-size: 12px; overflow-wrap: anywhere; word-break: break-all; }
+    .feedback { margin: 10px 0 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+  }
 </style>

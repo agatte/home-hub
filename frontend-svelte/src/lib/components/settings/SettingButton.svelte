@@ -5,6 +5,9 @@
   export let loading = false
   /** @type {string | undefined} */
   export let title = undefined
+  /** Optional explicit accessible name for symbolic controls. */
+  /** @type {string | undefined} */
+  export let ariaLabel = undefined
   /** @type {'button' | 'submit'} */
   export let type = 'button'
 </script>
@@ -12,6 +15,7 @@
 <button
   {type}
   {title}
+  aria-label={ariaLabel}
   class="settings-btn"
   class:btn-primary={variant === 'primary'}
   class:btn-ghost={variant === 'ghost'}
