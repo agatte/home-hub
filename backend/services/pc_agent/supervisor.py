@@ -297,6 +297,8 @@ class AgentSupervisor:
         recovery_launcher: Callable[[ProcessIdentity, Path], None] = launch_detached_recovery,
         exit_fn: Callable[[int], None] = os._exit,
     ) -> None:
+        from backend.services.pc_agent.content_brightness_shadow import ContentSignal
+        self._content_signal = ContentSignal()
         self._server_url = server_url
         self._stop = threading.Event()
         self._agents: dict[str, AgentState] = {}
@@ -394,7 +396,7 @@ class AgentSupervisor:
             self._agents["screen_sync"] = AgentState(
                 name="screen_sync",
                 target=run_agent,
-                kwargs={"server_url": self._server_url},
+                kwargs={"server_url": self._server_url, "content_signal": self._content_signal},
                 heartbeat_timeout=HEARTBEAT_TIMEOUTS["screen_sync"],
             )
             logger.info("Registered: screen_sync")
@@ -446,7 +448,7 @@ class AgentSupervisor:
             self._agents["monitor_brightness"] = AgentState(
                 name="monitor_brightness",
                 target=run_agent,
-                kwargs={"server_url": self._server_url},
+                kwargs={"server_url": self._server_url, "content_signal": self._content_signal},
             )
             logger.info("Registered: monitor_brightness")
         except ImportError as e:
