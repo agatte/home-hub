@@ -1,21 +1,10 @@
 <script>
   import { tick } from 'svelte'
-  // #431: isolated fictional identity-review study. No catalog, import,
-  // persisted preference, playback, HomeHub API, or third-party operation.
-  const artists = [
-    { name: 'Imaginary Atlas Ensemble', days: '10+ example days' },
-    { name: 'Fictional Pattern Unit', days: '4–9 example days' },
-    { name: 'Invented Sound Group', days: '2–3 example days' },
-    { name: 'Makebelieve Echo Collective', days: '1 example day' },
-  ]
-  const candidates = [
-    { name: 'Imaginary Atlas Ensemble', note: 'Invented lunar chamber ensemble' },
-    { name: 'Fictional Pattern Unit', note: 'Invented geometric percussion group' },
-    { name: 'Invented Sound Group', note: 'Invented paper instrument quartet' },
-    { name: 'Invented Sound Group', note: 'Invented cloud instrument duo — distinct candidate' },
-    { name: 'Makebelieve Echo Collective', note: 'Invented silent theatre ensemble' },
-  ]
-  const fixtures = [[0], [1], [2, 3], [4]]
+  import packet from '$lib/appleMusicArtistReviewHandoff431.fixture.json'
+  import { adaptSyntheticArtistReview431 } from '$lib/appleMusicArtistReviewHandoff431.js'
+
+  // Static repository fixture only. No route data, query, upload or private input.
+  const { artists, candidates, fixtures } = adaptSyntheticArtistReview431(packet)
 
   /** @typedef {'none' | 'accepted' | 'unsure'} DemoDecision */
   /** @typedef {{results: number[], chosen: number | null, decision: DemoDecision}} DemoRow */
@@ -218,7 +207,7 @@
       {:else if step === 'done'}
         {#if row.decision === 'accepted'}
           <h2 bind:this={stepHeading} tabindex="-1">Match selected.</h2>
-          <p class="step-description"><strong>{row.chosen === null ? 'Unverified' : candidates[row.chosen].name}</strong> is selected for this fictional session only. This is not a preference rating.</p>
+          <p class="step-description"><strong>{row.chosen === null ? 'Unverified' : candidates[row.chosen].name}</strong> is selected for this fictional session only. This is not verified identity or a preference rating.</p>
           <div class="step-actions">
             <button type="button" class="primary" on:click={next}>{index === artists.length - 1 ? 'Return to first artist' : 'Continue to next artist'}</button>
             <button type="button" class="secondary" on:click={undo}>Undo this match</button>

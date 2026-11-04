@@ -1,0 +1,81 @@
+{
+  "schema": "artist_review_fixture_431_v1",
+  "provenance": "synthetic_fixture_only",
+  "source": "apple_daily_tracks",
+  "evidence": "artist_label_day_exposure",
+  "identity_status": "unverified",
+  "preference_eligible": false,
+  "session_proven": false,
+  "cross_source_independent": false,
+  "actuation_eligible": false,
+  "live_catalog_enabled": false,
+  "network_enabled": false,
+  "persistence_enabled": false,
+  "artists": [
+    {
+      "ref": "fixture-label-1",
+      "label": "Imaginary Atlas Ensemble",
+      "date_band": "10+",
+      "candidate_refs": [
+        "demo-1"
+      ]
+    },
+    {
+      "ref": "fixture-label-2",
+      "label": "Fictional Pattern Unit",
+      "date_band": "4-9",
+      "candidate_refs": [
+        "demo-2"
+      ]
+    },
+    {
+      "ref": "fixture-label-3",
+      "label": "Invented Sound Group",
+      "date_band": "2-3",
+      "candidate_refs": [
+        "demo-3",
+        "demo-4"
+      ]
+    },
+    {
+      "ref": "fixture-label-4",
+      "label": "Makebelieve Echo Collective",
+      "date_band": "1",
+      "candidate_refs": [
+        "demo-5"
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "ref": "demo-1",
+      "provider": "DemoCatalog",
+      "name": "Imaginary Atlas Ensemble",
+      "note": "Invented lunar chamber ensemble"
+    },
+    {
+      "ref": "demo-2",
+      "provider": "DemoCatalog",
+      "name": "Fictional Pattern Unit",
+      "note": "Invented geometric percussion group"
+    },
+    {
+      "ref": "demo-3",
+      "provider": "DemoCatalog",
+      "name": "Invented Sound Group",
+      "note": "Invented paper instrument quartet"
+    },
+    {
+      "ref": "demo-4",
+      "provider": "DemoCatalog",
+      "name": "Invented Sound Group",
+      "note": "Invented cloud instrument duo — distinct candidate"
+    },
+    {
+      "ref": "demo-5",
+      "provider": "DemoCatalog",
+      "name": "Makebelieve Echo Collective",
+      "note": "Invented silent theatre ensemble"
+    }
+  ]
+}

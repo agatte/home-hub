@@ -113,6 +113,7 @@ export function initGamedayFeed() {
  * feed may still provide state once the backend is available.
  */
 export async function fetchGamedayInitial(generation = feedGeneration) {
+  if (generation !== feedGeneration) return
   // Resolve viewer authority before canonical score/clock. Pages fail safe
   // while this is unknown, preventing a canonical future-state flash on mount.
   const viewerAuthorityRevisionAtStart = viewerAuthorityRevision
@@ -133,6 +134,9 @@ export async function fetchGamedayInitial(generation = feedGeneration) {
   } catch (_) {
     /* WS may still resolve viewer authority; leave fail-safe status unknown. */
   }
+  // Cleanup can happen while an API request is pending or failing. Never
+  // chain another request after this feed loses ownership.
+  if (generation !== feedGeneration) return
 
   const stateRevisionAtStart = stateRevision
   try {
@@ -147,6 +151,7 @@ export async function fetchGamedayInitial(generation = feedGeneration) {
   } catch (_) {
     /* swallow ? WS will fill in */
   }
+  if (generation !== feedGeneration) return
 
   try {
     const schedule = /** @type {any} */ (await apiGet('/api/gameday/schedule'))
@@ -157,6 +162,7 @@ export async function fetchGamedayInitial(generation = feedGeneration) {
       scheduleLoaded: true,
     }))
   } catch (_) {
+    if (generation !== feedGeneration) return
     gameday.update((prev) => ({ ...prev, scheduleLoaded: true }))
   }
 }
