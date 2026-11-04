@@ -113,3 +113,40 @@ The Quiet Atlas preset review may render **declared** curated/custom targets
 from `GET /api/scenes` while continuing to show unknown native scene
 effects and leaving all actuators absent. This is a useful evidence preview
 for eventual confirmation UX, not a claim of readiness to turn on writes.
+
+## PROPOSED ONLY: offline single-light policy (#461, 2026-11-03)
+
+`backend/services/quiet_atlas_one_shot_contract.py` is an unregistered pure
+assessment model, with synthetic tests in `tests/test_quiet_atlas_one_shot_contract.py`.
+It accepts exactly one absolute power OR brightness (1–254) target. No route,
+writer, ownership acquisition, operation identity or completed-command claim
+exists. Even `eligible` is advisory only and always `permits_write=False`.
+This is **UNAPPROVED policy**, not an accepted PROJECT_SPEC decision.
+
+| Observed owner / state | Proposed native handling (UNAPPROVED) |
+| --- | --- |
+| Ordinary known unowned, fresh, available fixture | May be advisory eligible |
+| Manual stamp | Decision required; overall product must allow repeated manual adjustments, but native handling needs approved same-intent ownership semantics |
+| Fresh source-qualified ScreenSync | Decision required; explicit handoff/release, no automatic takeover |
+| Transit, scene/effect, known external owner | Decision required; explicit handoff/release |
+| Unknown owner or unavailable/unqualified/stale observation | Unavailable, fail closed |
+| Protected fixture, Away/external-off/host-return, Sleeping, disabled automation, pending scene/transition, DND | Blocked pending reviewed policy |
+
+All safety facts must be explicitly known. Target errors precede observation
+shape/identity/source/age checks, then availability/unknown owners, then hard
+safety gates, then manual/ScreenSync/transit/scene/effect/external conflicts.
+The proposed freshness ceiling is strictly less than five seconds, using supplied
+monotonic times; future times fail closed. A trusted server adapter must qualify
+both telemetry and owner evidence in one coherent snapshot. Client REST receipt
+time is never sufficient. The offline enum does not authenticate provenance.
+
+Changed evidence requires reassessment; no result reserves authority or closes
+a race. Future integration must reuse `LightingTransitionBoundary.serialized()`,
+`LightingAuthority` currency and `AutomationEngine.validate_lighting_lease()` at
+delegated mutation, rather than add another lock/token or reuse legacy PUT's
+write-then-stamp path. No integration is implemented here. Remaining gates are
+owner policy approval, trusted adapter/freshness policy, commit-time race and
+idempotency handling, acknowledgement/persistence and physical readback.
+Legacy working controls must remain available; these proposed restrictions
+must not create permanent lockout. No takeover, deployment or physical
+convergence is approved or demonstrated by these offline tests.
