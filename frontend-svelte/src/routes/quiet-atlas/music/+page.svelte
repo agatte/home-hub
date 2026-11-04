@@ -45,6 +45,8 @@
       <span class="eyebrow">02 / WHERE TO GO</span>
       <h2 id="music-journeys-title">One place to find <em>your next listen.</em></h2>
       <p>Three distinct jobs, one existing functional destination. Nothing is started merely by opening this review.</p>
+      <a class="artist-preview-link" href="/quiet-atlas/music/artist-review">Preview fictional artist matching <span aria-hidden="true">↗</span></a>
+      <p class="artist-preview-note">Session-only fictional review. No Apple history or catalog requests.</p>
     </div>
     <nav class="journeys" aria-label="Current music destinations">
       <a class="journey" href={musicTools} aria-label="Open existing Music discovery and suggestions">
@@ -117,6 +119,9 @@
   .journey-main strong { font:400 clamp(21px,2.2vw,29px)/1.25 Georgia,"Times New Roman",serif; letter-spacing:-.025em; }
   .journey-main small { color:var(--muted); font-size:12px; line-height:1.65; }
   .journey-action { color:var(--gold); font-size:22px; justify-self:end; }
+  .artist-preview-link { display:inline-flex; align-items:center; justify-content:space-between; gap:16px; min-height:48px; padding:9px 13px; margin-top:21px; text-decoration:none; color:#19271d !important; background:#e2d1ac; font-size:12px; font-weight:700; }
+  .artist-preview-link:hover { background:#f0dfbc; }
+  .artist-preview-note { margin:9px 0 0 !important; color:var(--muted); font-size:11px !important; }
   .endnote { display:flex; align-items:start; justify-content:space-between; gap:26px; padding-top:25px; font-size:11px; line-height:1.75; color:var(--muted); }
   .endnote p { max-width:750px; margin:0; }
   .endnote a { display:inline-flex; align-items:center; gap:11px; min-height:44px; flex:0 0 auto; font-weight:650; color:var(--ink); }
