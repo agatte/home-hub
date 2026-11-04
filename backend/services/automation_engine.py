@@ -4583,13 +4583,193 @@ class AutomationEngine:
         await self._refresh_camera_owner_if_current(self.current_mode, revision)
         return result
 
-    async def persist_manual_light_ownership(self) -> None:
+    async def persist_manual_light_ownership(
+        self, *, raise_on_error: bool = False,
+    ) -> None:
         """Await durability after an async owner has acknowledged manual writes.
 
         Synchronous marking/callbacks only establish in-memory ownership.
         Scene owners call this once after their acknowledgement batch.
+        Opt-in Hue-app holds pass raise_on_error=True for strict durability.
         """
-        await self._persist_override_state()
+        await self._persist_override_state(raise_on_error=raise_on_error)
+
+    async def hue_app_hold(self, light_id: str, expected_stamp: str | None = None) -> dict:
+        """Reserve/release one manual slot without issuing any device command.
+
+        The stamp is a concurrency version, not an authentication credential.
+        Ownership uses the ordinary four-hour sweep and explicit mode-change
+        clearing rules. Release schedules no work: normal reconciliation resumes.
+        """
+        from fastapi import HTTPException
+        from backend.services.lighting_transition_boundary import settle_lighting_io
+
+        if light_id not in ALL_LIGHT_IDS:
+            raise HTTPException(404, "Unknown fixture")
+
+        async def change():
+            async with self._transition_boundary.serialized():
+                stamps = self._manual_light_overrides
+                targets = self._state.manual_light_targets
+                old_stamp = stamps.get(light_id)
+                old_target = targets.get(light_id)
+                releasing = expected_stamp is not None
+                now = self._overrides._clock.utc_now()
+                if releasing:
+                    if (
+                        old_stamp is None
+                        or old_stamp.astimezone(timezone.utc).isoformat() != expected_stamp
+                        or now - old_stamp > timedelta(hours=self._override_timeout_hours)
+                    ):
+                        raise HTTPException(409, "Hold stamp changed or expired")
+                else:
+                    if old_stamp is not None:
+                        raise HTTPException(409, "Manual hold already exists")
+                    await self._transition_boundary.wait_for_settle([light_id])
+                    light = await self._hue.get_light(light_id)
+                    if not light:
+                        raise HTTPException(404, "Unknown fixture")
+                    if light.get("reachable") is not True:
+                        raise HTTPException(409, "Fixture is unreachable")
+                    lease = self._transition_boundary.authority.issue("hue_app_hold", [light_id])
+                    if (
+                        self.house_state != "home" or self.is_dnd_active()
+                        or not self.validate_lighting_lease(lease)
+                        or self._active_effect_name is not None
+                    ):
+                        raise HTTPException(409, "Lighting owner or lifecycle conflict")
+                    # The read above may yield to a dashboard manual write.
+                    if light_id in stamps:
+                        raise HTTPException(409, "Manual hold already exists")
+
+                revision = self._mode_transition_revision
+                if releasing:
+                    stamps.pop(light_id)
+                    targets.pop(light_id, None)
+                    self._transition_boundary.authority.invalidate([light_id])
+                    self._forget_dedup_light(light_id)
+                    new_stamp = None
+                else:
+                    self.mark_light_manual(light_id)
+                    new_stamp = stamps[light_id]
+                mutation_lease = self._transition_boundary.authority.issue("hue_app_hold", [light_id])
+
+                try:
+                    await self.persist_manual_light_ownership(raise_on_error=True)
+                except Exception:
+                    rolled_back = False
+                    # Never undo a newer synchronous manual/mode publication
+                    # while persistence was awaiting its transaction.
+                    if (
+                        stamps.get(light_id) == new_stamp
+                        and revision == self._mode_transition_revision
+                        and self._transition_boundary.authority.valid(mutation_lease)
+                    ):
+                        rolled_back = True
+                        if old_stamp is None:
+                            stamps.pop(light_id, None)
+                        else:
+                            stamps[light_id] = old_stamp
+                        if old_target is None:
+                            targets.pop(light_id, None)
+                        else:
+                            targets[light_id] = old_target
+                        self._transition_boundary.authority.invalidate([light_id])
+                        self._forget_dedup_light(light_id)
+                    # A store may commit and then raise. Persist the actual
+                    # current state, including any owner published during await.
+                    recovery_lease = self._transition_boundary.authority.issue(
+                        "hue_app_hold", [light_id],
+                    )
+                    try:
+                        await self.persist_manual_light_ownership(raise_on_error=True)
+                    except Exception:
+                        # An uncertain claim must remain conservatively held,
+                        # with a release token, unless a newer owner superseded it.
+                        if (
+                            rolled_back and not releasing and light_id not in stamps
+                            and revision == self._mode_transition_revision
+                            and self._transition_boundary.authority.valid(recovery_lease)
+                        ):
+                            stamps[light_id] = new_stamp
+                            self._transition_boundary.authority.invalidate([light_id])
+                            self._forget_dedup_light(light_id)
+                        recovery_stamp = stamps.get(light_id)
+                        # The first save may have committed even if a newer
+                        # mode/owner cleared memory before compensation failed.
+                        # Include the possibly durable original stamp even
+                        # when no matching in-memory owner remains.
+                        candidate_stamp = old_stamp if releasing else new_stamp
+                        raise HTTPException(503, {
+                            "error": "Ownership durability uncertain: compensating persistence failed",
+                            "light_id": light_id,
+                            "stamp": (
+                                (recovery_stamp or candidate_stamp)
+                                .astimezone(timezone.utc).isoformat()
+                                if (recovery_stamp or candidate_stamp) else None
+                            ),
+                            "active_in_memory": recovery_stamp is not None,
+                            "recovery": (
+                                "The stamp may exist only in durable storage. "
+                                "Do not assume the Hold was released; check ownership "
+                                "after persistence recovers, and explicitly change "
+                                "mode or release the matching stamp if present."
+                            ),
+                        }) from None
+                    raise HTTPException(503, "Ownership persistence failed; rollback persisted") from None
+                claim_conflict = not releasing and (
+                    self.house_state != "home" or self.is_dnd_active()
+                    or not self.validate_lighting_lease(mutation_lease, allow_manual=True)
+                    or self._active_effect_name is not None
+                )
+                if (
+                    stamps.get(light_id) != new_stamp
+                    or revision != self._mode_transition_revision or claim_conflict
+                ):
+                    # A failed claim response must not strand our own hold
+                    # without a release token. Preserve any newer manual owner.
+                    if not releasing and stamps.get(light_id) == new_stamp:
+                        stamps.pop(light_id, None)
+                        targets.pop(light_id, None)
+                        self._transition_boundary.authority.invalidate([light_id])
+                        self._forget_dedup_light(light_id)
+                    try:
+                        await self.persist_manual_light_ownership(raise_on_error=True)
+                    except Exception:
+                        # The first save succeeded, but the conflict cleanup
+                        # may fail after the store commits or before it does.
+                        # Never strand an original durable Hold without giving
+                        # its possible stamp back to the caller. A stronger
+                        # in-memory owner remains untouched.
+                        current_stamp = stamps.get(light_id)
+                        candidate_stamp = old_stamp if releasing else new_stamp
+                        raise HTTPException(503, {
+                            "error": "Ownership durability uncertain: conflict cleanup failed",
+                            "light_id": light_id,
+                            "stamp": (
+                                (current_stamp or candidate_stamp)
+                                .astimezone(timezone.utc).isoformat()
+                                if (current_stamp or candidate_stamp) else None
+                            ),
+                            "active_in_memory": current_stamp is not None,
+                            "recovery": (
+                                "The stamp may exist only in durable storage. "
+                                "Do not assume the Hold was released; check ownership "
+                                "after persistence recovers, and explicitly change "
+                                "mode or release the matching stamp if present."
+                            ),
+                        }) from None
+                    raise HTTPException(409, "Lighting ownership changed")
+                return {
+                    "status": "released" if releasing else "held",
+                    "light_id": light_id,
+                    "stamp": new_stamp.astimezone(timezone.utc).isoformat() if new_stamp else None,
+                    "expiry_hours": self._override_timeout_hours,
+                    "semantics": "Expires after 4 hours or clears on explicit mode change; not indefinite.",
+                }
+
+        # Retain serialization through persistence even if the HTTP caller leaves.
+        return await settle_lighting_io(change())
 
     async def _persist_override_state(self, *, raise_on_error: bool = False) -> None:
         # Snapshot and commit share one lock: a queued clear cannot be overtaken

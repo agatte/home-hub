@@ -488,6 +488,11 @@ class LightApplicator:
                 target = self._st.transit_light_targets.get(light_id)
                 if target is None:
                     target = self._st.manual_light_targets.get(light_id)
+                # A targetless manual reservation grants no authority to replay
+                # automation, external, or ScreenSync state onto this fixture.
+                if target is None and light_id in self._st.manual_light_overrides:
+                    unresolved.add(light_id)
+                    continue
                 # Manual/transit are stronger than an external writer.
                 if target is None:
                     target = external_targets.get(light_id)
