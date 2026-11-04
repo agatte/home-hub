@@ -272,7 +272,7 @@
   <div class="chip-content">
     <button
       class="chip-swatch"
-      style="background: {swatchColor}"
+      style="background-color: {swatchColor}"
       on:pointerdown|stopPropagation
       on:click|stopPropagation={() => { if (light.on) showPresets = !showPresets }}
       aria-label="Change color"
@@ -569,6 +569,42 @@
     .light-chip { padding: 10px 12px; gap: 8px; min-height: 56px; }
     .chip-name { font-size: 12px; }
     .chip-pct { font-size: 11px; }
-    .chip-power { width: 28px; height: 28px; }
+  }
+  /* Keep the swatch a small color dot while giving it a full-size touch target. */
+  @media (max-width: 760px) {
+    .chip-content { gap: 8px; }
+    .chip-swatch,
+    .chip-swatch:hover,
+    .light-off .chip-swatch {
+      box-sizing: border-box;
+      width: 44px;
+      height: 44px;
+      border: 15px solid transparent;
+      background-clip: padding-box;
+      transform: none;
+    }
+    .chip-power { width: 44px; height: 44px; }
+    /* Place presets inside the card so the overflow mask cannot cut them off. */
+    .chip-presets {
+      position: relative;
+      top: auto;
+      left: auto;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      margin-top: 8px;
+    }
+    .preset-dots { flex-wrap: wrap; gap: 8px; }
+    .preset-tab { min-height: 44px; font-size: 12px; }
+    .chip-preset-dot { flex: 0 0 44px; width: 44px; height: 44px; }
+    .chip-preset-dot:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .chip-swatch:focus-visible,
+    .chip-power:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
   }
 </style>
