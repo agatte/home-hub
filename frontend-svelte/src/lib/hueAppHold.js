@@ -18,6 +18,12 @@ export function saveHold(storage, state) {
   } catch { return false }
 }
 
+/**
+ * @param {number} status
+ * @param {any} body
+ * @param {boolean} releasing
+ * @param {{ stamp?: string | null } | null} [previous]
+ */
 export function interpretHold(status, body, releasing, previous = null) {
   const detail = body?.detail && typeof body.detail === 'object' ? body.detail : body
   if (status >= 200 && status < 300) {
