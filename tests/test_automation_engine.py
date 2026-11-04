@@ -416,7 +416,7 @@ class TestAutomationEngine:
         assert engine._external_off_detected is False
         assert engine._away_hold is False
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
 
     async def test_explicit_sleeping_auto_persists_confirmed_awake(
         self, engine, monkeypatch,
@@ -537,7 +537,7 @@ class TestAutomationEngine:
         assert engine.activity == "general"
         assert engine._home_awake_confirmed is True
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
 
     async def test_explicit_sleeping_auto_is_user_authority_during_dnd(
         self, engine,
@@ -1300,7 +1300,7 @@ class TestSleepingFloor:
         assert engine.house_state == "home"
         assert engine._home_awake_confirmed is True
         engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("working", revision=engine._mode_transition_revision)
 
     async def test_wireless_bed_input_cannot_release_manual_sleeping(self, engine):
         """Global recent input is weak when no trusted desk device moved."""
@@ -2373,6 +2373,9 @@ class TestApplyModeDedup:
         )
 
     async def test_force_resend_true_writes_after_no_state_change(self, engine, mock_hue):
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "working"
+        assert engine.effective_mode == "working"
         await engine._apply_mode("working", force_resend=True)
         calls = self._wrap_set_light(mock_hue)
         # force_resend=True bypasses dedup even when state hasn't changed.
@@ -2479,6 +2482,9 @@ class TestApplyModeDedup:
         engine._screen_sync = sync
         engine._get_time_period = lambda now=None: "night"
 
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "watching"
+        assert engine.effective_mode == "watching"
         await engine._apply_mode("watching", force_resend=True)
 
         assert sync.calls
@@ -2508,6 +2514,9 @@ class TestApplyModeDedup:
         sync = _FakeScreenSync()
         engine._screen_sync = sync
 
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "watching"
+        assert engine.effective_mode == "watching"
         await engine._apply_mode("watching", force_resend=True)
 
         mode, period, states = sync.calls[-1]
@@ -2515,7 +2524,8 @@ class TestApplyModeDedup:
         assert period == "evening"
         assert states["2"]["bri"] == 27
         assert states["5"]["bri"] == 14
-        clock.assert_called_once_with()
+        # The physical admission fence and composed mode take separate snapshots.
+        assert clock.call_count == 2
 
     async def test_gaming_resolver_ignores_generic_lighting_learner(
         self, monkeypatch, mock_hue, mock_hue_v2, mock_ws,
@@ -3922,7 +3932,7 @@ class TestRecentDeskAttendanceVeto:
         assert engine._mode_source_key == "time"
         assert "process:latitude" not in engine._last_mode_source_report_at
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
         engine._broadcast_mode.assert_awaited_once()
 
     async def test_latitude_retraction_hands_authority_to_fresh_desktop_semantic(
@@ -3952,7 +3962,7 @@ class TestRecentDeskAttendanceVeto:
         assert engine._last_mode_source_report_at["process:desktop"] == desktop_at
         assert "process:latitude" not in engine._last_mode_source_report_at
         engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("working", revision=engine._mode_transition_revision)
         engine._broadcast_mode.assert_awaited_once()
 
     async def test_latitude_retraction_preserves_newer_replacement_liveness(
@@ -4114,7 +4124,7 @@ class TestRecentDeskAttendanceVeto:
         assert first["authority_reconciled"] is True
         assert second["authority_reconciled"] is False
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
-        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle", revision=engine._mode_transition_revision)
         engine._broadcast_mode.assert_awaited_once()
 
     async def test_periodic_tick_cannot_reapply_retracted_latitude_watching(
@@ -4133,8 +4143,9 @@ class TestRecentDeskAttendanceVeto:
 
         await _drive_one_tick(engine)
 
-        engine._apply_time_based.assert_awaited_once()
-        engine._apply_mode.assert_not_awaited()
+        engine._apply_time_based.assert_not_awaited()
+        # Idle ticks now use the guarded General projection, never Watching.
+        engine._apply_mode.assert_awaited_once_with("idle")
 
     async def test_source_priority_rejection_keeps_one_existing_process_voter(
         self, engine,
@@ -6554,6 +6565,9 @@ class TestDeskFixtureComfortIntegration:
             face_present=True, face_confidence=0.9, detection_source="face",
             zone="desk", posture="upright",
         ))
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = mode
+        assert engine.effective_mode == mode
         await engine._apply_mode(mode)
         assert mock_hue._lights["5"]["bri"] == 90
 
@@ -6843,6 +6857,9 @@ class TestDeskFixtureComfortIntegration:
         )
 
         assert engine._fixture_comfort_zone() is None
+        # Direct actuation must use the currently owned effective mode.
+        engine._current_mode = "gaming"
+        assert engine.effective_mode == "gaming"
         await engine._apply_mode("gaming", force_resend=True)
         assert mock_hue._lights["5"]["bri"] > 90
 

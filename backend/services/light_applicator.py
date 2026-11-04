@@ -24,6 +24,7 @@ filter.
 """
 import asyncio
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -38,6 +39,17 @@ from backend.services.light_state_calculator import ALL_LIGHT_IDS
 
 # Same logger name as the engine so journald output is unchanged.
 logger = logging.getLogger("home_hub.automation")
+
+# Scoped exclusively to _apply_mode calls, including delegated async Hue tasks.
+# A detached/late mode writer must not outlive the effective Activity owner.
+mode_apply_epoch: ContextVar[tuple[int, str] | None] = ContextVar(
+    "homehub_mode_apply_epoch", default=None,
+)
+
+
+mode_physical_validator: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "homehub_mode_physical_validator", default=None,
+)
 
 
 @dataclass
@@ -75,6 +87,7 @@ class LightApplicator:
             [dict, Optional[int]], Awaitable[LightApplyResult]
         ],
         transition_boundary,
+        owner_revision_getter: Callable[[], int] | None = None,
     ) -> None:
         self._st = state
         self._overrides = overrides
@@ -99,6 +112,7 @@ class LightApplicator:
         # before the run_loop external-off continue). Paths that legitimately
         # re-light clear the flag first (signal_presence, user override).
         self._suppressed = suppressed_getter
+        self._owner_revision_getter = owner_revision_getter
         self._incident_capture: object | None = None
 
     def set_navigation_incident_capture(self, capture: object | None) -> None:
@@ -209,9 +223,58 @@ class LightApplicator:
             if invalidate is not None:
                 invalidate(light_ids)
 
-    async def _write_many(self, writes, light_ids):
+    async def _write_many(self, writes, light_ids, *, protect=True):
+        # The bridge boundary evaluates this validator inside its delegated
+        # mutation task, not merely before acquiring a serialization lock.
+        # Non-mode writers retain existing protected-owner/lease semantics.
+        owner = mode_apply_epoch.get()
+        physical_validator = mode_physical_validator.get()
+        validator = None
+        if owner is not None and self._owner_revision_getter is not None:
+            revision, expected_mode = owner
+
+            def validator():
+                return (
+                    not self._suppressed()
+                    and self._owner_revision_getter() == revision
+                    and self._current_mode_getter() == expected_mode
+                    and (physical_validator is None or physical_validator())
+                )
+        # Capture before delegation; never adopt a newer per-light owner in
+        # the worker. Intent generations also reject acquire/release ABA.
+        authority = self._transition_boundary.authority
+        physical_commit = getattr(physical_validator, "acceptance_guard", None)
+        if owner is not None and physical_commit is not None:
+            authority.bind_source_gate(physical_commit.source_context)
+        validators = []
+        for light_id in light_ids:
+            lease = authority.issue("static_apply", [light_id], intent_only=True)
+            def valid(lid=light_id, captured=lease):
+                return (
+                    (validator is None or validator())
+                    and authority.valid(captured)
+                    # ScreenSync/external ownership publishes intent generations.
+                    # Their getters prune mutable state; never run them in
+                    # a bridge thread. These direct dict reads are pure.
+                    and (not protect or (
+                        lid not in self._st.manual_light_overrides
+                        and lid not in self._st.transit_light_overrides
+                    ))
+                )
+            if owner is not None and physical_commit is not None:
+                consumed = [False]
+                def accept(lid=light_id, captured=lease, guard=physical_commit, once=consumed):
+                    if once[0]:
+                        return None
+                    once[0] = True
+                    return guard.commit(authority, captured, lid, self._st, protect)
+                valid.accept_command = accept
+            validators.append(valid)
         try:
-            return await self._transition_boundary.write_many(writes, light_ids=light_ids)
+            return await self._transition_boundary.write_many(
+                writes, light_ids=light_ids, validator=validator,
+                validators=validators,
+            )
         except asyncio.CancelledError:
             for light_id in light_ids:
                 self._st.last_applied_per_light.pop(light_id, None)
@@ -465,7 +528,7 @@ class LightApplicator:
             if transitiontime is not None:
                 cmd["transitiontime"] = transitiontime
             tasks.append(lambda lid=light_id, payload=cmd: hue.set_light(lid, payload))
-        results = await self._write_many(tasks, changed_ids)
+        results = await self._write_many(tasks, changed_ids, protect=False)
         successful = {
             light_id
             for light_id, result in zip(changed_ids, results)

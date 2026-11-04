@@ -40,6 +40,10 @@ class CircuitBreakerOpen(Exception):
         self.name = name
 
 
+class CircuitBreakerSkipped(Exception):
+    """No dependency I/O occurred; preserve health and probe accounting."""
+
+
 class CircuitBreaker:
     """Per-service async breaker. Thread-safe state mutations under a
     short-held Lock so the synchronous ``snapshot()`` and ``state``
@@ -161,8 +165,9 @@ class CircuitBreaker:
           ``CircuitBreakerOpen`` without invoking ``fn``.
         - When state is ``open`` and cooldown HAS elapsed: promote to
           half_open and run the call as a probe.
+        - On CircuitBreakerSkipped or task cancellation: preserve health.
         - On success: record and return the result.
-        - On any exception (including ``asyncio.TimeoutError`` from the
+        - On other exceptions (including ``asyncio.TimeoutError`` from the
           per-call timeout): record as failure and re-raise.
 
         ``call_timeout`` overrides the breaker-wide per-call budget for
@@ -185,6 +190,8 @@ class CircuitBreaker:
             result = await asyncio.wait_for(
                 awaitable, timeout=call_timeout or self.call_timeout
             )
+        except CircuitBreakerSkipped:
+            raise  # Neutral: neither success nor dependency failure.
         except asyncio.CancelledError:
             # Caller/task cancellation is lifecycle control, not evidence that
             # the wrapped dependency failed. Counting it toward the breaker
