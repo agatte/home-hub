@@ -210,7 +210,7 @@
     onOpenGroup={openGroup} onBrowseScenes={browseScenes} onOpenScene={openSpecificScene} />
 </div>
 {#if selectedGroup}
-  <QuietAtlasGroupSheet group={selectedGroup} {snapshotStatus} onClose={closeGroup} />
+  <QuietAtlasGroupSheet group={selectedGroup} {snapshotStatus} fixtureStates={snapshot.fixtures} onClose={closeGroup} />
 {/if}
 {#if sceneBrowserOpen}
   <QuietAtlasSceneBrowser {sceneList} loading={scenesLoading} error={sceneError} connected={$connected}
