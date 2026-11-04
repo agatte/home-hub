@@ -5,6 +5,9 @@ import path from 'node:path'
 export default defineConfig({
   plugins: [svelte({ hot: false })],
   resolve: {
+    // Svelte 4's default SSR export makes onMount a no-op. Unit tests mount
+    // components in jsdom and must resolve the browser runtime instead.
+    conditions: ['browser'],
     alias: {
       // Match the SvelteKit alias so imports like '$lib/foo' resolve in tests.
       $lib: path.resolve('./src/lib'),
