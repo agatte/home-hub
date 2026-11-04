@@ -424,6 +424,7 @@ def _publish_content_shadow(arr, media, signal, captured_at=None, captured_wall=
                        time.monotonic() if captured_at is None else captured_at,
                        time.time() if captured_wall is None else captured_wall)
     except Exception:
+        signal.invalidate()
         logger.debug("Content shadow unavailable", exc_info=True)
 
 
@@ -515,6 +516,8 @@ def run_agent(
                 else:
                     arr = None
 
+                if (rust_active or need_color) and arr is None and content_signal is not None:
+                    content_signal.invalidate()
                 if arr is not None:
                     # Damage path — only while Rust is active. Cheap edge-
                     # vignette score, posted above the floor + throttled; the
@@ -536,6 +539,8 @@ def run_agent(
                     if need_color:
                         last_color = now
                         cl = _color_luma_from_array(arr)
+                        if cl is None and content_signal is not None:
+                            content_signal.invalidate()
                         if cl is not None:
                             rgb, luma = cl
                             payload = _build_color_payload(rgb, luma)
@@ -567,6 +572,8 @@ def run_agent(
                 logger.info("Screen sync agent stopped")
                 break
             except Exception as e:
+                if content_signal is not None:
+                    content_signal.invalidate()
                 logger.error(f"Unexpected error: {e}", exc_info=True)
                 _wait_for_backoff(_stop, backoff, heartbeat)
                 backoff = min(backoff * 2, 60)

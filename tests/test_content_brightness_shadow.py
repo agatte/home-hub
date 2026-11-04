@@ -19,7 +19,8 @@ def sustained(pixels=None, media=False):
 
 def candidate(s, **overrides):
     args = dict(mode="working", period="late_night", shipped_target=15,
-                samsung_vcp_max=50, mapping_accepted=True, media_trustworthy=True)
+                samsung_vcp_max=50, mapping_accepted=True, media_trustworthy=True,
+                manual_override=False)
     args.update(overrides)
     return propose(s, **args)
 
@@ -115,3 +116,82 @@ def test_capture_clock_divergence_resets_without_consumer_poll():
     box = sustained()
     box.publish(frame(), False, 20, 900)
     assert not box.snapshot(20, 900).sustained
+
+
+@pytest.mark.parametrize("pixels", [[], [[255, 255]], "bad", None,
+                                    [[float("nan"), 255, 255]], [[256, 255, 255]]])
+def test_invalid_pixels_discard_positive_immediately(pixels):
+    box = sustained()
+    box.publish(pixels, False, 20, 120)
+    assert box.snapshot(20, 120) is None
+    box.publish(frame(), False, 22.5, 122.5)
+    assert not box.snapshot(22.5, 122.5).sustained
+
+
+@pytest.mark.parametrize("now,wall", [(float("nan"), 120), (20, float("inf"))])
+def test_invalid_capture_clocks_discard_positive(now, wall):
+    box = sustained()
+    box.publish(frame(), False, now, wall)
+    assert box.snapshot(20, 120) is None
+
+
+def test_shadow_processing_failure_invalidates():
+    box = sustained()
+    screen._publish_content_shadow(None, False, box, 20, 120)
+    assert box.snapshot(20, 120) is None
+
+
+def test_manual_ownership_unknown_is_closed():
+    signal = sustained().snapshot(17.5, 117.5)
+    assert candidate(signal, manual_override=None).reason == "manual-ownership-unknown"
+    assert propose(signal, mode="working", period="late_night",
+                   shipped_target=15, samsung_vcp_max=50,
+                   mapping_accepted=True, media_trustworthy=True).reason == (
+                       "manual-ownership-unknown"
+                   )
+
+
+def test_scalar_info_transition_rate_limit_and_closed_authority(caplog):
+    import logging
+    from backend.services.pc_agent.content_brightness_shadow import ShadowObserver
+
+    observer = ShadowObserver()
+    logger = logging.getLogger("shadow-test")
+    signal = sustained().snapshot(17.5, 117.5)
+    with caplog.at_level(logging.INFO, logger="shadow-test"):
+        for now, sample in [(20, signal), (21, signal), (22, None),
+                            (50, None), (80, signal)]:
+            observer.observe(sample, now=now, mode="working", period="late_night",
+                             shipped_target=15, logger=logger)
+    assert len(caplog.records) == 3
+    assert "visual_hypothesis_percent=2 retained_percent=15" in caplog.records[0].message
+    for record in caplog.records:
+        assert "manual_ownership=unknown" in record.message
+        assert "mapping_accepted=False media_trustworthy=False native_range_accepted=False" in record.message
+        assert "actuation=False" in record.message
+
+
+@pytest.mark.parametrize("failure", ["missing", "exception", "invalid-color"])
+def test_capture_loop_invalidates_without_network_or_hardware(monkeypatch, failure):
+    import threading
+    from types import SimpleNamespace
+
+    box = sustained()
+    stop = threading.Event()
+    monkeypatch.setattr(screen.time, "monotonic", lambda: 20)
+    monkeypatch.setattr(screen.time, "time", lambda: 120)
+    monkeypatch.setattr(screen.httpx, "Client",
+                        lambda **kwargs: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(screen.mss, "mss",
+                        lambda: SimpleNamespace(close=lambda: None))
+
+    def grab(_):
+        stop.set()
+        if failure == "exception":
+            raise ValueError("synthetic failed capture")
+        return frame() if failure == "invalid-color" else None
+
+    monkeypatch.setattr(screen, "_grab_array", grab)
+    monkeypatch.setattr(screen, "_color_luma_from_array", lambda _: None)
+    screen.run_agent("http://unused.invalid", stop_event=stop, content_signal=box)
+    assert box.snapshot(20, 120) is None

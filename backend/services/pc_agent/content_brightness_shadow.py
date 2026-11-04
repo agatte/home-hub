@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import math
 import threading
 
-import numpy as np
 
 
 @dataclass(frozen=True)
@@ -32,14 +31,38 @@ class ContentSignal:
         self._start = 0.0
         self._release = 0
 
+    def invalidate(self):
+        with self._lock:
+            self._signal = None
+            self._count = self._release = 0
+
     def publish(self, pixels, media, now, wall):
-        if not math.isfinite(now) or not math.isfinite(wall):
+        try:
+            if not math.isfinite(now) or not math.isfinite(wall):
+                raise ValueError("invalid clock")
+            rows = pixels.tolist() if hasattr(pixels, "tolist") else pixels
+
+            def flatten(items):
+                if not isinstance(items, (list, tuple)):
+                    raise ValueError("invalid RGB rows")
+                for item in items:
+                    if not isinstance(item, (list, tuple)):
+                        raise ValueError("invalid RGB row")
+                    if len(item) == 3 and all(isinstance(v, (int, float)) for v in item):
+                        yield item
+                    else:
+                        yield from flatten(item)
+
+            rgb = list(flatten(rows))
+            if not rgb or any(not math.isfinite(v) or not 0 <= v <= 255
+                              for row in rgb for v in row):
+                raise ValueError("invalid pixels")
+            white = sum(min(row) >= 225 and max(row) - min(row) <= 20
+                        for row in rgb) / len(rgb)
+            luma = sum(r * .299 + g * .587 + b * .114 for r, g, b in rgb) / len(rgb)
+        except (TypeError, ValueError, OverflowError):
+            self.invalidate()
             return
-        rgb = np.asarray(pixels).reshape(-1, 3)
-        valid = rgb.size and np.isfinite(rgb).all()
-        white = float(np.mean((rgb.min(axis=1) >= 225) &
-                             (np.ptp(rgb, axis=1) <= 20))) if valid else 0.0
-        luma = float(np.mean(rgb @ np.array([.299, .587, .114]))) if valid else 0.0
         with self._lock:
             old = self._signal
             continuous = (old is not None and 0 < now - old.monotonic <= 6
@@ -83,13 +106,15 @@ class Proposal:
 
 
 def propose(signal, *, mode, period, shipped_target, samsung_vcp_max=None,
-            mapping_accepted=False, media_trustworthy=False, manual_override=False):
+            mapping_accepted=False, media_trustworthy=False, manual_override=None):
     """Pure hypothetical target. Caller supplies a fresh mailbox snapshot.
 
     Mapping and media qualification are deliberately unaccepted by runtime.
     Never feed this result into resolve_target, Reconciler or a device writer.
     """
-    if manual_override:
+    if manual_override is None:
+        reason = "manual-ownership-unknown"
+    elif manual_override:
         reason = "manual-override"
     elif mode.lower() in {"sleeping", "gaming"} or period != "late_night":
         reason = "mode-or-period"
@@ -104,3 +129,33 @@ def propose(signal, *, mode, period, shipped_target, samsung_vcp_max=None,
     else:
         reason = "content-dwell"
     return Proposal(shipped_target, None, reason)
+
+
+class ShadowObserver:
+    """Scalar-only classification transitions, at most once per 30 seconds."""
+
+    def __init__(self):
+        self._last = None
+        self._logged_at = -math.inf
+
+    def observe(self, signal, *, now, mode, period, shipped_target, logger):
+        classification = ("missing" if signal is None else
+                          "white-like-sustained" if signal.sustained else
+                          "white-like" if signal.white_share >= .70 and signal.luma >= 200
+                          else "nonwhite")
+        key = (classification, mode.lower() not in {"sleeping", "gaming"}
+               and period == "late_night")
+        if key == self._last or now - self._logged_at < 30:
+            return
+        self._last, self._logged_at = key, now
+        candidate = propose(signal, mode=mode, period=period, shipped_target=shipped_target,
+                            mapping_accepted=False, media_trustworthy=False,
+                            samsung_vcp_max=None, manual_override=None)
+        logger.info(
+            "Content brightness SHADOW visual=%s policy_eligible=%s "
+            "visual_hypothesis_percent=%s retained_percent=%s "
+            "mapping_accepted=False media_trustworthy=False native_range_accepted=False "
+            "manual_ownership=unknown foreground_nonmedia_verified=False actuation=False",
+            classification, key[1], 2 if signal and signal.sustained and key[1] else None,
+            candidate.percent,
+        )

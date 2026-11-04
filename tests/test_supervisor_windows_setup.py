@@ -76,3 +76,38 @@ def test_detached_recovery_prefers_installed_runtime_launcher(monkeypatch, tmp_p
     assert Path(observed["args"][1]) == runtime
     assert Path(observed["kwargs"]["cwd"]) == ROOT
     assert observed["kwargs"]["creationflags"] == supervisor_recovery.CREATE_NO_WINDOW
+
+
+def test_supervisor_initializes_without_numpy_and_registers_independent_agents():
+    import subprocess
+    import sys
+
+    # Fresh interpreter prevents an already-imported NumPy from hiding regressions.
+    script = """
+import builtins
+import sys
+import types
+original = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if name == "numpy" or name.startswith("numpy."):
+        raise ImportError("synthetic missing numpy")
+    return original(name, *args, **kwargs)
+builtins.__import__ = blocked
+# Safe independent agent fixtures; real ScreenSync import fails without NumPy.
+for name, entry in [("activity_detector", "run_agent"),
+                    ("ambient_monitor", "run_monitor"),
+                    ("emotion_capture", "run_agent"),
+                    ("sleep_watcher", "run_agent"),
+                    ("monitor_brightness", "run_agent")]:
+    module = types.ModuleType("backend.services.pc_agent." + name)
+    setattr(module, entry, lambda **kwargs: None)
+    sys.modules[module.__name__] = module
+from backend.services.pc_agent.supervisor import AgentSupervisor
+supervisor = AgentSupervisor("http://unused.invalid")
+assert supervisor._content_signal.snapshot(10, 110) is None
+assert "screen_sync" not in supervisor._agents
+assert {"activity_detector", "ambient_monitor", "emotion_capture"} <= supervisor._agents.keys()
+"""
+    result = subprocess.run([sys.executable, "-B", "-c", script], cwd=ROOT,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
