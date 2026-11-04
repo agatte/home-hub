@@ -4695,18 +4695,17 @@ class AutomationEngine:
                             self._transition_boundary.authority.invalidate([light_id])
                             self._forget_dedup_light(light_id)
                         recovery_stamp = stamps.get(light_id)
-                        # The first save may have committed even if a newer
-                        # mode/owner cleared memory before compensation failed.
-                        # Include the possibly durable original stamp even
-                        # when no matching in-memory owner remains.
+                        # Only the initiating operation's stamp may be
+                        # released by its caller. A newer dashboard manual
+                        # owner could have replaced the stamp while saving.
+                        # Keep the original stamp for uncertain durable recovery.
                         candidate_stamp = old_stamp if releasing else new_stamp
                         raise HTTPException(503, {
                             "error": "Ownership durability uncertain: compensating persistence failed",
                             "light_id": light_id,
                             "stamp": (
-                                (recovery_stamp or candidate_stamp)
-                                .astimezone(timezone.utc).isoformat()
-                                if (recovery_stamp or candidate_stamp) else None
+                                candidate_stamp.astimezone(timezone.utc).isoformat()
+                                if candidate_stamp else None
                             ),
                             "active_in_memory": recovery_stamp is not None,
                             "recovery": (
@@ -4738,18 +4737,17 @@ class AutomationEngine:
                     except Exception:
                         # The first save succeeded, but the conflict cleanup
                         # may fail after the store commits or before it does.
-                        # Never strand an original durable Hold without giving
-                        # its possible stamp back to the caller. A stronger
-                        # in-memory owner remains untouched.
+                        # Return only our own potentially durable stamp.
+                        # Never authorize this caller to release a newer
+                        # dashboard manual owner that superseded this Hold.
                         current_stamp = stamps.get(light_id)
                         candidate_stamp = old_stamp if releasing else new_stamp
                         raise HTTPException(503, {
                             "error": "Ownership durability uncertain: conflict cleanup failed",
                             "light_id": light_id,
                             "stamp": (
-                                (current_stamp or candidate_stamp)
-                                .astimezone(timezone.utc).isoformat()
-                                if (current_stamp or candidate_stamp) else None
+                                candidate_stamp.astimezone(timezone.utc).isoformat()
+                                if candidate_stamp else None
                             ),
                             "active_in_memory": current_stamp is not None,
                             "recovery": (

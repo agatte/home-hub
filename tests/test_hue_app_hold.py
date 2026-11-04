@@ -346,15 +346,18 @@ async def test_commit_then_raise_compensates_current_state(
     before = dict(engine.manual_light_overrides)
     stored = {}
     calls = 0
+    operation_stamp = token
 
     async def save(key, payload):
-        nonlocal calls
+        nonlocal calls, operation_stamp
         calls += 1
         if calls == 2 and compensation_fails:
             raise RuntimeError("compensation unavailable")
         stored.clear()
         stored.update(payload)
         if calls == 1:
+            if not release:
+                operation_stamp = payload["manual_light_stamps_utc"]["6"]
             if superseded:
                 engine.mark_light_manual("6", {"bri": 33})
                 engine._override_source = "newer-source"
@@ -374,8 +377,15 @@ async def test_commit_then_raise_compensates_current_state(
         assert engine._override_source == "newer-source"
     if compensation_fails:
         assert "durability uncertain" in exc.value.detail["error"]
-        assert exc.value.detail["stamp"] == engine.manual_light_overrides["6"].astimezone(timezone.utc).isoformat()
+        assert exc.value.detail["stamp"] == operation_stamp
         assert "recovery" in exc.value.detail
+        if superseded:
+            # A recovery token must never release the newer dashboard owner.
+            assert exc.value.detail["stamp"] != engine.manual_light_overrides["6"].astimezone(timezone.utc).isoformat()
+            with pytest.raises(HTTPException) as stale:
+                await engine.hue_app_hold("6", exc.value.detail["stamp"])
+            assert stale.value.status_code == 409
+            assert engine._state.manual_light_targets["6"]["bri"] == 33
     else:
         assert stored["manual_light_stamps_utc"] == {
             lid: stamp.astimezone(timezone.utc).isoformat()
@@ -440,7 +450,7 @@ async def test_failed_compensation_preserves_newer_clear(engine, monkeypatch):
     assert engine._override_source == "newer-mode"
 
 
-@pytest.mark.parametrize("conflict", ["scene", "dnd"])
+@pytest.mark.parametrize("conflict", ["scene", "dnd", "manual"])
 @pytest.mark.asyncio
 async def test_commit_then_conflict_cleanup_failure_returns_possible_durable_stamp(
     engine, monkeypatch, conflict,
@@ -461,6 +471,8 @@ async def test_commit_then_conflict_cleanup_failure_returns_possible_durable_sta
                 engine._active_scene_override_key = (
                     "working", "night", "scene", "external",
                 )
+            elif conflict == "manual":
+                engine.mark_light_manual("6", {"bri": 33})
             else:
                 monkeypatch.setattr(engine, "is_dnd_active", lambda: True)
         else:
@@ -482,15 +494,76 @@ async def test_commit_then_conflict_cleanup_failure_returns_possible_durable_sta
     assert saves == 2
     assert exc.value.status_code == 503
     assert "durability uncertain" in exc.value.detail["error"]
-    assert exc.value.detail["active_in_memory"] is False
-    assert not engine.manual_light_overrides
+    assert exc.value.detail["active_in_memory"] is (conflict == "manual")
+    if conflict == "manual":
+        assert engine._state.manual_light_targets["6"]["bri"] == 33
+    else:
+        assert not engine.manual_light_overrides
     from backend.api.routes.automation import OVERRIDE_STATE_KEY
     persisted_stamp = stored[OVERRIDE_STATE_KEY]["manual_light_stamps_utc"]["6"]
     assert exc.value.detail["stamp"] == persisted_stamp
+    if conflict == "manual":
+        assert persisted_stamp != engine.manual_light_overrides["6"].astimezone(timezone.utc).isoformat()
+        with pytest.raises(HTTPException) as stale:
+            await engine.hue_app_hold("6", persisted_stamp)
+        assert stale.value.status_code == 409
+        assert engine._state.manual_light_targets["6"]["bri"] == 33
 
     restored = AutomationEngine(engine._hue, engine._hue_v2, engine._ws_manager)
     await restored.load_override_state()
     assert restored.manual_light_overrides["6"].astimezone(
         timezone.utc,
     ).isoformat() == persisted_stamp
+    engine._hue.set_light.assert_not_called()
+
+@pytest.mark.parametrize("cleanup_committed_before_error", [False, True])
+@pytest.mark.asyncio
+async def test_release_conflict_cleanup_failure_cannot_release_newer_owner(
+    engine, monkeypatch, cleanup_committed_before_error,
+):
+    """A failed Release must not adopt a newer dashboard owner's token."""
+    from copy import deepcopy
+    from backend.api.routes import routines
+    from backend.api.routes.automation import OVERRIDE_STATE_KEY
+
+    original_stamp = (await engine.hue_app_hold("6"))["stamp"]
+    saved = {}
+    saves = 0
+
+    async def save(key, payload):
+        nonlocal saves
+        saves += 1
+        if saves == 1:
+            # The release may already be durable before another owner appears.
+            saved[key] = deepcopy(payload)
+            engine.mark_light_manual("6", {"bri": 33})
+        else:
+            if cleanup_committed_before_error:
+                saved[key] = deepcopy(payload)
+            raise RuntimeError("cleanup failed after a competing manual write")
+
+    monkeypatch.setattr(routines, "save_setting", save)
+    monkeypatch.setattr(
+        engine, "_persist_override_state",
+        AutomationEngine._persist_override_state.__get__(engine),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await engine.hue_app_hold("6", original_stamp)
+
+    assert saves == 2
+    assert exc.value.status_code == 503
+    assert exc.value.detail["stamp"] == original_stamp
+    assert exc.value.detail["active_in_memory"] is True
+    current = engine.manual_light_overrides["6"].astimezone(timezone.utc).isoformat()
+    assert current != original_stamp
+    assert engine._state.manual_light_targets["6"]["bri"] == 33
+    with pytest.raises(HTTPException) as stale:
+        await engine.hue_app_hold("6", exc.value.detail["stamp"])
+    assert stale.value.status_code == 409
+    assert engine.manual_light_overrides["6"].astimezone(timezone.utc).isoformat() == current
+    assert engine._state.manual_light_targets["6"]["bri"] == 33
+    assert saved[OVERRIDE_STATE_KEY]["manual_light_stamps_utc"] == (
+        {"6": current} if cleanup_committed_before_error else {}
+    )
     engine._hue.set_light.assert_not_called()
