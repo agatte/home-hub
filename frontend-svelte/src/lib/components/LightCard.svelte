@@ -1,4 +1,5 @@
 <script>
+  import HueAppHold from './HueAppHold.svelte'
   import { setLight } from '$lib/stores/init.js'
   import { hueToHsl, ctToColor } from '$lib/utils/lightColor.js'
 
@@ -246,6 +247,7 @@
   nested interactive elements and keeps Svelte's a11y checks aligned with the
   actual keyboard model.
 -->
+<div class="light-card-owner" class:hold-pilot={light.light_id === '6' && linkedIds.length === 0}>
 <div
   class="light-chip"
   class:light-on={displayOn}
@@ -338,7 +340,14 @@
   {/if}
 </div>
 
+{#if light.light_id === '6' && linkedIds.length === 0}
+  <HueAppHold />
+{/if}
+</div>
+
 <style>
+  .light-card-owner { display: contents; }
+  .light-card-owner.hold-pilot { display: block; min-width: 0; }
   .light-chip {
     position: relative;
     overflow: hidden;

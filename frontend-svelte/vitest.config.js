@@ -16,6 +16,8 @@ export default defineConfig({
     setupFiles: ['./tests/unit/setup.js'],
     include: ['tests/unit/**/*.test.{js,ts,svelte.test.js}'],
     // Don't try to scan the e2e folder.
-    exclude: ['tests/e2e/**', 'node_modules/**', 'build/**', '.svelte-kit/**'],
+    // Browser-runtime mount tests run separately via vitest.hue-browser.config.js.
+    // Keep existing suites on their established SSR resolution semantics.
+    exclude: ['tests/e2e/**', 'node_modules/**', 'build/**', '.svelte-kit/**', 'tests/unit/components/HueAppHold.test.js'],
   },
 })
