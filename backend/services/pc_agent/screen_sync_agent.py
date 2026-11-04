@@ -40,6 +40,7 @@ import mss
 import numpy as np
 import psutil
 
+from backend.services.pc_agent.content_brightness_shadow import ContentSignal
 from backend.services.pc_agent.game_list import MEDIA_PROCESSES
 from backend.services.pc_agent.windows_media_session import (
     WindowsMediaSessionProbe,
@@ -414,6 +415,19 @@ def _color_luma_from_array(
     return rgb, luma
 
 
+def _publish_content_shadow(arr, media, signal, captured_at=None, captured_wall=None):
+    """Reuse capture; shadow failure must not interrupt color posts."""
+    try:
+        h, w = arr.shape[:2]
+        pixels = arr[::max(1, h // 30), ::max(1, w // 50)].reshape(-1, 3)
+        signal.publish(pixels, media,
+                       time.monotonic() if captured_at is None else captured_at,
+                       time.time() if captured_wall is None else captured_wall)
+    except Exception:
+        signal.invalidate()
+        logger.debug("Content shadow unavailable", exc_info=True)
+
+
 def capture_dominant_color() -> Optional[tuple[tuple[int, int, int], int]]:
     """Back-compat one-shot: grab + dominant color + luma. Used by tests and
     any caller that wants a single sample; the live agent loop uses the split
@@ -458,6 +472,7 @@ def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
     heartbeat: Optional[Callable[[], None]] = None,
+    content_signal: Optional[ContentSignal] = None,
 ) -> None:
     """
     Main loop — capture, POST, sleep, repeat. Backs off on HTTP errors.
@@ -496,10 +511,13 @@ def run_agent(
                 now = time.monotonic()
                 need_color = now - last_color >= CAPTURE_INTERVAL
                 if rust_active or need_color:
+                    captured_wall = time.time()
                     arr = _grab_array(sct)
                 else:
                     arr = None
 
+                if (rust_active or need_color) and arr is None and content_signal is not None:
+                    content_signal.invalidate()
                 if arr is not None:
                     # Damage path — only while Rust is active. Cheap edge-
                     # vignette score, posted above the floor + throttled; the
@@ -521,11 +539,19 @@ def run_agent(
                     if need_color:
                         last_color = now
                         cl = _color_luma_from_array(arr)
+                        if cl is None and content_signal is not None:
+                            content_signal.invalidate()
                         if cl is not None:
                             rgb, luma = cl
+                            payload = _build_color_payload(rgb, luma)
+                            if content_signal is not None:
+                                _publish_content_shadow(
+                                    arr, payload["foreground_media"], content_signal,
+                                    now, captured_wall,
+                                )
                             try:
                                 resp = client.post(
-                                    color_endpoint, json=_build_color_payload(rgb, luma)
+                                    color_endpoint, json=payload
                                 )
                                 resp.raise_for_status()
                                 backoff = 1
@@ -546,6 +572,8 @@ def run_agent(
                 logger.info("Screen sync agent stopped")
                 break
             except Exception as e:
+                if content_signal is not None:
+                    content_signal.invalidate()
                 logger.error(f"Unexpected error: {e}", exc_info=True)
                 _wait_for_backoff(_stop, backoff, heartbeat)
                 backoff = min(backoff * 2, 60)
