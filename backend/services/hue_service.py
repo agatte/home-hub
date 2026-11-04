@@ -2,14 +2,20 @@
 Philips Hue bridge service — wraps phue2 for light control.
 """
 import asyncio
+from concurrent.futures import Future
+from threading import Event
 import logging
 import time
 from typing import Any, Optional
 
-from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
-from backend.services.lighting_transition_boundary import settle_lighting_io
+from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitBreakerSkipped
+from backend.services.lighting_transition_boundary import (
+    lighting_write_validator, settle_lighting_io,
+)
 
 logger = logging.getLogger("home_hub.hue")
+
+_WRITE_REVOKED = object()
 
 # Extra buffer (seconds) added to a transition's own duration before the
 # polling loop is allowed to broadcast again. Absorbs bridge processing lag.
@@ -18,6 +24,44 @@ INFLIGHT_BUFFER_SECONDS = 0.5
 # Fallback assumed transition when the caller doesn't supply one. Matches
 # phue2's default (4 deciseconds = 0.4s).
 DEFAULT_TRANSITION_SECONDS = 0.4
+
+
+def _single_light_acknowledged(result: Any, light_id: int, command: dict) -> bool:
+    """Validate phue2's single-light nested v1 reply, not physical completion.
+
+    Reject partial/error/contradictory replies without retry: some properties may
+    already have applied. Require exact values until real firmware-supported
+    normalization rules are verified; physical completion remains unproven.
+    """
+    if not isinstance(result, list) or len(result) != 1:
+        return False
+    replies = result[0]
+    if not isinstance(replies, list) or not replies:
+        return False
+    expected = {f"/lights/{light_id}/state/{key}": key for key in command}
+    seen = set()
+    ranges = {"bri": (0, 254), "hue": (0, 65535), "sat": (0, 254),
+              "ct": (153, 500), "transitiontime": (0, 65535)}
+    for reply in replies:
+        if not isinstance(reply, dict) or set(reply) != {"success"}:
+            return False
+        success = reply["success"]
+        if not isinstance(success, dict) or len(success) != 1:
+            return False
+        address, value = next(iter(success.items()))
+        if address not in expected or address in seen:
+            return False
+        key = expected[address]
+        if key == "on":
+            if type(value) is not bool or value is not command[key]:
+                return False
+        else:
+            low, high = ranges[key]
+            if (type(value) is not int or not low <= value <= high
+                    or value != command[key]):
+                return False
+        seen.add(address)
+    return seen == set(expected)
 
 
 class HueService:
@@ -33,6 +77,7 @@ class HueService:
         self._username = username
         self._bridge = None
         self._connected = False
+        self._ack_observer = None  # Explicit injection only; never enabled at startup.
         self.known_light_ids: set[str] = set()
         self._last_states: dict[str, dict] = {}
         # light_id -> monotonic deadline. While now() < deadline, the polling
@@ -57,6 +102,14 @@ class HueService:
         self._breaker = CircuitBreaker(
             name="hue", failure_threshold=3, cooldown_seconds=30.0, call_timeout=5.0
         )
+
+    def set_ack_observer(self, observer) -> None:
+        """Inject a bounded synchronous observer, or None to detach.
+
+        No production wiring is authorized by this seam. Observers must not
+        mutate inputs, perform IO, or change write authority.
+        """
+        self._ack_observer = observer
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
@@ -106,15 +159,92 @@ class HueService:
     async def _safe_call(self, fn, *args, settle_mutation=False, **kwargs):
         """Run a sync bridge call in a thread under the circuit breaker."""
         if settle_mutation:
+            async def dispatch():
+                # Executor readiness precedes loop-side ownership validation.
+                # Pruning ScreenSync/external getters never run on the worker.
+                ready = Future()
+                release = Event()
+                checked = Future()
+                commit_release = Event()
+                allowed = False
+                snapshot = None
+                receipt = None
+                boundary = self._transition_boundary
+                validator = lighting_write_validator.get()
+                accept = getattr(validator, "accept_command", None)
+
+                def guarded_call():
+                    try:
+                        ready.set_result(None)
+                        release.wait()
+                        if not allowed or (
+                            boundary is not None
+                            and not boundary.dispatch_snapshot_valid(snapshot)
+                        ):
+                            raise CircuitBreakerSkipped()
+                        if accept is not None:
+                            checked.set_result(None)
+                            commit_release.wait()
+                            if not allowed or receipt is None:
+                                raise CircuitBreakerSkipped()
+                    except BaseException as error:
+                        if not checked.done():
+                            checked.set_exception(error)
+                        raise
+                    return fn(*args, **kwargs)
+
+                worker = asyncio.create_task(asyncio.to_thread(guarded_call))
+                def worker_finished(task):
+                    # Executor startup failures must not strand the rendezvous.
+                    if not ready.done():
+                        if task.cancelled():
+                            ready.set_exception(asyncio.CancelledError())
+                        else:
+                            ready.set_exception(task.exception() or RuntimeError("Hue worker did not enter"))
+
+                worker.add_done_callback(worker_finished)
+                try:
+                    await asyncio.wrap_future(ready)
+                    if boundary is None:
+                        allowed = validator is None or bool(validator())
+                    else:
+                        allowed, snapshot = boundary.validate_dispatch(validator)
+                    release.set()
+                    if accept is None:
+                        return await worker
+                    await asyncio.wrap_future(checked)
+                    # Re-evaluate complex policy on-loop after worker preflight.
+                    # Opt-in Desk writes then atomically commit raw evidence and
+                    # lease under the shared source gate. Workers consume the
+                    # immutable receipt and cannot retroactively retract it.
+                    if boundary is None:
+                        allowed = validator is None or bool(validator())
+                    else:
+                        allowed, snapshot = boundary.validate_dispatch(validator)
+                    if allowed and accept is not None:
+                        receipt = accept()
+                        allowed = receipt is not None
+                except BaseException:
+                    allowed = False
+                    raise
+                finally:
+                    release.set()
+                    commit_release.set()
+                    if not allowed:
+                        await asyncio.gather(worker, return_exceptions=True)
+                return await worker
+
             async def settled_call():
-                # CircuitBreaker.wait_for may cancel on timeout. Keep its local
-                # worker inside the lighting fence until the thread really ends.
-                return await settle_lighting_io(asyncio.to_thread(fn, *args, **kwargs))
+                # Timeout/cancellation cannot abandon the rendezvous or worker.
+                return await settle_lighting_io(dispatch())
 
             # Caller cancellation can arrive while wait_for is itself waiting
             # for settled_call's timeout cleanup. Keep that outer breaker task
             # fenced too so the serialized Hue boundary cannot unwind early.
-            return await settle_lighting_io(self._breaker.call(settled_call))
+            try:
+                return await settle_lighting_io(self._breaker.call(settled_call))
+            except CircuitBreakerSkipped:
+                return _WRITE_REVOKED
         return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
 
     @property
@@ -136,12 +266,12 @@ class HueService:
                 Bridge, self._bridge_ip, self._username
             )
             self._connected = True
-            logger.info(f"Connected to Hue bridge at {self._bridge_ip}")
+            logger.info("Connected to Hue bridge")
         except ImportError:
             logger.error("phue2 not installed — run: pip install phue2")
             self._connected = False
-        except Exception as e:
-            logger.error(f"Failed to connect to Hue bridge: {e}")
+        except Exception:
+            logger.error("Hue bridge connection failed")
             self._connected = False
 
     async def get_all_lights(self) -> list[dict]:
@@ -180,8 +310,8 @@ class HueService:
             # poll-loop callers don't add information by re-logging here,
             # and at 0.5s cadence the ERROR-level repeat floods Sentry.
             return []
-        except Exception as e:
-            logger.error(f"Error getting lights: {e}")
+        except Exception:
+            logger.error("Hue light inventory request failed")
             return []
 
     async def get_light(self, light_id: str) -> Optional[dict]:
@@ -201,7 +331,9 @@ class HueService:
             state: Dict with any of: on, bri, hue, sat, transitiontime.
 
         Returns:
-            True if the command succeeded.
+            True only for a complete bridge acknowledgement, not observed state.
+            False may include partial physical application; callers must not retry
+            on the assumption that nothing happened.
         """
         if (
             self._transition_boundary is not None
@@ -249,8 +381,21 @@ class HueService:
             if not command:
                 return False
 
-            await self._safe_call(self._bridge.set_light, lid, command, settle_mutation=True)
-            logger.info(f"Set light {light_id}: {command}")
+            result = await self._safe_call(
+                self._bridge.set_light, lid, command, settle_mutation=True,
+            )
+            if result is _WRITE_REVOKED:
+                return False
+            observer = getattr(self, "_ack_observer", None)
+            if result is not None and observer is not None:
+                try:
+                    observer.observe_v1(result, command, light_id)
+                except Exception:
+                    pass  # Observation cannot change ACK or ownership semantics.
+            if not _single_light_acknowledged(result, lid, command):
+                logger.warning("Hue light reply not accepted; remote outcome may be partial")
+                return False
+            logger.debug("Hue light command acknowledged; physical completion unverified")
 
             # Mark light in-flight so the polling loop doesn't broadcast
             # mid-transition bridge reads (which would bounce the UI back).
@@ -270,13 +415,15 @@ class HueService:
             return True
         except CircuitBreakerOpen:
             return False
-        except Exception as e:
-            logger.error(f"Error setting light {light_id}: {e}")
+        except Exception:
+            logger.error("Hue light write failed; remote outcome unknown")
             return False
 
     async def set_all_lights(self, state: dict[str, Any]) -> bool:
         """Set the same state on all lights (used for scenes)."""
         lights = await self.get_all_lights()
+        if not lights:
+            return False
         if self._transition_boundary is not None and self._transition_boundary.held_by_current_task:
             results = await self._transition_boundary.write_many([
                 lambda lid=light["light_id"]: self.set_light(lid, state) for light in lights
@@ -350,8 +497,8 @@ class HueService:
                 "transitiontime": 10,
             })
             return True
-        except Exception as e:
-            logger.error(f"Error flashing lights: {e}")
+        except Exception:
+            logger.error("Hue flash request failed; remote outcome unknown")
             return False
 
     async def poll_state_loop(self, ws_manager) -> None:
@@ -408,6 +555,6 @@ class HueService:
             except asyncio.CancelledError:
                 logger.info("Hue polling stopped")
                 break
-            except Exception as e:
-                logger.error(f"Hue polling error: {e}")
+            except Exception:
+                logger.error("Hue polling failed")
                 await asyncio.sleep(5)

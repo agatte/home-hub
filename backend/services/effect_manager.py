@@ -22,6 +22,7 @@ from backend.services.light_state_calculator import (
     EFFECT_AUTO_MAP,
 )
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
+from backend.services.light_applicator import mode_physical_validator
 
 logger = logging.getLogger("home_hub.automation.effects")
 
@@ -97,10 +98,53 @@ class EffectManager:
             self._tracker_known = False
             raise
 
-    def _publish_transition_checkpoint(self, producer: str, light_ids=None):
+    def _publish_transition_checkpoint(self, producer: str, light_ids=None, *, physical=None):
         authority = self._transition_boundary.authority
+        guard = getattr(physical, "acceptance_guard", None)
+        if guard is not None:
+            authority.bind_source_gate(guard.source_context)
         authority.invalidate(light_ids)
         return authority.issue(producer, light_ids, intent_only=True)
+
+    def _attach_effect_acceptance(self, current, checkpoint, physical, *, strict_release=True):
+        """Separate repeatable loop policy from each target's raw receipt.
+
+        Fanout inherits this adapter in lighting_write_validator. The original
+        physical guard and pre-wait checkpoint are never refreshed by children.
+        Protected release is exempt only after demonstrated safety coverage.
+        """
+        if physical is None:
+            return
+        current.desk_dependent = True
+        guard = getattr(physical, "acceptance_guard", None)
+        state = getattr(physical, "effect_state", None)
+        eligible = getattr(physical, "effect_eligible", None)
+
+        def accept(light_id, operation):
+            if guard is None or state is None or not callable(eligible):
+                return None
+            policy_operation = (
+                "strict_release" if strict_release and operation == "release" else operation
+            )
+            # All getters/callbacks run on-loop before the synchronous commit.
+            if not current() or not eligible(light_id, policy_operation):
+                return None
+            return guard.commit(self._transition_boundary.authority, checkpoint,
+                                light_id, state, policy_operation in {"start", "strict_release"})
+
+        current.accept_effect_command = accept
+
+    def _transition_current(self, checkpoint, physical) -> bool:
+        boundary = self._transition_boundary
+        # V2 all-light fanout creates child tasks inside the delegated turn.
+        # Validate under that exact turn, without granting a new lock owner.
+        if boundary.held_by_current_task:
+            semantic = boundary.authority.valid(checkpoint)
+        else:
+            semantic, _ = boundary.validate_dispatch(
+                lambda: boundary.authority.valid(checkpoint),
+            )
+        return semantic and (physical is None or physical())
 
     def release_light_ids(self) -> set[str]:
         """All mapped lamps touched by the bridge-wide no-effect release."""
@@ -176,11 +220,16 @@ class EffectManager:
             )
             return False
 
-        checkpoint = self._publish_transition_checkpoint("effect_reconcile")
-        authority = self._transition_boundary.authority
+        # Freeze the originating mode predicate before lock/settle/delegation.
+        # Explicit scene/effect writers have no mode predicate. Never recapture.
+        physical = mode_physical_validator.get()
+        if physical is not None and not physical():
+            return False
+        checkpoint = self._publish_transition_checkpoint("effect_reconcile", physical=physical)
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return self._transition_current(checkpoint, physical)
+            self._attach_effect_acceptance(current, checkpoint, physical)
             if not current():
                 return False
 
@@ -195,10 +244,12 @@ class EffectManager:
             await self._transition_boundary.wait_for_settle(required)
             if not current():
                 return False
+            self._attach_effect_acceptance(current, checkpoint, physical, strict_release=False)
             stopped = await self._mutate(
                 self._hue_v2.stop_effect_all, validator=current,
             )
             if stopped is not True:
+                self._tracker_known = False
                 logger.warning(
                     "Effect transition aborted: no_effect release failed desired=%s",
                     desired_effect,
@@ -264,12 +315,17 @@ class EffectManager:
         if not self._hue_v2 or not self._hue_v2.connected:
             return False
         required = self.release_light_ids()
-        checkpoint = self._publish_transition_checkpoint("scene_transition")
-        authority = self._transition_boundary.authority
+        # Freeze the originating mode predicate before lock/settle/delegation.
+        # Explicit scene/effect writers have no mode predicate. Never recapture.
+        physical = mode_physical_validator.get()
+        if physical is not None and not physical():
+            return False
+        checkpoint = self._publish_transition_checkpoint("scene_transition", physical=physical)
 
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return self._transition_current(checkpoint, physical)
+            self._attach_effect_acceptance(current, checkpoint, physical)
             if not current():
                 return False
             if before_transition is not None:
@@ -285,9 +341,11 @@ class EffectManager:
             if not current():
                 return False
 
+            self._attach_effect_acceptance(current, checkpoint, physical, strict_release=False)
             if await self._mutate(
                 self._hue_v2.stop_effect_all, validator=current,
             ) is not True:
+                self._tracker_known = False
                 logger.warning("Scene transition aborted: no_effect release failed")
                 return False
             if not current():
@@ -299,6 +357,7 @@ class EffectManager:
             self._tracker_known = True
 
             if await self._mutate(action, validator=current) is not True:
+                self._tracker_known = False
                 return False
             if not current():
                 self._tracker_known = False
@@ -350,11 +409,16 @@ class EffectManager:
         if not self._hue_v2 or not self._hue_v2.connected:
             return False
         required = {str(light_id)}
-        checkpoint = self._publish_transition_checkpoint("effect_reconcile_light")
-        authority = self._transition_boundary.authority
+        # Freeze the originating mode predicate before lock/settle/delegation.
+        # Explicit scene/effect writers have no mode predicate. Never recapture.
+        physical = mode_physical_validator.get()
+        if physical is not None and not physical():
+            return False
+        checkpoint = self._publish_transition_checkpoint("effect_reconcile_light", physical=physical)
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return self._transition_current(checkpoint, physical)
+            self._attach_effect_acceptance(current, checkpoint, physical)
             if not current():
                 return False
             safety_result = await establish_safety(required)
@@ -363,6 +427,7 @@ class EffectManager:
             await self._transition_boundary.wait_for_settle(required)
             if not current():
                 return False
+            self._attach_effect_acceptance(current, checkpoint, physical, strict_release=False)
             effect = desired_effect or "no_effect"
             success = await self._mutate(
                 lambda: self._hue_v2.set_effect(str(light_id), effect),
@@ -378,11 +443,18 @@ class EffectManager:
             return False
         if self._active_name is None:
             return True
-        checkpoint = self._publish_transition_checkpoint("effect_stop_all")
-        authority = self._transition_boundary.authority
+        # Freeze the originating mode predicate before lock/settle/delegation.
+        # Explicit scene/effect writers have no mode predicate. Never recapture.
+        physical = mode_physical_validator.get()
+        if physical is not None and not physical():
+            return False
+        checkpoint = self._publish_transition_checkpoint("effect_stop_all", physical=physical)
         async with self._transition_boundary.serialized():
             def current():
-                return authority.valid(checkpoint)
+                return self._transition_current(checkpoint, physical)
+            # No held-target safety reapplication precedes this entrypoint.
+            # Check protection both on-loop and inside each raw receipt gate.
+            self._attach_effect_acceptance(current, checkpoint, physical, strict_release=True)
             if not current():
                 return False
             stopped = await self._mutate(
@@ -394,8 +466,7 @@ class EffectManager:
                 self._active_lights = None
                 self._tracker_known = True
                 return True
-            if stopped is True:
-                self._tracker_known = False
+            self._tracker_known = False
             return False
 
     def get_desired_effect(

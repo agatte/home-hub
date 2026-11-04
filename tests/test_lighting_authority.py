@@ -546,7 +546,14 @@ async def test_real_hue_adapter_parallel_delegation_does_not_reacquire_parent_lo
     hue = HueService("fake-bridge", "fake-user")
     calls = []
     hue._connected = True
-    hue._bridge = SimpleNamespace(set_light=lambda lid, state: calls.append((lid, state.copy())))
+
+    def bridge_ack(lid, state):
+        calls.append((lid, state.copy()))
+        # phue2's single-light wrapper: one nested list of per-property ACKs.
+        return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                 for key, value in state.items()]]
+
+    hue._bridge = SimpleNamespace(set_light=bridge_ack)
     boundary = LightingTransitionBoundary(hue)
     hue.set_transition_boundary(boundary)
     async with boundary.serialized():

@@ -181,10 +181,11 @@ async def set_all_lights(state: LightState, request: Request) -> dict:
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
-    # Log one adjustment per light
-    for lid, before in before_lights.items():
-        await _log_light_change(
-            request, lid, before, state_dict, trigger="all_lights"
-        )
+    # Without per-light acknowledgements, a failed bulk write may be partial.
+    if success:
+        for lid, before in before_lights.items():
+            await _log_light_change(
+                request, lid, before, state_dict, trigger="all_lights"
+            )
 
     return {"status": "ok" if success else "partial_failure"}

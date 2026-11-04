@@ -30,6 +30,7 @@ python-dotenv==1.2.2
 
 # HTTP
 httpx==0.28.1             # Async HTTP client for ESPN API
+httpcore==1.0.9            # Audited HTTP transport DEBUG trace emitter contract (#370)
 
 # PC activity detection
 psutil==7.2.2             # Process monitoring for activity detection
