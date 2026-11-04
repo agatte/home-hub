@@ -2,10 +2,13 @@
 
 Status on 2026-11-04: **SOURCE ONLY / NOT INSTALLED / NOT INSTALLABLE**.
 Owner: [#489](https://github.com/agatte/home-hub/issues/489).
-Local uncommitted evidence lives in worktree
+Sandbox preparation and its test evidence live in worktree
 `C:\Work\home-hub-project\worktrees\obsidian-vault-relocation-prep-489-20261104`,
 branch `work/489-vault-storage-bundle-prep-20261104`, base
-`674d92a7861dd70646f67ece6a7706380348134e`. Nothing was published.
+`674d92a7861dd70646f67ece6a7706380348134e`. This source-only
+preparation was subsequently published for review as [PR #491](https://github.com/agatte/home-hub/pull/491)
+(commit `19e4ee1898e86e9b6847ea929ba1ab0cec6e71e6`); it has not been merged,
+installed, or used for any physical Vault move.
 
 The current concrete recipe, pins and gates are recorded in **Concrete offline
 recipe update (2026-11-04)** below. The earlier template evidence is retained as
@@ -132,8 +135,15 @@ The exact new Vault remains
 
 Input anchors, checked before transforming any source:
 
-- Reviewed current `scripts/obsidian_launcher_pins.json` raw-byte SHA-256:
+- Reviewed `scripts/obsidian_launcher_pins.json` raw-byte SHA-256, Windows CRLF
+  working-copy form:
   `20c774e360bff84d94942f0600219806e5919564e97c7e02264dddc808f31f62`.
+  Exact GitHub/Git LF blob form:
+  `6ce36d97fafda905cdced30cd4b6f0131d69fb952a689c0036dce28fe357cfc7`.
+  Both fixed reviewed byte forms are accepted; no arbitrary newline normalization,
+  caller-supplied resealing, or module-pin relaxation. The nine module Git blobs
+  match their existing reviewed SHA-256 pins without conversion. This explicit
+  two-anchor check addresses the four failures in initial PR #491 Linux CI.
 - Historical native source (read-only `obsidian-hidden-launcher-399-20261025`
   worktree, `scripts/obsidian_mirror_hidden_launcher.cs`) SHA-256:
   `4372e4d9f982f828bfbab79f308abbd83982130d3a548e24b9f27a7b7ebcac69`.

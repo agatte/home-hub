@@ -190,6 +190,21 @@ class BundleRecipeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'old_native_pin'):
             self.recipe()
 
+    def test_exact_reviewed_windows_and_git_pins_bytes(self):
+        """Accept only two fixed byte identities, not arbitrary normalized input."""
+        lf = self.old_pins.replace(b'\r\n', b'\n')
+        crlf = lf.replace(b'\n', b'\r\n')
+        self.assertEqual(prep.digest(lf), prep.OLD_PINS_LF_SHA256)
+        self.assertEqual(prep.digest(crlf), prep.OLD_PINS_SHA256)
+        results = []
+        for pins in (lf, crlf):
+            self.old_pins = pins
+            results.append(self.recipe())
+            with self.assertRaisesRegex(ValueError, 'reviewed_old_pins'):
+                self.old_pins = pins + b' '
+                self.recipe()
+        self.assertEqual(results[0], results[1])
+
     def test_old_pins_cannot_be_resealed_by_caller(self):
         import json
         pins = json.loads(self.old_pins)

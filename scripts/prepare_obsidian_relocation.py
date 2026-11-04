@@ -72,7 +72,8 @@ OLD_RELEASE = "5fbc1ddbe2d42d6a1540704b58da75a921b1e7f5"
 NEW_BUNDLE = USER + r"\AppData\Local\HomeHub\ObsidianMirror" + "\\" + NEW_RELEASE
 PYTHON = USER + r"\AppData\Local\Programs\Python\Python313\python.exe"
 OLD_ANCHOR = "073e5bd74df5c99ab29edb3e5c5504b6abaa1f7bd0283c7f6b2f04fe1c892b70"
-OLD_PINS_SHA256 = "20c774e360bff84d94942f0600219806e5919564e97c7e02264dddc808f31f62"
+OLD_PINS_SHA256 = "20c774e360bff84d94942f0600219806e5919564e97c7e02264dddc808f31f62"  # reviewed Windows CRLF bytes
+OLD_PINS_LF_SHA256 = "6ce36d97fafda905cdced30cd4b6f0131d69fb952a689c0036dce28fe357cfc7"  # reviewed Git LF blob
 OLD_NATIVE_SHA256 = "4372e4d9f982f828bfbab79f308abbd83982130d3a548e24b9f27a7b7ebcac69"
 MODULE_FILES = frozenset({
     "create_obsidian_pilot.py", "launch_obsidian_mirror.py", "manage_obsidian_vault.py",
@@ -102,7 +103,10 @@ def bundle_recipe(old_modules, old_pins, old_native, identity, *,
     """
     if release != NEW_RELEASE or bundle != NEW_BUNDLE or vault != VAULT:
         raise ValueError("release_or_target")
-    if type(old_pins) is not bytes or digest(old_pins) != OLD_PINS_SHA256:
+    # Only these two independently reviewed exact byte forms are allowed.
+    # Git stores LF while the approved Windows checkout has CRLF; no general
+    # newline normalization or caller-provided digest is trusted here.
+    if type(old_pins) is not bytes or digest(old_pins) not in (OLD_PINS_SHA256, OLD_PINS_LF_SHA256):
         raise ValueError("reviewed_old_pins")
     pins = json.loads(old_pins)
     if (set(pins) != {"source_commit", "files"}
