@@ -30,7 +30,7 @@ describe('Quiet Atlas phone-native Insights activity review (#461)', () => {
     expect(route).toContain('href="/analytics?shell=quiet-atlas"')
   })
 
-  it('places unverified decision explanation behind an accessible mobile disclosure', () => {
+  it('places unverified decision explanation behind an accessible disclosure at every width', () => {
     expect(route).toContain('let studyOpen = false')
     expect(route).toContain('aria-controls="insights-study-content"')
     expect(route).toContain('aria-expanded={studyOpen}')
@@ -40,7 +40,7 @@ describe('Quiet Atlas phone-native Insights activity review (#461)', () => {
     expect(route).toContain('.study-content.phone-collapsed {display:none;}')
     expect(route).toContain('.phone-study-toggle:focus-visible')
     expect(route).toContain('min-height:52px')
-    expect(route).toContain('.phone-study-toggle {display:none;}')
+    expect(route).not.toContain('.phone-study-toggle {display:none;}')
   })
 
   it('keeps context source and stale uncertainty readable on a small screen', () => {
@@ -51,7 +51,7 @@ describe('Quiet Atlas phone-native Insights activity review (#461)', () => {
     expect(context).toContain('.context-note {font-size:12px;line-height:1.55;}')
     expect(route).toContain('env(safe-area-inset-bottom, 0px)')
     expect(route).toContain('white-space:normal')
-    expect(route).toContain('.event time {font-size:12px;}')
+    expect(route).toContain('.event time {font-size:14px;}')
   })
 
   it('compiles the two modified Svelte views with zero warnings', () => {
