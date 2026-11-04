@@ -107,7 +107,10 @@ describe('mounted read-only fixture draft reconciliation (#461)', () => {
     await rerender({ group: bedroom(changed), snapshotStatus: 'recent-read', fixtureStates: changed })
     await tick()
     expect(screen.queryByText('Proposed adjustment · not sent')).not.toBeInTheDocument()
-    expect(screen.getByRole('slider', { name: /Draft Shaded desk lamp brightness percentage/ }).value).toBe('70')
+    const updatedSlider = screen.getByRole('slider', { name: /Draft Shaded desk lamp brightness percentage/ })
+    expect(updatedSlider).toBeInstanceOf(HTMLInputElement)
+    if (!(updatedSlider instanceof HTMLInputElement)) throw new Error('Brightness slider missing')
+    expect(updatedSlider.value).toBe('70')
     expect(screen.getByRole('button', { name: 'Close lighting details' })).toHaveFocus()
   })
 
@@ -117,7 +120,11 @@ describe('mounted read-only fixture draft reconciliation (#461)', () => {
       group: bedroom(initial), snapshotStatus: 'recent-read', fixtureStates: initial,
     })
     await openBedroomReview()
-    await rerender({ group: bedroom(initial), snapshotStatus, fixtureStates: initial })
+    await rerender({
+      group: bedroom(initial),
+      snapshotStatus: /** @type {'stale-read'|'disconnected'|'unverified'} */ (snapshotStatus),
+      fixtureStates: initial,
+    })
     await tick()
     expect(screen.queryByText('Proposed adjustment · not sent')).not.toBeInTheDocument()
     expect(screen.getByRole('slider', { name: /Draft Shaded desk lamp brightness percentage/ })).toBeDisabled()
