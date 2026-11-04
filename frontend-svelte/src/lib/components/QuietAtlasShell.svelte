@@ -24,6 +24,19 @@
     guest: Users,
   }
 
+  const MORE_COPY = {
+    settings: 'Automation and integrations.',
+    journal: 'History and nightly summaries.',
+    personality: 'Mood and learning preferences.',
+    apartment: 'Apartment widget and household tools.',
+    gameday: 'Stadium experience.',
+    guest: 'Visitor Wi-Fi and tools.',
+  }
+  const MORE_GROUPS = [
+    { id: 'home', label: 'Home & preferences', start: 0, end: 3 },
+    { id: 'experiences', label: 'Other experiences', start: 3, end: 6 },
+  ]
+
   $: activeSection = activeQuietAtlasSection($page.url.pathname)
   $: readOnlyPreview = isQuietAtlasReadOnlyPreview($page.url.pathname)
   $: destinations = MORE_DESTINATIONS.map((item) => ({
@@ -188,29 +201,33 @@
     >
       <header class="qa-more-header">
         <div>
-          <p class="qa-more-kicker">DESTINATIONS</p>
-          <h2 id="qa-more-title">More HomeHub</h2>
+          <h2 id="qa-more-title">More</h2>
         </div>
         <button bind:this={closeButton} type="button" class="qa-close-more" aria-label="Close More destinations" on:click={() => closeMore()}>
           <X size={20} strokeWidth={1.8} aria-hidden="true" />
         </button>
       </header>
-      <p class="qa-more-intro">Less-used tools stay one tap away without taking over the Home screen. Existing experiences remain available while their redesign is staged.</p>
-      <div class="qa-more-list">
-        {#each destinations as destination (destination.id)}
-          <a class="qa-more-link" href={destination.href} on:click={() => closeMore(false)}>
-            <span class="qa-more-icon">
-              <svelte:component this={MORE_ICONS[destination.id]} size={19} strokeWidth={1.7} aria-hidden="true" />
-            </span>
-            <span class="qa-more-copy">
-              <strong>{destination.label}</strong>
-              <small>{destination.description}</small>
-            </span>
-            <ArrowUpRight size={17} strokeWidth={1.8} aria-hidden="true" />
-          </a>
-        {/each}
-      </div>
-      <p class="qa-more-note">The dedicated measured Apartment page remains a separate #192 workstream. This link preserves access to the current Apartment widget and household tools on legacy Home.</p>
+      <p class="qa-more-intro">Preferences, history, and other experiences.</p>
+      {#each MORE_GROUPS as group (group.id)}
+        <section class="qa-more-group" aria-labelledby={'qa-more-group-' + group.id}>
+          <h3 id={'qa-more-group-' + group.id}>{group.label}</h3>
+          <div class="qa-more-list">
+            {#each destinations.slice(group.start, group.end) as destination (destination.id)}
+              <a class="qa-more-link" href={destination.href} on:click={() => closeMore(false)}>
+                <span class="qa-more-icon">
+                  <svelte:component this={MORE_ICONS[destination.id]} size={19} strokeWidth={1.7} aria-hidden="true" />
+                </span>
+                <span class="qa-more-copy">
+                  <strong>{destination.label}</strong>
+                  <small>{MORE_COPY[destination.id]}</small>
+                </span>
+                <ArrowUpRight size={17} strokeWidth={1.8} aria-hidden="true" />
+              </a>
+            {/each}
+          </div>
+        </section>
+      {/each}
+      <p class="qa-more-note">Apartment opens the current Home tools. The measured physical canvas is a separate, future page.</p>
     </section>
   {/if}
 </div>
@@ -352,19 +369,20 @@
     box-shadow: 0 24px 80px rgba(0,0,0,.42);
   }
   .qa-more-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-  .qa-more-kicker { color: #9fb59f; font-size: 10px; font-weight: 700; letter-spacing: .16em; }
+  .qa-more-group { margin-top: 20px; }
+  .qa-more-group h3 { margin: 0 0 10px; color: inherit; font-size: 14px; font-weight: 650; line-height: 1.5; }
   .qa-more-header h2 { margin-top: 8px; color: #f0f0e8; font-family: Georgia, serif; font-size: 30px; font-weight: 400; }
-  .qa-close-more { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid rgba(190,215,188,.2); border-radius: 12px; color: #d5e3d2; background: rgba(190,215,188,.06); cursor: pointer; }
-  .qa-more-intro { margin: 16px 0 20px; color: #b1c0b3; font-size: 13px; line-height: 1.6; }
+  .qa-close-more { display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; border: 1px solid rgba(190,215,188,.2); border-radius: 12px; color: #d5e3d2; background: rgba(190,215,188,.06); cursor: pointer; }
+  .qa-more-intro { margin: 16px 0 20px; color: #b1c0b3; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
   .qa-more-list { display: flex; flex-direction: column; gap: 8px; }
   .qa-more-link { display: grid; grid-template-columns: 40px minmax(0,1fr) 18px; align-items: center; gap: 12px; min-height: 64px; padding: 10px 11px; border: 1px solid rgba(190,215,188,.1); border-radius: 14px; color: inherit; background: rgba(190,215,188,.035); text-decoration: none; }
   .qa-more-link:hover { border-color: rgba(190,215,188,.28); background: rgba(190,215,188,.07); }
   .qa-more-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: #c5d9bd; background: rgba(111,150,108,.16); }
   .qa-more-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .qa-more-copy strong { font-size: 13px; font-weight: 650; }
-  .qa-more-copy small { color: #9eafa1; font-size: 11px; line-height: 1.45; }
+  .qa-more-copy strong { font-size: 15px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+  .qa-more-copy small { color: #9eafa1; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
   .qa-more-link > :last-child { color: #9fb59f; }
-  .qa-more-note { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(190,215,188,.1); color: #91a294; font-size: 11px; line-height: 1.55; }
+  .qa-more-note { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(190,215,188,.1); color: #91a294; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
   @media (max-width: 760px) {
     .qa-shell { display: flex; flex-direction: column; min-height: 100dvh; }
     .qa-sidebar { display: none; }
@@ -425,7 +443,7 @@
     }
     .qa-more-header h2 { font-size: clamp(25px, 7.8vw, 30px); }
     .qa-close-more { flex: 0 0 48px; width: 48px; height: 48px; }
-    .qa-more-intro { margin: 14px 0 16px; font-size: 12px; line-height: 1.6; }
+    .qa-more-intro { margin: 14px 0 16px; font-size: 14px; line-height: 1.6; }
     .qa-more-list { gap: 10px; }
     .qa-more-link {
       grid-template-columns: 40px minmax(0, 1fr) 18px;
@@ -434,9 +452,9 @@
       padding: 12px 10px;
     }
     .qa-more-icon { width: 40px; height: 40px; }
-    .qa-more-copy strong { font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
-    .qa-more-copy small { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-    .qa-more-note { font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+    .qa-more-copy strong { font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+    .qa-more-copy small { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+    .qa-more-note { font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
   }
   /* Preview-only Daylight coordination. Scoped to the opted-in Home page:
      no global theme, route persistence, or change to legacy/product surfaces. */
@@ -497,7 +515,7 @@
     --qa-more-surface: #f5f5ec;
     color: #263a2d; background: var(--qa-more-surface); border-color: rgba(58,87,63,.25);
   }
-  :global(.qa-shell:has(.home-review.daylight)) .qa-more-kicker,
+  :global(.qa-shell:has(.home-review.daylight)) .qa-more-group h3,
   :global(.qa-shell:has(.home-review.daylight)) .qa-more-link > :last-child { color: #5a795c; }
   :global(.qa-shell:has(.home-review.daylight)) .qa-more-header h2 { color: #263a2d; }
   :global(.qa-shell:has(.home-review.daylight)) .qa-more-intro,
