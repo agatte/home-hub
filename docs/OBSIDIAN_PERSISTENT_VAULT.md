@@ -126,6 +126,46 @@ without separate reviewed host installation/action-change authorization. Keep
 the previous bundle, task definition, and managed snapshots as evidence.
 See [the synchronization design](OBSIDIAN_SYNC_DESIGN.md).
 
+## Read-only retention proposal (#399, 2026-11-04)
+
+`scripts/plan_obsidian_retention.py plan --vault <absolute-vault-path>` is an
+explicit, offline report command. It has no deletion or scheduling capability.
+This is a **proposal**, not an accepted retention policy: keep the five newest
+verified complete backup/stage/receipt triples by receipt nanosecond mtime,
+breaking ties by suffix descending. Report older triples with exact full paths,
+counts and logical byte estimates (not allocated disk space). Protect all
+standalone backups, including the four older Oct 10/12 snapshots described in
+the task inventory; their contents are not inspected or counted.
+
+The planner requires an ordinary absolute `Documents/HomeHub Knowledge Vault`
+path and ordinary ancestors, verifies the current managed snapshot and complete
+triples with the mirror's read-only `_sealed` helper, and validates bounded,
+duplicate-key-free receipt metadata against both snapshot commits. Unexpected
+names in the sibling `.HomeHub Knowledge Vault-homehub-` namespace, active
+markers, partial pairs, bad metadata, links/reparse points in inspected paths,
+or integrity failures stop the whole report. The newest completed stage must
+name the current managed commit. No complete triple also means STOP. Personal
+notes and `.obsidian` are never enumerated. Unrelated Documents siblings are
+ignored; standalone backup contents remain protected and unverified.
+
+Planning **does not authorize deletion**. Any later cleanup needs separate
+per-target host authorization and a reviewed bounded workflow, including fresh
+integrity/identity checks and protection against a concurrent refresh. This
+report is cooperative read-only inspection, not an atomic filesystem snapshot;
+mtime is a retention ordering hint, not authenticated completion time. A matching
+current commit proves local consistency only, not freshness against GitHub.
+Do not run this command against the real host on Sandbox design approval.
+
+Local implementation evidence is uncommitted in
+`work/399-retention-report-20261104`. Synthetic tests are in
+`tests/test_plan_obsidian_retention.py`. On 2026-11-04, independent Sandbox
+verification using the already-installed `C:\Tools\Python313\python.exe`
+passed **12/12 planner tests**, **34/34 existing simple-mirror regression tests**,
+and Python syntax compilation; `git diff --check` also passed. The Codex shell's
+`python`/`py` PATH lookup failed, but did not block these independent checks.
+No interpreter was installed, no real-host inspection was performed, and the
+provided inventory counts/sizes remain operator-reported, not a fresh live audit.
+
 ## Constraints
 
 - Source selection is exactly Git-tracked regular Markdown from `AGENTS.md`
