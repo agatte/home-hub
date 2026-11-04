@@ -52,7 +52,10 @@ function list(value, length) {
  */
 export function adaptSyntheticArtistReview431(input) {
   // Even hostile proxy traps must not put user-controlled values into errors.
-  try { return adaptFixturePacket(input) } catch { invalid() }
+  try { return adaptFixturePacket(input) } catch {
+    // Explicit throw is required for Svelte's checked-JS return typing.
+    throw new Error('Invalid synthetic artist review fixture.')
+  }
 }
 
 /** @param {unknown} input */
