@@ -947,12 +947,17 @@ class TestEngineHooks:
         engine._apply_state = AsyncMock()
         engine._effect_manager.reconcile = AsyncMock()
 
+        # Underlying Working must not override the hard Away owner.
+        engine._current_mode = "working"
+        assert engine.effective_mode == "working"
         engine.arm_away_suppression("geofence:test")
+        assert engine.effective_mode == "away"
         await engine._apply_mode("working", force_resend=True)
         engine._apply_state.assert_not_awaited()
         engine._effect_manager.reconcile.assert_not_awaited()
 
         await engine.signal_presence("camera")
+        assert engine.effective_mode == "working"
         await engine._apply_mode("working", force_resend=True)
         # An unknown EffectManager tracker takes the serialized release path;
         # it need not pass through the steady-state _apply_state helper.

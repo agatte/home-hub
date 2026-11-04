@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
+from backend.services.lighting_transition_boundary import lighting_write_validator
+
 if TYPE_CHECKING:
     from backend.services.hue_service import HueService
     from backend.services.websocket_manager import WebSocketManager
@@ -211,6 +213,14 @@ class HueV2Service:
             return False
 
         try:
+            validator = lighting_write_validator.get()
+            if validator is not None and not validator():
+                return False
+            # Scene manifests do not yet prove complete, fresh fixture scope.
+            # Desk-dependent autonomous recall abstains; explicit recall keeps
+            # its existing authorization path.
+            if getattr(validator, "desk_dependent", False):
+                return False
             resp = await self._client.put(
                 f"/scene/{scene_id}",
                 json={"recall": {"action": "active"}},
@@ -247,9 +257,20 @@ class HueV2Service:
             return False
 
         try:
+            path = f"/light/{v2_id}"
+            payload = {"effects": {"effect": effect}}
+            validator = lighting_write_validator.get()
+            if validator is not None and not validator():
+                return False
+            accept = getattr(validator, "accept_effect_command", None)
+            if accept is not None:
+                receipt = accept(v1_light_id, "release" if effect == "no_effect" else "start")
+                if receipt is None:
+                    return False
+            elif getattr(validator, "desk_dependent", False):
+                return False
             resp = await self._client.put(
-                f"/light/{v2_id}",
-                json={"effects": {"effect": effect}},
+                path, json=payload,
             )
             resp.raise_for_status()
             logger.info(f"Set effect '{effect}' on light {v1_light_id}")

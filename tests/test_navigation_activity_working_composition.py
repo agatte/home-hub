@@ -309,6 +309,9 @@ async def test_engine_working_day_matches_pure_composition_and_sync_order(
         return True
 
     engine._apply_state = AsyncMock(side_effect=apply)
+    # Direct actuation must use the currently owned effective mode.
+    engine._current_mode = "working"
+    assert engine.effective_mode == "working"
     await engine._apply_mode("working")
 
     expected = compose_working_lights(
@@ -402,6 +405,9 @@ async def test_working_keeps_learner_await_before_later_reads(
     )
     engine._apply_state = AsyncMock(return_value=True)
 
+    # Direct actuation must use the currently owned effective mode.
+    engine._current_mode = "working"
+    assert engine.effective_mode == "working"
     await engine._apply_mode("working")
 
     assert events == [

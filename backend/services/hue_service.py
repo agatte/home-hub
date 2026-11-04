@@ -2,14 +2,20 @@
 Philips Hue bridge service — wraps phue2 for light control.
 """
 import asyncio
+from concurrent.futures import Future
+from threading import Event
 import logging
 import time
 from typing import Any, Optional
 
-from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
-from backend.services.lighting_transition_boundary import settle_lighting_io
+from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitBreakerSkipped
+from backend.services.lighting_transition_boundary import (
+    lighting_write_validator, settle_lighting_io,
+)
 
 logger = logging.getLogger("home_hub.hue")
+
+_WRITE_REVOKED = object()
 
 # Extra buffer (seconds) added to a transition's own duration before the
 # polling loop is allowed to broadcast again. Absorbs bridge processing lag.
@@ -106,15 +112,92 @@ class HueService:
     async def _safe_call(self, fn, *args, settle_mutation=False, **kwargs):
         """Run a sync bridge call in a thread under the circuit breaker."""
         if settle_mutation:
+            async def dispatch():
+                # Executor readiness precedes loop-side ownership validation.
+                # Pruning ScreenSync/external getters never run on the worker.
+                ready = Future()
+                release = Event()
+                checked = Future()
+                commit_release = Event()
+                allowed = False
+                snapshot = None
+                receipt = None
+                boundary = self._transition_boundary
+                validator = lighting_write_validator.get()
+                accept = getattr(validator, "accept_command", None)
+
+                def guarded_call():
+                    try:
+                        ready.set_result(None)
+                        release.wait()
+                        if not allowed or (
+                            boundary is not None
+                            and not boundary.dispatch_snapshot_valid(snapshot)
+                        ):
+                            raise CircuitBreakerSkipped()
+                        if accept is not None:
+                            checked.set_result(None)
+                            commit_release.wait()
+                            if not allowed or receipt is None:
+                                raise CircuitBreakerSkipped()
+                    except BaseException as error:
+                        if not checked.done():
+                            checked.set_exception(error)
+                        raise
+                    return fn(*args, **kwargs)
+
+                worker = asyncio.create_task(asyncio.to_thread(guarded_call))
+                def worker_finished(task):
+                    # Executor startup failures must not strand the rendezvous.
+                    if not ready.done():
+                        if task.cancelled():
+                            ready.set_exception(asyncio.CancelledError())
+                        else:
+                            ready.set_exception(task.exception() or RuntimeError("Hue worker did not enter"))
+
+                worker.add_done_callback(worker_finished)
+                try:
+                    await asyncio.wrap_future(ready)
+                    if boundary is None:
+                        allowed = validator is None or bool(validator())
+                    else:
+                        allowed, snapshot = boundary.validate_dispatch(validator)
+                    release.set()
+                    if accept is None:
+                        return await worker
+                    await asyncio.wrap_future(checked)
+                    # Re-evaluate complex policy on-loop after worker preflight.
+                    # Opt-in Desk writes then atomically commit raw evidence and
+                    # lease under the shared source gate. Workers consume the
+                    # immutable receipt and cannot retroactively retract it.
+                    if boundary is None:
+                        allowed = validator is None or bool(validator())
+                    else:
+                        allowed, snapshot = boundary.validate_dispatch(validator)
+                    if allowed and accept is not None:
+                        receipt = accept()
+                        allowed = receipt is not None
+                except BaseException:
+                    allowed = False
+                    raise
+                finally:
+                    release.set()
+                    commit_release.set()
+                    if not allowed:
+                        await asyncio.gather(worker, return_exceptions=True)
+                return await worker
+
             async def settled_call():
-                # CircuitBreaker.wait_for may cancel on timeout. Keep its local
-                # worker inside the lighting fence until the thread really ends.
-                return await settle_lighting_io(asyncio.to_thread(fn, *args, **kwargs))
+                # Timeout/cancellation cannot abandon the rendezvous or worker.
+                return await settle_lighting_io(dispatch())
 
             # Caller cancellation can arrive while wait_for is itself waiting
             # for settled_call's timeout cleanup. Keep that outer breaker task
             # fenced too so the serialized Hue boundary cannot unwind early.
-            return await settle_lighting_io(self._breaker.call(settled_call))
+            try:
+                return await settle_lighting_io(self._breaker.call(settled_call))
+            except CircuitBreakerSkipped:
+                return _WRITE_REVOKED
         return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
 
     @property
@@ -249,7 +332,11 @@ class HueService:
             if not command:
                 return False
 
-            await self._safe_call(self._bridge.set_light, lid, command, settle_mutation=True)
+            result = await self._safe_call(
+                self._bridge.set_light, lid, command, settle_mutation=True,
+            )
+            if result is _WRITE_REVOKED:
+                return False
             logger.info(f"Set light {light_id}: {command}")
 
             # Mark light in-flight so the polling loop doesn't broadcast
