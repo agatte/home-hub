@@ -503,9 +503,13 @@
 
   .chip-presets {
     pointer-events: auto;
-    position: absolute;
-    left: 12px;
-    top: 100%;
+    /* Keep choices inside the light card at desktop sizes too. */
+    position: relative;
+    left: auto;
+    top: auto;
+    width: max-content;
+    max-width: 100%;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 6px;
