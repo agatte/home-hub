@@ -18,6 +18,7 @@
   import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
   import QuietAtlasShell from '$lib/components/QuietAtlasShell.svelte'
   import { shouldUseQuietAtlasShell, shouldShowGlobalErrorToast } from '$lib/quietAtlas/navigation.js'
+  import { rootRuntimeTargets } from '$lib/quietAtlas/runtimeRoutePolicy431.js'
 
   // SvelteKit passes these props to layout components; declaring them
   // silences Svelte's unknown-prop warnings.
@@ -64,18 +65,16 @@
     const stopGameday = () => { cleanupGameday?.(); cleanupGameday = null }
 
     // Route-owned lifecycle keeps exactly one Game Day feed across client
-    // navigation. The prototype remains isolated from unrelated kiosk stores.
+    // navigation. The fictional #431 artist review must not start or retain
+    // HomeHub REST/WebSocket/weather/ambient/activity runtime.
     const unsubscribe = page.subscribe(($page) => {
-      const path = $page.url.pathname
-      const guest = path.startsWith('/guest')
-      const gamedayPath = path === '/gameday' || path.startsWith('/gameday/prototype')
-      if (guest) { stopGeneral(); stopGameday(); return }
+      const { general, gameday } = rootRuntimeTargets($page.url.pathname)
+      if (gameday) {
+        if (!cleanupGameday) cleanupGameday = initGamedayFeed()
+      } else stopGameday()
 
-      if (gamedayPath && !cleanupGameday) cleanupGameday = initGamedayFeed()
-      if (!gamedayPath) stopGameday()
-
-      if (path.startsWith('/gameday/prototype')) stopGeneral()
-      else startGeneral()
+      if (general) startGeneral()
+      else stopGeneral()
     })
 
     return () => { unsubscribe(); stopGeneral(); stopGameday() }

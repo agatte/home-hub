@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 // #431 focused interaction regression: a real mounted Svelte component,
 // not only source-string assertions or a compiler smoke test.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import Review from '../../src/routes/quiet-atlas/music/artist-review/+page.svelte'
 
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('#431 fictional artist-review focus and dialog ownership', () => {
   it('moves focus to the new step after every action that replaces its button', async () => {
@@ -68,5 +68,31 @@ describe('#431 fictional artist-review focus and dialog ownership', () => {
     await tick()
     expect(screen.getByRole('heading', { name: 'Find the right artist.' })).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Find the right artist.' }))
+  })
+})
+
+// No source label reaches a request even after simulated per-query permission.
+describe('#431 fixture bridge non-egress', () => {
+  it('cancels, skips and reconsents for the current artist without any network call', async () => {
+    const request = vi.fn(() => { throw new Error('Unexpected request') })
+    for (const name of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource']) vi.stubGlobal(name, request)
+    render(Review)
+    await fireEvent.click(screen.getByRole('button', { name: 'Find matches' }))
+    expect(screen.queryByRole('radio')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await tick()
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Find the right artist.' }))
+    expect(screen.queryByRole('radio')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Find matches' }))
+    expect(screen.getByText((_, element) => element?.tagName === 'P' && element.textContent === 'Artist name: Fictional Pattern Unit')).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { name: 'Show fictional matches' }))
+    expect(screen.getAllByRole('radio')).toHaveLength(1)
+    await fireEvent.click(screen.getByRole('radio'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Confirm fictional match' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo this match' }))
+    await fireEvent.click(screen.getByRole('button', { name: /None look right/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Start over' }))
+    expect(request).not.toHaveBeenCalled()
   })
 })

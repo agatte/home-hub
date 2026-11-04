@@ -73,7 +73,77 @@ Neither C nor D is accepted by this work. Current real input remains private;
 no file picker, source discovery, storage, host administration, or device write
 is part of this contract.
 
-This contract is proposed in draft PR #460 for Linux CI and independent
-privacy review. Source integration, merge, production deployment, catalog
-lookup, retention and recommendation use remain separately gated; publishing
-the draft does not authorize any of them.
+This synthetic evaluator contract was integrated through merged PR #460; that
+source merge is not live Apple identity verification or production deployment.
+Catalog lookup, retention, recommendation effects and device/production use
+remain separately gated.
+
+## 2026-11-03: Quiet Atlas synthetic handoff seam (local, uncommitted)
+
+`frontend-svelte/src/lib/appleMusicArtistReviewHandoff431.fixture.json` is the
+only input to the artist-review route. Its pure client adapter validates the
+whole packet before producing a frozen UI projection; invalid packets throw one
+fixed error containing no source values. There is no fallback input path.
+
+Schema `artist_review_fixture_431_v1` requires
+`provenance=synthetic_fixture_only`, `source=apple_daily_tracks`,
+`evidence=artist_label_day_exposure`, `identity_status=unverified` and false
+`preference_eligible`, `session_proven`, `cross_source_independent`,
+`actuation_eligible`, `live_catalog_enabled`, `network_enabled`,
+`persistence_enabled`. These packet-level invariants apply to every row.
+Exactly four ordered artist rows contain `ref`, `label`, `date_band` (one of
+`1`, `2-3`, `4-9`, `10+`) and `candidate_refs`; exactly five claims contain
+`ref`, fictional `provider=DemoCatalog`, `name` and `note`. All labels, bands,
+refs and claims are pinned to the invented examples, including two distinct
+same-name candidates. Unknown fields, nested extras, altered text/bands,
+duplicates, unknown refs, non-data properties and enabled flags reject the
+entire packet. Provenance text alone cannot enable arbitrary real labels.
+
+This models the local reviewer's transient (unverified label, date-band) shape,
+but does not call that script, read its RAM, adapt its real output, or connect
+the aggregate identity evaluator. No CSV/Apple payload, file picker, query
+parameter, clipboard, browser storage, export, dynamic private import, provider
+request, backend telemetry or HomeHub API is connected. Per-query permission is
+a simulation; match selection stays ephemeral mock state and never issues an
+identity proof or preference/session/cross-source/actuation eligibility.
+
+Validation: 50 dependency-free Node bridge, route and cancellation checks passed,
+including direct entry, client navigation and fixed redacted proxy errors; syntax
+and diff whitespace checks. Existing Vitest source assertions now consume the
+fixture; mounted flow/focus tests retain consent, next, undo, unsure, reset and
+Escape coverage, with an added cancel/skip/reconsent/no-request test. Those
+Vitest/Svelte checks and fresh desktop/mobile visual verification remain
+unexecuted because this worktree has no node_modules; no packages were installed.
+This is local synthetic evidence, not CI, independent review or new visual
+acceptance. The artist-review page's layout and handlers are preserved.
+
+An independent code review found the page had no IO, but the inherited root
+Svelte layout still initialized HomeHub REST/WebSocket, weather, activity and
+ambient services on the preview route. `rootRuntimeTargets` now excludes only
+`/quiet-atlas/music/artist-review` (plus existing Guest/prototype behavior)
+from normal runtime startup, and uses the root layout's owned cleanup when
+navigating into it. Normal Music and functional HomeHub routes retain their
+runtime; leaving the preview resumes subscriptions. Node tests cover direct
+entry and navigation, with root source wiring assertions. They do not replace
+a mounted layout/browser test. Already in-flight REST reads started on the
+prior route are not retroactively aborted; normal page assets still load.
+No data or device authority is granted by this isolation.
+
+A subsequent independent review found that the Game Day REST prime could still
+chain `/state` or `/schedule` after a prior request rejected following feed
+cleanup. The scoped `gameday.js` correction guards generation before each next
+request and before the schedule-failure store update. Five dependency-free
+synthetic tests execute the real prime body with mocked deferred failures:
+cleanup before launch, viewer-sync rejection, state rejection, schedule
+rejection and normal owned success. This prevents new Game Day follow-on
+requests from an abandoned feed; it does not cancel already-started requests
+or alter Game Day's successful priming flow. This cross-workstream change
+requires ordinary frontend CI and integrated browser lifecycle verification.
+
+Next gates remain separate: explicit consent and reviewed transport before any
+real label handoff; per-artist provider disclosure/egress consent, trustworthy
+provider verification and separate match acceptance before real identity;
+scope, retention, withdrawal/deletion and rollback decisions before persistence.
+Session proof, cross-source independence, taste/ranking/import and actuation
+remain unaccepted and require their own decisions. Commit/publish/merge/deploy
+are not authorized by this local task.

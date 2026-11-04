@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
 
 import landing from '../../src/routes/quiet-atlas/music/+page.svelte?raw'
+import packet from '../../src/lib/appleMusicArtistReviewHandoff431.fixture.json'
+import { adaptSyntheticArtistReview431 } from '../../src/lib/appleMusicArtistReviewHandoff431.js'
 import review from '../../src/routes/quiet-atlas/music/artist-review/+page.svelte?raw'
 import {
   activeQuietAtlasSection,
@@ -33,9 +35,10 @@ describe('#431 Quiet Atlas fictional artist identity preview', () => {
     for (const label of [
       'Imaginary Atlas Ensemble', 'Fictional Pattern Unit',
       'Invented Sound Group', 'Makebelieve Echo Collective',
-    ]) expect(review).toContain(label)
+    ]) expect(adaptSyntheticArtistReview431(packet).artists.map(row => row.name)).toContain(label)
 
-    expect(review).toContain('const fixtures = [[0], [1], [2, 3], [4]]')
+    expect(adaptSyntheticArtistReview431(packet).fixtures).toEqual([[0], [1], [2, 3], [4]])
+    expect(review).toContain('adaptSyntheticArtistReview431(packet)')
     expect(review).toContain('DemoCatalog (fictional)')
     expect(review).toContain('Identical artist names do not prove identical identities.')
     expect(review).toContain('row.chosen === null')
