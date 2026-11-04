@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte'
   // #431: isolated fictional identity-review study. No catalog, import,
   // persisted preference, playback, HomeHub API, or third-party operation.
   const artists = [
@@ -28,6 +29,24 @@
   /** @type {number | null} */
   let pending = null
   let announcement = 'Choose Find matches to begin.'
+  /** @type {HTMLElement | null} */
+  let stepHeading = null
+
+  // A button disappears whenever an active step changes. Restore the
+  // keyboard/screen-reader reading position after Svelte swaps the markup.
+  async function focusStepHeading() {
+    await tick()
+    const heading = stepHeading
+    if (!heading) return
+    heading.focus({ preventScroll: true })
+    // Focus must also remain visible after actions at the bottom of a long
+    // phone screen. Only scroll when needed; don't jump on routine clicks.
+    const bounds = heading.getBoundingClientRect()
+    if ((bounds.top < 80 || bounds.bottom > window.innerHeight - 84) &&
+        typeof heading.scrollIntoView === 'function') {
+      heading.scrollIntoView({ block: 'center', behavior: 'auto' })
+    }
+  }
 
   $: artist = artists[index]
   $: row = rows[index]
@@ -49,6 +68,7 @@
       ? 'done'
       : prior.results.length ? 'results' : 'intro'
     announcement = 'Now reviewing ' + artists[index].name + '.'
+    void focusStepHeading()
   }
 
   function next() {
@@ -60,6 +80,7 @@
     pending = index
     step = 'consent'
     announcement = 'Previewing this one fictional catalog request.'
+    void focusStepHeading()
   }
 
   function cancelPreview() {
@@ -67,6 +88,7 @@
     pending = null
     step = rows[index].results.length ? 'results' : 'intro'
     announcement = 'Request preview canceled. Nothing transmitted.'
+    void focusStepHeading()
   }
 
   function revealResults() {
@@ -76,6 +98,7 @@
     pending = null
     step = 'results'
     announcement = 'Fixed, fictional results ready. No network request was sent.'
+    void focusStepHeading()
   }
 
   /** @param {number} id */
@@ -90,6 +113,7 @@
     updateRow({ decision: 'accepted' })
     step = 'done'
     announcement = 'Mock match confirmed for this session only.'
+    void focusStepHeading()
   }
 
   function unsure() {
@@ -97,6 +121,7 @@
     updateRow({ chosen: null, decision: 'unsure' })
     step = 'done'
     announcement = 'Artist left unresolved. No match was inferred.'
+    void focusStepHeading()
   }
 
   function undo() {
@@ -104,6 +129,7 @@
     updateRow({ decision: 'none' })
     step = 'results'
     announcement = 'Fictional match undone.'
+    void focusStepHeading()
   }
 
   function restart() {
@@ -112,367 +138,214 @@
     index = 0
     step = 'intro'
     announcement = 'This fictional session was reset. All selections discarded.'
+    void focusStepHeading()
   }
 
   /** @param {KeyboardEvent} event */
   function keyboard(event) {
-    if (event.key === 'Escape' && step === 'consent') {
-      event.preventDefault()
-      cancelPreview()
-    }
+    if (event.key !== 'Escape' || step !== 'consent') return
+    // The shell's More dialog owns Escape while it is open. Inert background
+    // content still receives a svelte:window key handler unless guarded.
+    if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return
+    event.preventDefault()
+    cancelPreview()
   }
 </script>
 
 <svelte:head>
-  <title>Match your artists · Quiet Atlas fictional review | HomeHub</title>
+  <title>Artist review · Quiet Atlas fictional preview | HomeHub</title>
   <meta name="description" content="Fictional artist matching without catalog requests or saved review choices." />
 </svelte:head>
 
 <svelte:window on:keydown={keyboard} />
 
 <main class="artist-review" aria-label="Fictional artist identity design review">
-  <div class="masthead">
-    <span>HOMEHUB / QUIET ATLAS <span aria-hidden="true">×</span> MUSIC</span>
-    <span class="demo-status">FICTIONAL · NO CATALOG REQUESTS</span>
-  </div>
+  <div class="review-container">
+    <nav class="review-top" aria-label="Artist review navigation">
+      <span class="review-ident">Artist review <span aria-hidden="true">·</span> {index + 1} of {artists.length}</span>
+      <a class="close-link" href="/quiet-atlas/music">Close review</a>
+    </nav>
+     <header class="review-hero">
+      <div class="hero-copy">
+        <p class="demo-note">Fictional preview · Nothing sent or saved</p>
+        <h1>{artist.name}</h1>
+        <p class="exposure">Appears on {artist.days} · Not a preference rating.</p>
+      </div>
+      <img class="hero-art" src="/design-review/artist-light-waves-431.png" width="178" height="178" alt="" aria-hidden="true" />
+    </header>
 
-  <header class="hero">
-    <p class="eyebrow">ARTIST IDENTITY / REVIEW</p>
-    <h1>Match your <em>artists.</em></h1>
-    <p class="intro">One artist at a time. Find the right name, confirm it, or move on.</p>
-  </header>
-
-  <section class="review-stage" aria-label="Artist matching steps">
-    <div class="work">
-      <p class="eyebrow">{String(index + 1).padStart(2, '0')} / {String(artists.length).padStart(2, '0')} · ARTIST REVIEW</p>
-      <h2>{artist.name}</h2>
-      <p class="exposure">Appears on {artist.days}. This does not tell HomeHub whether you like this artist.</p>
-      <div class="step">
-        {#if step === 'intro'}
-          <h3>Find the right artist.</h3>
-          <p>See a few fictional catalog matches, then decide whether any look right.</p>
+    <section class="step" aria-label="Current artist review step">
+      {#if step === 'intro'}
+        <h2 bind:this={stepHeading} tabindex="-1">Find the right artist.</h2>
+        <p class="step-description">See possible matches for this name, then choose one or leave it unresolved.</p>
+        <div class="step-actions">
           <button type="button" class="primary" on:click={preview}>Find matches</button>
-          <p class="fine-print">A future real lookup would ask permission before sending each artist name.</p>
-        {:else if step === 'consent'}
-          <h3>One artist. One permission.</h3>
-          <div class="disclosure">
-            <p><strong>Artist name:</strong> {artist.name}</p>
-            <p><strong>Example recipient:</strong> DemoCatalog (fictional)</p>
-            <p>In a future real lookup, that provider could observe your IP address and retain the query. It would not receive your Apple export, listening dates, or account data.</p>
-          </div>
-          <p class="fine-print">This review never contacts a catalog. Normal HomeHub shell connections are separate.</p>
+          <button type="button" class="secondary" on:click={next}>{index === artists.length - 1 ? 'Return to first artist' : 'Skip for now'}</button>
+        </div>
+      {:else if step === 'consent'}
+        <h2 bind:this={stepHeading} tabindex="-1">Before we search.</h2>
+        <p class="step-description">Each real lookup would require your permission. This demo contacts nobody.</p>
+        <div class="consent-note">
+          <p><strong>Artist name:</strong> {artist.name}</p>
+          <p><strong>Example catalog:</strong> DemoCatalog (fictional)</p>
+          <p>A future real provider could see your IP address and retain the search. It would not receive your Apple export, listening dates, or account data.</p>
+        </div>
+        <div class="step-actions">
           <button type="button" class="primary" on:click={revealResults}>Show fictional matches</button>
-          <button type="button" class="quiet" on:click={cancelPreview}>Cancel this search</button>
-        {:else if step === 'results'}
-          <h3>Which one is the right match?</h3>
-          <p>These candidates are made up. Identical artist names do not prove identical identities.</p>
-          <fieldset class="options">
-            <legend>Choose one fictional candidate</legend>
-            {#each row.results as candidateIndex (candidateIndex)}
-              <label class:chosen={row.chosen === candidateIndex}>
-                <input
-                  type="radio"
-                  name="fictional-candidate"
-                  value={candidateIndex}
-                  checked={row.chosen === candidateIndex}
-                  on:change={() => chooseCandidate(candidateIndex)}
-                />
-                <span><strong>{candidates[candidateIndex].name}</strong><small>{candidates[candidateIndex].note}</small></span>
-              </label>
-            {/each}
-          </fieldset>
+          <button type="button" class="secondary" on:click={cancelPreview}>Cancel</button>
+        </div>
+      {:else if step === 'results'}
+        <h2 bind:this={stepHeading} tabindex="-1">Which one is the right match?</h2>
+        <p class="step-description">These are invented examples. Identical artist names do not prove identical identities.</p>
+        <fieldset class="options">
+          <legend>Choose one possible match</legend>
+          {#each row.results as candidateIndex (candidateIndex)}
+            <label class:chosen={row.chosen === candidateIndex}>
+              <input type="radio" name="fictional-candidate" value={candidateIndex}
+                checked={row.chosen === candidateIndex} on:change={() => chooseCandidate(candidateIndex)} />
+              <span><strong>{candidates[candidateIndex].name}</strong><small>{candidates[candidateIndex].note}</small></span>
+            </label>
+          {/each}
+        </fieldset>
+        <div class="step-actions">
           <button type="button" class="primary" disabled={row.chosen === null} on:click={confirm}>Confirm fictional match</button>
-          <button type="button" class="quiet" on:click={unsure}>None look right / I'm not sure</button>
-          <button type="button" class="quiet" on:click={preview}>Search again (fictional)</button>
-        {:else if step === 'done'}
-          {#if row.decision === 'accepted'}
-            <h3>A match, for this session.</h3>
-            <p>Selected: <strong>{row.chosen === null ? 'Unverified' : candidates[row.chosen].name}</strong>. This is an invented identity choice, not a preference rating or real catalog verification.</p>
-            <button type="button" class="primary" on:click={next}>Continue to next artist</button>
-            <button type="button" class="quiet" on:click={undo}>Undo this match</button>
-          {:else}
-            <h3>Nothing selected.</h3>
-            <p>That's okay. It's better to leave an identity unresolved than to guess.</p>
-            <button type="button" class="primary" on:click={next}>Continue to next artist</button>
-            <button type="button" class="quiet" on:click={preview}>Try this artist again</button>
-          {/if}
+          <button type="button" class="secondary" on:click={unsure}>None look right / I'm not sure</button>
+        </div>
+        <details class="optional-action">
+          <summary>Other options</summary>
+          <button type="button" class="text-action" on:click={preview}>Search again (fictional)</button>
+        </details>
+      {:else if step === 'done'}
+        {#if row.decision === 'accepted'}
+          <h2 bind:this={stepHeading} tabindex="-1">Match selected.</h2>
+          <p class="step-description"><strong>{row.chosen === null ? 'Unverified' : candidates[row.chosen].name}</strong> is selected for this fictional session only. This is not a preference rating.</p>
+          <div class="step-actions">
+            <button type="button" class="primary" on:click={next}>{index === artists.length - 1 ? 'Return to first artist' : 'Continue to next artist'}</button>
+            <button type="button" class="secondary" on:click={undo}>Undo this match</button>
+          </div>
+        {:else}
+          <h2 bind:this={stepHeading} tabindex="-1">Left unresolved.</h2>
+          <p class="step-description">No match was assumed. You can come back to this name later.</p>
+          <div class="step-actions">
+            <button type="button" class="primary" on:click={next}>{index === artists.length - 1 ? 'Return to first artist' : 'Continue to next artist'}</button>
+            <button type="button" class="secondary" on:click={preview}>Try this artist again</button>
+          </div>
         {/if}
+      {/if}
+    </section>
+    <footer class="review-bottom">
+      <div class="review-utility">
+        {#if index > 0}
+          <button type="button" class="text-action" on:click={() => navigate(index - 1)}>Previous artist</button>
+        {:else}
+          <span class="utility-spacer" aria-hidden="true"></span>
+        {/if}
+        <details class="details-panel">
+          <summary>How matching works &amp; privacy</summary>
+          <div class="details-body">
+            <p>This is an offline demonstration with invented artists. No real catalog connection. Nothing saved.</p>
+            <p>Any future lookup would need separate permission per artist. Selecting a match is not a like or dislike.</p>
+            <p class="tally">{count} of {artists.length} matched in this fictional session.</p>
+            <button type="button" class="text-action" on:click={restart}>Start over</button>
+          </div>
+        </details>
       </div>
-    </div>
-
-    <aside class="context" aria-label="Listening Room visual and privacy information">
-      <p class="eyebrow">THE LISTENING ROOM</p>
-      <img src="/design-review/artist-light-waves-431.png" width="178" height="178" alt="" aria-hidden="true" />
-      <p class="tally">{count} of {artists.length} matched in this fictional session</p>
-      <div class="context-rule"></div>
-      <p class="eyebrow">NO CATALOG REQUEST SENT</p>
-      <p>Made-up artists only. No real catalog connection. Nothing saved.</p>
-    </aside>
-  </section>
-
-  <footer class="footer">
-    <p class="status" aria-live="polite" aria-atomic="true">{announcement}</p>
-    <div class="foot-nav">
-      <div class="history">
-        <button type="button" class="quiet" on:click={() => navigate(index - 1)} disabled={index === 0}>Previous artist</button>
-        <button type="button" class="quiet" on:click={next}>{index === artists.length - 1 ? 'Return to first artist' : 'Next artist'}</button>
-      </div>
-      <div class="history">
-        <button type="button" class="quiet" on:click={restart}>Start over</button>
-        <a href="/quiet-atlas/music">Close / discard <span class="sr-only">the fictional review and return to Music</span></a>
-      </div>
-    </div>
-    <p class="footnote">Fictional-only opt-in study. This review makes no Apple catalog requests, no HomeHub API calls, no saved preferences, and no playback or device changes.</p>
-  </footer>
+      <p class="sr-only" aria-live="polite" aria-atomic="true">{announcement}</p>
+    </footer>
+  </div>
 </main>
 
 <style>
-  /*
-   * #431 Quiet Atlas Music: one content-container scale drives the reading
-   * column, Listening Room art/rail and editorial typography together.
-   * @container sizes are based on space *inside HomeHub's shell*, not the
-   * external browser viewport. Mobile uses a single column with page scroll.
-   */
+  /* #431 Quiet Atlas: one task, one obvious action, optional detail. */
   .artist-review {
-    --ink: #e9eee6;
-    --muted: #b0c0b0;
-    --gold: #e0c89b;
-    --line: rgba(200, 222, 199, .18);
-    box-sizing: border-box;
-    container-type: inline-size;
-    width: 100%;
-    max-width: 1160px;
-    min-height: 100%;
-    margin-inline: auto;
-    padding: clamp(18px, 3vw, 36px) clamp(17px, 3vw, 36px) 36px;
-    color: var(--ink);
-    background: radial-gradient(ellipse at 78% 4%, rgba(134,151,107,.09), transparent 42%), #101b15;
-    font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --ink:#eaf0e7; --muted:#b8c7b8; --gold:#e0c89b;
+    --line:rgba(210,225,207,.16);
+    box-sizing:border-box; container-type:inline-size; width:100%;
+    max-width:1160px; min-height:100%; margin-inline:auto;
+    padding:clamp(24px,4vw,48px) clamp(18px,3.2vw,48px) 52px;
+    color:var(--ink); background:radial-gradient(ellipse at 86% 7%,rgba(128,148,113,.07),transparent 46%),#101b15;
+    font:16px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   }
-  .artist-review * { box-sizing: border-box; }
-  .masthead {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--line);
-    color: var(--gold);
-    font-size: 10px;
-    font-weight: 750;
-    letter-spacing: .11em;
+  .artist-review * {box-sizing:border-box;}
+  .review-container {width:100%;max-width:700px;margin-inline:auto;}
+  .review-top {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    padding-bottom:clamp(20px,4cqw,38px);border-bottom:1px solid var(--line);}
+  .review-ident {color:var(--muted);font-size:14px;font-weight:600;}
+  .close-link {display:inline-flex;align-items:center;min-height:44px;color:var(--muted);font-size:14px;text-decoration:none;padding:8px 0;}
+  .close-link:hover,.text-action:hover,.secondary:hover {color:var(--gold);}
+  .review-hero {margin-top:clamp(26px,4cqw,44px);}
+  .review-hero {display:flex;align-items:flex-start;justify-content:space-between;gap:24px;}
+  .hero-copy {min-width:0;flex:1;}
+  .demo-note {margin:0 0 12px;font-size:13px;color:var(--muted);}
+  h1 {font:400 clamp(34px,5cqw,46px)/1.12 Georgia,"Times New Roman",serif;letter-spacing:-.035em;overflow-wrap:anywhere;margin:0 0 14px;}
+  .exposure {margin:0;max-width:510px;font-size:15px;line-height:1.7;color:var(--muted);}
+  .hero-art {display:block;flex:0 0 auto;width:clamp(70px,12cqw,100px);height:auto;aspect-ratio:1;object-fit:contain;opacity:.88;border-radius:4px;}
+  .step {width:100%;margin-top:clamp(30px,5cqw,52px);padding-top:clamp(22px,4cqw,30px);border-top:1px solid var(--line);}
+  h2 {margin:0 0 12px;font:400 clamp(24px,3.7cqw,29px)/1.25 Georgia,"Times New Roman",serif;letter-spacing:-.02em;}
+  h2:focus-visible {outline:2px solid #d5e7bd;outline-offset:4px;}
+  .step-description {margin:0 0 22px;max-width:590px;color:var(--muted);font-size:16px;line-height:1.7;}
+  .step-description strong {color:var(--ink);font-weight:600;}
+  .step-actions {display:flex;flex-direction:column;align-items:flex-start;gap:6px;max-width:510px;}
+  .primary {display:flex;align-items:center;justify-content:center;min-height:52px;width:100%;
+    padding:13px 20px;border:1px solid transparent;border-radius:3px;
+    background:#e2d1ac;color:#19271d;font-family:inherit;font-size:16px;font-weight:600;line-height:1.4;
+    text-align:center;cursor:pointer;}
+  .primary:not(:disabled):hover {background:#efe0bd;}
+  .primary:disabled {opacity:.47;cursor:not-allowed;}
+  .secondary,.text-action {display:inline-flex;align-items:center;justify-content:flex-start;min-height:44px;
+    padding:9px 2px;color:var(--ink);border:0;background:transparent;
+    font:500 15px/1.45 system-ui,sans-serif;text-align:left;cursor:pointer;}
+  .consent-note {max-width:600px;margin:0 0 24px;padding:18px 20px;background:rgba(79,110,86,.15);border-left:2px solid #c8b485;}
+  .consent-note p {margin:0 0 9px;font-size:15px;line-height:1.65;color:var(--muted);}
+  .consent-note p:last-child {margin:12px 0 0;}
+  .consent-note strong {font-weight:600;color:var(--ink);}
+  .options {min-width:0;margin:0 0 23px;padding:0;border:0;max-width:600px;}
+  .options legend {margin-bottom:9px;font-size:14px;color:var(--muted);}
+  .options label {display:flex;align-items:center;gap:15px;min-height:74px;padding:15px 17px;margin-bottom:9px;
+    border:1px solid var(--line);background:rgba(82,112,88,.1);cursor:pointer;}
+  .options label.chosen {border-color:var(--gold);background:rgba(196,169,111,.1);}
+  .options input {flex:0 0 20px;width:20px;height:20px;accent-color:#e2d1ac;cursor:pointer;}
+  .options label span {min-width:0;overflow-wrap:anywhere;}
+  .options strong,.options small {display:block;}
+  .options strong {font-size:16px;font-weight:600;line-height:1.45;}
+  .options small {color:var(--muted);font-size:14px;line-height:1.5;margin-top:4px;}
+  .optional-action {margin-top:6px;max-width:510px;}
+  .optional-action summary,.details-panel summary {display:inline-flex;align-items:center;min-height:44px;
+    cursor:pointer;color:var(--muted);font-size:14px;padding:8px 0;}
+  .optional-action summary:hover,.details-panel summary:hover {color:var(--gold);}
+  .optional-action summary::after,.details-panel summary::after {content:'+';display:inline-block;margin-left:10px;font-size:18px;line-height:1;font-weight:400;}
+  .optional-action[open] summary::after,.details-panel[open] summary::after {content:'−';}
+  .optional-action .text-action {display:flex;}
+  .review-bottom {margin-top:clamp(32px,5cqw,58px);padding-top:20px;border-top:1px solid var(--line);}
+  .review-utility {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+  .utility-spacer {min-width:8px;}
+  .details-panel {margin-left:auto;max-width:100%;}
+  .details-body {max-width:520px;padding:5px 0 12px;}
+  .details-body p {font-size:14px;line-height:1.7;color:var(--muted);margin:0 0 12px;}
+  .details-body .tally {color:var(--ink);}
+  button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible {outline:3px solid #d5e7bd;outline-offset:3px;}
+  .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+  @container (max-width:650px) {
+    .review-hero {gap:16px;}
+    .hero-art {width:clamp(58px,14cqw,78px);}
+    h1 {font-size:clamp(31px,6.2cqw,39px);}
+    .step-description {font-size:15px;}
   }
-  .masthead .demo-status { color: var(--muted); font-size: 9px; }
-  .hero { padding: clamp(26px, 4cqw, 44px) 0 24px; border-bottom: 1px solid var(--line); }
-  .eyebrow { margin: 0; color: var(--gold); font-size: 10px; font-weight: 750; letter-spacing: .13em; }
-  h1 {
-    margin: 14px 0 9px;
-    font-size: clamp(40px, calc(16px + 3.0769cqw), 48px);
-    font-weight: 650;
-    letter-spacing: -.05em;
-    line-height: 1.1;
+  @container (max-width:420px) {
+    .review-hero {gap:12px;}
+    .hero-art {width:60px;}
+    .review-ident,.close-link {font-size:14px;}
+    .consent-note {padding:16px;}
+    .review-utility {gap:6px;}
+    .details-panel {margin-left:0;}
+    h1 {font-size:clamp(31px,8.3cqw,36px);}
   }
-  h1 em { color: var(--gold); font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
-  .intro { margin: 0; color: var(--muted); line-height: 1.65; }
-
-  .review-stage {
-    /* Calibrated to the accepted 900–1160px Coordinated Scale desktop study. */
-    --rail-width: clamp(214px, calc(94px + 15.3846cqw), 254px);
-    --art-width: clamp(178px, calc(58px + 15.3846cqw), 218px);
-    --read-width: clamp(534px, calc(300px + 30cqw), 610px);
-    --artist-font: clamp(28px, calc(10px + 2.3077cqw), 34px);
-    --section-font: clamp(23px, calc(11px + 1.5385cqw), 27px);
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--rail-width);
-    align-items: start;
-    gap: clamp(24px, 2.6cqw, 32px);
-    padding: 22px 0 23px;
-    border-bottom: 1px solid var(--line);
-  }
-  .work { min-width: 0; }
-  h2 {
-    margin: 11px 0 6px;
-    font: 400 var(--artist-font)/1.2 Georgia, "Times New Roman", serif;
-    letter-spacing: -.035em;
-    overflow-wrap: anywhere;
-  }
-  .exposure { max-width: var(--read-width); margin: 0 0 17px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-  .step {
-    width: min(100%, calc(var(--read-width) + 20px));
-    min-height: 205px;
-    /* Short desktop windows keep the nav available; long steps alone scroll. */
-    max-height: clamp(210px, calc(100dvh - 535px), 500px);
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    scrollbar-width: thin;
-    scrollbar-gutter: stable;
-    scrollbar-color: #637c66 transparent;
-    padding: 17px 10px 4px 0;
-    border-top: 1px solid var(--line);
-  }
-  h3 { margin: 0 0 9px; font: 400 var(--section-font)/1.22 Georgia, "Times New Roman", serif; }
-  .step > p { max-width: var(--read-width); margin: 0 0 15px; color: var(--muted); line-height: 1.65; }
-  .primary {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 52px;
-    width: 100%;
-    max-width: var(--read-width);
-    padding: 12px 16px;
-    border: 1px solid transparent;
-    background: #e2d1ac;
-    color: #19271d;
-    font-family: inherit;
-    font-size: clamp(14px, calc(11px + .3846cqw), 15px);
-    line-height: 1.35;
-    font-weight: 700;
-    text-align: center;
-    cursor: pointer;
-  }
-  .primary:not(:disabled):hover { background: #f0dfbc; }
-  .primary:disabled { opacity: .48; cursor: not-allowed; }
-  .quiet {
-    min-height: 44px;
-    padding: 8px 7px;
-    color: var(--ink);
-    background: transparent;
-    border: 1px solid transparent;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-  .quiet:hover:not(:disabled) { color: var(--gold); }
-  .quiet:disabled { opacity: .42; cursor: not-allowed; }
-  .step > .quiet { display: block; margin-top: 7px; }
-  .step .fine-print { color: #9fb19f; font-size: 12px; line-height: 1.65; margin-top: 15px; }
-  .disclosure {
-    width: 100%;
-    border-left: 2px solid #c8b485;
-    background: #18291f;
-    padding: 12px 17px;
-    margin-bottom: 14px;
-  }
-  .disclosure p { color: var(--muted); margin: 5px 0 8px; font-size: 12px; line-height: 1.6; }
-  .disclosure p strong { color: var(--ink); }
-  .options { min-width: 0; border: 0; padding: 0; margin: 0 0 14px; }
-  .options legend { color: var(--muted); font-size: 12px; padding: 0 0 8px; }
-  .options label {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 64px;
-    padding: 11px;
-    margin: 7px 0;
-    border: 1px solid var(--line);
-    background: rgba(62,91,71,.18);
-    cursor: pointer;
-  }
-  .options label.chosen { border-color: #e0c89b; background: rgba(196,169,111,.12); }
-  .options input {
-    appearance: auto;
-    flex: 0 0 20px;
-    width: 20px;
-    height: 20px;
-    accent-color: #e2d1ac;
-    cursor: pointer;
-  }
-  .options label span { min-width: 0; overflow-wrap: anywhere; }
-  .options strong, .options small { display: block; }
-  .options strong { font-size: 13px; font-weight: 650; }
-  .options small { color: var(--muted); font-size: 11px; margin-top: 3px; line-height: 1.5; }
-
-  .context {
-    align-self: start;
-    width: 100%;
-    min-width: 0;
-    padding: 14px;
-    border: 1px solid var(--line);
-    background: rgba(22,40,28,.62);
-  }
-  .context img {
-    display: block;
-    width: min(100%, var(--art-width));
-    max-width: none;
-    height: auto;
-    aspect-ratio: 1;
-    margin: 14px auto 12px;
-    object-fit: contain;
-  }
-  .context .tally {
-    margin: 0;
-    color: var(--ink);
-    font-size: clamp(12px, calc(9px + .3846cqw), 13px);
-    font-weight: 650;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-  }
-  .context-rule { margin: 13px 0 10px; height: 1px; background: var(--line); }
-  .context p:last-child { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
-
-  .footer { padding-top: 12px; }
-  .status { margin: 0 0 6px; color: var(--muted); min-height: 21px; font-size: 12px; }
-  .foot-nav { display: flex; justify-content: space-between; gap: 14px; align-items: center; flex-wrap: wrap; }
-  .history { display: flex; align-items: center; flex-wrap: wrap; gap: 11px; }
-  .foot-nav a {
-    display: inline-flex;
-    align-items: center;
-    min-height: 44px;
-    padding: 8px 7px;
-    color: var(--ink);
-    text-decoration: none;
-  }
-  .foot-nav a:hover { color: var(--gold); }
-  button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 3px; }
-  .footnote { margin: 12px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0,0,0,0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  /* Breakpoint follows available HomeHub page width, not outer window width. */
-  @container (max-width: 800px) {
-    .review-stage { grid-template-columns: minmax(0, 1fr); gap: 14px; padding-top: 19px; }
-    .step { width: 100%; max-height: none; overflow: visible; scrollbar-gutter: auto; }
-    .context {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) min(25cqw, 110px);
-      align-items: start;
-      column-gap: 14px;
-    }
-    .context .eyebrow { grid-column: 1; }
-    .context img { grid-column: 2; grid-row: 1 / 5; width: 100%; margin: 0; }
-    .context .tally { grid-column: 1; margin-top: 9px; }
-    .context-rule { grid-column: 1; margin: 10px 0 5px; }
-    .context p:last-child { grid-column: 1; margin: 5px 0 0; }
-    h2 { font-size: clamp(27px, 4.3cqw, 31px); }
-    h3 { font-size: clamp(22px, 3.7cqw, 26px); }
-  }
-  @container (max-width: 420px) {
-    .context { grid-template-columns: minmax(0, 1fr) min(25cqw, 88px); column-gap: 10px; }
-    .foot-nav { align-items: stretch; }
-    .history { gap: 6px; }
-    h1 { font-size: clamp(35px, 9cqw, 40px); }
-  }
-  @media (max-width: 700px) {
-    .artist-review { padding-inline: 17px; }
-  }
-  @media (max-width: 360px) {
-    .artist-review { padding-inline: 15px; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .artist-review *, .artist-review *::before, .artist-review *::after {
-      scroll-behavior: auto !important;
-      animation: none !important;
-      transition: none !important;
+  @media (max-width:700px) {.artist-review {padding-inline:18px;}}
+  @media (max-width:360px) {.artist-review {padding-inline:15px;}}
+  @media (prefers-reduced-motion:reduce) {
+    .artist-review *,.artist-review *::before,.artist-review *::after {
+      scroll-behavior:auto !important;animation:none !important;transition:none !important;
     }
   }
 </style>
