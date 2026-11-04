@@ -23,9 +23,23 @@ describe('L6 Hue app ownership recovery', () => {
     expect(interpretHold(200, { status: 'held' }, false).kind).toBe('uncertain')
     expect(interpretHold(200, { status: 'released' }, true, previous)).toEqual({ kind: 'released', stamp: null })
   })
-  it.each([true, false])('keeps 503 recovery token with active_in_memory=%s', active => {
-    expect(interpretHold(503, { detail: { stamp: 'possible', active_in_memory: active } }, true, previous))
+  it.each([true, false])('does not adopt a newer owner stamp on failed release (active=%s)', active => {
+    expect(interpretHold(503, { detail: { stamp: 'competing-owner', active_in_memory: active } }, true, previous))
+      .toEqual({ kind: 'uncertain', stamp: 'original', activeInMemory: active })
+  })
+  it.each([true, false])('keeps only a server-provided claim recovery stamp (active=%s)', active => {
+    expect(interpretHold(503, { detail: { stamp: 'possible', active_in_memory: active } }, false, null))
       .toEqual({ kind: 'uncertain', stamp: 'possible', activeInMemory: active })
+  })
+  it('never uses a competing recovery token in a subsequent release request', async () => {
+    const server = vi.fn().mockResolvedValue({ status: 503, json: async () => ({
+      detail: { stamp: 'newer-dashboard-owner', active_in_memory: true },
+    }) })
+    const failedRelease = await requestHold(true, previous, server)
+    expect(failedRelease.stamp).toBe('original')
+    await requestHold(true, failedRelease, server)
+    expect(JSON.parse(server.mock.calls[1][1].body)).toEqual({ stamp: 'original' })
+    expect(server).toHaveBeenCalledTimes(2)
   })
   it('fails closed on conflict and retains the original token', () => {
     expect(interpretHold(409, { stamp: 'competitor' }, true, previous))

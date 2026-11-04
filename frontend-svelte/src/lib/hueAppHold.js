@@ -33,9 +33,13 @@ export function interpretHold(status, body, releasing, previous = null) {
     }
   }
   if (status === 409) return { kind: 'conflict', stamp: previous?.stamp ?? null }
+  // A failed release must keep its original stamp: the server may have
+  // observed a newer manual owner during persistence and must not grant this
+  // caller that owner's release token.
+  const recoveryStamp = status === 503 && validStamp(detail?.stamp) ? detail.stamp : null
   return {
     kind: 'uncertain',
-    stamp: (status === 503 && validStamp(detail?.stamp) ? detail.stamp : previous?.stamp) ?? null,
+    stamp: (releasing ? previous?.stamp : (recoveryStamp ?? previous?.stamp)) ?? null,
     activeInMemory: status === 503 && typeof detail?.active_in_memory === 'boolean'
       ? detail.active_in_memory : null,
   }
