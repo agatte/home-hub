@@ -1,28 +1,72 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte'
   import { fixtureStatusLabel } from '$lib/quietAtlas/lightingModel.js'
-  import { canDraftBrightness, reviewBrightnessDraft } from '$lib/quietAtlas/controlDraft.js'
+  import { canDraftBrightness, reviewBrightnessDraft, fixtureDraftEvidence } from '$lib/quietAtlas/controlDraft.js'
 
   /** Selected group returned by buildLightingOverview(). */
   export let group
   /** @type {'disconnected'|'unverified'|'recent-read'|'stale-read'} */
   export let snapshotStatus = 'unverified'
+  /** @type {Record<string, object>} The raw REST list behind this group, not write authority. */
+  export let fixtureStates = {}
   export let onClose = () => {}
 
   /** @type {Record<string,number>} */
   let draftPercents = {}
+  /** @type {Record<string,string>} Receipt-visible evidence captured when each local draft begins. */
+  let draftEvidence = {}
   /** @type {string | null} */
   let selectedFixtureId = null
   $: selectedFixture = group.fixtures.find((item) => item.id === selectedFixtureId)
   $: reviewedDraft = selectedFixture
     ? reviewBrightnessDraft(selectedFixture, snapshotStatus, draftPercents[selectedFixture.id])
     : null
-  // A REST receipt is not telemetry authority. Drop old local choices whenever
-  // that receipt becomes stale or the connection is unavailable.
-  $: if (snapshotStatus !== 'recent-read') { draftPercents = {}; selectedFixtureId = null }
+  // A vanished review must not strand keyboard focus in the detached button.
+  // Guard DOM access because reactive blocks also run during server rendering.
+  function reviewHasFocus() {
+    return typeof document !== 'undefined' &&
+      panel?.querySelector('.draft-summary')?.contains(document.activeElement) === true
+  }
+  /** @param {string | null} id */
+  async function restoreReviewFocus(id) {
+    await tick()
+    if (!panel?.isConnected) return
+    const review = [...panel.querySelectorAll('button.review')]
+      .find((button) => button instanceof HTMLButtonElement && button.dataset.fixtureId === id)
+    if (review instanceof HTMLButtonElement && !review.disabled) review.focus()
+    else closeButton?.focus()
+  }
+
+  // Do not silently rebase a drafted adjustment onto a different fixture state.
+  // An unchanged periodic read is harmless, but any changed reported fixture
+  // evidence discards all pending local drafts and their review selection.
+  $: if (snapshotStatus === 'recent-read' && Object.keys(draftEvidence).length &&
+      Object.entries(draftEvidence).some(([id, original]) =>
+        fixtureDraftEvidence(group.fixtures.find((item) => item.id === id), fixtureStates[id]) !== original)) {
+    const restore = reviewHasFocus()
+    const id = selectedFixtureId
+    draftEvidence = {}
+    draftPercents = {}
+    selectedFixtureId = null
+    if (restore) void restoreReviewFocus(id)
+  }
+  // A REST receipt is not telemetry authority. Revoke local draft evidence
+  // whenever the snapshot goes stale or connection/visibility is lost.
+  $: if (snapshotStatus !== 'recent-read') {
+    const restore = reviewHasFocus()
+    const id = selectedFixtureId
+    draftEvidence = {}
+    draftPercents = {}
+    selectedFixtureId = null
+    if (restore) void restoreReviewFocus(id)
+  }
 
   /** @param {string} fixtureId @param {number} percent */
   function updateDraft(fixtureId, percent) {
+    const fixture = group.fixtures.find((item) => item.id === fixtureId)
+    const evidence = fixtureDraftEvidence(fixture, fixtureStates[fixtureId])
+    if (snapshotStatus !== 'recent-read' || evidence === null) return
+    draftEvidence = { ...draftEvidence, [fixtureId]: evidence }
     draftPercents = { ...draftPercents, [fixtureId]: percent }
     selectedFixtureId = null
   }
@@ -30,11 +74,7 @@
   async function dismissBrightnessReview() {
     const id = selectedFixtureId
     selectedFixtureId = null
-    await tick()
-    const review = [...(panel?.querySelectorAll('button.review') ?? [])]
-      .find((button) => button instanceof HTMLButtonElement && button.dataset.fixtureId === id)
-    if (review instanceof HTMLButtonElement && !review.disabled) review.focus()
-    else closeButton?.focus()
+    await restoreReviewFocus(id)
   }
 
   /** @type {HTMLElement | null} */

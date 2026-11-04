@@ -34,6 +34,26 @@ export function reviewBrightnessDraft(fixture, snapshotStatus, proposedPercent) 
   }
 }
 
+/**
+ * Stable receipt-visible identity for a proposed brightness adjustment.
+ * This is only a local review invalidation key; it is never a write lease or
+ * a claim about Hue telemetry freshness, physical ownership, or permission.
+ * @param {ReturnType<import('./lightingModel.js').describeFixture> | undefined} fixture
+ * @param {unknown} raw
+ * @returns {string | null}
+ */
+export function fixtureDraftEvidence(fixture, raw) {
+  if (!fixture || !canDraftBrightness(fixture, 'recent-read') ||
+      !raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const state = /** @type {Record<string, any>} */ (raw)
+  if (state.light_id !== fixture.id) return null
+  return JSON.stringify([
+    fixture.id, fixture.name, state.light_id, state.reachable, state.on, state.bri,
+    state.ct ?? null, state.hue ?? null, state.sat ?? null,
+    state.colormode ?? null, state.effect ?? null, state.alert ?? null,
+  ])
+}
+
 /** The scene list includes configured targets for curated and custom scenes,
  * but these are *declarations*, never current bulb state or execution authority.
  * Malformed/partial data must be labelled unknown, not silently omitted.
