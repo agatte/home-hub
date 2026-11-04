@@ -355,7 +355,7 @@ def test_visual_comfort_curve_is_time_dominant_and_activity_bounded():
     assert mb.resolve_target("general", "evening", None, None) == 45
     assert mb.resolve_target("working", "night", None, None) == 35
     assert mb.resolve_target("watching", "night", None, None) == 25
-    assert mb.resolve_target("working", "late_night", None, None) == 25
+    assert mb.resolve_target("working", "late_night", None, None) == 15
     assert mb.resolve_target("watching", "late_night", None, None) == 15
     assert mb.resolve_target("sleeping", "day", None, None) == 5
     for period in ("day", "evening", "night", "late_night"):
@@ -364,6 +364,69 @@ def test_visual_comfort_curve_is_time_dominant_and_activity_bounded():
             for mode in ("idle", "general", "working", "gaming", "watching", "relax", "social")
         ]
         assert max(values) - min(values) <= 10
+
+
+@pytest.mark.parametrize(
+    ("ema_lux", "baseline_lux"),
+    [
+        (None, None),
+        (0.0, 100.0),
+        (200.0, 100.0),
+        (25.0, 75.0),
+    ],
+)
+def test_late_night_screen_ceiling_is_activity_independent(ema_lux, baseline_lux):
+    modes = ("idle", "general", "watching", "gaming", "working", "relax", "cooking", "social")
+    targets = {
+        mode: mb.resolve_target(mode, "late_night", ema_lux, baseline_lux)
+        for mode in modes
+    }
+
+    assert len(set(targets.values())) == 1
+    assert 5 < targets["gaming"] <= mb.TIME_PERIOD_BRIGHTNESS["late_night"]
+    assert mb.resolve_target("sleeping", "late_night", ema_lux, baseline_lux) == 5
+
+
+def test_late_night_activity_changes_do_not_write_brighter_or_override_manual_change(
+    monkeypatch,
+):
+    clock = [100.0]
+    brightness = [40]
+    writes = []
+    reconciler = mb.Reconciler()
+
+    def set_fake_brightness(target):
+        writes.append(target)
+        brightness[0] = target
+        return True
+
+    monkeypatch.setattr(mb.time, "time", lambda: clock[0])
+    monkeypatch.setattr(mb, "get_current_brightness", lambda: brightness[0])
+    monkeypatch.setattr(mb, "set_brightness", set_fake_brightness)
+    monkeypatch.setattr(reconciler, "_maybe_apply_color_temperature", lambda _period: None)
+
+    for mode in ("watching", "gaming", "working"):
+        reconciler.reconcile(mode, "late_night", None, None)
+        clock[0] += 30.0
+
+    assert writes == [15]
+
+    # Preserve the existing hardware/manual change backoff rather than
+    # fighting the user to enforce the automatic ceiling.
+    brightness[0] = 20
+    reconciler.reconcile("gaming", "late_night", None, None)
+    assert reconciler._manual_override_until == clock[0] + mb.MANUAL_OVERRIDE_BACKOFF_S
+
+    clock[0] += 30.0
+    reconciler.reconcile("working", "late_night", None, None)
+    assert writes == [15]
+
+
+def test_late_night_ceiling_does_not_change_day_evening_or_night():
+    assert mb.resolve_target("gaming", "day", None, None) == 65
+    assert mb.resolve_target("gaming", "evening", None, None) == 50
+    assert mb.resolve_target("gaming", "night", None, None) == 35
+    assert mb.resolve_target("gaming", "late_night", None, None) == 15
 
 
 def test_visual_comfort_curve_lux_only_nudges_within_ten_percent():

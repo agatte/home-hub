@@ -155,7 +155,7 @@ TIME_PERIOD_BRIGHTNESS: dict[str, int] = {
     "day": 60,
     "evening": 45,
     "night": 30,
-    "late_night": 20,
+    "late_night": 15,
 }
 ACTIVITY_BRIGHTNESS_NUDGE: dict[str, int] = {
     "working": 5,
@@ -700,8 +700,13 @@ def resolve_target(
     if mode == "sleeping":
         return SLEEPING_BRIGHTNESS
 
-    base = TIME_PERIOD_BRIGHTNESS.get(period, TIME_PERIOD_BRIGHTNESS["day"])
-    base += ACTIVITY_BRIGHTNESS_NUDGE.get(mode, 0)
+    # Late-night comfort is Activity-independent: Gaming/Working cannot
+    # brighten the display relative to Watching. Keep lux dimming bounded.
+    if period == "late_night":
+        base = TIME_PERIOD_BRIGHTNESS["late_night"]
+    else:
+        base = TIME_PERIOD_BRIGHTNESS.get(period, TIME_PERIOD_BRIGHTNESS["day"])
+        base += ACTIVITY_BRIGHTNESS_NUDGE.get(mode, 0)
 
     factor = 0.0
     if ema_lux is not None and baseline_lux:
@@ -709,6 +714,9 @@ def resolve_target(
         factor = max(-LUX_MOD_FRACTION, min(LUX_MOD_FRACTION, ratio * LUX_MOD_FRACTION))
 
     target = round(base * (1 + factor))
+    if period == "late_night":
+        # Lux may dim further, never lift above the late-night ceiling.
+        target = min(target, TIME_PERIOD_BRIGHTNESS["late_night"])
     return max(5, min(100, target))
 
 
