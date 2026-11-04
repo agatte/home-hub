@@ -1211,6 +1211,7 @@ def _bootstrap_state(server_url: str, state: SharedState) -> None:
 def run_agent(
     server_url: str = DEFAULT_SERVER,
     stop_event: Optional[threading.Event] = None,
+    content_signal=None,
 ) -> None:
     """Main agent loop — supervisor-compatible signature."""
     if not _HAS_SBC:
@@ -1284,6 +1285,13 @@ def run_agent(
 
             mode, period = shared.snapshot()
             lux_val, baseline = lux.snapshot()
+            # Diagnostic only: never pass a proposal into the writer.
+            from backend.services.pc_agent.content_brightness_shadow import propose
+            signal = (content_signal.snapshot(time.monotonic(), time.time())
+                      if content_signal is not None else None)
+            candidate = propose(signal, mode=mode, period=period,
+                                shipped_target=resolve_target(mode, period, lux_val, baseline))
+            logger.debug("Content brightness SHADOW: %s", candidate)
             reconciler.reconcile(mode, period, lux_val, baseline)
 
             _stop.wait(RECONCILE_INTERVAL_S)
