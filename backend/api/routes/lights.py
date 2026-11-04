@@ -1,7 +1,7 @@
 """
 Hue light control endpoints.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from backend.api._guards import _check_hue_available
 from backend.api.auth import require_api_key, source_from_request
@@ -13,6 +13,28 @@ router = APIRouter(prefix="/api/lights", tags=["lights"])
 # 10% per tap, floor of 20 units so taps stay perceptible at low bri.
 _BRIGHTNESS_STEP = 1.10
 _BRIGHTNESS_MIN_STEP = 20
+
+
+@router.post("/{light_id}/hue-app-hold", dependencies=[Depends(require_api_key)])
+async def hold_for_hue_app(light_id: str, request: Request) -> dict:
+    """Reserve a manual slot; no Hue write. Four-hour/mode-change expiry applies."""
+    _check_hue_available(request.app.state.hue)
+    automation = getattr(request.app.state, "automation", None)
+    if automation is None:
+        raise HTTPException(503, "Automation unavailable")
+    return await automation.hue_app_hold(light_id)
+
+
+@router.delete("/{light_id}/hue-app-hold", dependencies=[Depends(require_api_key)])
+async def release_hue_app_hold(
+    light_id: str, request: Request,
+    stamp: str = Body(embed=True, min_length=1, max_length=64),
+) -> dict:
+    """Release only the exact returned stamp; normal reconciliation resumes."""
+    automation = getattr(request.app.state, "automation", None)
+    if automation is None:
+        raise HTTPException(503, "Automation unavailable")
+    return await automation.hue_app_hold(light_id, expected_stamp=stamp)
 
 
 @router.get("", response_model=list[LightResponse])
@@ -181,10 +203,11 @@ async def set_all_lights(state: LightState, request: Request) -> dict:
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
-    # Log one adjustment per light
-    for lid, before in before_lights.items():
-        await _log_light_change(
-            request, lid, before, state_dict, trigger="all_lights"
-        )
+    # Without per-light acknowledgements, a failed bulk write may be partial.
+    if success:
+        for lid, before in before_lights.items():
+            await _log_light_change(
+                request, lid, before, state_dict, trigger="all_lights"
+            )
 
     return {"status": "ok" if success else "partial_failure"}

@@ -54,22 +54,21 @@ from backend.api.routes.presence import router as presence_router
 from backend.bootstrap import lifespan
 from backend.config import DATA_DIR, PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
-# Sentry init runs before app construction so the FastAPI auto-integration
-# patches request handling. dsn=None disables ingestion silently — safe in
-# dev where SENTRY_DSN is unset.
-#
-# Gate ingestion on APP_ENV == "production" so dev pytest runs (which
-# intentionally raise RuntimeError("speaker offline") in TTS tests, etc.)
-# don't burn the 10k/month free-tier quota with test-mock noise that looks
-# like real prod issues in the dashboard. If the dev .env happens to have
-# SENTRY_DSN set (config drift), this guard still silences it.
+# Empty DSN explicitly disables nonproduction ingestion, including SDK env fallback.
+# Disable outbound HTTPX instrumentation independently of tracing: it adds URLs
+# to error breadcrumbs even when traces_sample_rate is zero.
 import sentry_sdk  # noqa: E402
+from sentry_sdk.integrations.httpx import HttpxIntegration  # noqa: E402
+from backend.utils.sentry_privacy import redact_http_client_breadcrumbs  # noqa: E402
 
 sentry_sdk.init(
-    dsn=settings.SENTRY_DSN if settings.APP_ENV == "production" else None,
+    dsn=settings.SENTRY_DSN if settings.APP_ENV == "production" else "",
     environment=settings.APP_ENV,
     traces_sample_rate=0.0,
     send_default_pii=False,
+    include_local_variables=False,
+    disabled_integrations=[HttpxIntegration],
+    before_send=redact_http_client_breadcrumbs,
 )
 
 FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
@@ -542,8 +541,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
-    except Exception as e:
-        app_logger.error(f"WebSocket error: {e}")
+    except Exception:
+        app_logger.error("WebSocket command failed")
         ws_manager.disconnect(websocket)
     finally:
         request_id_var.reset(rid_token)

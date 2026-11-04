@@ -152,7 +152,11 @@ def test_transit_navigation_uses_injected_local_wall_hour() -> None:
 
 
 
-def test_presence_fusion_on_observation_keeps_separate_wall_reads() -> None:
+def test_presence_fusion_ingest_samples_one_atomic_wall_snapshot() -> None:
+    """Atomic source publication shares one pre-gate wall time, not three
+    per-phase samples inside the source lock. One consistent instant avoids
+    freshness changing between before/after publication checks.
+    """
     now = datetime(2026, 9, 23, 16, 0, tzinfo=timezone.utc)
     clock = SteppingClock(now, timedelta(microseconds=1))
     fusion = PresenceFusion(clock=clock)
@@ -167,7 +171,61 @@ def test_presence_fusion_on_observation_keeps_separate_wall_reads() -> None:
 
     fusion.on_observation(reading)
 
-    assert clock.calls == 3
+    assert clock.calls == 1
+    assert fusion._last_at_desk_at == now
+
+
+def test_presence_fusion_ingest_never_invokes_wall_clock_inside_source_gate() -> None:
+    """Clock implementations can invoke callbacks; the physical acceptance
+    gate must not execute such user-provided hooks while held.
+    """
+    now = datetime(2026, 9, 23, 16, 0, tzinfo=timezone.utc)
+    fusion = None
+
+    class GateCheckingClock(SteppingClock):
+        def utc_now(self) -> datetime:
+            assert fusion is not None
+            assert not fusion._physical_source_gate._is_owned()
+            return super().utc_now()
+
+    clock = GateCheckingClock(now, timedelta(microseconds=1))
+    fusion = PresenceFusion(clock=clock)
+    fusion.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=now,
+        face_present=True,
+        face_confidence=0.99,
+        detection_source="face",
+        zone="desk",
+    ))
+    assert clock.calls == 1
+
+
+def test_presence_fusion_ingest_edge_is_consistent_at_freshness_boundary() -> None:
+    """At the threshold, advancing a step-clock after ingest begins must not
+    split the old/new strong-presence decision or its reacquisition stamp.
+    """
+    from backend.services.presence_fusion import STRONG_PRESENCE_FRESHNESS_S
+
+    now = datetime(2026, 9, 23, 16, 0, tzinfo=timezone.utc)
+    clock = SteppingClock(now, timedelta(seconds=1))
+    fusion = PresenceFusion(clock=clock)
+    observed = now - timedelta(seconds=STRONG_PRESENCE_FRESHNESS_S - 0.5)
+    fusion._last_global_absence_observed_at = observed - timedelta(seconds=1)
+    reading = PresenceReading(
+        source="desktop",
+        captured_at=observed,
+        face_present=True,
+        face_confidence=0.99,
+        detection_source="face",
+        zone="desk",
+    )
+    fusion.on_observation(reading)
+    assert clock.calls == 1
+    assert fusion._last_strong_reacquisition_source == "desktop"
+    assert fusion._last_strong_reacquisition_at == observed
+
+
 
 
 @pytest.mark.asyncio

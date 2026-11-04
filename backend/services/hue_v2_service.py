@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
+from backend.services.lighting_transition_boundary import lighting_write_validator
+
 if TYPE_CHECKING:
     from backend.services.hue_service import HueService
     from backend.services.websocket_manager import WebSocketManager
@@ -46,6 +48,23 @@ AVAILABLE_EFFECTS = [
 ]
 
 
+def _write_acknowledged(payload: Any, resource_id: str, resource_type: str) -> bool:
+    """Require an error-free v2 write envelope for the requested resource.
+
+    Acceptance is not observation; rejection may still mean partial application.
+    """
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("errors"), list)
+        and not payload["errors"]
+        and isinstance(payload.get("data"), list)
+        and len(payload["data"]) == 1
+        and isinstance(payload["data"][0], dict)
+        and payload["data"][0].get("rid") == resource_id
+        and payload["data"][0].get("rtype") == resource_type
+    )
+
+
 class HueV2Service:
     """
     Controls Philips Hue lights via the CLIP API v2.
@@ -65,6 +84,7 @@ class HueV2Service:
         # disables read timeout so a quiet stream isn't killed.
         self._stream_client: Optional[httpx.AsyncClient] = None
         self._connected = False
+        self._ack_observer = None  # Explicit injection only; never enabled at startup.
         # Maps v1 light IDs ("1", "2") to v2 UUIDs and vice versa
         self._v1_to_v2: dict[str, str] = {}
         self._v2_to_v1: dict[str, str] = {}
@@ -81,6 +101,14 @@ class HueV2Service:
     def connected(self) -> bool:
         """Whether the v2 API connection is active."""
         return self._connected
+
+    def set_ack_observer(self, observer) -> None:
+        """Inject a bounded synchronous observer, or None to detach.
+
+        No production wiring is authorized by this seam. Observers must not
+        mutate inputs, perform IO, or change write authority.
+        """
+        self._ack_observer = observer
 
     def set_heartbeat_registry(self, registry: Any) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
@@ -114,8 +142,8 @@ class HueV2Service:
             logger.info(
                 f"Hue v2 API connected — {len(self._v1_to_v2)} lights mapped"
             )
-        except Exception as e:
-            logger.error(f"Failed to connect to Hue v2 API: {e}")
+        except Exception:
+            logger.error("Hue v2 connection failed")
             self._connected = False
 
     async def _build_id_map(self) -> None:
@@ -193,8 +221,8 @@ class HueV2Service:
             self._scene_cache = scenes
             self._scene_cache_time = time.monotonic()
             return scenes
-        except Exception as e:
-            logger.error(f"Error fetching v2 scenes: {e}")
+        except Exception:
+            logger.error("Hue v2 scene inventory request failed")
             return self._scene_cache if self._scene_cache else []
 
     async def activate_scene(self, scene_id: str) -> bool:
@@ -205,21 +233,40 @@ class HueV2Service:
             scene_id: The v2 scene UUID.
 
         Returns:
-            True if activation succeeded.
+            True for bridge acceptance, not observed scene state.
+            False may include partial application.
         """
         if not self._connected or not self._client:
             return False
 
         try:
+            validator = lighting_write_validator.get()
+            if validator is not None and not validator():
+                return False
+            # Scene manifests do not yet prove complete, fresh fixture scope.
+            # Desk-dependent autonomous recall abstains; explicit recall keeps
+            # its existing authorization path.
+            if getattr(validator, "desk_dependent", False):
+                return False
             resp = await self._client.put(
                 f"/scene/{scene_id}",
                 json={"recall": {"action": "active"}},
             )
             resp.raise_for_status()
-            logger.info(f"Activated native scene: {scene_id}")
+            body = resp.json()
+            observer = getattr(self, "_ack_observer", None)
+            if observer is not None:
+                try:
+                    observer.observe_v2(resp.status_code, body, scene_id, "scene")
+                except Exception:
+                    pass  # Observation cannot change ACK or ownership semantics.
+            if not _write_acknowledged(body, scene_id, "scene"):
+                logger.warning("Hue scene reply not accepted; remote outcome may be partial")
+                return False
+            logger.debug("Hue scene command acknowledged; physical completion unverified")
             return True
-        except Exception as e:
-            logger.error(f"Error activating scene {scene_id}: {e}")
+        except Exception:
+            logger.error("Hue scene write failed; remote outcome unknown")
             return False
 
     # ------------------------------------------------------------------
@@ -236,23 +283,45 @@ class HueV2Service:
                     glisten, opal.
 
         Returns:
-            True if the effect was applied.
+            True for bridge acceptance, not observed effect state.
+            False may include partial application.
         """
         if not self._connected or not self._client:
             return False
 
         v2_id = self.v1_to_v2_id(v1_light_id)
         if not v2_id:
-            logger.error(f"No v2 ID found for v1 light {v1_light_id}")
+            logger.error("Hue effect write skipped: resource mapping unavailable")
             return False
 
         try:
+            path = f"/light/{v2_id}"
+            payload = {"effects": {"effect": effect}}
+            validator = lighting_write_validator.get()
+            if validator is not None and not validator():
+                return False
+            accept = getattr(validator, "accept_effect_command", None)
+            if accept is not None:
+                receipt = accept(v1_light_id, "release" if effect == "no_effect" else "start")
+                if receipt is None:
+                    return False
+            elif getattr(validator, "desk_dependent", False):
+                return False
             resp = await self._client.put(
-                f"/light/{v2_id}",
-                json={"effects": {"effect": effect}},
+                path, json=payload,
             )
             resp.raise_for_status()
-            logger.info(f"Set effect '{effect}' on light {v1_light_id}")
+            body = resp.json()
+            observer = getattr(self, "_ack_observer", None)
+            if observer is not None:
+                try:
+                    observer.observe_v2(resp.status_code, body, v2_id, "light")
+                except Exception:
+                    pass  # Observation cannot change ACK or ownership semantics.
+            if not _write_acknowledged(body, v2_id, "light"):
+                logger.warning("Hue effect reply not accepted; remote outcome may be partial")
+                return False
+            logger.debug("Hue effect command acknowledged; physical completion unverified")
             return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429:
@@ -262,17 +331,16 @@ class HueV2Service:
                 # cycle reaches steady state. Not actionable, don't burn
                 # Sentry events.
                 logger.warning(
-                    "Hue bridge rate-limited setting effect '%s' on light %s (429)",
-                    effect, v1_light_id,
+                    "Hue effect write rate-limited (429); remote outcome unknown",
                 )
                 return False
             logger.error(
-                f"Error setting effect '{effect}' on light {v1_light_id}: {e}"
+                "Hue effect write failed; remote outcome unknown"
             )
             return False
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error setting effect '{effect}' on light {v1_light_id}: {e}"
+                "Hue effect write failed; remote outcome unknown"
             )
             return False
 
@@ -337,8 +405,8 @@ class HueV2Service:
                 })
 
             return rooms
-        except Exception as e:
-            logger.error(f"Error fetching rooms: {e}")
+        except Exception:
+            logger.error("Hue room inventory request failed")
             return []
 
     # ------------------------------------------------------------------
@@ -457,13 +525,13 @@ class HueV2Service:
             except asyncio.CancelledError:
                 logger.info("v2 event stream stopped (cancelled)")
                 raise
-            except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError) as e:
+            except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError):
                 logger.warning(
-                    "v2 event stream closed (%s), backoff %.1fs",
-                    type(e).__name__, backoff,
+                    "v2 event stream transport failure, backoff %.1fs",
+                    backoff,
                 )
             except Exception:
-                logger.exception(
+                logger.error(
                     "v2 event stream unexpected error, backoff %.1fs", backoff
                 )
 
@@ -500,7 +568,7 @@ class HueV2Service:
                     continue
                 v1_id = self._v2_to_v1.get(v2_id)
                 if not v1_id:
-                    logger.debug("v2 stream: no v1 mapping for %s", v2_id)
+                    logger.debug("v2 stream: resource mapping unavailable")
                     continue
 
                 prev = hue_v1_service._last_states.get(v1_id)
@@ -508,7 +576,7 @@ class HueV2Service:
                     # v1 polling hasn't filled the cache yet — let polling
                     # catch up; broadcasting a half-known dict would race.
                     logger.debug(
-                        "v2 stream: skipping %s (v1 cache not populated yet)", v1_id
+                        "v2 stream: skipping update (v1 cache not populated yet)"
                     )
                     continue
 
