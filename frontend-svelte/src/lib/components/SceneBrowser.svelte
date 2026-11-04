@@ -499,4 +499,41 @@
     color: var(--text-muted);
     padding: 4px 0;
   }
+  /* Keep real scene actions visible and finger-sized without changing handlers. */
+  @media (max-width: 760px) {
+    .scene-tabs-row { min-width: 0; }
+    .scene-tab,
+    .new-scene-btn { min-height: 44px; font-size: 14px; }
+    .scene-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .scene-wrap { display: flex; align-items: stretch; gap: 6px; width: 100%; min-width: 0; }
+    .scene-item {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 48px;
+      white-space: normal;
+      flex-wrap: wrap;
+      overflow-wrap: anywhere;
+      font-size: 14px;
+    }
+    .scene-name { font-size: 14px; }
+    .scene-source { font-size: 12px; }
+    .scene-try-btn,
+    .scene-edit-btn {
+      position: static;
+      flex: 0 0 44px;
+      width: 44px;
+      height: 44px;
+      opacity: 1;
+      border-radius: 12px;
+      align-self: center;
+    }
+    .scene-tab:focus-visible,
+    .new-scene-btn:focus-visible,
+    .scene-item:focus-visible,
+    .scene-try-btn:focus-visible,
+    .scene-edit-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+  }
 </style>
