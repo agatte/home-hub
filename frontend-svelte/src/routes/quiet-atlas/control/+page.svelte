@@ -12,9 +12,8 @@
 
 <main class="quiet-atlas-control">
   <header class="page-heading">
-    <p class="eyebrow">QUIET ATLAS · APARTMENT</p>
     <h1>Control</h1>
-    <p class="intro">Browse your rooms and presets. This new Control experience is still a read-only preview.</p>
+    <p class="intro">Browse lighting groups and scenes below. Control is still a read-only preview.</p>
     <a class="live-lighting-link" href="/#apartment-controls">
       <span>Adjust lights now</span>
       <span aria-hidden="true">↗</span>
@@ -27,7 +26,6 @@
 <style>
   .quiet-atlas-control { min-height: 100%; padding: 22px 0 40px; color: #eaeae4; background: #101a15; }
   .page-heading { max-width: 1100px; margin: 0 auto; padding: 0 clamp(14px, 4vw, 34px) 8px; }
-  .eyebrow { margin: 0 0 8px; color: #9fb3a1; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
   h1 { margin: 0; font: normal clamp(34px, 6vw, 48px)/1.1 Georgia, serif; }
   .intro { margin: 10px 0 0; color: #bdc9be; font-size: 14px; line-height: 1.5; }
   .live-lighting-link {
@@ -39,7 +37,7 @@
   }
   .live-lighting-link:hover { background: #f2f3e9; }
   .live-lighting-link:focus-visible { outline: 3px solid #d7ebbf; outline-offset: 3px; }
-  .live-lighting-note { margin: 8px 0 0; color: #b8c6b8; font-size: 12px; line-height: 1.45; }
+  .live-lighting-note { margin: 8px 0 0; color: #b8c6b8; font-size: 14px; line-height: 1.45; }
   @media (max-width: 600px) {
     .live-lighting-link { display: flex; width: 100%; min-height: 56px; margin-top: 16px; }
   }
