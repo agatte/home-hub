@@ -73,7 +73,7 @@
       <PiholeCard />
     </section>
 
-    <section class="widget widget-apartment widget-routines-full">
+    <section id="apartment-controls" class="widget widget-apartment widget-routines-full">
       <h2 class="widget-title">Apartment</h2>
       <ApartmentWidget />
     </section>
@@ -88,6 +88,7 @@
 </main>
 
 <style>
+  .widget-apartment { scroll-margin-top: 32px; }
   .widget-sonos-strip {
     margin-bottom: 8px;
     padding: 8px 12px;
