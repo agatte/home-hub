@@ -1,6 +1,6 @@
-# #431 — single-artist consent and ephemeral receiver, offline review candidate
+# #431 — single-artist consent and ephemeral receiver, merged offline foundation
 
-**Status: draft-PR engineering candidate; NOT merged, deployed, activated, connected to private exports or approved for real-name transport.** This document belongs to a scoped eight-file publication branch based on HomeHub master commit a135ad014d8ee9c03b5b64b06a6c8d412ba3156c. Its source modules are intentionally inert until a separately designed and reviewed server-authenticated encrypted transport, dedicated authentication and user-operated sender exist.
+**Status: MERGED OFFLINE-ONLY in PR #495 (2026-11-05 UTC), squash commit 6daf2cde7df080415f28187ae43181e38ed3b10a; NOT DEPLOYED, ACTIVATED OR APPROVED FOR REAL-NAME TRANSFER.** This eight-file foundation was reviewed and merged after exact-head CI and synthetic Windows Tk acceptance. Its source modules remain inert: a separate, secure, reviewed transport, dedicated authentication and user-operated sender are prerequisites for any real transfer.
 
 **Owner:** Sensing & Intelligence / Music Intelligence. Parent issue: [#254](https://github.com/agatte/home-hub/issues/254). Primary record and consent gates: [#431](https://github.com/agatte/home-hub/issues/431), especially [the accepted narrow data-sharing decision](https://github.com/agatte/home-hub/issues/431#issuecomment-6647769532) and [stage-4 offline test/security evidence](https://github.com/agatte/home-hub/issues/431#issuecomment-6649060854).
 
@@ -19,13 +19,13 @@ The existing Windows local Tk artist-label reviewer and deployed Quiet Atlas fic
 5. **tests/test_apple_music_single_artist_handoff.py** — fictional-only consent/adapter/receiver checks, including validation, cancellation, forgery, immutable preview, bad credentials, expiry, stale source, concurrency and redaction.
 6. **tests/test_apple_music_local_handoff_rehearsal.py** — fictional-only no-I/O, modal cancellation, source/session/row/action changes, no-preconsent payload and abort checks.
 7. **tests/test_apple_music_local_handoff_tk.py** — actual mounted Tk Treeview/button tests with fabricated names; skips if no display.
-8. **docs/APPLE_MUSIC_SINGLE_ARTIST_HANDOFF_431.md** — this up-to-date proposal, verification boundary and resume point.
+8. **docs/APPLE_MUSIC_SINGLE_ARTIST_HANDOFF_431.md** — the merged offline-foundation contract, evidence limits and future secure-transfer gates.
 
 ## Verification / evidence scope
 
-Prior to draft publication, the independent, isolated container replay of the **Stage 4 candidate source/test files** passed: xvfb-run -a python -B -m pytest -q tests/test_apple_music_single_artist_handoff.py tests/test_apple_music_local_handoff_rehearsal.py tests/test_apple_music_local_handoff_tk.py: **61 passed, 22 subtests passed**. All tests use invented labels and no private CSV. The staged ZIP CRC and each of its code/test file checksums were verified before publication; changes to this Markdown status page do not alter executable contract. The test does not represent full HomeHub CI, mounted *original* Windows Tk file-picker acceptance, authenticated TLS, privacy inspection, user acceptance, or production runtime.
+Before offline-only merge, corrected Stage 4 source/test files passed **65 synthetic tests and 22 subtests** under Linux/Xvfb. Windows Sandbox independently passed **65 scoped tests** under Python 3.13/Tk 8.6 and **five additional scenarios using the original Tk review window with fictional in-memory data**. GitHub exact-head Check run 41967657312 (backend, lint, frontend) completed **SUCCESS**. All tests use invented labels and no private CSV. The staged ZIP CRC and each of its code/test file checksums were verified before publication; changes to this Markdown status page do not alter executable contract. The green CI and fictional original-window tests do **not** prove operator-led file selection, authenticated TLS, private data acceptance, or production runtime.
 
-**Security environment observation:** Protected Windows Sandbox positively identified as WDAGUtilityAccount with C:\Work, but native Git 2.55.0.windows.3 exits -1058471934 even on --version. Read-only Code Integrity events 3033/3077/3118 identified Smart App Control blocking unsigned Git libiconv-2.dll and libpcre2-8-0.dll. Its git.exe launcher is signed. This GitHub connector publication does **not** repair that installation and is not a bypass of Sandbox security: no Sandbox filesystem, Git worktree, SAC policy, DLL, credential or host setting is changed.
+**Dated security environment observation:** Earlier protected Windows Sandbox Git failed under Smart App Control unsigned-DLL enforcement (Code Integrity 3033/3077/3118). During the final PR #495 review Git 2.55.0.windows.3 ran again without any policy modification; mapped repository ownership still requires a bounded per-command `safe.directory` setting. Neither the PR nor this status correction changes host/Sandbox security. Do not presume future Git availability without live probes.
 
 ## Closed gates before any real Apple name is transferred
 
@@ -51,7 +51,7 @@ Prior to draft publication, the independent, isolated container replay of the **
 
 ## Review and release gates
 
-The current branch/PR is a **publication for review and CI only**. A draft PR passing CI does not authorize merge or deployment. Before proposing release: verify exact eight-file diff and full Linux CI; obtain independent security review, original mounted Windows Tk test with fictional data, review of transport/auth/logging as a separate slice, and later explicit merge/deploy approvals. No live API registration, Apple export reads, external catalog queries, production database or device writes are part of this packet.
+**PR #495 is merged for offline-only groundwork; its merge and green CI do not authorize deployment or real-name transfer.** Before a future real-transfer release, independently review the new transport/authentication/logging/retention changes, complete operator-visible one-item confirmation on the real PC and a fictional-only end-to-end security test, and obtain separate scoped integration and deployment approvals. No live API registration, Apple export reads, external catalog queries, production database or device writes are part of this packet.
 
 **How to run the candidate tests** in a full compatible checkout with dependencies available:
 
@@ -67,4 +67,6 @@ It **only** shows a local modal and discards the proposed payload. Do not use it
 
 ## Resume
 
-Owning issue [#431](https://github.com/agatte/home-hub/issues/431) holds current review/deployment/consent state. Continue with exact-head CI, source/credential/privacy review, and optional synthetic mounted testing, not production activation. Future Git repairs must preserve Smart App Control and unrelated worktrees. All post-PR integration, actual data movement, identity verification, durable learning and Sonos actions remain separately gated.
+Owning issue [#431](https://github.com/agatte/home-hub/issues/431) holds current delivery and remaining consent/security gates. Next is a separately reviewed security/transport protocol proposal, dedicated bypass-free authentication design, monotonic GUI revision, bounded retention, logging audit and a fictional-only test plan; **not** production activation. Future Git repairs must preserve Smart App Control and unrelated worktrees. All post-PR integration, actual data movement, identity verification, durable learning and Sonos actions remain separately gated.
+
+See [the proposed secure handoff protocol](APPLE_MUSIC_SECURE_HANDOFF_PROTOCOL_431.md) for the separate, NOT APPROVED future transport design and fictional offline gate boundary.
