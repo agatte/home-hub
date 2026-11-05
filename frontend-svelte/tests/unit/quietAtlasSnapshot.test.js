@@ -42,6 +42,19 @@ describe('Quiet Atlas read-only light snapshot / reconnect (#270)', () => {
     expect(acceptLightRead(next, a.ticket, fixtures, 1100)).toBe(next)
     expect(readStatus(next, 1100)).toBe('unverified')
   })
+  it('keeps still-fresh receipt evidence while a routine replacement GET is pending', () => {
+    const previous = fresh(1000)
+    const first = beginLightRead(previous)
+    expect(readStatus(first.state, 1100)).toBe('recent-read')
+    expect(first.state.fixtures).toBe(previous.fixtures)
+    // Request ID replacement, not whole-snapshot invalidation, rejects old responses.
+    const next = beginLightRead(first.state)
+    expect(acceptLightRead(next.state, first.ticket, [], 1150)).toBe(next.state)
+    const received = acceptLightRead(next.state, next.ticket, fixtures, 1200)
+    expect(readStatus(received, 1200)).toBe('recent-read')
+    expect(received.fixtures['2'].bri).toBe(previous.fixtures['2'].bri)
+    expect(readStatus(first.state, 31001)).toBe('stale-read')
+  })
   it('out-of-order reads and old failures never clobber latest result', () => {
     const first = beginLightRead(connected())
     const second = beginLightRead(first.state)

@@ -4,7 +4,7 @@ import {
   isKnownLightingGroup, CONTROL_SCENES_HREF, parseControlIntent,
   activeQuietAtlasSection, isQuietAtlasReadOnlyPreview,
 } from '../../src/lib/quietAtlas/navigation.js'
-import { LIGHTING_GROUPS } from '../../src/lib/quietAtlas/lightingModel.js'
+import { LIGHTING_GROUPS, buildLightingOverview } from '../../src/lib/quietAtlas/lightingModel.js'
 import home from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
 import control from '../../src/routes/quiet-atlas/control/+page.svelte?raw'
 import experience from '../../src/lib/components/QuietAtlasLightingExperience.svelte?raw'
@@ -22,7 +22,17 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
       expect(isKnownLightingGroup(id)).toBe(true)
       expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/' + id)).toBe(true)
     }
-    for (const value of ['other', '__proto__', '../settings', '']) {
+    // Extra fixtures already appear as a read-only Control card; it must open.
+    const other = buildLightingOverview({
+      '7': { light_id: '7', name: 'Additional lamp', reachable: true, on: true, bri: 125 },
+    }, true).find(({ id }) => id === 'other')
+    expect(other?.fixtureIds).toEqual(['7'])
+    expect(other?.supportsGroupWrite).toBe(false)
+    expect(buildLightingOverview({}, true).some(({ id }) => id === 'other')).toBe(false)
+    expect(isKnownLightingGroup('other')).toBe(true)
+    expect(lightingDetailHref('other', 'control')).toBe('/quiet-atlas/lighting/other?from=control')
+    expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/other')).toBe(true)
+    for (const value of ['__proto__', '../settings', '']) {
       expect(controlGroupHref(value)).toBe('/quiet-atlas/control')
       expect(lightingDetailHref(value, 'home')).toBe('/quiet-atlas/home')
       expect(isKnownLightingGroup(value)).toBe(false)
@@ -43,7 +53,7 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(parse('group=living&group=bedroom')).toBeNull()
     expect(parse('view=scenes&view=scenes')).toBeNull()
     expect(parse('view=apply')).toBeNull()
-    expect(parse('group=other')).toBeNull()
+    expect(parse('group=other')).toBe('group:other')
     expect(parse('group=')).toBeNull()
     expect(parse('')).toBeNull()
     expect(parseControlIntent(null)).toBeNull()
@@ -60,6 +70,10 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(detail).toContain('class="return-link" href={returnHref}')
     expect(detail).toContain('lightingDetailOrigin($page.url.searchParams)')
     expect(detail).toContain('<QuietAtlasGroupSheet inline={true} group={room}')
+    const refreshCode = detail.slice(detail.indexOf('async function refresh()'), detail.indexOf('function onConnectionChanged('))
+    expect(refreshCode).toContain('beginLightRead(snapshot)')
+    expect(refreshCode).not.toContain('invalidateLightRead(snapshot)')
+    expect(detail).toContain('snapshot = invalidateLightRead(snapshot)') // reconnect/visibility revoke evidence
     for (const source of [home, control, experience, detail]) {
       expect(source).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite|light_command)\s*\(/)
     }

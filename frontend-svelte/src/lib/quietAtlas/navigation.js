@@ -1,6 +1,8 @@
 import { LIGHTING_GROUPS } from './lightingModel.js'
 
-const controlGroupIds = new Set(LIGHTING_GROUPS.map(({ id }) => id))
+// 'other' is a read-only group created only when the API reports extra fixtures.
+// This allowlist grants a display route, never device write authority.
+const controlGroupIds = new Set([...LIGHTING_GROUPS.map(({ id }) => id), 'other'])
 export const CONTROL_SCENES_HREF = '/quiet-atlas/control?view=scenes'
 
 /** Whether a route refers to an approved display-only lighting group. */

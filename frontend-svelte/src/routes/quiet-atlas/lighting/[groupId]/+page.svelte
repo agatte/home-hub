@@ -43,9 +43,10 @@
 
   async function refresh() {
     if (!mounted || !snapshot.connected || document.visibilityState !== 'visible') return
-    // A newer read invalidates older requests before it begins.
+    // Preserve still-fresh receipt evidence during routine GETs so unchanged
+    // reports do not discard an unfinished local draft. The new requestId
+    // supersedes older responses; connection/visibility still invalidate it.
     abortRead()
-    snapshot = invalidateLightRead(snapshot)
     const next = beginLightRead(snapshot)
     snapshot = next.state
     if (!next.ticket) return
