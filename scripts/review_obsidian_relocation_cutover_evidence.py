@@ -167,6 +167,8 @@ def _bindings(value):
         ) and entry["arguments"] == "", "action_literal")
         _require(entry["python"] == r"C:\Users\Anthony\AppData\Local\Programs\Python\Python313\python.exe"
                  and _hex(entry["source_commit"], 40), "runtime_literal")
+        _require(entry["start_in"].rsplit("\\", 1)[-1] == entry["source_commit"],
+                 "release_label_binding")
         for key in ("exe_sha256", "python_sha256", "manifest_sha256", "pins_sha256",
                     "runtime_sha256", "task_xml_sha256"):
             _require(_hex(entry[key]), "binding_hash")
