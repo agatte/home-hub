@@ -210,9 +210,10 @@ ChatGPT owns integration/handoff. Before real transfer, in order:
    No remote-agent access to the private source or name is implied. Catalog,
    identity matching, persistence, ranking and device actions remain separately gated.
 
-Resume from merged PR #498, issue #431 and this local uncommitted three-path
-raw-parser candidate; independent exact-diff review is coordinated outside the
-Write worker. The four prior offline suites plus the raw-parser suite are the
+Resume from merged PR #498, [PR #501](https://github.com/agatte/home-hub/pull/501)
+and issue #431. The three-path offline raw-parser candidate was published for
+review in PR #501; independently recheck its current state and exact-head CI
+before any integration. The four prior offline suites plus the raw-parser suite are the
 bounded regression target, with AST parsing and Git whitespace/scope checks.
 Their success proves synthetic behavior only, not human consent, TLS, cleanup
 of OS copies or live security.
@@ -224,8 +225,8 @@ prior mounted Tk suite **5 passed**, no skips.
 Each ran separately with `-B -m unittest discover -s tests -p <module> -q`.
 Python AST parsing of both new Python files and `git diff --check` passed.
 That original four-file publication is merged, offline only. The raw-parser
-candidate remains local and uncommitted; publishing/integration and deployment
-need separate approval. No deployment is authorized.
+candidate is published for review in PR #501; merging and deployment remain
+separate authorization gates. No deployment or real transfer is authorized.
 
 Raw-parser validation on 2026-11-05, approved Windows Sandbox, Python 3.13:
 **18 passed**, including exact raw/label limits, Unicode, nested/escaped duplicate
@@ -235,4 +236,5 @@ own module-loading reads or prove erasure of traceback locals or memory copies.
 The four prior suites reran separately: single-artist **40**, rehearsal **20**,
 mounted Tk **5**, gate **20**, all passed with no skips. AST parsing of the two
 raw-parser Python files and Git whitespace checks passed. Exactly the parser,
-its tests and this protocol are changed; nothing is staged or published.
+its tests and this protocol were included in the PR #501 publication;
+no HTTP endpoint, production deployment or real artist transfer was authorized.
