@@ -16,7 +16,10 @@ Owner remains #489. This next milestone is limited to
 `scripts/review_obsidian_relocation_cutover_evidence.py`, its portable unittest
 file, and this document, in isolated worktree
 `C:\Work\home-hub-project\worktrees\obsidian-host-preflight-contract-489-20261105`,
-base `461fc52179e08a512ea022b957910ae421ebaf0c`. It is uncommitted and unpublished.
+base `461fc52179e08a512ea022b957910ae421ebaf0c`. The source-only
+candidate was committed and published for review as
+[draft PR #500](https://github.com/agatte/home-hub/pull/500).
+At this checkpoint it is not merged, installed or accepted on the host.
 No real-host evidence was collected; Codex made no network calls. The
 merged PR #499 status was independently checked against current GitHub `master`
 by the coordinating assistant on 2026-11-05.
