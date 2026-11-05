@@ -72,6 +72,8 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(detail).toContain('<QuietAtlasGroupSheet inline={true} group={room}')
     const refreshCode = detail.slice(detail.indexOf('async function refresh()'), detail.indexOf('function onConnectionChanged('))
     expect(refreshCode).toContain('beginLightRead(snapshot)')
+    expect(refreshCode).toContain('nextPollAt = Date.now() + 15000')
+    expect(detail).toContain('}, 15000)') // timer checks due refresh every 15s
     expect(refreshCode).not.toContain('invalidateLightRead(snapshot)')
     expect(detail).toContain('snapshot = invalidateLightRead(snapshot)') // reconnect/visibility revoke evidence
     for (const source of [home, control, experience, detail]) {
