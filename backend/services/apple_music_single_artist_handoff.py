@@ -96,9 +96,14 @@ class OneArtistConsentSession:
 
     def preview(self, index: int) -> ArtistPreview:
         if self._closed or self._used or type(index) is not int or index < 0 or index >= len(self._candidates):
+            self.discard()
             raise HandoffRefused()
         label, band = self._candidates[index]
-        _check_artist(label, band)
+        try:
+            _check_artist(label, band)
+        except HandoffRefused:
+            self.discard()
+            raise
         self._preview_index = index
         self._challenge = token_urlsafe(32)
         return ArtistPreview(label, band, RECIPIENT, self._challenge)
@@ -107,6 +112,7 @@ class OneArtistConsentSession:
         if (self._closed or self._used or confirmed is not True or self._challenge is None
                 or type(challenge) is not str or challenge != self._challenge
                 or recipient != RECIPIENT or self._preview_index is None):
+            self.discard()
             raise HandoffRefused()
         # Burn the authorization *before* constructing the payload. A failed
         # request must require a fresh human review, never transparent replay.
