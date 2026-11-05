@@ -50,7 +50,9 @@ class RehearsalTests(unittest.TestCase):
         new = self.session.preview(1)
         with self.assertRaises(HandoffRefused):
             self.session.approve_once(old.challenge, RECIPIENT, confirmed=True)
-        self.assertEqual(self.session.approve_once(new.challenge, RECIPIENT, confirmed=True).body["artist_label"], "Fictional Harbor Ensemble")
+        # A failed stale authorization burns the entire pending consent.
+        with self.assertRaises(HandoffRefused):
+            self.session.approve_once(new.challenge, RECIPIENT, confirmed=True)
 
     def test_cancel_and_discard(self):
         p = self.session.preview(0)
@@ -316,7 +318,9 @@ class ExistingReviewerAdapterTests(unittest.TestCase):
         spoofed = ArtistPreview("Someone Else", actual.date_band, actual.recipient, actual.challenge)
         with self.assertRaises(HandoffRefused):
             bridge.confirm(spoofed, confirmed=True)
-        self.assertEqual(bridge.confirm(actual, confirmed=True).body["artist_label"], "Fictional Northwind Quartet")
+        # A forged preview invalidates the whole bridge; re-review is required.
+        with self.assertRaises(HandoffRefused):
+            bridge.confirm(actual, confirmed=True)
 
     def test_reviewer_discard_invalidates_pending(self):
         reviewer = FakeReviewer()
@@ -338,3 +342,39 @@ class ExistingReviewerAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ConsentRevocationReviewTests(unittest.TestCase):
+    """Regression probes for explicit refusal and stale pending challenges."""
+
+    def test_declined_consent_revokes_existing_challenge(self):
+        session = OneArtistConsentSession((("Fictional Harbor Orchestra", "1 day"),))
+        preview = session.preview(0)
+        with self.assertRaises(HandoffRefused):
+            session.approve_once(preview.challenge, RECIPIENT, confirmed=False)
+        with self.assertRaises(HandoffRefused):
+            session.approve_once(preview.challenge, RECIPIENT, confirmed=True)
+
+    def test_invalid_reselection_revokes_existing_challenge(self):
+        session = OneArtistConsentSession((("Fictional Harbor Orchestra", "1 day"),))
+        preview = session.preview(0)
+        with self.assertRaises(HandoffRefused):
+            session.preview(9)
+        with self.assertRaises(HandoffRefused):
+            session.approve_once(preview.challenge, RECIPIENT, confirmed=True)
+
+    def test_invalid_adapter_selection_revokes_existing_challenge(self):
+        adapter = LocalReviewerAdapter(FakeReviewer())
+        preview = adapter.preview_selected(("0",))
+        with self.assertRaises(HandoffRefused):
+            adapter.preview_selected(("01",))
+        with self.assertRaises(HandoffRefused):
+            adapter.confirm(preview, confirmed=True)
+
+    def test_mismatched_preview_object_revokes_existing_challenge(self):
+        adapter = LocalReviewerAdapter(FakeReviewer())
+        preview = adapter.preview_selected(("0",))
+        forged = ArtistPreview("Fictional Wrong Artist", preview.date_band, preview.recipient, preview.challenge)
+        with self.assertRaises(HandoffRefused):
+            adapter.confirm(forged, confirmed=True)
+        with self.assertRaises(HandoffRefused):
+            adapter.confirm(preview, confirmed=True)
