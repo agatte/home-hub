@@ -6,7 +6,6 @@
   import { Power, Gamepad2, Monitor, Tv, ChefHat, Flame, PartyPopper, Moon, Bot } from 'lucide-svelte'
 
   const CARDS = [
-    { id: 'alloff',    label: 'All Off',   icon: Power,        isAction: true, color: '#f87171' },
     { id: 'gaming',    label: 'Gaming',    icon: Gamepad2,     isAction: false },
     { id: 'working',   label: 'Working',   icon: Monitor,      isAction: false },
     { id: 'watching',  label: 'Watching',  icon: Tv,           isAction: false },
@@ -15,6 +14,7 @@
     { id: 'social',    label: 'Party',     icon: PartyPopper,  isAction: false },
     { id: 'sleeping',  label: 'Sleep',     icon: Moon,         isAction: false },
     { id: 'auto',      label: 'Auto',      icon: Bot,          isAction: false },
+    { id: 'alloff',    label: 'All Off',   icon: Power,        isAction: true, color: '#f87171' },
   ]
 
   $: currentMode = $automation.mode
@@ -516,36 +516,52 @@
     }
   }
 
+  /* The functional legacy handoff must not hide manual modes off-screen on phones.
+     Keep DOM, touch, and keyboard order aligned: All Off is last and visually separate. */
   @media (max-width: 600px) {
     .card-row {
-      justify-content: flex-start;
-      overflow-x: auto;
-      scroll-snap-type: x mandatory;
-      -webkit-overflow-scrolling: touch;
-      padding-bottom: 4px;
-      scrollbar-width: none;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      justify-content: stretch;
     }
-    .card-row::-webkit-scrollbar {
+    .mode-card {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      min-height: 64px;
+      aspect-ratio: auto;
+      flex: none;
+    }
+    .card-inner {
+      min-height: 64px;
+    }
+    .card-front {
+      padding: 4px;
+      gap: 4px;
+      box-sizing: border-box;
+    }
+    .card-icon {
       display: none;
     }
-    .mode-card {
-      min-width: 80px;
-      max-width: 90px;
-      flex-shrink: 0;
-      scroll-snap-align: start;
-    }
-  }
-
-  @media (max-width: 480px) {
-    .card-row {
-      gap: 8px;
-    }
-    .mode-card {
-      min-width: 72px;
-      max-width: 80px;
-    }
     .card-label {
-      font-size: 17px;
+      font-size: clamp(15px, 3.8vw, 17px);
+      letter-spacing: 0.3px;
+    }
+    .mode-card-danger {
+      grid-column: 1 / -1;
+      min-height: 56px;
+    }
+    .mode-card-danger .card-inner {
+      min-height: 56px;
+    }
+    .mode-card-danger .card-front {
+      flex-direction: row;
+      gap: 10px;
+      background: rgba(248, 113, 113, 0.08);
+    }
+    .mode-card-danger .card-icon {
+      display: flex;
     }
   }
 </style>
