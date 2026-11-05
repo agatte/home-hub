@@ -125,6 +125,7 @@ export function withQuietAtlasShell(href) {
 
 // Route identity outranks an arbitrary fragment. A Music/Settings #control anchor
 // must not highlight the Control destination in the shared preview shell.
+/** @param {URLSearchParams | null} [searchParams] */
 export function activeQuietAtlasSection(pathname, _hash = '', searchParams = null) {
   if (pathname.startsWith('/quiet-atlas/lighting/')) return lightingDetailOrigin(searchParams)
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'

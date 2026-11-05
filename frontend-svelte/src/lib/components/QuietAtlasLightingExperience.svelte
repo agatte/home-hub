@@ -18,7 +18,7 @@
   let sceneList = []
   let scenesLoading = false
   let sceneError = ''
-  /** @type {string | null} */
+  /** @type {boolean} */
   let sceneBrowserOpen = false
   /** @type {string | null} */
   let focusSceneId = null
