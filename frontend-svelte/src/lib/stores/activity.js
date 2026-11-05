@@ -13,6 +13,9 @@ function resetIdle() {
   timeout = setTimeout(() => userIdle.set(true), IDLE_TIMEOUT_MS)
 }
 
+// Restart the existing idle timer on a swallowed ambient wake.
+export function wakeActivity() { resetIdle() }
+
 /** Call once on mount to start tracking user activity. Returns cleanup fn. */
 export function initActivityTracking() {
   const events = ['mousemove', 'mousedown', 'touchstart', 'keydown', 'scroll']
