@@ -1,14 +1,41 @@
 # #489 Vault storage relocation: Sandbox preparation
 
-Status on 2026-11-04: **SOURCE ONLY / NOT INSTALLED / NOT INSTALLABLE**.
+Status on 2026-11-05: **SOURCE-ONLY COMPONENTS MERGED / NOT INSTALLED / NOT INSTALLABLE**.
 Owner: [#489](https://github.com/agatte/home-hub/issues/489).
-Sandbox preparation and its test evidence live in worktree
-`C:\Work\home-hub-project\worktrees\obsidian-vault-relocation-prep-489-20261104`,
-branch `work/489-vault-storage-bundle-prep-20261104`, base
-`674d92a7861dd70646f67ece6a7706380348134e`. This source-only
-preparation was subsequently published for review as [PR #491](https://github.com/agatte/home-hub/pull/491)
-(commit `19e4ee1898e86e9b6847ea929ba1ab0cec6e71e6`); it has not been merged,
-installed, or used for any physical Vault move.
+The offline release recipe ([PR #491](https://github.com/agatte/home-hub/pull/491)),
+offline evidence preflight ([PR #496](https://github.com/agatte/home-hub/pull/496)),
+and offline stage-plan reviewer ([PR #497](https://github.com/agatte/home-hub/pull/497))
+are **merged on `master`**. Merging these source files did not install an
+updater, reconfigure a task, touch the Vault, or authorize a physical move.
+Earlier worktree/PR references below are historical preparation evidence.
+
+## Sandbox-only staging rehearsal (2026-11-05, source published for review)
+
+Isolated Sandbox worktree:
+`C:\Work\home-hub-project\worktrees\obsidian-relocation-stage-489-20261105`,
+branch `work/489-exact-stage-synthetic-20261105`, base
+`a8f2f09650566c3b2c8dc929c3c94cf7c28ec9a4` (PR #497 merged).
+Source and test files published for review in [PR #499](https://github.com/agatte/home-hub/pull/499) are
+`scripts/obsidian_relocation_stage_rehearsal.py` and
+`tests/test_obsidian_relocation_stage_rehearsal.py`. Publication alone does not mean installation or physical acceptance.
+
+The test fixture accepts only the fixed fictional SID/interpreter hash and
+the actual Windows Sandbox `WDAGUtilityAccount` token, with exactly one new
+`hh489-only-synthetic-stage-<32hex>` directory in that guest's TEMP folder.
+It revalidates the nine-module, exact-hash manifest plan, uses exclusive
+directory/file creation, reads back ten expected files, rejects preexisting
+destinations, and **preserves partial fixtures on errors**. This exercises
+Sandbox NTFS mechanics only. It has no host-usable CLI, no real Windows
+bundle target and returns `installable=false`, `host_stage_authorized=false`,
+`task_update_authorized=false`, `vault_move_authorized=false`.
+
+**Not verified:** the host's current SID/Python binary/ACLs, new GUI executable,
+an exclusive **host** installer, linked/reparse and filesystem ownership under
+concurrent host processes, complete live task configuration, current Vault/history
+content seals, lock/quiescence, or recovery/rollback. Physical staging and
+relocation still require separate, attended approvals. Earlier dated claims
+below of "unmerged" or "unpublished" source represent their original historical
+checkpoint; use current GitHub PR/commit state above for integration status.
 
 The current concrete recipe, pins and gates are recorded in **Concrete offline
 recipe update (2026-11-04)** below. The earlier template evidence is retained as
