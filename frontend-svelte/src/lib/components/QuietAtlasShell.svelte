@@ -37,7 +37,7 @@
     { id: 'experiences', label: 'Other experiences', start: 3, end: 6 },
   ]
 
-  $: activeSection = activeQuietAtlasSection($page.url.pathname)
+  $: activeSection = activeQuietAtlasSection($page.url.pathname, $page.url.hash, $page.url.searchParams)
   $: readOnlyPreview = isQuietAtlasReadOnlyPreview($page.url.pathname)
   $: destinations = MORE_DESTINATIONS.map((item) => ({
     ...item,

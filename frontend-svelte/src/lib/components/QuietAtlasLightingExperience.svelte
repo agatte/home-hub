@@ -6,7 +6,7 @@
   import { newReadOnlySnapshot, connectionChanged, invalidateLightRead, beginLightRead, acceptLightRead, failLightRead, readStatus } from '$lib/quietAtlas/lightSnapshot.js'
   import { buildLightingOverview, normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
   import QuietAtlasLightingOverview from './QuietAtlasLightingOverview.svelte'
-  import QuietAtlasGroupSheet from './QuietAtlasGroupSheet.svelte'
+  import { lightingDetailHref } from '$lib/quietAtlas/navigation.js'
   import QuietAtlasSceneBrowser from './QuietAtlasSceneBrowser.svelte'
 
   /** @type {string | null} Validated route target from the Control page. */
@@ -19,7 +19,6 @@
   let scenesLoading = false
   let sceneError = ''
   /** @type {string | null} */
-  let selectedGroupId = null
   let sceneBrowserOpen = false
   /** @type {string | null} */
   let focusSceneId = null
@@ -125,11 +124,13 @@
   // Local overview sheets are still usable when there is no route target.
   $: if (routeIntent !== handledRouteIntent) {
     handledRouteIntent = routeIntent
-    selectedGroupId = routeIntent?.startsWith('group:') ? routeIntent.slice(6) : null
     sceneBrowserOpen = routeIntent === 'scenes'
     focusSceneId = null
+    // Legacy ?group= links redirect to a real non-modal page, without X-to-Control.
+    if (routeIntent?.startsWith('group:') && typeof window !== 'undefined') {
+      void goto(lightingDetailHref(routeIntent.slice(6), 'control'), { replaceState: true, noScroll: true })
+    }
   }
-  $: selectedGroup = selectedGroupId ? groups.find((g) => g.id === selectedGroupId) : null
 
   async function refreshScenes() {
     if (!isMounted || !snapshot.connected || document.visibilityState !== 'visible') return
@@ -178,17 +179,13 @@
     }
   })
 
-  // Closing a deep-linked sheet replaces only that URL entry, so Back returns
-  // to Home rather than reopening the same sheet. No light/scene writes.
+  // Only the legacy scene browser uses a deep-linked dialog; lighting groups use pages.
+  // No light/scene writes.
   function clearDeepLink() {
     void goto('/quiet-atlas/control', { replaceState: true, noScroll: true, keepFocus: true })
   }
   /** @param {string} id */
-  function openGroup(id) { selectedGroupId = id; sceneBrowserOpen = false }
-  function closeGroup() {
-    selectedGroupId = null
-    if (routeIntent?.startsWith('group:')) clearDeepLink()
-  }
+  function openGroup(id) { void goto(lightingDetailHref(id, 'control')) }
   function closeScenes() {
     sceneBrowserOpen = false
     if (routeIntent === 'scenes') clearDeepLink()
@@ -209,9 +206,6 @@
   <QuietAtlasLightingOverview {groups} {snapshotStatus} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
     onOpenGroup={openGroup} onBrowseScenes={browseScenes} onOpenScene={openSpecificScene} />
 </div>
-{#if selectedGroup}
-  <QuietAtlasGroupSheet group={selectedGroup} {snapshotStatus} fixtureStates={snapshot.fixtures} onClose={closeGroup} />
-{/if}
 {#if sceneBrowserOpen}
   <QuietAtlasSceneBrowser {sceneList} loading={scenesLoading} error={sceneError} connected={$connected}
     selectedSceneId={focusSceneId} onRetry={refreshScenes} onClose={closeScenes} />

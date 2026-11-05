@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
 import home from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
-import { controlGroupHref, CONTROL_SCENES_HREF } from '../../src/lib/quietAtlas/navigation.js'
+import { lightingDetailHref, CONTROL_SCENES_HREF } from '../../src/lib/quietAtlas/navigation.js'
 
 describe('Quiet Atlas phone-first Home composition', () => {
   it('uses a genuinely distinct phone hierarchy without reordering keyboard focus', () => {
@@ -30,9 +30,9 @@ describe('Quiet Atlas phone-first Home composition', () => {
 
   it('keeps rooms/presets prominent, readable and tap-sized without group fanout', () => {
     expect(home).toContain('aria-label="Browse lighting by room"')
-    expect(home).toContain('href={controlGroupHref(group.id)}')
+    expect(home).toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(home).toContain('href={CONTROL_SCENES_HREF}')
-    expect(controlGroupHref('bedroom')).toBe('/quiet-atlas/control?group=bedroom')
+    expect(lightingDetailHref('bedroom', 'home')).toBe('/quiet-atlas/lighting/bedroom?from=home')
     expect(CONTROL_SCENES_HREF).toBe('/quiet-atlas/control?view=scenes')
     for (const label of ['Living', 'Bedroom', 'Kitchen', 'Plant']) {
       expect(home).toContain("name: '" + label + "'")
