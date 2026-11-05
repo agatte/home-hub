@@ -66,6 +66,18 @@ describe('Quiet Atlas read-only light snapshot / reconnect (#270)', () => {
     expect(unchanged.fixtures['2'].bri).toBe(initial.fixtures['2'].bri)
     expect(readStatus(unchanged, 53001)).toBe('stale-read')
   })
+  it('manual refresh off the polling phase must not defer a safe replacement', () => {
+    // Timer ticks at t=15s/30s. Manual GET settles at t=1.1s after an off-phase
+    // start. The following t=15s tick must be eligible, not skipped by a
+    // second 15s deadline. A delayed response at t=23s preserves draft evidence.
+    const manualReceipt = fresh(1100)
+    const pending = beginLightRead(manualReceipt) // at the next 15s timer tick
+    expect(readStatus(pending.state, 22000)).toBe('recent-read')
+    const unchanged = acceptLightRead(pending.state, pending.ticket, fixtures, 23000)
+    expect(readStatus(unchanged, 32000)).toBe('recent-read')
+    expect(unchanged.fixtures['2'].bri).toBe(manualReceipt.fixtures['2'].bri)
+    expect(readStatus(unchanged, 53001)).toBe('stale-read')
+  })
   it('out-of-order reads and old failures never clobber latest result', () => {
     const first = beginLightRead(connected())
     const second = beginLightRead(first.state)

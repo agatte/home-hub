@@ -54,10 +54,11 @@
     const controller = new AbortController()
     currentRequest = controller
     const timeout = window.setTimeout(() => controller.abort(), 8000)
-    // Poll before the 30s receipt TTL: a delayed replacement GET must not
-    // cause an unchanged, otherwise valid draft to disappear at expiry.
-    // The 15s scheduler preserves an 8s fetch-timeout margin.
-    nextPollAt = Date.now() + 15000
+    // The 15s scheduler already bounds ordinary replacement reads. Do not
+    // add another 15s deadline here: an off-phase manual refresh can then
+    // skip a tick, pushing the next read past the 30s receipt TTL.
+    // Pending requests prevent overlap; failed reads below retain backoff.
+    nextPollAt = 0
     try {
       const response = await fetch('/api/lights', { signal: controller.signal, cache: 'no-store' })
       if (!response.ok) throw new Error('Lighting report unavailable')
