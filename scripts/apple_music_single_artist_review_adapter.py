@@ -48,14 +48,20 @@ class LocalReviewerAdapter:
                 or not selected_ids[0].isdecimal()
                 or len(selected_ids[0]) > 4
                 or selected_ids[0] != str(int(selected_ids[0]))):
+            self.discard()
             raise HandoffRefused()
-        self._last_preview = self._consent.preview(int(selected_ids[0]))
+        try:
+            self._last_preview = self._consent.preview(int(selected_ids[0]))
+        except HandoffRefused:
+            self.discard()
+            raise
         return self._last_preview
 
     def confirm(self, preview: ArtistPreview, *, confirmed: bool) -> PreparedSingleArtist:
         self._assert_same_session()
         if (type(preview) is not ArtistPreview or preview is not self._last_preview
                 or preview.recipient != RECIPIENT):
+            self.discard()
             raise HandoffRefused()
         self._last_preview = None
         return self._consent.approve_once(preview.challenge, RECIPIENT, confirmed=confirmed)
