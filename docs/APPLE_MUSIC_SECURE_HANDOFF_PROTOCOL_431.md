@@ -162,9 +162,10 @@ needs lifecycle cleanup tests; synthetic object disposal cannot prove erasure.
 
 ## Acceptance, evidence and next approval gates
 
-Local uncommitted slice only: fictional gate and builtin unittest module; preserved
-merged-status reconciliation plus this proposal. No API registration, auth change,
-TLS configuration, secret provisioning, private data, network or production effect.
+Draft PR #498 publishes the fictional gate, its unittest module, the
+merged-status reconciliation and this PROPOSED protocol for code review.
+No API registration, auth change, TLS configuration, secret provisioning,
+private data, network or production effect is authorized by that publication.
 The focused suite covers refusal, binding, revision restoration, exact deadline,
 cancellation, sweep/close/restart, clock failure, concurrent one-use redemption,
 redacted repr/errors and blocked I/O during synthetic import/lifecycle.
@@ -191,15 +192,17 @@ ChatGPT owns integration/handoff. Before real transfer, in order:
    No remote-agent access to the private source or name is implied. Catalog,
    identity matching, persistence, ranking and device actions remain separately gated.
 
-Resume from the named worktree and uncommitted diff; these findings are not
-published to GitHub. The three prior offline suites and the new suite are the
-bounded regression target, with AST parsing and Git whitespace/scope checks.
+Resume from draft PR #498 and issue #431; recheck the exact head and CI before
+integration. The three prior offline suites and the new suite are the bounded
+regression target, with AST parsing and Git whitespace checks.
 Their success proves synthetic behavior only, not human consent, TLS, cleanup
 of OS copies or live security.
 
 Validation on 2026-11-05 in the approved Windows Sandbox, Python 3.13:
-new gate suite **18 passed**; prior single-artist suite **40 passed**; prior
-rehearsal suite **20 passed**; prior mounted Tk suite **5 passed**, no skips.
+new gate suite **20 passed** (including fresh-import and extreme-TTL guards);
+prior single-artist suite **40 passed**; prior rehearsal suite **20 passed**;
+prior mounted Tk suite **5 passed**, no skips.
 Each ran separately with `-B -m unittest discover -s tests -p <module> -q`.
 Python AST parsing of both new Python files and `git diff --check` passed.
-Only the four authorized paths are changed; all remain uncommitted.
+The original four-file publication is review-only; any corrective push and
+merge need their own separate approval. No deployment is authorized.
