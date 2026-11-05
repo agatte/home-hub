@@ -662,7 +662,7 @@ class TestApplyZoneOverlay:
 
     @pytest.mark.parametrize(
         ("period", "l2_target"),
-        (("day", 160), ("evening", 110), ("night", 70), ("late_night", 50)),
+        (("day", 160), ("evening", 110), ("night", 90), ("late_night", 70)),
     )
     def test_desk_watching_never_lifts_l5(self, period, l2_target):
         state = self._state(l2_bri=10, l5_bri=12)

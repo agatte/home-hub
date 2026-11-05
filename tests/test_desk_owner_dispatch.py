@@ -8,6 +8,7 @@ Gaming publication, ScreenSync frame composition and Hue worker are unexercised.
 No shared numeric L2 floor or physical adequacy claim (#136); #402 unchanged.
 """
 import ast
+from backend.services.desk_visual_comfort import DESK_WATCHING_FILL
 import asyncio
 from contextlib import asynccontextmanager, nullcontext
 from contextvars import ContextVar
@@ -80,7 +81,7 @@ def load(filename, classes=None, functions=(), constants=False, namespace=None):
 calculator_tree = ast.parse((ROOT / 'backend/services/light_state_calculator.py').read_text(encoding='utf-8'))
 CALC = load('light_state_calculator',
     functions={n.name for n in calculator_tree.body if isinstance(n, ast.FunctionDef)},
-    classes={n.name: None for n in calculator_tree.body if isinstance(n, ast.ClassDef)}, constants=True)
+    classes={n.name: None for n in calculator_tree.body if isinstance(n, ast.ClassDef)}, constants=True, namespace={"DESK_WATCHING_FILL": DESK_WATCHING_FILL})
 CONSTANTS = load('automation_constants', constants=True)
 AUTH = load('lighting_authority', classes={'LightingLease': None, 'LightingAuthority': None})
 BOUND = load('lighting_transition_boundary', classes={'LightingTransitionBoundary': None},

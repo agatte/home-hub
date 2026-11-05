@@ -1452,3 +1452,309 @@ async def test_neutral_video_keeps_saturation_easing_outside_desk_page():
     assert 30 < hue.last_for("2")["sat"] < vivid
     await sync.apply_color("2", 220, 10, 10, "watching", zone="bed", period="night")
     assert hue.last_for("2")["sat"] > 30
+
+
+@pytest.fixture
+def desk_fill_rig(mock_hue_v2, mock_ws):
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop", captured_at=datetime.now(timezone.utc),
+        face_present=True, detection_source="face", zone="desk",
+    ))
+    engine = AutomationEngine(hue=hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+                              screen_sync=sync, presence_fusion=presence)
+    engine._current_mode = "watching"
+    engine._effect_manager._tracker_known = True  # Synthetic reconciled bridge ownership.
+    engine._manual_override = True  # Semantic manual Watching is allowed.
+    engine._override_mode = "watching"
+    engine._get_time_period = lambda: "night"
+    req = _make_request(engine, sync)
+    req.app.state.presence = presence
+    return req, engine, sync, presence, hue
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("period,floor", [("evening", 110), ("night", 90), ("late_night", 70)])
+async def test_qualified_manual_watching_diffuse_fill(desk_fill_rig, period, floor):
+    req, engine, sync, presence, hue = desk_fill_rig
+    engine._get_time_period = lambda: period
+    result = await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    assert result["applied"]
+    assert hue.last_for("2")["bri"] == int(floor * sync._smoothing_alpha_for("watching", period))
+    # Existing EMA and max-step remain in force; an already-settled target holds.
+    sync._last_bri["2"] = float(floor)
+    assert (await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req))["applied"]
+    assert hue.last_for("2")["bri"] == floor
+    assert "ct" not in hue.last_for("2")
+    assert hue.last_for("5")["bri"] <= sync.get_floor("watching", "5", zone="desk", period=period)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["missing", "stale", "pose", "couch", "bed", "conflict",
+    "manual_l2", "dnd", "away", "sleeping", "scene", "disabled", "external", "return", "effect", "laptop"])
+async def test_desk_fill_fail_closed(desk_fill_rig, blocker):
+    req, engine, sync, presence, hue = desk_fill_rig
+    if blocker in {"missing", "stale", "pose", "couch", "bed"}:
+        presence = PresenceFusion()
+        req.app.state.presence = presence
+        if blocker != "missing":
+            presence.on_observation(PresenceReading(
+                source="desktop", captured_at=datetime.now(timezone.utc) - timedelta(seconds=9 if blocker == "stale" else 0),
+                face_present=True, detection_source="pose" if blocker == "pose" else "face",
+                zone=blocker if blocker in {"couch", "bed"} else "desk"))
+    if blocker == "conflict":
+        presence.on_observation(PresenceReading(source="latitude",
+            captured_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            face_present=True, detection_source="yolo", zone="couch"))
+    if blocker == "manual_l2":
+        engine.manual_light_overrides["2"] = datetime.now(timezone.utc)
+    if blocker == "dnd":
+        engine.is_dnd_active = lambda: True
+    if blocker == "away":
+        engine._away_hold = True
+    if blocker == "sleeping":
+        engine._current_mode = "sleeping"
+        engine._override_mode = "sleeping"
+    if blocker == "scene":
+        engine._active_scene_override_key = ("watching", "night", "test", "test")
+    if blocker == "disabled":
+        engine._enabled = False
+    if blocker == "external":
+        engine._external_off_detected = True
+    if blocker == "return":
+        engine._host_return_hold = True
+    if blocker == "effect":
+        engine._effect_manager._active_name = "test"
+        engine._effect_manager._active_lights = ["2"]
+    await receive_screen_color(ScreenColorReport(r=0, g=0, b=0,
+        source="laptop" if blocker == "laptop" else "desktop"), req)
+    l2 = [state for lid, state in hue.calls if lid == "2"]
+    assert not l2 or l2[-1]["bri"] < 90
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["replace", "missing", "aba", "stale", "conflict", "latitude_aba", "dnd", "manual", "scene", "away"])
+async def test_diffuse_fill_revalidated_after_queue_wait(desk_fill_rig, change):
+    req, engine, sync, presence, hue = desk_fill_rig
+    entered, release, ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def block():
+        async with sync._transition_boundary.serialized():
+            entered.set()
+            await release.wait()
+    original = sync.apply_color
+    async def queued(*args, **kwargs):
+        if args[0] == "2":
+            assert kwargs["desk_diffuse_fill"] is True
+            ready.set()
+        return await original(*args, **kwargs)
+    sync.apply_color = queued
+    blocker = asyncio.create_task(block())
+    await entered.wait()
+    task = asyncio.create_task(receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req))
+    try:
+        await asyncio.wait_for(ready.wait(), 2)
+        if change == "replace":
+            presence.on_observation(PresenceReading(source="desktop", captured_at=datetime.now(timezone.utc),
+                face_present=True, detection_source="face", zone="desk"))
+        elif change in {"missing", "aba"}:
+            original_reading = presence.get_source_reading("desktop")
+            presence.invalidate_source("desktop")
+            if change == "aba":
+                presence.on_observation(original_reading)
+        elif change == "stale":
+            import backend.api.routes.automation as route
+            # Keep the immutable publication; make only its freshness fail.
+            original_fresh = route._reading_is_fresh
+            route._reading_is_fresh = lambda reading, age: False
+        elif change == "conflict":
+            presence.on_observation(PresenceReading(source="latitude", captured_at=datetime.now(timezone.utc),
+                face_present=True, detection_source="yolo", zone="couch"))
+        elif change == "latitude_aba":
+            # A competing strong source must revoke even if it disappears before dispatch.
+            presence.on_observation(PresenceReading(source="latitude", captured_at=datetime.now(timezone.utc),
+                face_present=True, detection_source="yolo", zone="couch"))
+            presence.invalidate_source("latitude")
+        elif change == "dnd":
+            engine.is_dnd_active = lambda: True
+        elif change == "manual":
+            engine.manual_light_overrides["2"] = datetime.now(timezone.utc)
+        elif change == "scene":
+            engine._active_scene_override_key = ("watching", "night", "test", "test")
+        elif change == "away":
+            engine._away_hold = True
+    finally:
+        release.set()
+        await blocker
+    try:
+        await task
+    finally:
+        if change == "stale":
+            route._reading_is_fresh = original_fresh
+    assert "2" not in hue.lights_touched()
+
+
+@pytest.mark.asyncio
+async def test_diffuse_fill_source_loss_at_bridge_dispatch(desk_fill_rig):
+    req, engine, sync, presence, hue = desk_fill_rig
+    boundary = sync._transition_boundary
+    original = boundary.run_write
+    async def invalidate_before_dispatch(*args, **kwargs):
+        presence.on_observation(PresenceReading(source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, zone=None))
+        return await original(*args, **kwargs)
+    boundary.run_write = invalidate_before_dispatch
+    await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    assert "2" not in hue.lights_touched()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["missing", "latitude_aba", "unchanged"])
+async def test_diffuse_fill_at_final_hue_acceptance(desk_fill_rig, change, monkeypatch):
+    from threading import Event, Thread
+    from backend.services.hue_service import HueService
+
+    req, engine, sync, presence, _ = desk_fill_rig
+    hue = HueService("memory", "memory")
+    hue._connected = True
+    calls = []
+    def bridge(lid, command):
+        assert not presence._physical_source_gate._is_owned()
+        calls.append((str(lid), command))
+        return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                 for key, value in command.items()]]
+    hue._bridge = SimpleNamespace(set_light=bridge)
+    boundary = sync._transition_boundary
+    hue.set_transition_boundary(boundary)
+    sync._hue = hue
+    original = boundary.validate_dispatch
+    validations = 0
+    raced = False
+    def validate(validator):
+        nonlocal validations, raced
+        result = original(validator)
+        validations += 1
+        # Hue's final on-loop check has returned True. Publish from another
+        # thread before the atomic receipt (or old unguarded worker release).
+        final = validations == (2 if hasattr(validator, "accept_command") else 1)
+        if result[0] and final and not raced:
+            raced = True
+            published = Event()
+            def publish():
+                if change == "missing":
+                    presence.invalidate_source("desktop")
+                elif change == "latitude_aba":
+                    presence.on_observation(PresenceReading(source="latitude",
+                        captured_at=datetime.now(timezone.utc), face_present=True,
+                        detection_source="yolo", zone="couch"))
+                    presence.invalidate_source("latitude")
+                published.set()
+            worker = Thread(target=publish)
+            worker.start()
+            assert published.wait(2)
+            worker.join(2)
+            assert not worker.is_alive()
+        return result
+    monkeypatch.setattr(boundary, "validate_dispatch", validate)
+    await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    assert raced
+    assert any(lid == "2" for lid, _ in calls) is (change == "unchanged")
+    if change != "unchanged":
+        assert "2" not in hue._inflight_until
+        assert "2" not in sync.fresh_owned_light_ids()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("period,ceiling", [("night", 70), ("late_night", 50)])
+async def test_manual_static_fill_fallback_at_hue_worker(desk_fill_rig, monkeypatch, period, ceiling):
+    from threading import Event
+    from backend.services.hue_service import HueService
+    from backend.services.light_applicator import LightApplicator, mode_apply_epoch, mode_physical_validator
+
+    _, engine, sync, presence, _ = desk_fill_rig
+    assert engine._capture_mode_physical_validator() is None
+    # Compose while Desk is present, then lose it after Hue's loop validation.
+    states = engine._apply_zone_overlay({"2": {"on": True, "bri": 10, "ct": 400},
+        "5": {"on": True, "bri": 14, "ct": 400}}, "watching", period)
+    hue = HueService("memory", "memory")
+    hue._connected = True
+    calls = []
+    def bridge(lid, command):
+        calls.append((str(lid), command))
+        return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                 for key, value in command.items()]]
+    hue._bridge = SimpleNamespace(set_light=bridge)
+    boundary = sync._transition_boundary
+    hue.set_transition_boundary(boundary)
+    app = object.__new__(LightApplicator)
+    app._transition_boundary = boundary
+    app._st = SimpleNamespace(last_applied_per_light={}, manual_light_overrides={}, transit_light_overrides={})
+    app._suppressed = lambda: False
+    app._owner_revision_getter = lambda: engine._mode_transition_revision
+    app._current_mode_getter = lambda: engine.effective_mode
+    app._overrides = SimpleNamespace(prune_expired_transit=lambda: None)
+    app.protected_light_ids = lambda: set()
+    app._hue_getter = lambda: hue
+    app._invalidate_screen_sync_cache = lambda ids: None
+    entered, release = Event(), Event()
+    original = boundary.dispatch_snapshot_valid
+    def paused(snapshot):
+        entered.set()
+        assert release.wait(5)
+        return original(snapshot)
+    monkeypatch.setattr(boundary, "dispatch_snapshot_valid", paused)
+    async def apply():
+        owner = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+        guard = mode_physical_validator.set(engine._capture_mode_physical_validator())
+        try:
+            async with boundary.serialized():
+                return await app._apply_per_light_locked(states, None)
+        finally:
+            mode_physical_validator.reset(guard)
+            mode_apply_epoch.reset(owner)
+    task = asyncio.create_task(apply())
+    try:
+        async with asyncio.timeout(5):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        presence.invalidate_source("desktop")
+    finally:
+        release.set()
+        await task
+    assert next(command["bri"] for lid, command in calls if lid == "2") == ceiling
+    assert next(command["bri"] for lid, command in calls if lid == "5") == 14
+
+
+@pytest.mark.parametrize("age_seconds,manual,expected_l2", [
+    (0, False, 90),       # Fresh automatic Desk has its existing source fence.
+    (15, False, 70),      # Fused Desk persists longer than the 8-second write fence.
+    (0, True, 70),        # Manual Activity has no physical incremental write lease.
+])
+def test_static_increment_requires_fresh_owned_desk_fence(
+    desk_fill_rig, age_seconds, manual, expected_l2,
+):
+    from backend.services.light_applicator import mode_physical_validator
+
+    _, engine, _, presence, _ = desk_fill_rig
+    engine._manual_override = manual
+    engine._override_mode = "watching" if manual else None
+    if age_seconds:
+        presence.invalidate_source("desktop")
+        presence.on_observation(PresenceReading(
+            source="desktop",
+            captured_at=datetime.now(timezone.utc) - timedelta(seconds=age_seconds),
+            face_present=True, detection_source="face", zone="desk",
+        ))
+    assert presence.latest_zone() == "desk"  # Not enough for a brighter static lift.
+    physical = engine._capture_mode_physical_validator()
+    token = mode_physical_validator.set(physical)
+    try:
+        state = engine._apply_zone_overlay({
+            "2": {"on": True, "bri": 10, "ct": 400},
+            "5": {"on": True, "bri": 14, "ct": 400},
+        }, "watching", "night")
+    finally:
+        mode_physical_validator.reset(token)
+    assert state["2"]["bri"] == expected_l2
+    assert state["5"]["bri"] == 14

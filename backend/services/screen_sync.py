@@ -22,6 +22,7 @@ plugging the laptop into a TV. It runs the same screen capture loop but
 in-process on the laptop and POSTs to its own localhost endpoint, so it
 goes through the same wire format as the desktop agent. Disabled by default.
 """
+from backend.services.desk_visual_comfort import DESK_WATCHING_FILL
 import asyncio
 import base64
 import colorsys
@@ -428,6 +429,7 @@ def _leased_frame(method):
         final_guard = kwargs.pop("final_guard", None)
         incoming_lease = kwargs.pop("authority_lease", None)
         desk_neutral_page = kwargs.pop("desk_neutral_page", False)
+        physical_acceptance = kwargs.pop("physical_acceptance", None)
         bound = signature.bind(self, *args, **kwargs)
         bound.apply_defaults()
         light_id = bound.arguments["light_id"]
@@ -452,6 +454,21 @@ def _leased_frame(method):
                 )
             if not eligible():
                 return False
+
+            if physical_acceptance is not None:
+                authority.bind_source_gate(physical_acceptance.source_context)
+                consumed = False
+                def accept():
+                    nonlocal consumed
+                    if consumed:
+                        return None
+                    consumed = True
+                    # Keep the exact current frame lease, including its normal
+                    # owner checks above; no new writer or fallback retry.
+                    return physical_acceptance.commit(
+                        authority, lease, light_id, None, False,
+                    )
+                eligible.accept_command = accept
 
             def refresh_lease():
                 nonlocal lease
@@ -1226,6 +1243,7 @@ class ScreenSyncService:
         period: Optional[str] = None,
         lux_multiplier: float = 1.0,
         weather_condition: Optional[str] = None,
+        desk_diffuse_fill: bool = False,
     ) -> bool:
         """
         Apply a screen sample to one of the managed bedroom lamps.
@@ -1248,6 +1266,9 @@ class ScreenSyncService:
                 ``lux_to_multiplier``). Consumed for gaming + watching across
                 day/evening (L2 only — L5 is excluded); lifts the cap+floor
                 envelope on dim ambient. Defaults to 1.0 (no lift).
+            desk_diffuse_fill: Route-qualified physical Desk Watching only.
+                The route must retain its source/owner fence through dispatch;
+                this flag only changes L2's input floor within the resolved cap.
             weather_condition: Classified weather string ("clouds" / "rain"
                 / "thunderstorm" / "snow" / None). Same gate as
                 ``lux_multiplier``; stacks multiplicatively with it to lift
@@ -1271,6 +1292,12 @@ class ScreenSyncService:
             mode, light_id, zone=zone, posture=posture, period=period,
             lux_multiplier=lux_multiplier, weather_condition=weather_condition,
         )
+        if (
+            desk_diffuse_fill is True and light_id == "2" and mode == "watching"
+            and source == "desktop" and zone == "desk"
+            and isinstance(period, str) and period in DESK_WATCHING_FILL
+        ):
+            min_bri = min(max_bri, max(min_bri, DESK_WATCHING_FILL[period]))
         sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
         luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)
         h, s, br = rgb_to_hue_hsb(

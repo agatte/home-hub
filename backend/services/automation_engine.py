@@ -3482,8 +3482,19 @@ class AutomationEngine:
             getattr(self, "_bed_reclined_l1_night", None)
             or BED_RECLINED_L1_NIGHT_DEFAULT
         )
+        # A fused Desk zone may remain sticky for up to five minutes.  The new
+        # night/late-night L2 increment requires the short-lived physical
+        # validator captured by _apply_mode, which is checked again at dispatch.
+        # Without it (including manual Activity), retain the earlier 70/50 lift.
+        physical = mode_physical_validator.get()
+        allow_increased_desk_fill = bool(
+            mode == "watching" and period in {"night", "late_night"}
+            and not self._manual_override
+            and physical is not None and physical()
+        )
         return _calc_apply_zone_overlay(
             state, mode, period, zone, posture, l1_night,
+            desk_diffuse_fill=allow_increased_desk_fill,
         )
 
     def set_bed_reclined_l1_night(self, value: int) -> None:

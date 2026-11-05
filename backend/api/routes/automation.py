@@ -45,7 +45,7 @@ from backend.services.automation_constants import (
     ScheduleConfig,
 )
 from backend.services.light_state_calculator import lux_to_multiplier
-from backend.services.desk_visual_comfort import is_neutral_page
+from backend.services.desk_visual_comfort import DESK_WATCHING_FILL, is_neutral_page
 from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
 from backend.services.presence_fusion import PresenceReading
 from backend.services.agent_health_monitor import SUPERVISOR_SILENT_SECONDS
@@ -748,12 +748,57 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     boundary = getattr(engine, "lighting_transition_boundary", None)
     frame_leases = {}
     neutral_desk_page = False
+    desk_fill_reading = None
+    desk_fill_revision = None
+    desk_fill_latitude_revision = None
+    desk_fill_acceptance = None
+
+    def desk_fill_eligible():
+        current = getattr(request.app.state, "presence", None)
+        if (current is not presence or current is None
+            or engine.current_mode != "watching" or report.source != "desktop"
+            or getattr(engine, "house_state", None) != "home"
+            or getattr(engine, "_enabled", False) is not True
+            or not callable(getattr(engine, "is_dnd_active", None))
+            or engine.is_dnd_active()
+            or any(getattr(engine, flag, False) for flag in (
+                "_external_off_detected", "_away_hold", "_host_return_hold",
+                "_gaming_scene_transition_pending", "_active_scene_override_key",
+                "_gaming_scene_override", "_active_effect_name"))
+            or "2" in engine.manual_light_overrides
+            or not callable(getattr(engine, "validate_screen_sync_lease", None))
+            or boundary is None
+            or engine._get_time_period() != period):
+            return False
+        reading = current.get_source_reading("desktop")
+        if (reading is None or reading.source != "desktop"
+            or reading.face_present is not True or reading.zone != "desk"
+            or reading.detection_source not in {None, "face"}
+            or not _reading_is_fresh(reading, 8.0)
+            or current.latest_zone(max_age_s=8) != "desk"):
+            return False
+        contrary = current.get_source_reading("latitude")
+        if (contrary is not None and _reading_is_fresh(contrary, 8.0)
+            and contrary.zone in {"couch", "bed"}
+            and current._is_strongly_present(contrary)):
+            return False
+        if desk_fill_reading is not None and (
+            reading is not desk_fill_reading
+            or current.physical_source_generation("desktop") != desk_fill_revision
+            or current.physical_source_generation("latitude") != desk_fill_latitude_revision
+        ):
+            return False
+        # The enclosing @leased_frame revalidates its current lease/owners at
+        # every dispatch check (including its refreshed acknowledgement lease).
+        return True
 
     def final_frame_guard(light_id):
         def eligible():
             if not 0 <= time.monotonic() - frame_accepted_at < SCREEN_SYNC_FRESH_SECONDS:
                 return False
             if engine.current_mode != frame_mode or getattr(engine, "current_game", None) != frame_game:
+                return False
+            if light_id == "2" and desk_fill_reading is not None and not desk_fill_eligible():
                 return False
             current_presence = getattr(request.app.state, "presence", None)
             if neutral_desk_page:
@@ -889,6 +934,38 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
+    # Bind the immutable physical publication after cap context resolution.
+    if (frame_game != "rust" and zone == "desk" and period in DESK_WATCHING_FILL
+        and "2" in _screen_sync_target_lights(report, sync)
+        and desk_fill_eligible()):
+        desk_fill_reading = presence.get_source_reading("desktop")
+        desk_fill_revision = presence.physical_source_generation("desktop")
+        desk_fill_latitude_revision = presence.physical_source_generation("latitude")
+        from backend.services.lighting_authority import DeskAcceptanceGuard
+        # Freeze the original source lifetime; waiting for a frame/worker must
+        # never renew it. The guard commits raw sources and lease atomically.
+        captured_monotonic = time.monotonic()
+        captured_now = datetime.now(timezone.utc)
+        desktop_at = desk_fill_reading.captured_at
+        if desktop_at.tzinfo is None:
+            desktop_at = desktop_at.replace(tzinfo=timezone.utc)
+        latitude = presence.get_source_reading("latitude")
+        conflict_not_after = None
+        if (latitude is not None and latitude.zone in {"couch", "bed"}
+            and presence._is_strongly_present(latitude)):
+            latitude_at = latitude.captured_at
+            if latitude_at.tzinfo is None:
+                latitude_at = latitude_at.replace(tzinfo=timezone.utc)
+            latitude_age = (captured_now - latitude_at).total_seconds()
+            if latitude_age <= 8.0:
+                conflict_not_after = captured_monotonic + max(0.0, -latitude_age - 2.0)
+        desk_fill_acceptance = DeskAcceptanceGuard(
+            engine, presence, captured_monotonic + 8.0
+            - (captured_now - desktop_at).total_seconds(),
+            conflict_not_after=conflict_not_after,
+            source_readings=(("desktop", desk_fill_reading), ("latitude", latitude)),
+        )
+
     # Rust profile: hold a fixed ember color and drive the bedroom lamps'
     # BRIGHTNESS from the screen's whole-frame luma, so the room dims as Rust's
     # day/night cycle goes dark (the user's "dark in game → dimmer room" ask).
@@ -1002,6 +1079,8 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 final_guard=final_frame_guard(light_id),
                 authority_lease=frame_leases.get(light_id),
                 desk_neutral_page=neutral_desk_page,
+                desk_diffuse_fill=light_id == "2" and desk_fill_reading is not None,
+                physical_acceptance=desk_fill_acceptance if light_id == "2" else None,
             )
         if accepted is not False:
             applied.append(light_id)
