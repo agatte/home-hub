@@ -75,6 +75,7 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(refreshCode).toContain('nextPollAt = 0') // do not double-gate the 15s timer
     expect(refreshCode).not.toContain('nextPollAt = Date.now() + 15000')
     expect(refreshCode).toContain('nextPollAt = nowMs + 15000') // failure backoff only
+    expect(refreshCode).toContain('if (!mounted || currentRequest !== controller) return') // old aborts cannot delay new polls
     expect(detail).toContain('}, 15000)') // timer checks due refresh every 15s
     expect(refreshCode).not.toContain('invalidateLightRead(snapshot)')
     expect(detail).toContain('snapshot = invalidateLightRead(snapshot)') // reconnect/visibility revoke evidence

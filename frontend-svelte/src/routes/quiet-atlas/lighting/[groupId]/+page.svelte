@@ -67,7 +67,9 @@
       snapshot = acceptLightRead(snapshot, ticket, rows, Date.now())
       nowMs = Date.now()
     } catch {
-      if (!mounted) return
+      // An aborted/superseded read must not impose retry backoff on the
+      // replacement request (or revoke its still-fresh draft evidence).
+      if (!mounted || currentRequest !== controller) return
       snapshot = failLightRead(snapshot, ticket)
       nowMs = Date.now()
       nextPollAt = nowMs + 15000
