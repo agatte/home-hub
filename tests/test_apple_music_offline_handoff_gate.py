@@ -202,6 +202,12 @@ class OfflineGateTests(unittest.TestCase):
             gate.issue()
             random.assert_called_once_with(32)
 
+    def test_extreme_integer_ttl_fails_closed(self):
+        for ttl in (10 ** 1000, -(10 ** 1000)):
+            with self.subTest(positive=ttl > 0):
+                with self.assertRaises(OfflineRefused):
+                    OfflineHandoffGate(**self.binding, ttl=ttl)
+
     def test_invalid_configuration_and_generator(self):
         for ttl in (0, -1, 61, True, float('nan')):
             with self.assertRaises(OfflineRefused):
