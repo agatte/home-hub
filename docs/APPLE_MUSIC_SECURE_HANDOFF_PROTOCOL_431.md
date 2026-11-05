@@ -194,7 +194,7 @@ ChatGPT owns integration/handoff. Before real transfer, in order:
 
 Resume from draft PR #498 and issue #431; recheck the exact head and CI before
 integration. The three prior offline suites and the new suite are the bounded
-regression target, with AST parsing and Git whitespace checks.
+regression target, with AST parsing and Git whitespace/scope checks.
 Their success proves synthetic behavior only, not human consent, TLS, cleanup
 of OS copies or live security.
 
