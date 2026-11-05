@@ -1,6 +1,6 @@
 <script>
   import '$lib/styles/global.css'
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { page } from '$app/stores'
   import { initStores } from '$lib/stores/init.js'
   import { initGamedayFeed } from '$lib/stores/gameday.js'
@@ -17,6 +17,8 @@
   import VitalStrip from '$lib/components/VitalStrip.svelte'
   import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
   import QuietAtlasShell from '$lib/components/QuietAtlasShell.svelte'
+  import QuietAtlasAmbient from '$lib/components/QuietAtlasAmbient.svelte'
+  import { AMBIENT_VIEWPORT, ambientRouteEligible } from '$lib/quietAtlas/ambient.js'
   import { shouldUseQuietAtlasShell, shouldShowGlobalErrorToast } from '$lib/quietAtlas/navigation.js'
   import { rootRuntimeTargets } from '$lib/quietAtlas/runtimeRoutePolicy431.js'
 
@@ -44,6 +46,44 @@
   // Guest and Game Day keep their purpose-built layouts.
   $: isQuietAtlasShell = shouldUseQuietAtlasShell($page.url.pathname, $page.url.searchParams)
   $: isIsolatedRoute = isGuestRoute || isGamedayPrototypeRoute || isQuietAtlasShell
+  let ambientViewport = false
+  $: ambientVisible = ambientViewport && ambientRouteEligible($page.url.pathname) && $userIdle
+
+  // Reactive statements run before DOM patching applies inert. The root owns
+  // restoration for every dismissal path, including viewport and route changes.
+  let wasAmbientVisible = false
+  let ambientFocus = null
+  $: if (ambientVisible !== wasAmbientVisible) {
+    wasAmbientVisible = ambientVisible
+    if (ambientVisible) {
+      ambientFocus = document.activeElement
+    } else {
+      const previous = ambientFocus
+      ambientFocus = null
+      tick().then(() => {
+        if (!wasAmbientVisible && previous instanceof HTMLElement &&
+            previous.isConnected && !previous.closest('[inert]')) {
+          previous.focus({ preventScroll: true })
+        }
+      })
+    }
+  }
+
+  onMount(() => {
+    let stopViewport = () => {}
+    const unsubscribe = page.subscribe(($page) => {
+      stopViewport()
+      ambientViewport = false
+      stopViewport = () => {}
+      if (!ambientRouteEligible($page.url.pathname)) return
+      const viewport = window.matchMedia(AMBIENT_VIEWPORT)
+      const update = () => { ambientViewport = viewport.matches }
+      update()
+      viewport.addEventListener('change', update)
+      stopViewport = () => viewport.removeEventListener('change', update)
+    })
+    return () => { unsubscribe(); stopViewport() }
+  })
 
   onMount(() => {
     let cleanupStores = null
@@ -89,7 +129,7 @@
   <NowPlayingIdle />
 {/if}
 
-<div class="app-shell" class:user-idle={$userIdle && !isQuietAtlasShell}>
+<div class="app-shell" class:user-idle={$userIdle && !isQuietAtlasShell} inert={ambientVisible}>
   <div
     class:app={!isGamedayRoute && !isGamedayPrototypeRoute && !isQuietAtlasShell}
     class:app-bleed={isGamedayRoute || isGamedayPrototypeRoute}
@@ -109,6 +149,10 @@
     <div class="idle-hint">Tap anywhere to wake</div>
   {/if}
 </div>
+
+{#if ambientVisible}
+  <QuietAtlasAmbient />
+{/if}
 
 {#if !isIsolatedRoute}
   <FloatingNav />

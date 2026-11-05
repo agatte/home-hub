@@ -474,6 +474,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "source": automation.mode_source,
             "manual_override": automation.manual_override,
             "time_period": automation.get_time_period(),
+            # Fresh source-qualified context on each websocket connection.
+            "house_state": automation.house_state,
+            "activity": automation.activity,
         },
     }))
 

@@ -6,10 +6,14 @@ and the JSON safety guard we added.
 """
 import json
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 from fastapi.testclient import TestClient
+from fastapi.websockets import WebSocketDisconnect
 
-from backend.main import app
+from backend.main import app, websocket_endpoint
 
 
 @pytest.fixture(scope="module")
@@ -18,6 +22,53 @@ def client():
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("house_state", "activity"),
+    [("home", "general"), ("away", None), ("sleeping", None)],
+)
+async def test_initial_websocket_mode_snapshot_is_fresh_and_read_only(
+    house_state, activity
+):
+    """Exercise the handshake without lifespan, bridges, sockets, or commands."""
+    manager = SimpleNamespace(connect=AsyncMock(), disconnect=Mock())
+    automation = SimpleNamespace(
+        current_mode="idle",
+        mode_source="test",
+        manual_override=None,
+        house_state=house_state,
+        activity=activity,
+        get_time_period=lambda: "afternoon",
+    )
+    state = SimpleNamespace(
+        ws_manager=manager,
+        hue=SimpleNamespace(connected=False),
+        sonos=SimpleNamespace(connected=False),
+        automation=automation,
+        build_id="test-build",
+    )
+    websocket = SimpleNamespace(
+        app=SimpleNamespace(state=state),
+        send_text=AsyncMock(),
+        receive_text=AsyncMock(side_effect=WebSocketDisconnect()),
+    )
+
+    await websocket_endpoint(websocket)
+
+    frames = [
+        json.loads(call.args[0])
+        for call in websocket.send_text.await_args_list
+    ]
+    assert [frame["type"] for frame in frames] == [
+        "connection_status", "mode_update"
+    ]
+    assert frames[1]["data"]["house_state"] == house_state
+    assert frames[1]["data"]["activity"] == activity
+    assert frames[1]["data"]["mode"] == "idle"
+    manager.connect.assert_awaited_once_with(websocket)
+    manager.disconnect.assert_called_once_with(websocket)
 
 class TestWebSocketConnection:
     """Test WebSocket connect and initial messages."""
@@ -38,6 +89,13 @@ class TestWebSocketConnection:
             assert "mode" in msg["data"]
             assert "source" in msg["data"]
             assert "manual_override" in msg["data"]
+            # A newly opened WS must provide a fresh lifecycle snapshot.
+            assert msg["data"]["house_state"] in {
+                "away", "home", "winding_down", "sleeping"
+            }
+            assert "activity" in msg["data"]
+            if msg["data"]["house_state"] in {"away", "sleeping"}:
+                assert msg["data"]["activity"] is None
 
     def test_ws_malformed_json_does_not_crash(self, client):
         """The JSON safety guard should keep the connection alive."""

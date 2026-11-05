@@ -3,6 +3,7 @@
 // function that closes the socket — Svelte's onMount uses the returned value
 // as its destroy hook.
 
+import { receiveAmbientContext, resetAmbientContext } from '../quietAtlas/ambient.js'
 import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
 import { lights, setLightsFromList, applyLightUpdate, optimisticLightPatch } from './lights.js'
@@ -28,6 +29,7 @@ let modeUpdateLockUntil = 0
 let pendingOverride = null  // expected manual_override value from server
 
 export function initStores() {
+  resetAmbientContext()
   // Initial REST fetches — best-effort, errors swallowed so the UI still mounts
   // if the backend is warming up.
   apiGet('/api/lights')
@@ -87,6 +89,7 @@ export function initStores() {
             modeUpdateLockUntil = 0
             pendingOverride = null
           }
+          receiveAmbientContext(data)
           automation.update((prev) => mergeAutomationUpdate(prev, data))
           break
         case 'dnd_update':
@@ -134,11 +137,12 @@ export function initStores() {
           break
       }
     },
-    (isConnected) => connected.set(isConnected)
+    (isConnected) => { resetAmbientContext(); connected.set(isConnected) }
   )
   socket.connect()
 
   return () => {
+    resetAmbientContext()
     socket?.close()
     socket = null
     stopWeatherPolling()
