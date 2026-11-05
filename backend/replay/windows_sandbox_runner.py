@@ -61,6 +61,7 @@ PROJECT_FILES = (
     "backend/services/automation_constants.py",
     "backend/services/camera_constants.py",
     "backend/services/decision_clock.py",
+    "backend/services/desk_visual_comfort.py",
     "backend/services/engine_state.py",
     "backend/services/heartbeat.py",
     "backend/services/light_applicator.py",

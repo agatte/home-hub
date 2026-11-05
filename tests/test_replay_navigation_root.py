@@ -470,6 +470,7 @@ def test_closed_project_import_graph_has_no_live_io_modules():
         "backend.services.automation_constants",
         "backend.services.camera_constants",
         "backend.services.decision_clock",
+        "backend.services.desk_visual_comfort",
         "backend.services.engine_state",
         "backend.services.heartbeat",
         "backend.services.light_applicator",
@@ -502,6 +503,7 @@ def test_closed_project_import_graph_has_no_live_io_modules():
         "re",
         "threading",
         "time",
+        "types",
         "typing",
         "zoneinfo",
     }

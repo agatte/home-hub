@@ -20,6 +20,7 @@ that imported them from there.
 """
 from __future__ import annotations
 
+from backend.services.desk_visual_comfort import DESK_WATCHING_FILL
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
@@ -1666,6 +1667,7 @@ def apply_zone_overlay(
     zone: Optional[str],
     posture: Optional[str],
     bed_reclined_l1_night: int = BED_RECLINED_L1_NIGHT_DEFAULT,
+    *, desk_diffuse_fill: bool = True,
 ) -> dict[str, Any]:
     """Zone- and posture-aware per-light adjustments as the final overlay.
 
@@ -1706,10 +1708,12 @@ def apply_zone_overlay(
     if zone == "desk" and mode == "watching":
         zone_bri_by_period = {
             "day": 160,
-            "evening": 110,
-            "night": 70,
-            "late_night": 50,
+            **DESK_WATCHING_FILL,
         }
+        if not desk_diffuse_fill:
+            # Manual mode applies have no per-light physical receipt. Retain
+            # their prior targets until the incremental L2 write is fenced.
+            zone_bri_by_period.update(night=70, late_night=50)
         target_bri = zone_bri_by_period.get(period)
         if target_bri is None:
             return state
@@ -1718,6 +1722,8 @@ def apply_zone_overlay(
         for light_id in ("2",):
             if light_id not in new_state:
                 continue
+            if new_state[light_id].get("on") is False:
+                continue  # Explicit darkness is not a diffuse-fill request.
             current = int(new_state[light_id].get("bri", 0))
             if current >= target_bri:
                 continue
