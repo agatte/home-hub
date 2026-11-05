@@ -47,8 +47,8 @@ class OfflineHandoffGate:
                  token_factory: Callable[[], str] | None = None) -> None:
         if (any(type(v) is not str or not v or len(v) > 128
                 for v in (session, principal, audience, boot_epoch))
-                or type(ttl) not in (int, float) or not math.isfinite(ttl)
-                or not 0 < ttl <= 60):
+                or type(ttl) not in (int, float) or not 0 < ttl <= 60
+                or not math.isfinite(ttl)):
             raise OfflineRefused()
         self._binding = (session, principal, audience, boot_epoch)
         self._ttl = ttl
