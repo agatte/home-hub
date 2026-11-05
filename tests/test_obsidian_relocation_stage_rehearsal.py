@@ -17,6 +17,10 @@ import obsidian_relocation_stage_rehearsal as rehearsal
 import prepare_obsidian_relocation as recipe
 
 
+@unittest.skipUnless(
+    os.name == "nt" and Path.home() == rehearsal.GUEST_TEMP.parents[2],
+    "Native fixture runs only in the protected Windows Sandbox guest",
+)
 class StageRehearsalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -9,15 +9,15 @@ are **merged on `master`**. Merging these source files did not install an
 updater, reconfigure a task, touch the Vault, or authorize a physical move.
 Earlier worktree/PR references below are historical preparation evidence.
 
-## Current Sandbox-only staging rehearsal (2026-11-05, uncommitted)
+## Sandbox-only staging rehearsal (2026-11-05, source published for review)
 
 Isolated Sandbox worktree:
 `C:\Work\home-hub-project\worktrees\obsidian-relocation-stage-489-20261105`,
 branch `work/489-exact-stage-synthetic-20261105`, base
 `a8f2f09650566c3b2c8dc929c3c94cf7c28ec9a4` (PR #497 merged).
-New, **uncommitted** sources are
+Source and test files published for review in [PR #499](https://github.com/agatte/home-hub/pull/499) are
 `scripts/obsidian_relocation_stage_rehearsal.py` and
-`tests/test_obsidian_relocation_stage_rehearsal.py`.
+`tests/test_obsidian_relocation_stage_rehearsal.py`. Publication alone does not mean installation or physical acceptance.
 
 The test fixture accepts only the fixed fictional SID/interpreter hash and
 the actual Windows Sandbox `WDAGUtilityAccount` token, with exactly one new
