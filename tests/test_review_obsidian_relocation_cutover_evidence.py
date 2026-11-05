@@ -39,7 +39,7 @@ def fixture():
         bindings[kind] = {
             "exe": bundle + r"\fictional.exe", "start_in": bundle, "arguments": "",
             "python": r"C:\Users\Anthony\AppData\Local\Programs\Python\Python313\python.exe",
-            "source_commit": "e" * 40,
+            "source_commit": str(i) * 40,
             **dict.fromkeys(("exe_sha256", "python_sha256", "manifest_sha256",
                              "pins_sha256", "runtime_sha256", "task_xml_sha256"), "f" * 64),
         }
@@ -131,6 +131,17 @@ class OfflineReviewTests(unittest.TestCase):
                     target = target[part]
                 target[path[-1]] = value
                 self.assertEqual(self.review(packet, names, bindings)["reasons"], [reason])
+
+    def test_release_label_must_match_version_directory(self):
+        for kind in ("current", "proposed"):
+            with self.subTest(kind=kind):
+                packet, names, bindings = fixture()
+                packet["bindings"][kind]["source_commit"] = "e" * 40
+                bindings[kind]["source_commit"] = "e" * 40
+                self.assertEqual(
+                    self.review(packet, names, bindings)["reasons"],
+                    ["release_label_binding"],
+                )
 
     def test_missing_extra_and_malformed(self):
         for key in fixture()[0]:
