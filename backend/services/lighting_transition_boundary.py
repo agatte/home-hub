@@ -106,6 +106,9 @@ class LightingTransitionBoundary:
         try:
             allowed = validator is None or bool(validator())
             authority = self.authority
+            lease = getattr(validator, "dispatch_lease", None)
+            if lease is not None:
+                return allowed, (self._serialized_epoch, lease)
             snapshot = (self._serialized_epoch, authority._global,
                         authority._whole, authority._closed)
             return allowed, snapshot
@@ -119,6 +122,16 @@ class LightingTransitionBoundary:
         serialized turn through settle prevents stale/ABA workers borrowing it.
         """
         authority = self.authority
+        if snapshot is not None and len(snapshot) == 2:
+            # Per-light static plans must survive intent on unrelated fixtures.
+            # The immutable original lease still rejects same-light owner ABA.
+            with authority.publication_gate():
+                return bool(
+                    self._lock.locked()
+                    and self._delegated_worker_epoch.get() in (None, self._serialized_epoch)
+                    and snapshot[0] == self._serialized_epoch
+                    and authority._valid_raw(snapshot[1])
+                )
         return bool(
             snapshot is not None and not authority._closed
             and self._lock.locked()

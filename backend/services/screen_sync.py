@@ -430,6 +430,12 @@ def _leased_frame(method):
         incoming_lease = kwargs.pop("authority_lease", None)
         desk_neutral_page = kwargs.pop("desk_neutral_page", False)
         physical_acceptance = kwargs.pop("physical_acceptance", None)
+        gaming_comfort = kwargs.pop("gaming_comfort", None)
+        if gaming_comfort is not None and (
+            physical_acceptance is None or physical_acceptance.lux is None
+            or gaming_comfort[0] is not physical_acceptance.lux[1]
+        ):
+            gaming_comfort = None
         bound = signature.bind(self, *args, **kwargs)
         bound.apply_defaults()
         light_id = bound.arguments["light_id"]
@@ -451,6 +457,7 @@ def _leased_frame(method):
                     and 0 <= self._frame_clock() - accepted_at < SCREEN_SYNC_FRESH_SECONDS
                     and (self._authority_validator is None or self._authority_validator(lease, light_id, mode, source))
                     and (final_guard is None or final_guard())
+                    and (physical_acceptance is None or physical_acceptance.current())
                 )
             if not eligible():
                 return False
@@ -469,12 +476,17 @@ def _leased_frame(method):
                         authority, lease, light_id, None, False,
                     )
                 eligible.accept_command = accept
+                def accept_publication():
+                    return physical_acceptance.commit(
+                        authority, lease, light_id, None, False,
+                    )
+                eligible.accept_publication = accept_publication
 
             def refresh_lease():
                 nonlocal lease
                 lease = authority.issue("screen_sync_ack", [light_id])
 
-            token = self._frame_guard.set((eligible, refresh_lease, method.__name__, desk_neutral_page))
+            token = self._frame_guard.set((eligible, refresh_lease, method.__name__, desk_neutral_page, gaming_comfort))
             try:
                 return await method(self, *args, **kwargs)
             finally:
@@ -811,8 +823,12 @@ class ScreenSyncService:
 
     def _record_source_write(self, source: str, light_id: str) -> bool:
         frame = self._frame_guard.get()
-        if frame is not None and not frame[0]():
-            return False
+        if frame is not None:
+            if not frame[0]():
+                return False
+            accept = getattr(frame[0], "accept_publication", None)
+            if accept is not None and accept() is None:
+                return False
         self._transition_boundary.authority.invalidate([light_id])
         observed_at = datetime.now(timezone.utc)
         self._last_color_at = observed_at
@@ -1369,6 +1385,22 @@ class ScreenSyncService:
             return False
         if base.get("on") is False:
             return False
+
+        frame = self._frame_guard.get()
+        if light_id == "2" and frame is not None and frame[4] is not None:
+            from backend.services.light_state_calculator import apply_desk_camera_fill
+            snapshot, floor, twilight = frame[4]
+            original_bri = base.get("bri")
+            # Detached canonical target; never publish the source-only increment
+            # into accepted_gaming_targets. RGB is deliberately irrelevant here.
+            base = apply_desk_camera_fill(
+                {"2": base}, "gaming", period, snapshot.ema_lux,
+                snapshot.baseline_lux, eligible=True, floor_override=floor,
+            )["2"]
+            if isinstance(original_bri, (int, float)):
+                base = {**base, "bri": max(original_bri, base["bri"])}
+            if twilight is not None and isinstance(original_bri, (int, float)):
+                base = {**base, "bri": round(original_bri + (base["bri"] - original_bri) * twilight)}
 
         hue = base.get("hue")
         sat = base.get("sat")

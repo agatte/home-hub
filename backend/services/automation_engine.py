@@ -65,7 +65,7 @@ from backend.services.automation_constants import (
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
 from backend.services.light_applicator import (
-    LightApplicator, LightApplyResult, mode_apply_epoch, mode_physical_validator,
+    LightApplicator, LightApplyResult, mode_apply_epoch, mode_physical_validator, mode_light_receipts,
 )
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.lighting_authority import LightingLease, LightingSemanticField
@@ -80,7 +80,8 @@ from backend.services.living_room_atmosphere import (
     preserve_atmosphere_effect_scope,
 )
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
-from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
+from math import isfinite
+
 from backend.services.navigation_activity_policy import (
     evaluate_override_expiry,
     has_fresh_mode_replacement,
@@ -132,6 +133,8 @@ from backend.services.light_state_calculator import (  # noqa: E402
     adjust_single_light as _adjust_single_light_pure,
     apply_brightness_multiplier as _calc_apply_brightness_multiplier,
     apply_general_desk_lux_balance as _apply_general_desk_lux_balance,
+    apply_desk_camera_fill,
+    DESK_COLORED_FILL,
     apply_functional_weather_brightness as _calc_apply_functional_weather_brightness,
     apply_gaming_day_surround_brightness as _calc_apply_gaming_day_surround_brightness,
     apply_lux_multiplier as _calc_apply_lux_multiplier,
@@ -144,6 +147,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     get_functional_weather_multiplier as _get_functional_weather_multiplier,
     get_mode_state_table as _get_mode_state_table,
     get_time_period as _calc_get_time_period,
+    resolve_evening_start as _calc_resolve_evening_start,
     interpolate_gaming_state,
     lerp_light_state as _lerp_light_state,
     lux_to_multiplier,
@@ -162,6 +166,9 @@ from backend.services.effect_manager import (  # noqa: E402
 # Values are Hue deciseconds. Scheduled evolution stays slower than
 # entry/profile changes; the existing 30-minute evening ramp supplies the
 # small intermediate targets.
+GENERAL_SUNSET_RAMP_MINUTES = 30  # Gradual Home+General twilight handoff (#370)
+
+
 GAMING_TRANSITION_TIME: dict[str, int | None] = {
     "activity_entry": 20,
     "profile_acquire": 20,
@@ -1733,24 +1740,192 @@ class AutomationEngine:
 
     def _read_fresh_bedroom_lux(self) -> tuple[Optional[float], Optional[float]]:
         """Return calibrated bedroom lux while the desktop channel is fresh."""
-        channel = self._bedroom_lux
-        if channel is None:
-            return None, None
-        ema = getattr(channel, "ema_lux", None)
-        baseline = getattr(channel, "baseline_lux", None)
-        if ema is None or baseline is None or float(baseline) <= 0:
-            return None, None
-        is_fresh = getattr(channel, "is_fresh", None)
-        if not callable(is_fresh) or not is_fresh(float(LUX_EMA_STALE_RESET_SECONDS)):
-            return None, None
-        return float(ema), float(baseline)
+        return self._read_room_lux(self._bedroom_lux, "bedroom")
 
-    def _compose_general_state(self, state: dict[str, Any], period: str) -> dict[str, Any]:
+    def _read_room_lux(self, channel, room):
+        """Validate room-owned calibrated samples; diagnostics contain no images."""
+        reason, age = "missing", None
+        ema = baseline = None
+        if channel is not None:
+            reason = "disabled"
+            if (room == "bedroom" or getattr(channel, "enabled", False)) and not getattr(channel, "_paused", False):
+                reason = "invalid"
+                try:
+                    ema = float(channel.ema_lux)
+                    baseline = float(channel.baseline_lux)
+                    age = (datetime.now(timezone.utc) - channel.last_lux_update).total_seconds()
+                    if (isfinite(ema) and ema >= 0 and isfinite(baseline) and baseline > 0
+                            and getattr(channel, "room", room) == room):
+                        reason = "fresh" if 0 <= age <= LUX_STALE_SECONDS else "stale_or_future"
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    pass
+        diagnostics = self.__dict__.setdefault("_room_lux_diagnostics", {})
+        diagnostics[room] = {"source": "desktop" if room == "bedroom" else "latitude",
+                             "age_seconds": age, "reason": reason}
+        return (ema, baseline) if reason == "fresh" else (None, None)
+
+    def _manual_comfort_physical_ok(self):
+        """Physical evidence only; selecting an Activity supplies no location."""
+        from backend.services.presence_fusion import PresenceFusion
+        now = self._now()
+        contrary = self._physical_context_source_reading("latitude")
+        return not (
+            contrary is not None and contrary.zone in {"couch", "bed"}
+            and -2 <= self._physical_context_reading_age(contrary, now)
+            <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and PresenceFusion._is_strongly_present(contrary)
+        )
+
+    def _compose_desk_camera_fill(self, state, mode, period, *, now=None):
+        """Compose L2 comfort under a scoped physical and lux receipt."""
+        physical = mode_physical_validator.get()
+        manual = bool(self._manual_override)
+        if manual:
+            physical = self._capture_desk_physical_validator(manual_comfort=True)
+        zone, _ = self._current_zone_posture()
+        eligible = bool(
+            zone == "desk" and self.house_state == "home"
+            and self._enabled and not self.is_dnd_active()
+            and not self._away_hold and not self._host_return_hold
+            and not self._external_off_detected
+            and self.__dict__.get("_active_scene_override_key") is None
+            and not (mode == "gaming" and self._current_game)
+            and physical is not None and physical()
+        )
+        colored = "hue" in state.get("2", {}) or "sat" in state.get("2", {})
+        if colored or manual:
+            # Only generic static plans. Named games retain their
+            # director/profile authority, including Rust and League of Legends.
+            eligible = bool(
+                eligible and mode_apply_epoch.get() == (
+                    self._mode_transition_revision, self.effective_mode,
+                )
+                and not (mode == "gaming" and self._current_game)
+                and self._active_effect_name is None
+                and not self._gaming_scene_transition_pending
+                and self._gaming_scene_override is None
+                and "2" not in self.manual_light_overrides
+                and "2" not in self._transit_light_overrides
+            )
+        from backend.services.lux_channel import LuxChannel
+        channel = self._bedroom_lux
+        snapshot = channel.snapshot("bedroom", LUX_STALE_SECONDS) if isinstance(channel, LuxChannel) else None
+        guard = getattr(physical, "acceptance_guard", None)
+        if manual or guard is not None:
+            eligible = eligible and snapshot is not None and guard is not None
+        ema, baseline = ((snapshot.ema_lux, snapshot.baseline_lux) if snapshot else
+                         self._read_fresh_bedroom_lux())
+        light_receipt = guard.with_lux(channel, snapshot) if eligible and guard is not None and snapshot is not None else None
+        raw_ema, raw_baseline = ema, baseline
+        if eligible and ema is not None and baseline is not None:
+            ratio = ema / baseline
+            previous = self.__dict__.get("_desk_lux_ratio")
+            if previous is not None and abs(ratio - previous) < 0.10:
+                ratio = previous
+            self.__dict__["_desk_lux_ratio"] = ratio
+            ema, baseline = ratio, 1.0
+        else:
+            self.__dict__.pop("_desk_lux_ratio", None)
+        self.__dict__["_desk_fill_diagnostic"] = {
+            "eligible": eligible, "period": period, "activity": mode,
+            "reason": "physical_lease" if eligible else "no_automatic_desk_lease",
+        }
+        now = now or self._now() if eligible else now
+        floor = self._desk_floor_for_period(
+            period, now, mode=mode, colored=colored,
+        ) if eligible else None
+        result = apply_desk_camera_fill(
+            state, mode, period, ema, baseline, eligible=eligible, floor_override=floor,
+        )
+        progress = self._twilight_progress(period, now) if eligible else None
+        if progress is not None and result.get("2", {}).get("on") is True:
+            # Ease the policy as well as the authored scene: General/day had
+            # its own room-lux balance, and other daytime modes had no new lift.
+            start = state["2"].get("bri")
+            if mode == "general":
+                start = _apply_general_desk_lux_balance(
+                    state, raw_ema, raw_baseline,
+                )["2"].get("bri")
+            if isinstance(start, (int, float)) and "bri" in result["2"]:
+                target = round(start + (result["2"]["bri"] - start) * progress)
+                result = {**result, "2": {**result["2"], "bri": target}}
+        # Manual Activity only lends extra L2 output. Enforce this after
+        # twilight interpolation: General's baseline lux balance may lower the
+        # interpolation start even when the raw fill stage was lift-only.
+        if manual and result.get("2", {}).get("bri", 0) <= state.get("2", {}).get("bri", 0):
+            result = state
+        light = state.get("2", {})
+        reason = "physical_lease" if eligible else "no_automatic_desk_lease"
+        if eligible:
+            if period not in {"evening", "night", "late_night"}:
+                reason = "daylight_policy_unchanged"
+            elif mode not in {"general", "working", "watching", "gaming", "relax", "social", "cooking"}:
+                reason = "unsupported_activity"
+            elif light.get("on") is not True:
+                reason = "off_target_preserved"
+            elif colored:
+                reason = "colored_brightness_floor" if mode in {"gaming", "relax", "social"} else "colored_target_preserved"
+            elif not isinstance(light.get("ct"), (int, float)) or not 333 <= light["ct"] <= 500:
+                reason = "not_warm_ct"
+        self.__dict__["_desk_fill_diagnostic"].update(
+            reason=reason, applied=result != state,
+            lux_available=ema is not None and baseline is not None,
+        )
+        if result != state and eligible and guard is not None and snapshot is not None:
+            receipts = mode_light_receipts.get()
+            if receipts is not None:
+                receipts["2"] = light_receipt
+            else:
+                return state  # No scoped per-light acceptance boundary.
+        return result
+
+    def _twilight_progress(self, period, now):
+        if period != "evening":
+            return None
+        try:
+            weather = self._weather_service.get_cached() if self._weather_service else None
+        except Exception:
+            weather = None
+        start = _calc_resolve_evening_start(
+            self._schedule_config, now, sunset_ts=(weather or {}).get("sunset"),
+        )
+        elapsed = (now - start).total_seconds()
+        total = GENERAL_SUNSET_RAMP_MINUTES * 60
+        return elapsed / total if 0 <= elapsed < total else None
+
+    def _desk_floor_for_period(self, period, now, *, mode=None, colored=False):
+        """Share the same easing with the legacy Watching overlay."""
+        floor = None
+        if period in {"evening", "night"}:
+            schedule = self._schedule_config.weekday if now.weekday() < 5 else self._schedule_config.weekend
+            hour = schedule.winddown_start_hour if period == "evening" else schedule.late_night_start_hour
+            end = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            remaining = (end - now).total_seconds()
+            if 0 < remaining <= WINDDOWN_RAMP_MINUTES * 60:
+                values = DESK_COLORED_FILL if colored else {"evening": 110, "night": 90, "late_night": 70}
+                start_floor = values[period]
+                end_floor = values["night" if period == "evening" else "late_night"]
+                floor = end_floor + (start_floor - end_floor) * remaining / (WINDDOWN_RAMP_MINUTES * 60)
+        progress = self._twilight_progress(period, now)
+        if progress is not None:
+            floor = (160 + (110 - 160) * progress if mode == "watching"
+                     else (DESK_COLORED_FILL["evening"] if colored else 110) * progress)
+        return floor
+
+    def _compose_general_state(self, state: dict[str, Any], period: str, *, now=None) -> dict[str, Any]:
         """Apply fresh Desk lux balance, then shared fixture comfort ceilings."""
         fresh_zone, _ = self._current_zone_posture()
+        physical = mode_physical_validator.get() if period != "day" else None
+        new_fill = bool(period != "day" and physical is not None and physical()
+                        and not self._manual_override)
         if fresh_zone == "desk":
             ema, baseline = self._read_fresh_bedroom_lux()
+            before = state
             state = _apply_general_desk_lux_balance(state, ema, baseline)
+            if new_fill and "2" in before:
+                state = {**state, "2": before["2"]}  # L2 has one lux stage; retain L5 dimming.
+        if period != "day":
+            state = self._compose_desk_camera_fill(state, "general", period, now=now)
         comfort_zone = self._fixture_comfort_zone()
         return _enforce_fixture_comfort_invariants(
             state, "general", period, comfort_zone,
@@ -1768,21 +1943,7 @@ class AutomationEngine:
         rather than in the calculator so the calculator can remain
         agnostic of the camera service object.
         """
-        camera = self._camera_service
-        if camera is None or not getattr(camera, "enabled", False):
-            return None, None
-        if getattr(camera, "_paused", False):
-            return None, None
-        ema = getattr(camera, "ema_lux", None)
-        if ema is None:
-            return None, None
-        last_update = getattr(camera, "last_lux_update", None)
-        if last_update is None:
-            return None, None
-        age = (datetime.now(timezone.utc) - last_update).total_seconds()
-        if age > LUX_STALE_SECONDS:
-            return None, None
-        return float(ema), getattr(camera, "baseline_lux", None)
+        return self._read_room_lux(self._camera_service, "living_room")
 
     def _apply_lux_multiplier(
         self, state: dict[str, Any], mode: str
@@ -1808,6 +1969,15 @@ class AutomationEngine:
         )
         self._last_lux_multiplier = new_mult
         self._last_weather_class = new_class
+        if new_state is state:
+            return state
+        # Latitude owns only the living-room/kitchen brightness input. Do not
+        # propagate its scalar to bedroom fixtures or unrelated accent owners.
+        if any(lid in state for lid in ("1", "3", "4")):
+            new_state = {lid: new_state[lid] if lid in {"1", "3", "4"} else light
+                         for lid, light in state.items()}
+        else:
+            new_state = state
         return new_state
 
     # Class-level aliases kept for back-compat with tests that read these
@@ -3469,7 +3639,7 @@ class AutomationEngine:
 
 
     def _apply_zone_overlay(
-        self, state: dict[str, Any], mode: str, period: str,
+        self, state: dict[str, Any], mode: str, period: str, *, now=None,
     ) -> dict[str, Any]:
         """Zone/posture overlay (shim → calculator).
 
@@ -3488,13 +3658,15 @@ class AutomationEngine:
         # Without it (including manual Activity), retain the earlier 70/50 lift.
         physical = mode_physical_validator.get()
         allow_increased_desk_fill = bool(
-            mode == "watching" and period in {"night", "late_night"}
+            mode == "watching" and period in {"evening", "night", "late_night"}
             and not self._manual_override
             and physical is not None and physical()
         )
         return _calc_apply_zone_overlay(
             state, mode, period, zone, posture, l1_night,
             desk_diffuse_fill=allow_increased_desk_fill,
+            desk_fill_floor=(self._desk_floor_for_period(period, now or self._now(), mode=mode)
+                             if allow_increased_desk_fill else None),
         )
 
     def set_bed_reclined_l1_night(self, value: int) -> None:
@@ -5254,7 +5426,7 @@ class AutomationEngine:
         mode_brightness = self._mode_brightness.get("working", 1.0)
         state = apply_working_brightness(state, mode_brightness)
 
-        lux_ema, lux_baseline = self._read_fresh_camera_lux()
+        lux_ema, lux_baseline = self._read_fresh_bedroom_lux()
         lux_weather_class = self._get_current_weather_condition()
         lux_stage = apply_working_lux(
             state,
@@ -5325,13 +5497,69 @@ class AutomationEngine:
         )
         return apply_working_post_sunset_warmth(state, period)
 
+    def _compose_period_handoff(self, state, mode, period, now):
+        """Ease compatible authored plans; existing owners still apply last.
+
+        Cross-color-space and legacy Game Day plans retain established routing.
+        No invented CT/HSB crossfade or new scene ownership is implied.
+        """
+        if mode not in {"general", "working", "watching", "gaming", "relax", "social", "cooking"}:
+            return state
+        if mode == "gaming" and self._current_game:
+            return state
+        schedule = self._schedule_config.weekday if now.weekday() < 5 else self._schedule_config.weekend
+        left, right, progress = None, None, None
+        if period == "evening":
+            try:
+                weather = self._weather_service.get_cached() if self._weather_service else None
+            except Exception:
+                weather = None
+            start = _calc_resolve_evening_start(
+                self._schedule_config, now, sunset_ts=(weather or {}).get("sunset"),
+            )
+            elapsed = (now - start).total_seconds()
+            if 0 <= elapsed < GENERAL_SUNSET_RAMP_MINUTES * 60:
+                left, right, progress = "day", "evening", elapsed / (GENERAL_SUNSET_RAMP_MINUTES * 60)
+        if period == "night":
+            end = now.replace(hour=schedule.late_night_start_hour, minute=0, second=0, microsecond=0)
+            remaining = (end - now).total_seconds()
+            if 0 < remaining <= WINDDOWN_RAMP_MINUTES * 60:
+                left, right, progress = "night", "late_night", 1 - remaining / (WINDDOWN_RAMP_MINUTES * 60)
+        if left is None:
+            return state
+        left_state = _resolve_activity_state(mode, left)
+        right_state = _resolve_activity_state(mode, right)
+        result = {lid: dict(light) for lid, light in state.items()}
+        skipped = []
+        for lid in left_state.keys() & right_state.keys():
+            a, b = dict(left_state[lid]), dict(right_state[lid])
+            # An authored Off endpoint fades toward zero in the other endpoint's
+            # color space. Explicit user Off remains owned by the applicator.
+            if a.get("on") is False and b.get("on") is True:
+                a = {**b, "on": False, "bri": 0}
+            elif b.get("on") is False and a.get("on") is True:
+                b = {**a, "on": False, "bri": 0}
+            try:
+                result.update(interpolate_gaming_state({lid: a}, {lid: b}, progress))
+            except ValueError:
+                skipped.append(lid)
+        self.__dict__["_period_handoff_diagnostic"] = {
+            "transition": f"{left}_to_{right}", "incompatible_lights": sorted(skipped),
+        }
+        return _enforce_post_sunset_ct_warmth(result, period)
+
     def _capture_mode_physical_validator(self):
+        if self._manual_override:
+            return None
+        return self._capture_desk_physical_validator()
+
+    def _capture_desk_physical_validator(self, *, manual_comfort=False):
         """Read-only final Desk fence, independent of Activity loss dwell.
 
         PresenceReading is immutable; identity is the originating source epoch.
         A refresh cannot extend an already composed plan's capture deadline.
         """
-        if self._manual_override or self.effective_mode == "sleeping":
+        if (self._manual_override and not manual_comfort) or self.effective_mode == "sleeping":
             return None
         from time import monotonic as native_monotonic
         capture_monotonic = native_monotonic()
@@ -5373,9 +5601,10 @@ class AutomationEngine:
                 and self.__dict__.get("_desk_owner_generation", 0) == desk_owner_generation
                 and (not owns_desk or self._desk_activity_owner is desk_owner)
                 and self._physical_context_source_reading("desktop") is desktop
-                and self._resolve_desk_process_authority(
-                    current_now, DeskAuthorityState(),
-                ).disposition == "desk"
+                and (self._manual_comfort_physical_ok() if manual_comfort else
+                     self._resolve_desk_process_authority(
+                         current_now, DeskAuthorityState(),
+                     ).disposition == "desk")
             )
         # V1 and V2 effects reuse the original primitive source-gated commit.
         # Native scene scope remains unresolved and Desk recall fails closed.
@@ -5466,9 +5695,12 @@ class AutomationEngine:
             physical = self._capture_mode_physical_validator()
         token = mode_apply_epoch.set(owner)
         physical_token = mode_physical_validator.set(physical)
+        receipt_token = mode_light_receipts.set({}) if inherited is None else None
         try:
             await self._apply_mode_under_owner(mode, force_resend=force_resend)
         finally:
+            if receipt_token is not None:
+                mode_light_receipts.reset(receipt_token)
             mode_physical_validator.reset(physical_token)
             mode_apply_epoch.reset(token)
 
@@ -5878,6 +6110,8 @@ class AutomationEngine:
             else:
                 state = _resolve_activity_state(mode, period, game)
 
+            state = self._compose_period_handoff(state, mode, period, now)
+
             atmosphere_active = bool(
                 atmosphere_plan is not None and atmosphere_plan.should_apply
             )
@@ -5977,13 +6211,15 @@ class AutomationEngine:
             if not working_day_composed:
                 state = self._gaming_day_surround_brightness(state, mode, period)
             if not working_day_composed:
-                state = self._apply_zone_overlay(state, mode, period)
+                state = self._apply_zone_overlay(state, mode, period, now=now)
             if (
                 not working_day_composed
                 and mode not in WEATHER_SKIP_MODES
             ):
                 state = self._weather_adjust(state)
+            gaming_frame_l2_bri = state.get("2", {}).get("bri")
             if not working_day_composed:
+                state = self._compose_desk_camera_fill(state, mode, period, now=now)
                 comfort_zone = self._fixture_comfort_zone()
                 state = _enforce_fixture_comfort_invariants(
                     state, mode, period, comfort_zone,
@@ -6112,7 +6348,26 @@ class AutomationEngine:
                         self._screen_sync, "publish_accepted_gaming_state", None,
                     )
                     if callable(publish):
-                        publish(state)
+                        # Generic frames have no Desk receipt. Never export a
+                        # physical-only camera increment into their replay cache.
+                        # Keep the ordinary composed baseline (and final caps).
+                        frame_state = state
+                        l2 = state.get("2", {})
+                        if ("hue" in l2 and isinstance(gaming_frame_l2_bri, (int, float))
+                                and l2.get("bri", 0) > gaming_frame_l2_bri):
+                            frame_state = {**state, "2": {**l2, "bri": gaming_frame_l2_bri}}
+                        if isinstance(applied, LightApplyResult):
+                            # A protected/skipped light did not accept this
+                            # composition. Omit it, replacing any older cached
+                            # game target too: releasing that owner must not
+                            # make an unaccepted target replayable. Exact dedup
+                            # matches still represent an acknowledged target.
+                            accepted_ids = applied.successful | applied.deduplicated
+                            frame_state = {
+                                lid: light for lid, light in frame_state.items()
+                                if lid in accepted_ids and lid not in applied.skipped
+                            }
+                        publish(frame_state)
                 self._last_gaming_transition_reason = gaming_transition_reason
                 self._gaming_plan_changed = accepted_plan_changed
             if atmosphere_plan is not None and atmosphere_plan.should_apply:
@@ -6134,6 +6389,7 @@ class AutomationEngine:
         """
         state = ACTIVITY_LIGHT_STATES["social"]
         period = self._get_time_period()
+        state = self._compose_desk_camera_fill(state, "social", period)
         comfort_zone = self._fixture_comfort_zone()
         state = _enforce_fixture_comfort_invariants(
             state, "social", period, comfort_zone,
@@ -6629,6 +6885,26 @@ class AutomationEngine:
     _adjust_single_light = staticmethod(_adjust_single_light_pure)
 
     async def _apply_time_based(self) -> None:
+        """General scheduling uses the same automatic final physical fence."""
+        owner = (self._mode_transition_revision, self.effective_mode)
+        inherited = mode_apply_epoch.get()
+        if inherited is not None and inherited != owner:
+            return
+        physical = mode_physical_validator.get()
+        if inherited is None:
+            physical = self._capture_mode_physical_validator()
+        epoch_token = mode_apply_epoch.set(owner)
+        physical_token = mode_physical_validator.set(physical)
+        receipt_token = mode_light_receipts.set({}) if inherited is None else None
+        try:
+            await self._apply_time_based_under_owner()
+        finally:
+            if receipt_token is not None:
+                mode_light_receipts.reset(receipt_token)
+            mode_physical_validator.reset(physical_token)
+            mode_apply_epoch.reset(epoch_token)
+
+    async def _apply_time_based_under_owner(self) -> None:
         """Apply the time-appropriate light state (weekday/weekend aware)."""
         now = datetime.now(tz=TZ)
         hour = now.hour
@@ -6675,9 +6951,44 @@ class AutomationEngine:
             evening_state = _resolve_activity_state("general", "evening")
             night_state = _resolve_activity_state("general", "night")
             state = _lerp_light_state(evening_state, night_state, progress)
-            state = self._compose_general_state(state, "evening")
+            state = self._compose_general_state(state, "evening", now=now)
             await self._apply_state(state)
             return
+
+        # #370: the sunset-aware period switches from Day to Evening at the
+        # exact weather sunset, which previously stepped all Home/General
+        # fixtures down in a single write. Evolve the existing authored
+        # fixture plan across twilight through the SAME owner-aware applicator.
+        # This is only the general time-rule path; mode/scene/ScreenSync owners
+        # and explicit per-light Off retain their existing priority.
+        sunset_ts = None
+        if self._weather_service is not None:
+            try:
+                cached_weather = self._weather_service.get_cached()
+                if cached_weather:
+                    sunset_ts = cached_weather.get("sunset")
+            except Exception:
+                sunset_ts = None
+        period = _calc_get_time_period(
+            self._schedule_config, now, sunset_ts=sunset_ts,
+        )
+        if period == "evening":
+            evening_start = _calc_resolve_evening_start(
+                self._schedule_config, now, sunset_ts=sunset_ts,
+            )
+            elapsed = (now - evening_start).total_seconds()
+            total = GENERAL_SUNSET_RAMP_MINUTES * 60
+            if 0 <= elapsed < total:
+                progress = elapsed / total
+                state = _lerp_light_state(
+                    _resolve_activity_state("general", "day"),
+                    _resolve_activity_state("general", "evening"),
+                    progress,
+                )
+                state = _enforce_post_sunset_ct_warmth(state, "evening")
+                state = self._compose_general_state(state, "evening", now=now)
+                await self._apply_state(state)
+                return
 
         for start, end, rule in rules:
             if start <= hour < end:
@@ -6712,7 +7023,8 @@ class AutomationEngine:
                     if start >= ramp_end:
                         period = self._get_time_period(now)
                         state = _resolve_activity_state("general", period)
-                        state = self._compose_general_state(state, period)
+                        state = self._compose_period_handoff(state, "general", period, now)
+                        state = self._compose_general_state(state, period, now=now)
                         await self._apply_state(state)
                         return
                     state = rule

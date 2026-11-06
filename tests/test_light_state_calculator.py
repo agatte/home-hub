@@ -12,6 +12,28 @@ from unittest.mock import patch
 
 import pytest
 
+
+@pytest.mark.parametrize("mode", ["gaming", "relax", "social"])
+@pytest.mark.parametrize("period,floor", [("evening", 160), ("night", 120), ("late_night", 95)])
+@pytest.mark.parametrize("lux,scale", [(37, 1.1), (127, 1), (220, .9), (None, 1)])
+def test_colored_desk_fill_is_only_a_bounded_brightness_floor(mode, period, floor, lux, scale):
+    from backend.services.light_state_calculator import apply_desk_camera_fill
+    for bri in (1, 120, 200, 254):
+        state = {"2": {"on": True, "bri": bri, "hue": 46920, "sat": 190},
+                 "5": {"on": True, "bri": 14, "hue": 48000, "sat": 165}}
+        out = apply_desk_camera_fill(state, mode, period, lux, 127, eligible=True)
+        assert out["2"] == {**state["2"], "bri": max(bri, round(floor * scale))}
+        assert out["5"] == state["5"]
+        assert state["2"]["bri"] == bri
+
+
+@pytest.mark.parametrize("change", [{"on": False}, {"ct": 370}, {"hue": -1},
+    {"hue": float("nan")}, {"sat": 255}, {"sat": None}, {"bri": 0}])
+def test_colored_desk_fill_preserves_off_and_invalid_or_mixed_targets(change):
+    from backend.services.light_state_calculator import apply_desk_camera_fill
+    state = {"2": {"on": True, "bri": 1, "hue": 46920, "sat": 190, **change}}
+    assert apply_desk_camera_fill(state, "gaming", "night", 37, 127, eligible=True) is state
+
 from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
     ALL_LIGHT_IDS,

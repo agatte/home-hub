@@ -92,6 +92,7 @@ SYNC = load('screen_sync', classes={'ScreenSyncService': {'get_floor', 'get_cap'
 APP = load('light_applicator', classes={'LightApplyResult': None, 'LightApplicator': {
     'protected_light_ids', 'external_owned_light_ids', '_write_many',
     '_apply_per_light_locked', '_invalidate_screen_sync_cache'}}, namespace={**CALC, **CONSTANTS})
+APP['mode_light_receipts'] = ContextVar('fixture_light_receipts', default=None)
 APP['mode_apply_epoch'] = ContextVar('fixture_mode_epoch', default=None)
 APP['mode_physical_validator'] = ContextVar('fixture_physical_validator', default=None)
 ENGINE = load('automation_engine', classes={'AutomationEngine': {
@@ -237,14 +238,22 @@ class DeskOwnerDispatch(unittest.IsolatedAsyncioTestCase):
     async def test_engine_final_owners(self):
         for owner in ('auto', 'manual_activity', 'manual_light', 'scene', 'effect', 'screen_sync', 'away', 'sleeping', 'disabled'):
             e, _, b, t = runtime()
-            if owner == 'manual_activity': e.manual_override_mode = 'watching'
-            if owner == 'manual_light': e.manual_light_overrides['2'] = object()
-            if owner == 'scene': e._active_scene_override_key = 'fixture'
-            if owner == 'effect': e._active_effect_name, e._active_effect_lights = 'fixture', ['2']
-            if owner == 'screen_sync': e._screen_sync = SimpleNamespace(fresh_owned_light_ids=lambda: {'2'})
-            if owner == 'away': e._away_hold = True
-            if owner == 'sleeping': e.current_mode = 'sleeping'
-            if owner == 'disabled': e._enabled = False
+            if owner == 'manual_activity':
+                e.manual_override_mode = 'watching'
+            if owner == 'manual_light':
+                e.manual_light_overrides['2'] = object()
+            if owner == 'scene':
+                e._active_scene_override_key = 'fixture'
+            if owner == 'effect':
+                e._active_effect_name, e._active_effect_lights = 'fixture', ['2']
+            if owner == 'screen_sync':
+                e._screen_sync = SimpleNamespace(fresh_owned_light_ids=lambda: {'2'})
+            if owner == 'away':
+                e._away_hold = True
+            if owner == 'sleeping':
+                e.current_mode = 'sleeping'
+            if owner == 'disabled':
+                e._enabled = False
             lease = b.authority.issue('static', ['2'])
             async with b.serialized():
                 result = await b.run_write(lambda: t.set_light('2', {'bri': 1}),
@@ -293,13 +302,15 @@ class DeskOwnerDispatch(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(apply())
             try:
                 await asyncio.wait_for(t.entered.wait(), 2)
-                if change == 'expiry': b.authority.invalidate(['2'])
+                if change == 'expiry':
+                    b.authority.invalidate(['2'])
                 if change == 'same-mode-ABA':
                     e.current_mode = 'working'
                     b.authority.invalidate()
                     e.current_mode = 'watching'
                     b.authority.invalidate()
-                if change == 'manual': e.manual_light_overrides['2'] = object()
+                if change == 'manual':
+                    e.manual_light_overrides['2'] = object()
                 t.release.set()
                 self.assertEqual(await asyncio.wait_for(task, 2), change == 'unchanged')
                 self.assertEqual(len(t.calls), int(change == 'unchanged'))

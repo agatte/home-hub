@@ -11,11 +11,16 @@ EMA + stale-reset semantics intentionally mirror ``CameraService`` so the
 engine can read either source by the active mode's room with identical
 duck-typed logic (Part D).
 
-Part C is store-only: nothing consumes the channel yet, so wiring it up is a
-no-op on lighting behavior.
+Acceptance snapshots bind one calibrated publication and its freshness to
+the physical Desk receipt; legacy properties remain available to other consumers.
 """
 
 import logging
+from dataclasses import dataclass
+from functools import wraps
+from math import isfinite
+from threading import RLock
+from time import monotonic
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -31,6 +36,25 @@ LUX_EMA_STALE_RESET_SECONDS = 300  # snap (not blend) after a gap this long
 FUTURE_SKEW_TOLERANCE_S = 2.0
 
 
+@dataclass(frozen=True)
+class LuxSnapshot:
+    room: str
+    generation: int
+    ema_lux: float
+    baseline_lux: float
+    captured_at: datetime
+    deadline: float
+    max_age_s: float
+
+
+def _locked(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 class LuxChannel:
     """One room's smoothed ambient lux + calibration baseline.
 
@@ -41,11 +65,14 @@ class LuxChannel:
     """
 
     def __init__(self, room: str, baseline_lux: Optional[float] = None) -> None:
+        self._lock = RLock()
+        self._generation = 0
         self.room = room
         self._baseline_lux: Optional[float] = baseline_lux
         self._ema_lux: Optional[float] = None
         self._last_update: Optional[datetime] = None
 
+    @_locked
     def update(
         self, raw_lux: float, *, captured_at: Optional[datetime] = None
     ) -> None:
@@ -58,6 +85,8 @@ class LuxChannel:
         instead of blending, so the first post-gap sample doesn't average
         yesterday's room light with today's.
         """
+        if not isfinite(float(raw_lux)) or raw_lux < 0:
+            return
         now = captured_at or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -87,14 +116,18 @@ class LuxChannel:
                 + (1 - LUX_EMA_ALPHA) * self._ema_lux
             )
         self._last_update = now
+        self._generation += 1
 
+    @_locked
     def set_baseline(self, baseline_lux: Optional[float]) -> None:
         """Set the calibrated baseline (from a calibration POST)."""
+        self._generation += 1
         self._baseline_lux = (
             float(baseline_lux) if baseline_lux is not None else None
         )
 
     @property
+    @_locked
     def ema_lux(self) -> Optional[float]:
         """Smoothed lux, or ``None`` until calibrated (no usable baseline)."""
         if self._baseline_lux is None:
@@ -102,24 +135,29 @@ class LuxChannel:
         return self._ema_lux
 
     @property
+    @_locked
     def baseline_lux(self) -> Optional[float]:
         return self._baseline_lux
 
     @property
+    @_locked
     def last_lux_update(self) -> Optional[datetime]:
         return self._last_update
 
     @property
+    @_locked
     def calibrated(self) -> bool:
         return self._baseline_lux is not None
 
+    @_locked
     def is_fresh(self, max_age_s: float) -> bool:
         """True iff a sample landed within ``max_age_s`` seconds."""
         if self._last_update is None:
             return False
         age = (datetime.now(timezone.utc) - self._last_update).total_seconds()
-        return age <= max_age_s
+        return 0 <= age <= max_age_s
 
+    @_locked
     def status(self) -> dict:
         """Observability snapshot. Exposes the RAW smoothed value even when
         uncalibrated (for shadow-logging before the engine consumes it)."""
@@ -132,3 +170,32 @@ class LuxChannel:
                 self._last_update.isoformat() if self._last_update else None
             ),
         }
+
+    @_locked
+    def snapshot(self, room: str, max_age_s: float = 30.0) -> Optional[LuxSnapshot]:
+        """Freeze one calibrated publication and its original monotonic lifetime."""
+        sampled_at = monotonic()
+        if self.room != room or self._last_update is None:
+            return None
+        ema, baseline = self._ema_lux, self._baseline_lux
+        if (ema is None or baseline is None or not isfinite(ema) or ema < 0
+                or not isfinite(baseline) or baseline <= 0):
+            return None
+        age = (datetime.now(timezone.utc) - self._last_update).total_seconds()
+        if not 0 <= age <= max_age_s:
+            return None
+        return LuxSnapshot(room, self._generation, ema, baseline,
+                           self._last_update, sampled_at + max_age_s - age, max_age_s)
+
+    def _matches_locked(self, snapshot: LuxSnapshot) -> bool:
+        """Primitive receipt check; caller holds physical gate then lux lock."""
+        return (
+            monotonic() <= snapshot.deadline
+            and self.room == snapshot.room
+            and self._generation == snapshot.generation
+            and self._last_update == snapshot.captured_at
+            and self._ema_lux == snapshot.ema_lux
+            and self._baseline_lux == snapshot.baseline_lux
+            and 0 <= (datetime.now(timezone.utc) - snapshot.captured_at).total_seconds()
+            <= snapshot.max_age_s
+        )

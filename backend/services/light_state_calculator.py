@@ -122,8 +122,8 @@ MODE_TRANSITION_TIME: dict[str, int] = {
 # cross-room contamination (a bright living-room window was dimming the
 # windowed-but-blinds-closed bedroom). Removed until per-room lux exists
 # (desktop-webcam bedroom sampler — see project_lighting_ml_audit_2026_05_30).
-# The multiplier applies ONE scalar to every light, so even relax only truly
-# "matches" for L1; kept because relax is ambiance, not task light.
+# The pure compatibility helper applies one scalar. The engine restricts its
+# Latitude result to L1 and paired L3/L4; bedroom fixtures use their own channel.
 LUX_MODES = frozenset(("relax",))
 
 # Piecewise-linear curve mapping camera-derived ambient brightness
@@ -220,6 +220,48 @@ def apply_general_desk_lux_balance(
             continue
         light["bri"] = max(1, min(254, int(round(int(light["bri"]) * scale))))
     return result
+
+
+DESK_COLORED_FILL = {"evening": 160, "night": 120, "late_night": 95}
+
+
+def apply_desk_camera_fill(state, mode, period, lux, baseline, *, eligible=False, floor_override=None):
+    """Bounded L2 floor under an existing final physical lease (#370).
+
+    Candidate Hue values, not photometric claims. Quantized lux bands avoid
+    reacting to small EMA jitter. Missing data is neutral; lux never locates a
+    person, turns on a light, converts screen color, or changes L5.
+    """
+    light = state.get("2", {})
+    colored = mode in {"gaming", "relax", "social"} and "ct" not in light and all(
+        isinstance(light.get(key), (int, float)) and low <= light[key] <= high
+        for key, low, high in (("hue", 0, 65535), ("sat", 0, 254))
+    )
+    floors = DESK_COLORED_FILL if colored else DESK_WATCHING_FILL
+    if not eligible or mode not in {"general", "working", "watching", "gaming", "relax", "social", "cooking"} or period not in floors:
+        return state
+    if (light.get("on") is not True or (not colored and ("hue" in light or "sat" in light
+            or not isinstance(light.get("ct"), (int, float))
+            or not 333 <= light["ct"] <= 500))
+            or not isinstance(light.get("bri"), (int, float))
+            or not 1 <= light["bri"] <= 254):
+        return state
+    floor = floors[period] if floor_override is None else floor_override
+    scale = 1.0
+    if lux is not None and baseline is not None and baseline > 0:
+        ratio = lux / baseline
+        # Broad bands complement camera EMA and downstream target deduplication.
+        scale = 1.10 if ratio < 0.5 else 0.90 if ratio > 1.5 else 1.0
+    # Never cut brighter authored targets to our ceiling; only new increments
+    # are bounded to 200. A bright room can reduce an on target by at most 10%.
+    target = max(round(floor * scale), min(max(200, light["bri"]), round(light["bri"] * scale)))
+    if colored:
+        # Saturated light is not equivalent to warm white at the same bri.
+        # Only raise its bounded floor; never dim or rescale authored colors.
+        target = max(light["bri"], min(176, round(floor * scale)))
+    if light["bri"] == target:
+        return state
+    return {**state, "2": {**light, "bri": target}}
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +406,9 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         },
         "evening": {
             "1": {"on": True, "bri": 80,  "ct": 400},
-            "2": {"on": True, "bri": 130, "ct": 370},
+            # Keep the shaded L2 useful after the actual sunset; the prior
+            # 130 target caused an observed room-wide twilight drop (#370).
+            "2": {"on": True, "bri": 170, "ct": 370},
             "3": {"on": True, "bri": 45,  "ct": 400},
             "4": {"on": True, "bri": 45,  "ct": 400},
             "5": {"on": True, "bri": 55,  "ct": 420},
@@ -888,6 +932,37 @@ def get_time_period_static() -> str:
         return "night"
 
 
+def resolve_evening_start(
+    schedule, now: datetime, *, sunset_ts: Optional[float] = None,
+) -> datetime:
+    """Return the trusted sunset (or fixed fallback) used by period routing.
+
+    Share one boundary with the General twilight ramp so neither can
+    disagree on when Day becomes Evening. Wrong-day/unusable weather never
+    changes the existing schedule fallback.
+    """
+    day = schedule.weekday if now.weekday() < 5 else schedule.weekend
+    evening_start = now.replace(
+        hour=day.evening_start_hour, minute=0, second=0, microsecond=0,
+    )
+    if sunset_ts is not None:
+        try:
+            sunset_local = datetime.fromtimestamp(
+                float(sunset_ts), tz=timezone.utc,
+            ).astimezone(TZ)
+        except (TypeError, ValueError, OSError, OverflowError):
+            sunset_local = None
+        if sunset_local is not None and sunset_local.date() == now.date():
+            ramp_start = now.replace(
+                hour=day.ramp_start_hour, minute=0, second=0, microsecond=0,
+            )
+            winddown_start = now.replace(
+                hour=day.winddown_start_hour, minute=0, second=0, microsecond=0,
+            )
+            evening_start = max(ramp_start, min(sunset_local, winddown_start))
+    return evening_start
+
+
 def get_time_period(
     schedule,
     now: Optional[datetime] = None,
@@ -918,27 +993,9 @@ def get_time_period(
     day = schedule.weekday if now.weekday() < 5 else schedule.weekend
 
     if day.ramp_start_hour <= hour < day.winddown_start_hour:
-        evening_start = now.replace(
-            hour=day.evening_start_hour, minute=0, second=0, microsecond=0,
+        evening_start = resolve_evening_start(
+            schedule, now, sunset_ts=sunset_ts,
         )
-        if sunset_ts is not None:
-            try:
-                sunset_local = datetime.fromtimestamp(
-                    float(sunset_ts), tz=timezone.utc,
-                ).astimezone(TZ)
-            except (TypeError, ValueError, OSError, OverflowError):
-                sunset_local = None
-            if sunset_local is not None and sunset_local.date() == now.date():
-                ramp_start = now.replace(
-                    hour=day.ramp_start_hour, minute=0, second=0, microsecond=0,
-                )
-                winddown_start = now.replace(
-                    hour=day.winddown_start_hour, minute=0, second=0, microsecond=0,
-                )
-                evening_start = max(
-                    ramp_start,
-                    min(sunset_local, winddown_start),
-                )
         return "day" if now < evening_start else "evening"
     # late_night wraps midnight: [late_night_start_hour, 24) ∪ [0, wake_hour)
     if hour >= day.late_night_start_hour or hour < day.wake_hour:
@@ -1667,7 +1724,7 @@ def apply_zone_overlay(
     zone: Optional[str],
     posture: Optional[str],
     bed_reclined_l1_night: int = BED_RECLINED_L1_NIGHT_DEFAULT,
-    *, desk_diffuse_fill: bool = True,
+    *, desk_diffuse_fill: bool = True, desk_fill_floor: Optional[float] = None,
 ) -> dict[str, Any]:
     """Zone- and posture-aware per-light adjustments as the final overlay.
 
@@ -1715,6 +1772,8 @@ def apply_zone_overlay(
             # their prior targets until the incremental L2 write is fenced.
             zone_bri_by_period.update(night=70, late_night=50)
         target_bri = zone_bri_by_period.get(period)
+        if desk_diffuse_fill and desk_fill_floor is not None:
+            target_bri = round(desk_fill_floor)
         if target_bri is None:
             return state
         new_state = {lid: dict(ls) for lid, ls in state.items()}
