@@ -33,53 +33,43 @@ def test_one_close_failing_does_not_block_others(caplog):
     rec_close.assert_called()
 
 
-def test_ambient_sound_shutdown_is_called_on_shutdown():
+def test_ambient_sound_and_tts_close_are_called_on_shutdown():
+    """Verify both service closers with one complete, real app lifespan."""
     from backend.services.ambient_sound_service import AmbientSoundService
+    from backend.services.tts_service import TTSService
 
     shutdown_mock = AsyncMock(return_value=None)
-    with patch.object(AmbientSoundService, "shutdown", shutdown_mock):
+    close_mock = AsyncMock(return_value=None)
+    with patch.object(AmbientSoundService, "shutdown", shutdown_mock), \
+         patch.object(TTSService, "close", close_mock):
         with TestClient(app) as _client:
             pass
 
     shutdown_mock.assert_called()
-
-
-def test_tts_close_is_called_on_shutdown():
-    from backend.services.tts_service import TTSService
-
-    close_mock = AsyncMock(return_value=None)
-    with patch.object(TTSService, "close", close_mock):
-        with TestClient(app) as _client:
-            pass
-
     close_mock.assert_called()
 
 
-def test_event_logger_retry_task_started_and_torn_down():
-    """The retry loop is registered into `tasks` so the cancel-and-wait path
-    handles it. Verify it's running while the app is up and gets cancelled
-    on shutdown."""
+def test_event_logger_retry_and_heartbeat_registry_during_lifespan():
+    """Verify retry-task setup/teardown and poll-loop registration together.
+
+    Both contracts use the same healthy startup and /health response; sharing
+    that *one* real lifespan avoids redundant setup without bypassing it.
+    The context manager exit still exercises task cancellation and shutdown.
+    """
     with TestClient(app) as client:
-        # Hit /health to confirm lifespan completed startup.
         r = client.get("/health")
         assert r.status_code == 200
         body = r.json()
-        # New keys exposed by health route.
+
+        # The retry loop is registered and has an initially empty queue.
         assert "event_logger_drops" in body
         assert "event_logger_overflow" in body
         assert "event_logger_queue_depth" in body
         assert body["event_logger_queue_depth"] == 0
 
-
-def test_heartbeat_registry_populated_on_startup():
-    """Every always-on poll loop should register itself before lifespan
-    yields. Camera is opt-in so it's covered separately."""
-    with TestClient(app) as client:
-        body = client.get("/health").json()
+        # Always-on poll loops register before lifespan yields; camera is
+        # opt-in and is covered separately. No Hue/Sonos connection required.
         names = {t["name"] for t in body["tasks"]}
-        # The minimum guaranteed set, regardless of Hue/Sonos connectivity:
-        # automation, scheduler, rule_engine, transit_lighting,
-        # event_logger_retry are always registered.
         required = {
             "automation",
             "scheduler",
@@ -88,6 +78,5 @@ def test_heartbeat_registry_populated_on_startup():
             "event_logger_retry",
         }
         assert required.issubset(names), f"missing: {required - names}"
-        # All freshly-registered tasks should be healthy at boot.
         assert body["status"] == "healthy"
         assert body["tasks_stale"] == []
