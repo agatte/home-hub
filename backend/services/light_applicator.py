@@ -52,6 +52,12 @@ mode_physical_validator: ContextVar[Callable[[], bool] | None] = ContextVar(
 )
 
 
+# Per-light incremental comfort receipts, scoped to one mode composition.
+mode_light_receipts: ContextVar[dict | None] = ContextVar(
+    "homehub_mode_light_receipts", default=None,
+)
+
+
 @dataclass
 class LightApplyResult:
     """Per-light outcome of one bridge application."""
@@ -246,13 +252,18 @@ class LightApplicator:
         physical_commit = getattr(physical_validator, "acceptance_guard", None)
         if owner is not None and physical_commit is not None:
             authority.bind_source_gate(physical_commit.source_context)
+        receipts = mode_light_receipts.get() or {}
         validators = []
         for light_id in light_ids:
+            light_commit = receipts.get(light_id, physical_commit)
+            if light_commit is not None:
+                authority.bind_source_gate(light_commit.source_context)
             lease = authority.issue("static_apply", [light_id], intent_only=True)
-            def valid(lid=light_id, captured=lease):
+            def valid(lid=light_id, captured=lease, guard=receipts.get(light_id)):
                 return (
                     (validator is None or validator())
                     and authority.valid(captured)
+                    and (guard is None or guard.current())
                     # ScreenSync/external ownership publishes intent generations.
                     # Their getters prune mutable state; never run them in
                     # a bridge thread. These direct dict reads are pure.
@@ -261,14 +272,15 @@ class LightApplicator:
                         and lid not in self._st.transit_light_overrides
                     ))
                 )
-            if owner is not None and physical_commit is not None:
+            if owner is not None and light_commit is not None:
                 consumed = [False]
-                def accept(lid=light_id, captured=lease, guard=physical_commit, once=consumed):
+                def accept(lid=light_id, captured=lease, guard=light_commit, once=consumed):
                     if once[0]:
                         return None
                     once[0] = True
                     return guard.commit(authority, captured, lid, self._st, protect)
                 valid.accept_command = accept
+            valid.dispatch_lease = lease
             validators.append(valid)
         try:
             return await self._transition_boundary.write_many(
@@ -389,6 +401,10 @@ class LightApplicator:
         # Keep the pre-change value per light so we can log accurate before/after pairs
         pre_values: dict[str, dict] = {}
         for light_id, state in states.items():
+            receipt = (mode_light_receipts.get() or {}).get(light_id)
+            if receipt is not None and not receipt.current():
+                skipped.add(light_id)
+                continue
             last = self._st.last_applied_per_light.get(light_id)
             if state != last:
                 pre_values[light_id] = (last or {}).copy()
@@ -398,6 +414,12 @@ class LightApplicator:
                 tasks.append(lambda lid=light_id, payload=cmd: hue.set_light(lid, payload))
                 changed_ids.append(light_id)
             else:
+                if receipt is not None:
+                    authority = self._transition_boundary.authority
+                    lease = authority.issue("desk_comfort_dedup", [light_id], intent_only=True)
+                    if receipt.commit(authority, lease, light_id, self._st, True) is None:
+                        skipped.add(light_id)
+                        continue
                 deduplicated.add(light_id)
 
         successful_ids: list[str] = []

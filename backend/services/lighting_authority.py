@@ -8,6 +8,7 @@ itself, but any newer semantic/lifecycle/owner intent still revokes them.
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import copy
 from dataclasses import dataclass
 from typing import Iterable
 from time import monotonic as _native_monotonic
@@ -29,6 +30,8 @@ class DeskAcceptanceGuard:
 
     def __init__(self, engine, presence, monotonic_deadline, *,
                  conflict_not_after=None, source_readings=None):
+        self.lux = None
+        self.comfort_lease = None
         self.engine = engine.__dict__
         self.presence = presence.__dict__
         self.gate = self.presence.get("_physical_source_gate")
@@ -59,24 +62,55 @@ class DeskAcceptanceGuard:
                 "_host_return_hold", "_external_off_detected")),
         )
 
+    def with_lux(self, channel, snapshot):
+        """Derive an L2-only receipt without changing the whole-mode guard."""
+        derived = copy(self)
+        derived.lux = (channel, snapshot)
+        boundary = self.engine.get("_transition_boundary")
+        if boundary is not None:
+            authority = boundary.authority
+            derived.comfort_lease = (authority, authority.issue(
+                "desk_comfort", ["2"], intent_only=True,
+            ))
+        return derived
+
+    def current(self):
+        if self.gate is None or self.snapshot is None:
+            return False
+        with self.gate:
+            with self.lux[0]._lock if self.lux else nullcontext():
+                return self._current_locked()
+
+    def _current_locked(self):
+        accepted_at = _native_monotonic()
+        return (
+            accepted_at <= self.deadline
+            and (self.conflict_not_after is None or accepted_at < self.conflict_not_after)
+            and self.snapshot == self._snapshot()
+            and (self.comfort_lease is None or self.comfort_lease[0]._valid_raw(self.comfort_lease[1]))
+            and (self.lux is None or (self.comfort_lease is not None
+                                    and self.engine.get("_bedroom_lux") is self.lux[0]
+                                    and self.lux[0]._matches_locked(self.lux[1])))
+        )
+
     def commit(self, authority, lease, light_id, state, protect):
         # All policy/getters ran on-loop before this short synchronous scope.
         # Native monotonic sampling also accounts for time spent waiting on it.
         if self.gate is None or self.snapshot is None:
             return None
         with self.gate:
-            accepted_at = _native_monotonic()
-            if (
-                accepted_at > self.deadline
-                or (self.conflict_not_after is not None
-                    and accepted_at >= self.conflict_not_after)
-                or self.snapshot != self._snapshot()
-                or not authority._valid_raw(lease)
-                or (protect and (light_id in state.manual_light_overrides
-                                 or light_id in state.transit_light_overrides))
-            ):
-                return None
-            return LightingAcceptanceReceipt(object(), lease)
+            # Fixed order: PresenceFusion source gate, then LuxChannel lock.
+            # Both release before the worker enters bridge IO.
+            with self.lux[0]._lock if self.lux else nullcontext():
+                if (
+                    not self._current_locked()
+                    or not authority._valid_raw(lease)
+                    or (protect and (light_id in state.manual_light_overrides
+                                     or light_id in state.transit_light_overrides))
+                ):
+                    return None
+                return LightingAcceptanceReceipt(object(), lease)
+
 
 
 @dataclass(frozen=True)

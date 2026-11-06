@@ -135,3 +135,54 @@ class TestStatusShape:
         assert s["ema_lux"] is None
         assert s["calibrated"] is False
         assert s["last_update"] is None
+
+
+class TestAcceptanceSnapshot:
+    def test_frozen_generation_rejects_update_and_calibration_aba(self):
+        from dataclasses import FrozenInstanceError
+        import pytest
+        c = LuxChannel("bedroom", 127)
+        c.update(37)
+        snapshot = c.snapshot("bedroom")
+        assert snapshot is not None
+        with pytest.raises(FrozenInstanceError):
+            snapshot.generation = 99
+        with c._lock:
+            assert c._matches_locked(snapshot)
+        c.set_baseline(200)
+        c.set_baseline(127)
+        with c._lock:
+            assert not c._matches_locked(snapshot)
+        snapshot = c.snapshot("bedroom")
+        c.update(37)
+        with c._lock:
+            assert not c._matches_locked(snapshot)
+
+    def test_invalid_and_out_of_order_publications(self):
+        c = LuxChannel("bedroom", 127)
+        now = datetime.now(timezone.utc)
+        c.update(37, captured_at=now)
+        snapshot = c.snapshot("bedroom")
+        c.update(10, captured_at=now - timedelta(seconds=1))
+        c.update(float("nan"))
+        c.update(-1)
+        assert c.snapshot("bedroom").generation == snapshot.generation
+        assert c.snapshot("living_room") is None
+        c.set_baseline(0)
+        assert c.snapshot("bedroom") is None
+        c.set_baseline(float("inf"))
+        assert c.snapshot("bedroom") is None
+        c.set_baseline(None)
+        assert c.snapshot("bedroom") is None
+
+    def test_expiry_and_future(self):
+        from unittest.mock import patch
+        c = LuxChannel("bedroom", 127)
+        c.update(37)
+        snapshot = c.snapshot("bedroom")
+        with patch("backend.services.lux_channel.monotonic", return_value=snapshot.deadline + .001):
+            with c._lock:
+                assert not c._matches_locked(snapshot)
+        c.update(37, captured_at=datetime.now(timezone.utc) + timedelta(seconds=1))
+        assert c.snapshot("bedroom") is None
+        assert not c.is_fresh(30)

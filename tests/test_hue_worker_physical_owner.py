@@ -77,9 +77,10 @@ def fixture_modules():
         sys.modules[fullname] = module
         spec.loader.exec_module(module)
     base.update(mode_apply_epoch=ContextVar('worker_mode', default=None),
-                mode_physical_validator=ContextVar('worker_physical', default=None))
+                mode_physical_validator=ContextVar('worker_physical', default=None),
+                mode_light_receipts=ContextVar('worker_receipts', default=None))
     selected('automation_engine', {'DeskAuthorityState': None, 'DeskAuthorityDecision': None,
-        'AutomationEngine': {'_desk_activity_owner', '_capture_mode_physical_validator', '_resolve_desk_process_authority',
+        'AutomationEngine': {'_desk_activity_owner', '_capture_mode_physical_validator', '_capture_desk_physical_validator', '_manual_comfort_physical_ok', '_resolve_desk_process_authority',
         '_physical_context_source_reading', '_physical_context_reading_age'}}, base)
     selected('light_applicator', {'LightApplyResult': None, 'LightApplicator': {
         '_write_many', '_apply_per_light_locked'}}, base)

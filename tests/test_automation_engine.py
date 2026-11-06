@@ -702,6 +702,69 @@ class TestAutomationEngine:
         engine._weather_adjust.assert_not_called()
 
     @patch("backend.services.automation_engine.datetime")
+    async def test_general_sunset_evolves_room_instead_of_one_second_dim(
+        self, mock_dt, engine,
+    ):
+        """Reproduce the 2026-11-05 17:37:26 General sunset collapse (#370)."""
+        sunset = datetime(2026, 11, 5, 17, 37, 26, tzinfo=TZ)
+        engine._weather_service = SimpleNamespace(
+            get_cached=lambda: {"sunset": sunset.timestamp()},
+        )
+        engine._current_zone_posture = lambda: (None, None)
+        engine._fixture_comfort_zone = lambda: None
+        engine._apply_state = AsyncMock()
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        expected = [
+            (-1, 190, 140, 90),
+            (0, 190, 140, 90),
+            (900, 180, 110, 67),
+            (1800, 170, 80, 45),
+        ]
+        for seconds, l2, l1, kitchen in expected:
+            mock_dt.now.return_value = sunset + timedelta(seconds=seconds)
+            await engine._apply_time_based()
+            state = engine._apply_state.await_args.args[0]
+            assert state["2"]["bri"] == l2
+            assert state["1"]["bri"] == l1
+            assert state["3"]["bri"] == state["4"]["bri"]
+            assert state["3"]["bri"] == kitchen
+            assert state["5"]["bri"] <= 90
+            assert state["6"] == {"on": False}
+            if seconds >= 0:
+                assert all(
+                    light.get("ct", 333) >= 333
+                    for light in state.values()
+                    if light.get("on")
+                )
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_general_sunset_wrong_day_falls_back_to_fixed_eighteen(
+        self, mock_dt, engine,
+    ):
+        """Stale weather must not move sunset to a different local date."""
+        now = datetime(2026, 11, 5, 17, 37, 26, tzinfo=TZ)
+        engine._weather_service = SimpleNamespace(
+            get_cached=lambda: {"sunset": (now - timedelta(days=1)).timestamp()},
+        )
+        engine._current_zone_posture = lambda: (None, None)
+        engine._fixture_comfort_zone = lambda: None
+        engine._apply_state = AsyncMock()
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        mock_dt.now.return_value = now
+        await engine._apply_time_based()
+        assert engine._apply_state.await_args.args[0]["2"]["bri"] == 190
+
+        mock_dt.now.return_value = now.replace(hour=18, minute=0, second=0, microsecond=0)
+        await engine._apply_time_based()
+        assert engine._apply_state.await_args.args[0]["2"]["bri"] == 190
+
+        mock_dt.now.return_value = now.replace(hour=18, minute=30)
+        await engine._apply_time_based()
+        assert engine._apply_state.await_args.args[0]["2"]["bri"] == 170
+
+    @patch("backend.services.automation_engine.datetime")
     async def test_explicit_sleeping_auto_overnight_renders_awake_general(
         self, mock_dt, engine, mock_hue,
     ):
@@ -7669,6 +7732,7 @@ class TestGeneralBedroomLux136:
             ema_lux=ema,
             baseline_lux=baseline,
             is_fresh=lambda _max_age: fresh,
+            last_lux_update=datetime.now(timezone.utc) - timedelta(seconds=0 if fresh else 301),
         )
 
     def test_desk_general_uses_fresh_bedroom_lux(self, mock_hue, mock_hue_v2, mock_ws):
@@ -7792,3 +7856,545 @@ async def test_reapply_preserves_screen_sync_frame_that_arrived_after_transient(
     await engine.reapply_current_mode(force_resend=True)
 
     assert mock_hue._lights["5"] == screen_owned
+
+
+class TestNightComfort370:
+    """Offline composition matrix; final ownership is covered by real Hue suites."""
+
+    @pytest.fixture
+    def comfort_engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    @pytest.mark.parametrize("skipped", ["2", "5"])
+    @pytest.mark.parametrize("other_outcome", ["successful", "deduplicated"])
+    async def test_skipped_gaming_target_is_not_published(
+        self, comfort_engine, skipped, other_outcome,
+    ):
+        from backend.services.light_applicator import LightApplyResult
+
+        engine = comfort_engine
+        engine._current_mode = "gaming"
+        engine._now = lambda: datetime(2026, 11, 5, 22, 0, tzinfo=TZ)
+        engine._get_time_period = lambda now=None: "night"
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        other = "5" if skipped == "2" else "2"
+        engine._apply_state = AsyncMock(return_value=LightApplyResult(
+            skipped={skipped}, **{other_outcome: {other}},
+        ))
+        hue = SimpleNamespace(set_light=AsyncMock(return_value=True))
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        engine._screen_sync = sync
+        # An older accepted game must also disappear for the skipped light.
+        sync.publish_accepted_gaming_state({
+            lid: {"on": True, "bri": 10, "hue": 1000, "sat": 100}
+            for lid in ("2", "5")
+        })
+        await engine._apply_mode("gaming")
+        composed = engine._apply_state.await_args.args[0]
+        assert sync._accepted_gaming_targets == {other: composed[other]}
+        for rgb in [(0, 0, 0), (255, 255, 255), (200, 0, 10)]:
+            assert not await sync.apply_color(skipped, *rgb, "gaming", period="night")
+        hue.set_light.assert_not_awaited()
+        assert await sync.apply_color(other, 255, 0, 0, "gaming", period="night")
+        assert hue.set_light.await_args.args[0] == other
+
+    @pytest.mark.parametrize("protected", ["manual", "transit"])
+    async def test_skipped_gaming_l2_cannot_relight_after_owner_release(
+        self, mock_hue_v2, mock_ws, protected,
+    ):
+        from backend.services.hue_service import HueService
+
+        hue = HueService("memory", "memory")
+        hue._connected = True
+        calls = []
+
+        def bridge(lid, command):
+            calls.append((str(lid), command.copy()))
+            return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                     for key, value in command.items()]]
+
+        hue._bridge = SimpleNamespace(set_light=bridge)
+        engine = AutomationEngine(hue=hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+        hue.set_transition_boundary(engine.lighting_transition_boundary)
+        sync = ScreenSyncService(hue, target_light_ids=["2", "5"],
+                                 transition_boundary=engine.lighting_transition_boundary)
+        engine._screen_sync = sync
+        engine._current_mode = "gaming"
+        engine._now = lambda: datetime(2026, 11, 5, 22, 0, tzinfo=TZ)
+        engine._get_time_period = lambda now=None: "night"
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        owners = (engine.manual_light_overrides if protected == "manual"
+                  else engine._transit_light_overrides)
+        owners["2"] = datetime.now(timezone.utc) + timedelta(minutes=1)
+        # Explicit Off is the physical state held by the stronger owner.
+        await hue.set_light("2", {"on": False})
+        calls.clear()
+        await engine._apply_mode("gaming")
+        assert not any(lid == "2" for lid, _ in calls)
+        assert "2" not in sync._accepted_gaming_targets
+        assert "5" in sync._accepted_gaming_targets
+        owners.pop("2")
+        calls.clear()
+        for rgb in [(0, 0, 0), (255, 255, 255), (200, 0, 10)]:
+            assert not await sync.apply_color("2", *rgb, "gaming", period="night")
+        assert calls == []
+        # Only a subsequent accepted static write establishes L2 replay again.
+        await engine._apply_mode("gaming")
+        assert any(lid == "2" and cmd["on"] for lid, cmd in calls)
+        assert "2" in sync._accepted_gaming_targets
+
+    async def test_colored_gaming_increment_cannot_escape_into_frame_replay(self, comfort_engine):
+        engine = comfort_engine
+        engine._current_mode = "gaming"
+        engine._now = lambda: datetime(2026, 11, 5, 22, 0, tzinfo=TZ)
+        engine._get_time_period = lambda now=None: "night"
+        engine._current_zone_posture = lambda: ("desk", None)
+        engine._fixture_comfort_zone = lambda: "desk"
+        engine._capture_mode_physical_validator = lambda: lambda: True
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        engine._apply_state = AsyncMock(return_value=True)
+        hue = SimpleNamespace(set_light=AsyncMock(return_value=True))
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        engine._screen_sync = sync
+        engine._bedroom_lux = self.channel("dark")
+        await engine._apply_mode("gaming")
+        composed = engine._apply_state.await_args.args[0]
+        assert composed["2"]["bri"] == 132
+        assert sync._accepted_gaming_targets["2"]["bri"] == 105
+        assert sync._accepted_gaming_targets["5"] == composed["5"]
+        # Losing Desk must not replay a cached physical-only camera increment.
+        engine._current_zone_posture = lambda: (None, None)
+        for rgb in [(0, 0, 0), (255, 255, 255), (200, 0, 10)]:
+            assert await sync.apply_color("2", *rgb, "gaming", period="night", desk_diffuse_fill=True)
+        assert hue.set_light.await_args.args[1]["bri"] == 105
+
+    @pytest.mark.parametrize("mode", ["gaming", "relax", "social"])
+    @pytest.mark.parametrize("context", ["desk", "bed", "couch", "projector", None,
+        "manual", "manual_l2", "transit", "effect", "scene", "game", "no_epoch", "lost"])
+    def test_colored_floor_requires_automatic_owned_desk(self, comfort_engine, mode, context):
+        from backend.services.light_applicator import mode_apply_epoch, mode_physical_validator
+        engine = comfort_engine
+        engine._current_mode = mode
+        engine._now = lambda: datetime(2026, 11, 5, 22, 0, tzinfo=TZ)
+        engine._current_zone_posture = lambda: (context if context in {None, "bed", "couch", "projector"} else "desk", None)
+        engine._bedroom_lux = self.channel("dark")
+        if context == "manual":
+            engine._manual_override = True
+        elif context == "manual_l2":
+            engine._manual_light_overrides["2"] = datetime.now(timezone.utc)
+        elif context == "transit":
+            engine._transit_light_overrides["2"] = datetime.now(timezone.utc) + timedelta(minutes=1)
+        elif context == "effect":
+            # Use the existing effect manager's public ownership projection.
+            engine._effect_manager._active_name = "test"
+        elif context == "scene":
+            engine._gaming_scene_transition_pending = True
+        elif context == "game":
+            engine._current_game = "rust"
+        state = {"2": {"on": True, "bri": 1, "hue": 46920, "sat": 190},
+                 "5": {"on": True, "bri": 14, "hue": 48000, "sat": 165}}
+        owner = mode_apply_epoch.set(None if context == "no_epoch" else (engine._mode_transition_revision, engine.effective_mode))
+        physical = mode_physical_validator.set(lambda: context != "lost")
+        try:
+            out = engine._compose_desk_camera_fill(state, mode, "night")
+        finally:
+            mode_physical_validator.reset(physical)
+            mode_apply_epoch.reset(owner)
+        blocked = context != "desk" and not (context == "game" and mode != "gaming")
+        assert out["2"]["bri"] == (1 if blocked else 132)
+        assert {k: v for k, v in out["2"].items() if k != "bri"} == {k: v for k, v in state["2"].items() if k != "bri"}
+        assert out["5"] == state["5"]
+
+    @pytest.mark.parametrize("kind,expected", [("dark", 132), ("bright", 108), ("stale", 120), ("missing", 120)])
+    @pytest.mark.parametrize("mode", ["gaming", "relax", "social"])
+    def test_colored_floor_uses_bedroom_only(self, comfort_engine, mode, kind, expected):
+        from backend.services.light_applicator import mode_apply_epoch, mode_physical_validator
+        engine = comfort_engine
+        engine._current_mode = mode
+        engine._now = lambda: datetime(2026, 11, 5, 22, 0, tzinfo=TZ)
+        engine._current_zone_posture = lambda: ("desk", None)
+        engine._bedroom_lux = self.channel(kind)
+        engine._camera_service = SimpleNamespace(enabled=True, ema_lux=120, baseline_lux=74,
+                                                 last_lux_update=datetime.now(timezone.utc))
+        state = {"2": {"on": True, "bri": 1, "hue": 6500, "sat": 200}}
+        owner = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+        physical = mode_physical_validator.set(lambda: True)
+        try:
+            out = engine._compose_desk_camera_fill(state, mode, "night")
+        finally:
+            mode_physical_validator.reset(physical)
+            mode_apply_epoch.reset(owner)
+        assert out["2"] == {**state["2"], "bri": expected}
+
+    @staticmethod
+    def channel(kind, room="bedroom"):
+        from backend.services.lux_channel import LuxChannel
+        channel = LuxChannel(room, baseline_lux=100)
+        if kind != "missing":
+            channel.update(20 if kind == "dark" else 200,
+                           captured_at=datetime.now(timezone.utc) - timedelta(seconds=60 if kind == "stale" else 0))
+        return channel
+
+    @pytest.mark.parametrize("mode", ["general", "working", "watching", "gaming", "relax", "social", "cooking"])
+    @pytest.mark.parametrize("period", ["day", "evening", "night", "late_night"])
+    def test_room_source_context_matrix(self, comfort_engine, mode, period):
+        from itertools import product
+        from backend.services.light_applicator import mode_physical_validator
+        engine = comfort_engine
+        engine._now = lambda: datetime(2026, 11, 5, 19, 0, tzinfo=TZ)
+        floors = {"evening": 110, "night": 90, "late_night": 70}
+        # 7 x 4 x 4 x 4 x 4 x 3 = 5,376 synthetic composition rows.
+        for bedroom, latitude, zone, screen in product(
+            ["dark", "bright", "stale", "missing"],
+            ["dark", "bright", "stale", "missing"],
+            ["desk", None, "couch", "bed"], ["white", "dark", "colored"],
+        ):
+            engine._bedroom_lux = self.channel(bedroom)
+            living = self.channel(latitude, "living_room")
+            engine._camera_service = SimpleNamespace(
+                enabled=True, ema_lux=living.ema_lux, baseline_lux=living.baseline_lux,
+                last_lux_update=living.last_lux_update,
+            )
+            engine._current_zone_posture = lambda: (zone, None)
+            engine.__dict__.pop("_desk_lux_ratio", None)
+            l2 = {"on": True, "bri": 1, "ct": 370}
+            if screen == "colored":
+                l2 = {"on": True, "bri": 1, "hue": 5000, "sat": 200}
+            state = {"2": l2, "5": {"on": True, "bri": 14, "ct": 400},
+                     "3": {"on": True, "bri": 45}, "4": {"on": True, "bri": 45}}
+            token = mode_physical_validator.set(lambda: True)
+            try:
+                out = engine._compose_desk_camera_fill(state, mode, period)
+            finally:
+                mode_physical_validator.reset(token)
+            expected = 1
+            if zone == "desk" and period in floors and screen != "colored":
+                expected = round(floors[period] * (1.1 if bedroom == "dark" else .9 if bedroom == "bright" else 1))
+            assert out["2"]["bri"] == expected, (mode, period, bedroom, latitude, zone, screen)
+            assert out["5"] == state["5"]
+            assert out["3"] == out["4"] == state["3"]
+            assert state["2"]["bri"] == 1
+
+    @pytest.mark.parametrize("room", ["bedroom", "living_room"])
+    @pytest.mark.parametrize("bad", ["future", "stale", "nan", "negative", "zero_baseline", "missing", "naive", "wrong_room"])
+    def test_invalid_camera_samples_abstain(self, comfort_engine, room, bad):
+        now = datetime.now(timezone.utc)
+        sample = SimpleNamespace(enabled=True, room=room, ema_lux=20, baseline_lux=100,
+                                 last_lux_update=now)
+        if bad == "future":
+            sample.last_lux_update = now + timedelta(seconds=1)
+        elif bad == "stale":
+            sample.last_lux_update = now - timedelta(seconds=31)
+        elif bad == "nan":
+            sample.ema_lux = float("nan")
+        elif bad == "negative":
+            sample.ema_lux = -1
+        elif bad == "zero_baseline":
+            sample.baseline_lux = 0
+        elif bad == "missing":
+            sample.last_lux_update = None
+        elif bad == "naive":
+            sample.last_lux_update = now.replace(tzinfo=None)
+        else:
+            sample.room = "other_room"
+        assert comfort_engine._read_room_lux(sample, room) == (None, None)
+        assert comfort_engine._room_lux_diagnostics[room]["reason"] != "fresh"
+        if room == "bedroom":
+            from backend.services.light_applicator import mode_apply_epoch, mode_physical_validator
+            engine = comfort_engine
+            engine._current_mode = "gaming"
+            engine._now = lambda: datetime(2026, 11, 5, 22, 0, tzinfo=TZ)
+            engine._current_zone_posture = lambda: ("desk", None)
+            engine._bedroom_lux = sample
+            state = {"2": {"on": True, "bri": 1, "hue": 46920, "sat": 190}}
+            owner = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+            physical = mode_physical_validator.set(lambda: True)
+            try:
+                assert engine._compose_desk_camera_fill(state, "gaming", "night")["2"]["bri"] == 120
+            finally:
+                mode_physical_validator.reset(physical)
+                mode_apply_epoch.reset(owner)
+
+    @pytest.mark.parametrize("owner", ["manual", "dnd", "away", "sleeping", "scene", "external_off", "host_return", "disabled", "lost_physical"])
+    def test_stronger_context_blocks_new_lift(self, comfort_engine, owner):
+        from backend.services.light_applicator import mode_physical_validator
+        engine = comfort_engine
+        engine._bedroom_lux = self.channel("dark")
+        engine._current_zone_posture = lambda: ("desk", None)
+        if owner == "manual":
+            engine._manual_override = "working"
+        elif owner == "dnd":
+            engine.is_dnd_active = lambda: True
+        elif owner == "away":
+            engine._away_hold = True
+        elif owner == "sleeping":
+            engine._current_mode = "sleeping"
+        elif owner == "scene":
+            engine._active_scene_override_key = ("working", "night", "scene", "bridge")
+        elif owner == "external_off":
+            engine._external_off_detected = True
+        elif owner == "host_return":
+            engine._host_return_hold = True
+        elif owner == "disabled":
+            engine._enabled = False
+        state = {"2": {"on": True, "bri": 10, "ct": 370}}
+        token = mode_physical_validator.set(lambda: owner != "lost_physical")
+        try:
+            assert engine._compose_desk_camera_fill(state, "working", "night") == state
+        finally:
+            mode_physical_validator.reset(token)
+
+    def test_latitude_relax_never_scales_bedroom(self, comfort_engine):
+        engine = comfort_engine
+        engine._camera_service = SimpleNamespace(enabled=True, ema_lux=0, baseline_lux=100,
+                                                 last_lux_update=datetime.now(timezone.utc))
+        state = resolve_activity_state("relax", "evening")
+        out = engine._apply_lux_multiplier(state, "relax")
+        assert out["2"] == state["2"] and out["5"] == state["5"]
+        assert out["1"]["bri"] > state["1"]["bri"]
+        assert out["3"] == out["4"]
+
+    @pytest.mark.parametrize("period", ["evening", "night", "late_night"])
+    def test_explicit_off_and_lux_hysteresis(self, comfort_engine, period):
+        from backend.services.light_applicator import mode_physical_validator
+        engine = comfort_engine
+        engine._current_zone_posture = lambda: ("desk", None)
+        engine._bedroom_lux = self.channel("dark")
+        token = mode_physical_validator.set(lambda: True)
+        try:
+            off = {"2": {"on": False, "bri": 0, "ct": 370}}
+            assert engine._compose_desk_camera_fill(off, "working", period) == off
+            engine._bedroom_lux.update(49)
+            state = {"2": {"on": True, "bri": 1, "ct": 370}}
+            first = engine._compose_desk_camera_fill(state, "working", period)
+            # Directly replace EMA to test band jitter independently of upstream EMA.
+            engine._bedroom_lux._ema_lux = 51
+            engine._desk_lux_ratio = .49
+            second = engine._compose_desk_camera_fill(state, "working", period)
+            assert first == second
+        finally:
+            mode_physical_validator.reset(token)
+
+
+    @pytest.mark.parametrize("mode", ["general", "working", "watching", "gaming", "relax", "social", "cooking"])
+    @pytest.mark.parametrize("period", ["evening", "night", "late_night"])
+    async def test_authored_engine_composition(self, comfort_engine, mode, period):
+        """Actual pipeline with a synthetic valid lease, not final acceptance proof."""
+        engine = comfort_engine
+        engine._current_mode = "idle" if mode == "general" else mode
+        engine._get_time_period = lambda now=None: period
+        engine._now = lambda: datetime(2026, 11, 5, 19, 0, tzinfo=TZ)
+        engine._current_zone_posture = lambda: ("desk", None)
+        engine._fixture_comfort_zone = lambda: "desk"
+        engine._capture_mode_physical_validator = lambda: lambda: True
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        engine._apply_state = AsyncMock()
+        targets = []
+        for kind in ["dark", "bright"]:
+            engine._bedroom_lux = self.channel(kind)
+            engine.__dict__.pop("_desk_lux_ratio", None)
+            if mode == "general":
+                # General's scheduler has no new physical lease. Exercise its
+                # actual composition separately without claiming a new fence.
+                from backend.services.light_applicator import mode_physical_validator
+                token = mode_physical_validator.set(lambda: True)
+                try:
+                    state = engine._compose_general_state(resolve_activity_state(mode, period), period)
+                finally:
+                    mode_physical_validator.reset(token)
+            else:
+                await engine._apply_mode(mode)
+                assert engine._apply_state.await_count > 0
+                state = engine._apply_state.await_args.args[0]
+            targets.append(state)
+            cap = {"evening": 75, "night": 60, "late_night": 40}[period]
+            assert not state["5"].get("on") or state["5"].get("bri", 0) <= cap
+            assert state["3"] == state["4"]
+            for light in state.values():
+                assert not ("ct" in light and ("hue" in light or "sat" in light))
+                assert light.get("ct", 333) >= 333
+        if "ct" in targets[0]["2"] and targets[0]["2"].get("on"):
+            assert targets[0]["2"]["bri"] > targets[1]["2"]["bri"]
+        elif mode in {"gaming", "relax", "social"} and targets[0]["2"].get("on"):
+            assert targets[0]["2"]["bri"] >= targets[1]["2"]["bri"]
+            assert targets[0]["2"]["bri"] >= {"evening": 176, "night": 132, "late_night": 105}[period]
+            assert targets[0]["2"]["hue"] == targets[1]["2"]["hue"]
+            assert targets[0]["2"]["sat"] == targets[1]["2"]["sat"]
+            engine._capture_mode_physical_validator = lambda: None
+            await engine._apply_mode(mode)
+            baseline = engine._apply_state.await_args.args[0]
+            assert {lid: light for lid, light in targets[0].items() if lid != "2"} == {
+                lid: light for lid, light in baseline.items() if lid != "2"
+            }
+            assert targets[0]["2"]["hue"] == baseline["2"]["hue"]
+            assert targets[0]["2"]["sat"] == baseline["2"]["sat"]
+        else:
+            assert targets[0]["2"] == targets[1]["2"]
+
+    @pytest.mark.parametrize("mode", ["general", "working", "watching", "gaming", "relax", "social", "cooking"])
+    @pytest.mark.parametrize("boundary", ["sunset", "late_night"])
+    def test_period_handoff_color_safe_and_bounded(self, comfort_engine, mode, boundary):
+        engine = comfort_engine
+        end = datetime(2026, 11, 5, 17, 37, 26, tzinfo=TZ) if boundary == "sunset" else datetime(2026, 11, 5, 23, 0, tzinfo=TZ)
+        engine._weather_service = SimpleNamespace(get_cached=lambda: {"sunset": end.timestamp()})
+        period = "evening" if boundary == "sunset" else "night"
+        left, right = ("day", "evening") if boundary == "sunset" else ("night", "late_night")
+        start = end if boundary == "sunset" else end - timedelta(minutes=30)
+        states = []
+        for seconds in [0, 1, 900, 1799]:
+            now = start + timedelta(seconds=seconds)
+            base = resolve_activity_state(mode, period)
+            state = engine._compose_period_handoff(base, mode, period, now)
+            states.append(state)
+            for lid, light in state.items():
+                assert not ("ct" in light and ("hue" in light or "sat" in light))
+                if "bri" in light:
+                    a = resolve_activity_state(mode, left).get(lid, {}).get("bri", 0)
+                    b = resolve_activity_state(mode, right).get(lid, {}).get("bri", 0)
+                    assert min(a, b) <= light["bri"] <= max(a, b)
+        skipped = engine.__dict__.get("_period_handoff_diagnostic", {}).get("incompatible_lights", [])
+        for lid in states[0]:
+            if lid not in skipped and "bri" in states[0][lid] and "bri" in states[1][lid]:
+                assert abs(states[0][lid]["bri"] - states[1][lid]["bri"]) <= 1
+
+    @pytest.mark.parametrize("period,hour,next_period", [("evening", 21, "night"), ("night", 23, "late_night")])
+    def test_floor_is_continuous_at_night_boundaries(self, comfort_engine, period, hour, next_period):
+        from backend.services.light_applicator import mode_physical_validator
+        engine = comfort_engine
+        engine._bedroom_lux = self.channel("dark")
+        engine._current_zone_posture = lambda: ("desk", None)
+        state = {"2": {"on": True, "bri": 1, "ct": 370}}
+        end = datetime(2026, 11, 5, hour, 0, tzinfo=TZ)
+        token = mode_physical_validator.set(lambda: True)
+        try:
+            engine._now = lambda: end - timedelta(seconds=1)
+            before = engine._compose_desk_camera_fill(state, "working", period)
+            engine._now = lambda: end
+            after = engine._compose_desk_camera_fill(state, "working", next_period)
+            assert abs(before["2"]["bri"] - after["2"]["bri"]) <= 1
+        finally:
+            mode_physical_validator.reset(token)
+
+
+    @pytest.mark.parametrize("owner", ["none", "manual_l2", "transit_l2", "source_lost"])
+    async def test_real_general_scheduler_physical_context_and_owner(self, comfort_engine, mock_hue, owner):
+        engine = comfort_engine
+        now = datetime.now(timezone.utc)
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=now, face_present=True, face_confidence=.9,
+            detection_source="face", zone="desk", posture="upright",
+        ))
+        engine._bedroom_lux = self.channel("dark")
+        engine._bedroom_lux._last_update = now
+        engine._current_mode = "idle"
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        # Drive the real General scheduler while retaining the real physical
+        # clock/source validator and ordinary mock-Hue LightApplicator.
+        late = datetime(2026, 11, 5, 23, 30, tzinfo=TZ)
+        mock_hue._lights["2"]["bri"] = 33
+        if owner == "manual_l2":
+            engine._state.manual_light_overrides["2"] = now
+        elif owner == "transit_l2":
+            engine._state.transit_light_overrides["2"] = now + timedelta(minutes=5)
+        physical = engine._capture_mode_physical_validator()
+        assert physical is not None and physical(), engine._physical_context_source_reading("desktop")
+        original = engine._compose_general_state
+        def compose(state, period, **kwargs):
+            result = original(state, period, **kwargs)
+            if owner == "source_lost":
+                presence.invalidate_source("desktop")
+            return result
+        engine._compose_general_state = compose
+        with patch("backend.services.automation_engine.datetime") as clock:
+            clock.now.side_effect = lambda tz=None: late if tz == TZ else now
+            clock.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            # Physical policy uses the independent injected engine clock.
+            engine._now = lambda: now.astimezone(TZ)
+            await engine._apply_time_based()
+        if owner == "none":
+            assert mock_hue._lights["2"]["bri"] >= 77, engine.__dict__.get("_desk_fill_diagnostic")
+        else:
+            assert mock_hue._lights["2"]["bri"] == 33
+
+
+    @pytest.mark.parametrize("hour", [21, 23])
+    @pytest.mark.parametrize("mode", ["watching", "gaming", "relax", "social"])
+    async def test_watching_actual_pipeline_floor_boundary(self, comfort_engine, hour, mode):
+        engine = comfort_engine
+        engine._current_mode = mode
+        engine._current_zone_posture = lambda: ("desk", None)
+        engine._fixture_comfort_zone = lambda: "desk"
+        engine._capture_mode_physical_validator = lambda: lambda: True
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        engine._apply_state = AsyncMock()
+        engine._bedroom_lux = self.channel("dark")
+        boundary = datetime(2026, 11, 5, hour, 0, tzinfo=TZ)
+        targets = []
+        for now in [boundary - timedelta(seconds=1), boundary]:
+            engine._now = lambda: now
+            await engine._apply_mode(mode)
+            targets.append(engine._apply_state.await_args.args[0]["2"]["bri"])
+        assert abs(targets[0] - targets[1]) <= 1
+
+    @pytest.mark.parametrize("kind,expected", [("dark", 130), ("bright", 85), ("stale", 100), ("missing", 100)])
+    def test_latitude_living_surround_source_matrix(self, comfort_engine, kind, expected):
+        engine = comfort_engine
+        living = self.channel(kind, "living_room")
+        engine._camera_service = SimpleNamespace(enabled=True, ema_lux=living.ema_lux,
+                                                 baseline_lux=living.baseline_lux,
+                                                 last_lux_update=living.last_lux_update)
+        engine._bedroom_lux = self.channel("bright" if kind == "dark" else "dark")
+        state = {lid: {"on": True, "bri": 100, "ct": 400} for lid in ["1", "2", "3", "4", "5", "6"]}
+        out = engine._apply_lux_multiplier(state, "relax")
+        assert out["1"]["bri"] == out["3"]["bri"] == out["4"]["bri"] == expected
+        assert all(out[lid] == state[lid] for lid in ["2", "5", "6"])
+
+    def test_swapped_room_channels_rejected(self, comfort_engine):
+        engine = comfort_engine
+        engine._bedroom_lux = self.channel("dark", "living_room")
+        engine._camera_service = self.channel("dark", "bedroom")
+        engine._camera_service.enabled = True
+        assert engine._read_fresh_bedroom_lux() == (None, None)
+        assert engine._read_fresh_camera_lux() == (None, None)
+
+
+    @pytest.mark.parametrize("mode", ["general", "working", "watching", "cooking"])
+    @pytest.mark.parametrize("lux", ["dark", "bright", "missing"])
+    async def test_desk_lux_policy_is_continuous_at_sunset(self, comfort_engine, mode, lux):
+        from backend.services.light_applicator import mode_physical_validator
+        engine = comfort_engine
+        sunset = datetime(2026, 11, 5, 17, 37, 26, tzinfo=TZ)
+        engine._weather_service = SimpleNamespace(get_cached=lambda: {"sunset": sunset.timestamp()},
+                                                 get_actuator_context=lambda: None)
+        engine._current_mode = "idle" if mode == "general" else mode
+        engine._current_zone_posture = lambda: ("desk", None)
+        engine._fixture_comfort_zone = lambda: "desk"
+        engine._capture_mode_physical_validator = lambda: lambda: True
+        engine._get_desired_effect = lambda *args: None
+        engine._effect_manager.needs_reconcile = lambda desired: False
+        engine._apply_state = AsyncMock()
+        engine._bedroom_lux = self.channel(lux)
+        targets = []
+        for now in [sunset - timedelta(seconds=1), sunset, sunset + timedelta(seconds=1)]:
+            engine._now = lambda: now
+            period = engine._get_time_period(now)
+            if mode == "general":
+                state = engine._compose_period_handoff(resolve_activity_state(mode, period), mode, period, now)
+                token = mode_physical_validator.set(lambda: True)
+                try:
+                    state = engine._compose_general_state(state, period, now=now)
+                finally:
+                    mode_physical_validator.reset(token)
+            else:
+                await engine._apply_mode(mode)
+                state = engine._apply_state.await_args.args[0]
+            targets.append(state["2"]["bri"])
+        assert max(targets) - min(targets) <= 1, (mode, lux, targets)

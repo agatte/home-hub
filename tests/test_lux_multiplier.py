@@ -156,13 +156,13 @@ def _make_engine(mock_hue, mock_hue_v2, mock_ws) -> AutomationEngine:
 
 def _fake_camera(ema_lux: float | None, *, age_seconds: float = 0.0,
                  enabled: bool = True, paused: bool = False,
-                 baseline_lux: float | None = None) -> SimpleNamespace:
+                 baseline_lux: float | None = 90.0) -> SimpleNamespace:
     """Build a duck-typed stand-in for the camera service.
 
     The engine reads ``enabled``, ``_paused``, ``ema_lux``, ``last_lux_update``,
     and ``baseline_lux`` via getattr — SimpleNamespace matches exactly without
-    needing MediaPipe. ``baseline_lux=None`` simulates a legacy calibration
-    (no baseline persisted yet) and should make the curve fall back to 90.
+    needing MediaPipe. ``baseline_lux=None`` means no valid room calibration
+    and must abstain. The default fixture represents a calibrated 90-lux room.
     """
     last = None
     if ema_lux is not None:
@@ -326,30 +326,29 @@ class TestApplyLuxMultiplierArithmetic:
         # User's room calibrates at lux=141. At lux=141 the multiplier must
         # be 1.00 → bri must equal the untouched base value.
         engine.set_camera_service(_fake_camera(141.0, baseline_lux=141.0))
-        state = {"2": {"on": True, "bri": 200}}
+        state = {"1": {"on": True, "bri": 200}}
         result = engine._apply_lux_multiplier(state, "relax")
-        assert result["2"]["bri"] == 200  # no modulation at baseline
+        assert result["1"]["bri"] == 200  # no modulation at baseline
 
     def test_baseline_dark_room_lifts_bri(self, engine):
         # lux=91 < baseline=141 → effective=40 → 1.20 lift.
         engine.set_camera_service(_fake_camera(91.0, baseline_lux=141.0))
-        state = {"2": {"on": True, "bri": 200}}
+        state = {"1": {"on": True, "bri": 200}}
         result = engine._apply_lux_multiplier(state, "relax")
         # 200 * 1.20 = 240.
-        assert result["2"]["bri"] == 240
+        assert result["1"]["bri"] == 240
 
     def test_baseline_bright_room_dims_bri(self, engine):
         # lux=231 > baseline=141 → full dim (×0.85).
         engine.set_camera_service(_fake_camera(231.0, baseline_lux=141.0))
-        state = {"2": {"on": True, "bri": 200}}
+        state = {"1": {"on": True, "bri": 200}}
         result = engine._apply_lux_multiplier(state, "relax")
-        assert result["2"]["bri"] == 170  # int(200 * 0.85)
+        assert result["1"]["bri"] == 170  # int(200 * 0.85)
 
-    def test_missing_baseline_falls_back_to_90(self, engine):
-        # Legacy calibration without baseline_lux — the engine defaults to 90,
-        # preserving the original (pre-fix) behavior. lux=141 → 0.915×.
+    def test_missing_baseline_abstains(self, engine):
+        # No valid calibrated room baseline means no brightness adjustment.
         engine.set_camera_service(_fake_camera(141.0, baseline_lux=None))
-        state = {"2": {"on": True, "bri": 200}}
+        state = {"1": {"on": True, "bri": 200}}
         result = engine._apply_lux_multiplier(state, "relax")
-        # int(200 * 0.915) = 183
-        assert result["2"]["bri"] == 183
+        assert result is state
+        assert result["1"]["bri"] == 200

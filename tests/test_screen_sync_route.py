@@ -1610,12 +1610,25 @@ async def test_diffuse_fill_source_loss_at_bridge_dispatch(desk_fill_rig):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["missing", "latitude_aba", "unchanged"])
-async def test_diffuse_fill_at_final_hue_acceptance(desk_fill_rig, change, monkeypatch):
+@pytest.mark.parametrize("change", ["missing", "latitude_aba", "unchanged", "lux_update", "lux_calibration_aba", "lux_expiry"])
+@pytest.mark.parametrize("rgb", [(0, 0, 0), (255, 255, 255), (200, 0, 10)])
+async def test_diffuse_fill_at_final_hue_acceptance(desk_fill_rig, change, monkeypatch, rgb):
     from threading import Event, Thread
     from backend.services.hue_service import HueService
 
     req, engine, sync, presence, _ = desk_fill_rig
+    if change.startswith("lux_"):
+        from backend.services.lux_channel import LuxChannel
+        engine._current_mode = "gaming"
+        engine._manual_override = False
+        engine._override_mode = None
+        channel = LuxChannel("bedroom", 127)
+        channel.update(37)
+        engine._bedroom_lux = req.app.state.bedroom_lux = channel
+        sync.publish_accepted_gaming_state({
+            "2": {"on": True, "bri": 40, "hue": 46920, "sat": 190},
+            "5": {"on": True, "bri": 14, "hue": 48000, "sat": 165},
+        })
     hue = HueService("memory", "memory")
     hue._connected = True
     calls = []
@@ -1649,6 +1662,14 @@ async def test_diffuse_fill_at_final_hue_acceptance(desk_fill_rig, change, monke
                         captured_at=datetime.now(timezone.utc), face_present=True,
                         detection_source="yolo", zone="couch"))
                     presence.invalidate_source("latitude")
+                elif change == "lux_update":
+                    channel.update(37)
+                elif change == "lux_calibration_aba":
+                    channel.set_baseline(200)
+                    channel.set_baseline(127)
+                elif change == "lux_expiry":
+                    import backend.services.lux_channel as lux_module
+                    monkeypatch.setattr(lux_module, "monotonic", lambda: 10**20)
                 published.set()
             worker = Thread(target=publish)
             worker.start()
@@ -1657,7 +1678,7 @@ async def test_diffuse_fill_at_final_hue_acceptance(desk_fill_rig, change, monke
             assert not worker.is_alive()
         return result
     monkeypatch.setattr(boundary, "validate_dispatch", validate)
-    await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    await receive_screen_color(ScreenColorReport(r=rgb[0], g=rgb[1], b=rgb[2]), req)
     assert raced
     assert any(lid == "2" for lid, _ in calls) is (change == "unchanged")
     if change != "unchanged":
@@ -1666,17 +1687,76 @@ async def test_diffuse_fill_at_final_hue_acceptance(desk_fill_rig, change, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rgb", [(0, 0, 0), (255, 255, 255), (200, 0, 10)])
+@pytest.mark.parametrize("lose_source", [False, True])
+async def test_gaming_camera_floor_is_gated_even_with_injected_flag(desk_fill_rig, rgb, lose_source):
+    """Generic frames refresh an accepted plan, not Watching's RGB envelope."""
+    req, engine, sync, presence, hue = desk_fill_rig
+    engine._current_mode = "gaming"
+    engine._manual_override = False
+    engine._override_mode = None
+    from backend.services.lux_channel import LuxChannel
+    engine._bedroom_lux = LuxChannel("bedroom", baseline_lux=127)
+    engine._bedroom_lux.update(37)
+    base = {"2": {"on": True, "bri": 40, "hue": 46920, "sat": 190},
+            "5": {"on": True, "bri": 14, "hue": 48000, "sat": 165}}
+    sync.publish_accepted_gaming_state(base)
+    original = sync.apply_color
+    async def inspect(*args, **kwargs):
+        assert kwargs["desk_diffuse_fill"] is False
+        assert kwargs["physical_acceptance"] is None
+        if lose_source:
+            presence.invalidate_source("desktop")
+        # Even a mistakenly enabled flag cannot reach the RGB floor pipeline.
+        kwargs["desk_diffuse_fill"] = True
+        return await original(*args, **kwargs)
+    sync.apply_color = inspect
+    result = await receive_screen_color(ScreenColorReport(r=rgb[0], g=rgb[1], b=rgb[2]), req)
+    assert result["applied"]
+    for lid in ("2", "5"):
+        assert {key: hue.last_for(lid)[key] for key in base[lid]} == base[lid]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("period,ceiling", [("night", 70), ("late_night", 50)])
-async def test_manual_static_fill_fallback_at_hue_worker(desk_fill_rig, monkeypatch, period, ceiling):
+@pytest.mark.parametrize("mode", ["watching", "gaming", "relax", "social"])
+@pytest.mark.parametrize("lose_source", [True, False])
+async def test_manual_static_fill_fallback_at_hue_worker(desk_fill_rig, monkeypatch, period, ceiling, mode, lose_source):
     from threading import Event
     from backend.services.hue_service import HueService
-    from backend.services.light_applicator import LightApplicator, mode_apply_epoch, mode_physical_validator
+    from backend.services.light_applicator import LightApplicator, mode_apply_epoch, mode_physical_validator, mode_light_receipts
 
     _, engine, sync, presence, _ = desk_fill_rig
-    assert engine._capture_mode_physical_validator() is None
+    receipts = {}
+    manual = mode == "watching"
+    engine._current_mode = mode
+    engine._manual_override = manual
+    engine._override_mode = mode if manual else None
+    if manual:
+        assert engine._capture_mode_physical_validator() is None
     # Compose while Desk is present, then lose it after Hue's loop validation.
-    states = engine._apply_zone_overlay({"2": {"on": True, "bri": 10, "ct": 400},
-        "5": {"on": True, "bri": 14, "ct": 400}}, "watching", period)
+    states = {"2": {"on": True, "bri": 10, "ct": 400},
+              "5": {"on": True, "bri": 14, "ct": 400}}
+    if manual:
+        states = engine._apply_zone_overlay(states, mode, period)
+    else:
+        from backend.services.lux_channel import LuxChannel
+        engine._bedroom_lux = LuxChannel("bedroom", baseline_lux=127)
+        engine._bedroom_lux.update(37)
+        states["2"] = {"on": True, "bri": 10, "hue": 46920, "sat": 190}
+        epoch = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+        physical = engine._capture_mode_physical_validator()
+        assert physical is not None and physical()
+        guard = mode_physical_validator.set(physical)
+        receipt_token = mode_light_receipts.set(receipts)
+        try:
+            states = engine._compose_desk_camera_fill(states, mode, period)
+        finally:
+            mode_light_receipts.reset(receipt_token)
+            mode_physical_validator.reset(guard)
+            mode_apply_epoch.reset(epoch)
+        ceiling = 132 if period == "night" else 105
+        assert states["2"]["bri"] == ceiling
     hue = HueService("memory", "memory")
     hue._connected = True
     calls = []
@@ -1707,10 +1787,12 @@ async def test_manual_static_fill_fallback_at_hue_worker(desk_fill_rig, monkeypa
     async def apply():
         owner = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
         guard = mode_physical_validator.set(engine._capture_mode_physical_validator())
+        receipt_token = mode_light_receipts.set(receipts)
         try:
             async with boundary.serialized():
                 return await app._apply_per_light_locked(states, None)
         finally:
+            mode_light_receipts.reset(receipt_token)
             mode_physical_validator.reset(guard)
             mode_apply_epoch.reset(owner)
     task = asyncio.create_task(apply())
@@ -1718,12 +1800,20 @@ async def test_manual_static_fill_fallback_at_hue_worker(desk_fill_rig, monkeypa
         async with asyncio.timeout(5):
             while not entered.is_set():
                 await asyncio.sleep(0.001)
-        presence.invalidate_source("desktop")
+        if lose_source:
+            presence.invalidate_source("desktop")
     finally:
         release.set()
         await task
-    assert next(command["bri"] for lid, command in calls if lid == "2") == ceiling
-    assert next(command["bri"] for lid, command in calls if lid == "5") == 14
+    if manual or not lose_source:
+        command = next(command for lid, command in calls if lid == "2")
+        assert command["bri"] == ceiling
+        assert next(command["bri"] for lid, command in calls if lid == "5") == 14
+        if not manual:
+            assert (command["hue"], command["sat"]) == (46920, 190)
+            assert "ct" not in command
+    else:
+        assert not calls  # Whole automatic apply is physically fenced.
 
 
 @pytest.mark.parametrize("age_seconds,manual,expected_l2", [
@@ -1758,3 +1848,296 @@ def test_static_increment_requires_fresh_owned_desk_fence(
         mode_physical_validator.reset(token)
     assert state["2"]["bri"] == expected_l2
     assert state["5"]["bri"] == 14
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["manual", "gaming_frame"])
+@pytest.mark.parametrize("change", ["unchanged", "source_loss", "source_aba", "lux_update",
+    "lux_calibration_aba", "lux_expiry", "activity_aba", "owner_aba", "off"])
+async def test_per_light_comfort_receipt_at_memory_worker(desk_fill_rig, monkeypatch, path, change):
+    """Actual Hue worker pauses after composition; only L2 owns the lux receipt."""
+    from dataclasses import replace
+    from threading import Event
+    from backend.services.hue_service import HueService
+    from backend.services.light_applicator import mode_apply_epoch, mode_light_receipts
+    from backend.services.lux_channel import LuxChannel
+
+    req, engine, sync, presence, _ = desk_fill_rig
+    engine._current_mode = "gaming" if path == "gaming_frame" else "watching"
+    engine._manual_override = path == "manual"
+    engine._override_mode = "watching" if path == "manual" else None
+    channel = LuxChannel("bedroom", 127)
+    channel.update(37)
+    engine._bedroom_lux = req.app.state.bedroom_lux = channel
+    hue = HueService("memory", "memory")
+    hue._connected = True
+    calls = []
+    def bridge(lid, command):
+        assert not presence._physical_source_gate._is_owned()
+        assert not channel._lock._is_owned()
+        calls.append((str(lid), command.copy()))
+        return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                 for key, value in command.items()]]
+    hue._bridge = SimpleNamespace(set_light=bridge)
+    boundary = engine.lighting_transition_boundary
+    hue.set_transition_boundary(boundary)
+    sync._hue = engine._hue = hue
+    assert sync._transition_boundary is boundary
+    entered, release = Event(), Event()
+    original = boundary.dispatch_snapshot_valid
+    def paused(snapshot):
+        entered.set()
+        assert release.wait(5)
+        return original(snapshot)
+    monkeypatch.setattr(boundary, "dispatch_snapshot_valid", paused)
+    baseline = {
+        "1": {"on": True, "bri": 80, "ct": 400},
+        "2": {"on": True, "bri": 70, "ct": 400},
+        "3": {"on": True, "bri": 30, "ct": 400},
+        "4": {"on": True, "bri": 30, "ct": 400},
+        "5": {"on": True, "bri": 14, "ct": 400},
+    }
+    receipts = {}
+    if path == "gaming_frame":
+        baseline["2"] = {"on": True, "bri": 40, "hue": 46920, "sat": 190}
+        sync.publish_accepted_gaming_state(baseline)
+    async def apply():
+        if path == "gaming_frame":
+            return await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+        assert engine._capture_mode_physical_validator() is None
+        epoch = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+        token = mode_light_receipts.set(receipts)
+        try:
+            states = engine._compose_desk_camera_fill(baseline, "watching", "night")
+            assert states["2"]["bri"] == 99
+            assert states["1"] == baseline["1"]
+            return await engine._applicator.apply_state(states)
+        finally:
+            mode_light_receipts.reset(token)
+            mode_apply_epoch.reset(epoch)
+    task = asyncio.create_task(apply())
+    try:
+        async with asyncio.timeout(5):
+            while not entered.is_set():
+                await asyncio.sleep(.001)
+        if change == "source_loss":
+            presence.invalidate_source("desktop")
+        elif change == "source_aba":
+            reading = presence.get_source_reading("desktop")
+            presence.on_observation(replace(reading))
+            presence.on_observation(reading)
+        elif change == "lux_update":
+            channel.update(37)
+        elif change == "lux_calibration_aba":
+            channel.set_baseline(200)
+            channel.set_baseline(127)
+        elif change == "lux_expiry":
+            # Advance only lux's monotonic receipt clock, not physical/frame age.
+            import backend.services.lux_channel as lux_module
+            monkeypatch.setattr(lux_module, "monotonic", lambda: 10**20)
+        elif change == "activity_aba":
+            previous = engine._override_mode
+            engine._override_mode = "working"
+            engine._override_mode = previous
+        elif change in {"owner_aba", "off"}:
+            boundary.authority.invalidate(["2"])
+            if change == "off":
+                engine.manual_light_overrides["2"] = datetime.now(timezone.utc)
+            else:
+                boundary.authority.invalidate(["2"])
+    finally:
+        release.set()
+        await task
+    l2 = [command for lid, command in calls if lid == "2"]
+    assert bool(l2) is (change == "unchanged")
+    if l2:
+        assert l2[0]["bri"] == (99 if path == "manual" else 132)
+        assert not ({"ct", "hue"} <= l2[0].keys())
+    if change != "activity_aba":
+        independent = {"1", "3", "4", "5"} if path == "manual" else {"5"}
+        assert independent <= {lid for lid, _ in calls}
+        assert next(command["bri"] for lid, command in calls if lid == "5") == 14
+        if path == "manual":
+            assert next(command for lid, command in calls if lid == "3") == next(
+                command for lid, command in calls if lid == "4")
+    if path == "gaming_frame":
+        assert sync._accepted_gaming_targets["2"] == baseline["2"]
+
+
+@pytest.mark.asyncio
+async def test_continuous_gaming_comfort_recomputes_without_cached_lift(desk_fill_rig):
+    from backend.services.lux_channel import LuxChannel
+    req, engine, sync, presence, hue = desk_fill_rig
+    engine._current_mode = "gaming"
+    engine._manual_override = False
+    engine._override_mode = None
+    channel = LuxChannel("bedroom", 127)
+    channel.update(37)
+    engine._bedroom_lux = req.app.state.bedroom_lux = channel
+    # Exercise successive leases, real worker receipts and ACK cache publication,
+    # not only the synchronous fake transport used by the route fixtures.
+    from backend.services.hue_service import HueService
+    hue = HueService("memory", "memory")
+    hue._connected = True
+    calls = []
+    def bridge(lid, command):
+        assert not presence._physical_source_gate._is_owned()
+        assert not channel._lock._is_owned()
+        calls.append((str(lid), command.copy()))
+        return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                 for key, value in command.items()]]
+    hue._bridge = SimpleNamespace(set_light=bridge)
+    hue.set_transition_boundary(engine.lighting_transition_boundary)
+    sync._hue = engine._hue = hue
+    def last_for(lid):
+        return next(command for target, command in reversed(calls) if target == lid)
+    base = {"2": {"on": True, "bri": 40, "hue": 46920, "sat": 190},
+            "5": {"on": True, "bri": 14, "hue": 48000, "sat": 165}}
+    sync.publish_accepted_gaming_state(base)
+    for rgb in [(0, 0, 0), (255, 255, 255), (200, 0, 10)]:
+        result = await receive_screen_color(ScreenColorReport(r=rgb[0], g=rgb[1], b=rgb[2]), req)
+        assert result["applied"]
+        assert last_for("2")["bri"] == 132
+        assert last_for("2")["hue"] == 46920
+        assert last_for("5")["bri"] == 14
+    presence.invalidate_source("desktop")
+    await receive_screen_color(ScreenColorReport(r=255, g=255, b=255), req)
+    assert last_for("2")["bri"] == 40
+    assert sync._accepted_gaming_targets == base
+    presence.on_observation(PresenceReading(source="desktop", captured_at=datetime.now(timezone.utc),
+        face_present=True, detection_source="face", zone="desk"))
+    channel.set_baseline(10)  # Bright relative to the new calibration.
+    await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    assert last_for("2")["bri"] == 108
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["general", "watching", "working", "gaming", "relax", "social", "cooking"])
+async def test_manual_activity_real_pipeline_lends_only_l2(desk_fill_rig, mode):
+    from backend.services.hue_service import HueService
+    from backend.services.lux_channel import LuxChannel
+    _, engine, sync, presence, _ = desk_fill_rig
+    engine._current_mode = "idle" if mode == "general" else mode
+    engine._manual_override = True
+    engine._override_mode = mode
+    engine._get_time_period = lambda now=None: "night"
+    engine._get_desired_effect = lambda *args: None
+    engine._effect_manager.needs_reconcile = lambda desired: False
+    hue = HueService("memory", "memory")
+    hue._connected = True
+    calls = []
+    def bridge(lid, command):
+        calls.append((str(lid), command.copy()))
+        return [[{"success": {f"/lights/{lid}/state/{key}": value}}
+                 for key, value in command.items()]]
+    hue._bridge = SimpleNamespace(set_light=bridge)
+    hue.set_transition_boundary(engine.lighting_transition_boundary)
+    sync._hue = engine._hue = hue
+    assert engine._capture_mode_physical_validator() is None
+    await engine._apply_mode(mode, force_resend=True)
+    baseline = dict(calls)
+    assert baseline
+    calls.clear()
+    channel = LuxChannel("bedroom", 127)
+    channel.update(37)
+    engine._bedroom_lux = channel
+    await engine._apply_mode(mode, force_resend=True)
+    composed = dict(calls)
+    assert composed.keys() == baseline.keys()
+    for lid in baseline:
+        if lid != "2":
+            assert {k: v for k, v in composed[lid].items() if k != "transitiontime"} == {
+                k: v for k, v in baseline[lid].items() if k != "transitiontime"}, (mode, lid)
+    assert composed["2"]["bri"] >= baseline["2"]["bri"]
+    assert composed["3"] == composed["4"]
+    assert not ({"ct", "hue"} <= composed["2"].keys())
+    assert composed["5"]["bri"] == baseline["5"]["bri"]
+
+
+@pytest.mark.parametrize("twilight", [0.0, 0.5, 1.0])
+def test_manual_general_twilight_never_dims_authored_l2(desk_fill_rig, twilight):
+    """#370: a twilight lux balance may not undo manual L2 no-dimming."""
+    from backend.services.light_applicator import mode_apply_epoch, mode_light_receipts
+    from backend.services.lux_channel import LuxChannel
+
+    _, engine, _, _, _ = desk_fill_rig
+    engine._current_mode = "idle"
+    engine._manual_override = True
+    engine._override_mode = "general"
+    engine._twilight_progress = lambda period, now: twilight
+    channel = LuxChannel("bedroom", 127)
+    channel.update(127)
+    engine._bedroom_lux = channel
+    authored = {"2": {"on": True, "bri": 200, "ct": 370},
+                "5": {"on": True, "bri": 25, "ct": 420}}
+
+    receipts = {}
+    epoch = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+    scope = mode_light_receipts.set(receipts)
+    try:
+        result = engine._compose_desk_camera_fill(authored, "general", "evening")
+    finally:
+        mode_light_receipts.reset(scope)
+        mode_apply_epoch.reset(epoch)
+
+    assert engine._desk_fill_diagnostic["eligible"] is True
+    assert result["2"]["bri"] >= authored["2"]["bri"], (twilight, result)
+    assert result["5"] == authored["5"]
+    assert authored["2"]["bri"] == 200
+
+
+@pytest.mark.parametrize("blocker", ["uncalibrated", "wrong_room", "future", "missing",
+    "stale", "dnd", "scene", "transit", "manual_light", "sleeping", "off", "contrary"])
+def test_manual_per_light_comfort_requires_real_qualified_inputs(desk_fill_rig, blocker):
+    from backend.services.light_applicator import mode_apply_epoch, mode_light_receipts
+    from backend.services.lux_channel import LuxChannel
+    _, engine, _, presence, _ = desk_fill_rig
+    channel = LuxChannel("living_room" if blocker == "wrong_room" else "bedroom",
+                         None if blocker == "uncalibrated" else 127)
+    if blocker != "missing":
+        age = 31 if blocker == "stale" else -1 if blocker == "future" else 0
+        channel.update(37, captured_at=datetime.now(timezone.utc) - timedelta(seconds=age))
+    engine._bedroom_lux = channel
+    if blocker == "dnd":
+        engine.is_dnd_active = lambda: True
+    elif blocker == "scene":
+        engine._active_scene_override_key = ("watching", "night", "scene", "bridge")
+    elif blocker == "transit":
+        engine._transit_light_overrides["2"] = datetime.now(timezone.utc) + timedelta(minutes=1)
+    elif blocker == "manual_light":
+        engine.manual_light_overrides["2"] = datetime.now(timezone.utc)
+    elif blocker == "sleeping":
+        engine._override_mode = "sleeping"
+    elif blocker == "contrary":
+        presence.on_observation(PresenceReading(source="latitude", captured_at=datetime.now(timezone.utc),
+            face_present=True, detection_source="yolo", zone="couch"))
+    state = {"2": {"on": blocker != "off", "bri": 70, "ct": 400},
+             "5": {"on": True, "bri": 14, "ct": 400}}
+    receipts = {}
+    epoch = mode_apply_epoch.set((engine._mode_transition_revision, engine.effective_mode))
+    token = mode_light_receipts.set(receipts)
+    try:
+        assert engine._compose_desk_camera_fill(state, "watching", "night") == state
+        assert not receipts
+    finally:
+        mode_light_receipts.reset(token)
+        mode_apply_epoch.reset(epoch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ct", [False, True])
+async def test_gaming_frame_comfort_never_dims_authored_target(desk_fill_rig, ct):
+    from backend.services.lux_channel import LuxChannel
+    req, engine, sync, _, hue = desk_fill_rig
+    engine._current_mode = "gaming"
+    engine._manual_override = False
+    engine._override_mode = None
+    channel = LuxChannel("bedroom", 10)
+    channel.update(37)
+    engine._bedroom_lux = req.app.state.bedroom_lux = channel
+    color = {"ct": 400} if ct else {"hue": 46920, "sat": 190}
+    sync.publish_accepted_gaming_state({"2": {"on": True, "bri": 200, **color}})
+    await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    assert hue.last_for("2")["bri"] == 200
+    assert all(hue.last_for("2")[key] == value for key, value in color.items())
+    assert not ({"ct", "hue"} <= hue.last_for("2").keys())

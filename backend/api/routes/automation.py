@@ -752,11 +752,13 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     desk_fill_revision = None
     desk_fill_latitude_revision = None
     desk_fill_acceptance = None
+    gaming_comfort = None
 
     def desk_fill_eligible():
         current = getattr(request.app.state, "presence", None)
         if (current is not presence or current is None
-            or engine.current_mode != "watching" or report.source != "desktop"
+            or engine.current_mode not in {"watching", "gaming"} or report.source != "desktop"
+            or (engine.current_mode == "gaming" and frame_game is not None)
             or getattr(engine, "house_state", None) != "home"
             or getattr(engine, "_enabled", False) is not True
             or not callable(getattr(engine, "is_dnd_active", None))
@@ -965,6 +967,21 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             conflict_not_after=conflict_not_after,
             source_readings=(("desktop", desk_fill_reading), ("latitude", latitude)),
         )
+        if frame_mode == "gaming":
+            from backend.services.lux_channel import LuxChannel
+            channel = getattr(request.app.state, "bedroom_lux", None)
+            snapshot = channel.snapshot("bedroom", 30.0) if isinstance(channel, LuxChannel) else None
+            if snapshot is not None:
+                desk_fill_acceptance = desk_fill_acceptance.with_lux(channel, snapshot)
+                comfort_now = engine._now()
+                gaming_comfort = (snapshot, engine._desk_floor_for_period(
+                    period, comfort_now, mode="gaming", colored=True,
+                ), engine._twilight_progress(period, comfort_now))
+            else:
+                # Missing lux cannot lend a physical-only brightness receipt.
+                desk_fill_reading = None
+                desk_fill_acceptance = None
+
 
     # Rust profile: hold a fixed ember color and drive the bedroom lamps'
     # BRIGHTNESS from the screen's whole-frame luma, so the room dims as Rust's
@@ -1081,6 +1098,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 desk_neutral_page=neutral_desk_page,
                 desk_diffuse_fill=light_id == "2" and desk_fill_reading is not None,
                 physical_acceptance=desk_fill_acceptance if light_id == "2" else None,
+                gaming_comfort=gaming_comfort if light_id == "2" else None,
             )
         if accepted is not False:
             applied.append(light_id)
