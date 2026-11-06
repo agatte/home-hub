@@ -24,15 +24,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # PR checkout defaults to a synthetic merge commit; depth 2 usually
-          # includes its base parent. Missing ancestry fails open to full CI.
+          # A PR checks out GitHub's synthetic merge and its two parents.
+          # Missing parents or event-SHA mismatches fail open to full CI.
           fetch-depth: 2
       - name: Determine conservative test scope
         id: scope
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/ci_change_scope.py --event "$EVENT_NAME" --base "$BASE_SHA"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+        run: >-
+          python3 scripts/ci_change_scope.py --event "$EVENT_NAME"
+          --pr-head "$PR_HEAD_SHA" --merge-sha "$MERGE_SHA"
 
   lint:
     needs: scope
