@@ -347,6 +347,123 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ## Worktrees
 
+### Proposed Sandbox retirement helper (#504, 2026-11-06; not approved policy)
+
+`scripts/safe_retire_worktree.py` is a local, uncommitted tooling proposal. The
+host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` rule remains mandatory;
+neither this section nor the proposed AGENTS amendment authorizes removal.
+Review/merge of tooling and policy, then explicit authorization for an exact
+target and any remote read, are separate gates. No real removal was exercised
+during this design task. Network retrieval of #504 was prohibited; the task's
+supplied issue context is scope evidence, not a newly verified issue state.
+
+The helper defaults to dry-run. It uses existing Windows Python 3.13 and native
+`C:\Tools\Git\cmd\git.exe`, with no install, fetch, force, prune, cache cleanup,
+branch deletion or raw filesystem deletion. Each Git subprocess passes a
+per-command safe.directory for the mapped checkout, without changing global
+or repository Git configuration. It refuses:
+
+- Any account other than Windows guest `WDAGUtilityAccount`, any target outside
+  a direct child of `C:\Work\home-hub-project\worktrees`, main, project root,
+  child paths, traversal, alternate drives and noncanonical paths.
+- Reparse points/junctions/symlinks in target ancestry or tree, malformed/non-file
+  `.git`, linked admin directory outside main's `.git\worktrees`, broken backlink,
+  wrong common directory/root, or missing/duplicate/locked/prunable/detached or
+  mismatched target registration.
+- Dirty tracked/submodule state, any `assume-unchanged`/`skip-worktree`
+  (including sparse-checkout) index flags, or any untracked content. All
+  `git ls-files -v -z` tracked entries must have the ordinary `H` tag;
+  unfamiliar flags or malformed output fail closed. Ignored files must
+  match exact generated CPython 3.13 `__pycache__` filenames, pytest cache
+  metadata/known cache entries, or Ruff cache metadata/version/numeric entries.
+  This is a path whitelist, not content authentication. Unknown ignored files,
+  including secrets and other versions/layouts, fail closed; no contents are read.
+- Missing/malformed task registry or any matched task outside `completed` and
+  `superseded` (including `failed`). Only task/state metadata is read, never
+  prompts, logs, credentials or guest Codex databases. Unresolved task workdirs
+  at the target or under any target subdirectory are refused. Apply holds the launcher's
+  exact workdir lease with Windows FileShare.None; a missing individual lock
+  file is opened or created, without creating lock directories. Malformed
+  other task records also block.
+- Missing exact lowercase 40hex `--expected-head` / `--expected-master`, wrong
+  `--expected-branch`, local `origin/master` mismatch, or HEAD not an ancestor of
+  that master. Squash/rebase-equivalent work is not sufficient proof.
+
+Offline dry-run demonstrates **local ancestry only**. It never claims stale
+`origin/master` is updated remote evidence. Apply also requires `--verify-remote`,
+which performs a separately authorized read-only `git ls-remote origin
+refs/heads/master` and demands that exact expected master. It never fetches or
+advances local refs; stale local refs stop for a separately approved update.
+The remote query uses existing Git configuration; no credential configuration
+changes or interactive prompts are allowed. Do not use this option under a
+no-network/no-credential-access task. No network option was exercised here.
+
+Illustrative offline command after review (replace placeholders):
+
+```powershell
+& C:\Work\home-hub-project\main\.venv\Scripts\python.exe scripts\safe_retire_worktree.py 'C:\Work\home-hub-project\worktrees\<name>' --expected-head <40hex> --expected-branch <branch> --expected-master <40hex>
+```
+
+Only after separate policy/target/network gates would both `--apply` and
+`--verify-remote` be added. The pilot is never an implicit default. This design
+task explicitly preserves `ci-pr-merge-scope-504-20261106` at
+`c7ed184fb0e29baa82d144dadce93b173b826132`, branch
+`work/504-pr-merge-scope-20261106`; its separate pilot approval is not exercised.
+
+Before the sole destructive command, the helper repeats registry and full
+target/main/registration preflight. It calls **only** native `git worktree remove
+<exact-target>`, without force. If Git refuses (including ignored caches), stop
+and retain the blocker; never auto-clean or force. Git failure/timeout can leave
+uncertain partial state: inspect read-only before new authorization, never retry
+or repair automatically.
+
+After success it requires target path/registration absent, branch still at exact
+expected HEAD, all other registration records unchanged, and main tracked/
+untracked status plus listed-file size/mtime/inode metadata unchanged. It prints
+sanitized phase/target/ref evidence and snapshot digests; retain stdout and exit
+status in a separately approved operator evidence location. No file contents or
+Git stderr are printed. Postflight failure stops without rollback; source can be
+recovered from the preserved branch only under a new reviewed action. Ignored
+generated cache bytes are not backed up or recoverable.
+
+Safety review limits: this is a cooperative local guard, not an OS security
+boundary. Protected mappings remain the boundary; guest username does not prove
+the active WSB hash. The launcher lease excludes cooperating Write workers, not
+arbitrary editors/Git commands, new queued tasks or Read workers. All target
+users must be quiescent. Remote refs, filesystem paths and registrations can race
+after checks. Metadata/status comparison detects ordinary main edits without
+reading secrets; it cannot prove byte identity against same-size/restored-mtime
+edits or verify untouched bytes throughout every other worktree. The only destructive operation is native Git's target removal; the helper
+may also create a file in the existing Codex lock directory. Preservation
+against concurrent or malicious writers is not guaranteed. Trusted Git executable/configuration and a
+quiet environment are prerequisites. The Windows lock was probed directly against a PowerShell FileShare.None
+open: concurrent acquisition was denied and re-acquisition after release
+succeeded. This does not close the launch race for a new Codex worker in a
+child workdir with a different lock key. Operator quiescence or a reviewed
+shared retirement/launch interlock is still required before live use.
+The separately authorized pilot remains unexecuted; destructive and remote
+tests were mocked.
+
+Local validation uses `unittest` with mocked filesystem/registry/remote/removal,
+Ruff, in-memory Python compilation and `git diff --check`. No real
+worktree, branch, cache or registration is removed. The proposal remains only in
+this named worktree until separately authorized publication; it is not a
+GitHub-durable handoff.
+
+Local proposal verification (2026-11-06, base
+`0787b5e794827a1ff55b31db50a3bf9b38abda58`, branch
+`work/504-sandbox-worktree-guard-20261106`): 23 offline unit tests passed using
+the existing main venv Python; Ruff passed for the helper and its tests.
+Tests cover path/link rejection, registration/admin anomalies, hidden
+index flags, tracked/untracked and ignored state, SHA/branch/ancestry and
+remote mismatch, nested Codex workdir registry states, lease API contract,
+preflight races, dry-run, native refusal, and postflight
+registration/branch/main changes. Windows API calls, network and
+all destructive boundaries were mocked. A later supervising, real-target
+DRY-RUN completed successfully without a removal or remote query. An initial
+attempt correctly refused the host-mapped Git checkout until per-command
+safe.directory was added; no Git global setting or credential was changed.
+
 ### Current registered-worktree checkpoint — 2026-10-07
 
 The 2026-09-20 recovery-era statement below that `main` was the only registered worktree is historical, not current. The bounded Project Admin reconciliation found multiple registered task/diagnostic worktrees in the writable Sandbox project root.
