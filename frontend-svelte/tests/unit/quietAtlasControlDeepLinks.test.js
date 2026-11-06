@@ -1,52 +1,86 @@
 import { describe, expect, it } from 'vitest'
 import {
-  controlGroupHref,
-  CONTROL_SCENES_HREF,
-  parseControlIntent,
+  controlGroupHref, lightingDetailHref, lightingDetailOrigin,
+  isKnownLightingGroup, CONTROL_SCENES_HREF, parseControlIntent,
+  activeQuietAtlasSection, isQuietAtlasReadOnlyPreview,
 } from '../../src/lib/quietAtlas/navigation.js'
-import { LIGHTING_GROUPS } from '../../src/lib/quietAtlas/lightingModel.js'
+import { LIGHTING_GROUPS, buildLightingOverview } from '../../src/lib/quietAtlas/lightingModel.js'
 import home from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
 import control from '../../src/routes/quiet-atlas/control/+page.svelte?raw'
 import experience from '../../src/lib/components/QuietAtlasLightingExperience.svelte?raw'
+import detail from '../../src/routes/quiet-atlas/lighting/[groupId]/+page.svelte?raw'
 
 const parse = (query) => parseControlIntent(new URLSearchParams(query))
 
-describe('Quiet Atlas read-only Home to Control detail links', () => {
-  it('maps only known fixture groups to whitelisted destinations', () => {
+describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
+  it('routes only known fixture groups, preserving a whitelisted origin', () => {
     expect(LIGHTING_GROUPS.map(({ id }) => id)).toEqual(['living', 'bedroom', 'kitchen', 'plant'])
     for (const { id } of LIGHTING_GROUPS) {
-      expect(controlGroupHref(id)).toBe('/quiet-atlas/control?group=' + id)
-      expect(parse('group=' + id)).toBe('group:' + id)
+      expect(controlGroupHref(id)).toBe('/quiet-atlas/lighting/' + id + '?from=control')
+      expect(lightingDetailHref(id, 'home')).toBe('/quiet-atlas/lighting/' + id + '?from=home')
+      expect(parse('group=' + id)).toBe('group:' + id) // old bookmarked links
+      expect(isKnownLightingGroup(id)).toBe(true)
+      expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/' + id)).toBe(true)
     }
-    expect(controlGroupHref('other')).toBe('/quiet-atlas/control')
-    expect(controlGroupHref('__proto__')).toBe('/quiet-atlas/control')
-    expect(controlGroupHref('../settings')).toBe('/quiet-atlas/control')
-    expect(controlGroupHref('')).toBe('/quiet-atlas/control')
+    // Extra fixtures already appear as a read-only Control card; it must open.
+    const other = buildLightingOverview({
+      '7': { light_id: '7', name: 'Additional lamp', reachable: true, on: true, bri: 125 },
+    }, true).find(({ id }) => id === 'other')
+    expect(other?.fixtureIds).toEqual(['7'])
+    expect(other?.supportsGroupWrite).toBe(false)
+    expect(buildLightingOverview({}, true).some(({ id }) => id === 'other')).toBe(false)
+    expect(isKnownLightingGroup('other')).toBe(true)
+    expect(lightingDetailHref('other', 'control')).toBe('/quiet-atlas/lighting/other?from=control')
+    expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/other')).toBe(true)
+    for (const value of ['__proto__', '../settings', '']) {
+      expect(controlGroupHref(value)).toBe('/quiet-atlas/control')
+      expect(lightingDetailHref(value, 'home')).toBe('/quiet-atlas/home')
+      expect(isKnownLightingGroup(value)).toBe(false)
+    }
+    expect(lightingDetailHref('living', 'https://evil.test')).toBe('/quiet-atlas/lighting/living?from=control')
+    expect(lightingDetailOrigin(new URLSearchParams('from=https://evil.test'))).toBe('control')
+    expect(lightingDetailOrigin(new URLSearchParams('from=home'))).toBe('home')
+    expect(lightingDetailOrigin(null)).toBe('control')
+    expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/future-functional')).toBe(false)
+    expect(activeQuietAtlasSection('/quiet-atlas/lighting/living', '', new URLSearchParams('from=home'))).toBe('home')
+    expect(activeQuietAtlasSection('/quiet-atlas/lighting/bedroom', '', new URLSearchParams('from=control'))).toBe('control')
   })
 
-  it('accepts only one valid read-only view or group parameter', () => {
+  it('keeps scene browsing and old group URLs read-only', () => {
     expect(CONTROL_SCENES_HREF).toBe('/quiet-atlas/control?view=scenes')
     expect(parse('view=scenes')).toBe('scenes')
     expect(parse('view=scenes&group=plant')).toBeNull()
     expect(parse('group=living&group=bedroom')).toBeNull()
     expect(parse('view=scenes&view=scenes')).toBeNull()
     expect(parse('view=apply')).toBeNull()
-    expect(parse('group=other')).toBeNull()
-    expect(parse('group=%5F%5Fproto%5F%5F')).toBeNull()
+    expect(parse('group=other')).toBe('group:other')
     expect(parse('group=')).toBeNull()
     expect(parse('')).toBeNull()
     expect(parseControlIntent(null)).toBeNull()
   })
 
-  it('threads only navigational intent into existing read-only dialogs', () => {
-    expect(home).toContain('href={controlGroupHref(group.id)}')
+  it('never opens a group dialog from Home or Control, and Back is not an X-to-Control', () => {
+    expect(home).toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(home).toContain('href={CONTROL_SCENES_HREF}')
     expect(control).toContain('parseControlIntent($page.url.searchParams)')
-    expect(control).toContain('<QuietAtlasLightingExperience {routeIntent} />')
-    expect(experience).toContain('routeIntent !== handledRouteIntent')
-    expect(experience).toContain("routeIntent === 'scenes'")
+    expect(experience).toContain("goto(lightingDetailHref(id, 'control'))")
     expect(experience).toContain("routeIntent?.startsWith('group:')")
-    expect(experience).toContain('replaceState: true')
-    expect(experience).not.toMatch(/\b(apiPost|setLight|activateScene|hueWrite)\s*\(/)
+    expect(experience).toContain('replaceState: true') // only legacy URL redirect
+    expect(experience).not.toContain('<QuietAtlasGroupSheet')
+    expect(detail).toContain('class="return-link" href={returnHref}')
+    expect(detail).toContain('lightingDetailOrigin($page.url.searchParams)')
+    expect(detail).toContain('<QuietAtlasGroupSheet inline={true} group={room}')
+    const refreshCode = detail.slice(detail.indexOf('async function refresh()'), detail.indexOf('function onConnectionChanged('))
+    expect(refreshCode).toContain('beginLightRead(snapshot)')
+    expect(refreshCode).toContain('nextPollAt = 0') // do not double-gate the 15s timer
+    expect(refreshCode).not.toContain('nextPollAt = Date.now() + 15000')
+    expect(refreshCode).toContain('nextPollAt = nowMs + 15000') // failure backoff only
+    expect(refreshCode).toContain('if (!mounted || currentRequest !== controller) return') // old aborts cannot delay new polls
+    expect(detail).toContain('}, 15000)') // timer checks due refresh every 15s
+    expect(refreshCode).not.toContain('invalidateLightRead(snapshot)')
+    expect(detail).toContain('snapshot = invalidateLightRead(snapshot)') // reconnect/visibility revoke evidence
+    for (const source of [home, control, experience, detail]) {
+      expect(source).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite|light_command)\s*\(/)
+    }
   })
 })

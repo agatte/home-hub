@@ -11,7 +11,7 @@ describe('Quiet Atlas task-first route hierarchy (#157)', () => {
     expect(phone.indexOf('href="/#apartment-controls"')).toBeGreaterThan(-1)
     expect(phone.indexOf('href="/#apartment-controls"')).toBeLessThan(phone.indexOf('<nav'))
     expect(phone).toContain('Adjust lights now')
-    expect(phone).toContain('href={controlGroupHref(group.id)}')
+    expect(phone).toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(phone).toContain('href={CONTROL_SCENES_HREF}')
     expect(home).toContain('class="working-lighting-link" href="/#apartment-controls"')
     expect(home).toContain('SPATIAL PLACEHOLDER · NOT A FLOOR PLAN')

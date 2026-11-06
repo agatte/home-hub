@@ -3,7 +3,7 @@
   import { onMount } from 'svelte'
   import { connected } from '$lib/stores/connection.js'
   import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
-  import { controlGroupHref, CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
+  import { lightingDetailHref, CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import {
     newHomeContextSnapshot, homeContextConnectionChanged, invalidateHomeContextRead,
     beginHomeContextRead, acceptHomeContextRead, failHomeContextRead, homeContextPresentation,
@@ -264,7 +264,7 @@
     </div>
     <nav class="phone-rooms" aria-label="Browse lighting by room">
       {#each groups as group (group.id)}
-        <a href={controlGroupHref(group.id)} class="phone-room" aria-label={group.label}>
+        <a href={lightingDetailHref(group.id, 'home')} class="phone-room" aria-label={group.label}>
           <span class="phone-room-icon" aria-hidden="true"></span>
           <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail} · Browse fixtures</small></span>
           <span class="phone-room-arrow" aria-hidden="true">↗</span>
@@ -352,7 +352,7 @@
     </div>
     <div class="groups" aria-label="Browse lighting groups">
       {#each groups as group}
-        <a href={controlGroupHref(group.id)} class="group" aria-label={group.label}>
+        <a href={lightingDetailHref(group.id, 'home')} class="group" aria-label={group.label}>
           <span class="group-mark" aria-hidden="true"></span>
           <span class="group-copy"><strong>{group.name}</strong><small>{group.detail} · view lights</small></span>
           <span class="group-arrow" aria-hidden="true">↗</span>

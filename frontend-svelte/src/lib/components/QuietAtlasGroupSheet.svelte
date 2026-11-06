@@ -10,6 +10,8 @@
   /** @type {Record<string, object>} The raw REST list behind this group, not write authority. */
   export let fixtureStates = {}
   export let onClose = () => {}
+  // Inline detail is a normal page region: no scrim, focus trap, X or modal lifecycle.
+  export let inline = false
 
   /** @type {Record<string,number>} */
   let draftPercents = {}
@@ -34,6 +36,7 @@
     const review = [...panel.querySelectorAll('button.review')]
       .find((button) => button instanceof HTMLButtonElement && button.dataset.fixtureId === id)
     if (review instanceof HTMLButtonElement && !review.disabled) review.focus()
+    else if (inline) panel?.focus()
     else closeButton?.focus()
   }
 
@@ -85,6 +88,7 @@
   let priorFocus
 
   const stopFocusOutside = (event) => {
+    if (inline) return
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
     if (event.key !== 'Tab' || !panel) return
     const tabbable = [...panel.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter((element) => element instanceof HTMLElement)
@@ -93,17 +97,17 @@
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
   }
-  onMount(() => { priorFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null; closeButton?.focus() })
-  onDestroy(() => { if (priorFocus?.isConnected && typeof priorFocus.focus === 'function') priorFocus.focus() })
+  onMount(() => { if (!inline) { priorFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null; closeButton?.focus() } })
+  onDestroy(() => { if (!inline && priorFocus?.isConnected && typeof priorFocus.focus === 'function') priorFocus.focus() })
 </script>
 
 <svelte:window on:keydown={stopFocusOutside} />
-<div class="sheet-root">
-  <button class="sheet-scrim" type="button" aria-label={`Close ${group.label} details`} on:click={onClose}></button>
-  <section bind:this={panel} class="sheet" role="dialog" aria-modal="true" aria-label={`${group.label} lighting details`}>
+<div class="sheet-root" class:inline>
+  {#if !inline}<button class="sheet-scrim" type="button" aria-label={`Close ${group.label} details`} on:click={onClose}></button>{/if}
+  <section bind:this={panel} class="sheet" class:inline role={inline ? 'region' : 'dialog'} aria-modal={inline ? undefined : 'true'} tabindex="-1" aria-label={`${group.label} lighting details`}>
     <header class="sheet-header">
-      <div><div class="overline">LIGHTING · FIXTURES</div><h2>{group.label}</h2></div>
-      <button bind:this={closeButton} type="button" class="close" on:click={onClose} aria-label="Close lighting details">✕</button>
+      <div><div class="overline">LIGHTING · FIXTURES</div><h2>{inline ? 'Individual lights' : group.label}</h2></div>
+      {#if !inline}<button bind:this={closeButton} type="button" class="close" on:click={onClose} aria-label="Close lighting details">✕</button>{/if}
     </header>
     {#if snapshotStatus !== 'recent-read'}
       <p class="caution" role="status">Fixture values are historical, not confirmed live. Light snapshot: {snapshotStatus === 'disconnected' ? 'disconnected' : snapshotStatus === 'stale-read' ? 'stale' : 'unverified'}.</p>
@@ -191,4 +195,8 @@
     .draft-summary { overflow-wrap:anywhere; }
   }
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+  .sheet-root.inline { position:static; inset:auto; z-index:auto; display:block; max-width:100%; min-width:0; }
+  .sheet.inline { width:100%; max-height:none; overflow:visible; padding:clamp(18px,2.5vw,30px); border-radius:22px; border:1px solid rgba(143,172,147,.22); background:linear-gradient(145deg,#1a2c22,#14231c); box-shadow:none; }
+  .sheet.inline .fixtures { grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr)); }
+  @media(max-width:700px){.sheet.inline { width:100%; padding:18px 15px; max-height:none; border-radius:19px; }.sheet.inline .fixtures{grid-template-columns:minmax(0,1fr)} }
 </style>
