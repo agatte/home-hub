@@ -712,12 +712,9 @@ async def test_engine_live_evening_lux_case_floors_only_atmosphere_lights(
     assert mock_hue._lights["1"]["bri"] == 90
     assert mock_hue._lights["3"]["bri"] == 30
     assert mock_hue._lights["4"]["bri"] == 30
-    assert mock_hue._lights["2"]["bri"] == int(
-        ACTIVITY_LIGHT_STATES["relax"]["evening"]["2"]["bri"] * 0.90
-    )
-    assert mock_hue._lights["5"]["bri"] == int(
-        ACTIVITY_LIGHT_STATES["relax"]["evening"]["5"]["bri"] * 0.90
-    )
+    # Latitude camera lux governs living-room/kitchen, never bedroom L2/L5.
+    assert mock_hue._lights["2"]["bri"] == ACTIVITY_LIGHT_STATES["relax"]["evening"]["2"]["bri"]
+    assert mock_hue._lights["5"]["bri"] == ACTIVITY_LIGHT_STATES["relax"]["evening"]["5"]["bri"]
     for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS:
         expected = ATMOSPHERES["moss_ember"].palettes["evening"][light_id]
         assert mock_hue._lights[light_id]["hue"] == expected["hue"]

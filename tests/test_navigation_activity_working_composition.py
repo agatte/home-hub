@@ -387,9 +387,14 @@ async def test_working_keeps_learner_await_before_later_reads(
         events.append(f"zone:{label}")
         return None, None
 
-    def read_lux():
+    def read_bedroom_lux():
         label = "after" if phase["after_log"] else "before"
-        events.append(f"lux:{label}")
+        events.append(f"bedroom_lux:{label}")
+        return (40.0, 100.0)
+
+    def read_living_room_lux():
+        label = "after" if phase["after_log"] else "before"
+        events.append(f"latitude_lux:{label}")
         return (40.0, 100.0)
 
     def read_weather():
@@ -398,7 +403,8 @@ async def test_working_keeps_learner_await_before_later_reads(
         return label
 
     engine._current_zone_posture = current_zone_posture
-    engine._read_fresh_camera_lux = read_lux
+    engine._read_fresh_bedroom_lux = read_bedroom_lux
+    engine._read_fresh_camera_lux = read_living_room_lux
     engine._get_current_weather_condition = read_weather
     engine._fixture_comfort_zone = lambda: (
         events.append("comfort") or None
@@ -414,11 +420,11 @@ async def test_working_keeps_learner_await_before_later_reads(
         "zone:overlay",
         "learner_overlay",
         "learner_log",
-        "lux:after",
+        "bedroom_lux:after",
         "weather:rain",
         "weather:rain",
         "learner_weather:rain",
-        "lux:after",
+        "latitude_lux:after",
         "weather:rain",
         "zone:post_log",
         "comfort",
