@@ -36,14 +36,38 @@ def classify_paths(paths: list[str] | None) -> tuple[bool, bool, str]:
     return False, False, "docs-only"
 
 
-def changed_pr_paths(base: str, head: str = "HEAD") -> list[str] | None:
-    """Get exact names relative to PR base; no rename can hide a moved old path."""
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", base):
+def changed_pr_paths(pr_head: str, merge_sha: str, checkout: str = "HEAD") -> list[str] | None:
+    """Diff GitHub's verified PR merge against its *actual* target parent.
+
+    The pull_request.base.sha event field can be stale on long-lived PRs.
+    actions/checkout uses a synthetic merge with current base as first parent
+    and PR head as second. Never trust those parents without verifying both
+    GitHub-provided SHAs; missing or ambiguous ancestry triggers full CI.
+    """
+    sha = r"[0-9a-fA-F]{40}"
+    if not re.fullmatch(sha, pr_head) or not re.fullmatch(sha, merge_sha):
         return None
     try:
+        ancestry = subprocess.run(
+            ["git", "rev-list", "--parents", "-n", "1", checkout],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if ancestry.returncode != 0:
+            return None
+        parts = ancestry.stdout.decode("ascii", errors="strict").split()
+        if (len(parts) != 3
+                or any(not re.fullmatch(sha, part) for part in parts)
+                or parts[0].lower() != merge_sha.lower()
+                or parts[2].lower() != pr_head.lower()):
+            return None
+
+        # Compare the merged tree (including conflict resolutions) to the
+        # exact base tree used by GitHub, not a potentially stale event base.
         result = subprocess.run(
             ["git", "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
-             base, head, "--"],
+             parts[1], parts[0], "--"],
             capture_output=True,
             check=False,
             timeout=30,
@@ -62,10 +86,12 @@ def changed_pr_paths(base: str, head: str = "HEAD") -> list[str] | None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--event", required=True)
-    parser.add_argument("--base", default="")
+    parser.add_argument("--pr-head", default="")
+    parser.add_argument("--merge-sha", default="")
     args = parser.parse_args()
 
-    paths = changed_pr_paths(args.base) if args.event == "pull_request" else None
+    paths = (changed_pr_paths(args.pr_head, args.merge_sha)
+             if args.event == "pull_request" else None)
     backend, frontend, reason = classify_paths(paths)
     if args.event != "pull_request":
         reason = "full-validation-event"
