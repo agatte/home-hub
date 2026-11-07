@@ -349,13 +349,17 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ### Proposed Sandbox retirement helper (#504, 2026-11-06; not approved policy)
 
-`scripts/safe_retire_worktree.py` is a local, uncommitted tooling proposal. The
-host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` rule remains mandatory;
-neither this section nor the proposed AGENTS amendment authorizes removal.
-Review/merge of tooling and policy, then explicit authorization for an exact
-target and any remote read, are separate gates. No real removal was exercised
-during this design task. Network retrieval of #504 was prohibited; the task's
-supplied issue context is scope evidence, not a newly verified issue state.
+`scripts/safe_retire_worktree.py` began as a local, uncommitted tooling proposal
+on 2026-11-06. As of 2026-11-07, it and the proposed Codex launcher interlock
+are published for review in [PR #508](https://github.com/agatte/home-hub/pull/508),
+head `5771ee638b82b78130c04168ceb3736e58a5df90` (six files, full hosted
+CI green). **The proposal is not an active removal policy, even if this PR is
+later merged.** The host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1`
+rule remains mandatory until an independently approved policy activation and
+verified effective Sandbox launcher rollout. A separate exact-target removal
+and any remote-read authorization remain required. No real removal was exercised.
+The initial design task's no-network restriction is historical; current issue
+and PR status must be verified live.
 
 The helper defaults to dry-run. It uses existing Windows Python 3.13 and native
 `C:\Tools\Git\cmd\git.exe`, with no install, fetch, force, prune, cache cleanup,
@@ -447,9 +451,9 @@ tests were mocked.
 
 Local validation uses `unittest` with mocked filesystem/registry/remote/removal,
 Ruff, in-memory Python compilation and `git diff --check`. No real
-worktree, branch, cache or registration is removed. The proposal remains only in
-this named worktree until separately authorized publication; it is not a
-GitHub-durable handoff.
+worktree, branch, cache or registration was removed by the initial design task.
+This initial 2026-11-06 snapshot predates the reviewed PR #508 publication;
+the newer exact-head status and acceptance gates are stated above.
 
 Local proposal verification (2026-11-06, base
 `0787b5e794827a1ff55b31db50a3bf9b38abda58`, branch
@@ -467,11 +471,14 @@ safe.directory was added; no Git global setting or credential was changed.
 
 #### Local shared-worktree lifecycle interlock proposal (PR #508 follow-up)
 
-Uncommitted follow-up based on `20a1573ad8fce69184388ec03ecf78c115a3cac3`,
-same isolated branch, 2026-11-06. Issue/PR context is the supplied task and this
-branch; no network refresh, publication, live apply or worktree removal occurred.
-The existing main entrypoint has **not** been integrated or updated. This is
-implementation evidence for review, not live safety or an active policy change.
+Initially an uncommitted follow-up based on `20a1573ad8fce69184388ec03ecf78c115a3cac3`
+on 2026-11-06; since 2026-11-07 it is published at PR #508 head
+`5771ee638b82b78130c04168ceb3736e58a5df90`. The initial implementation
+task itself performed no remote operation, live apply or worktree removal.
+The effective Sandbox entrypoint still hardcodes the older
+`C:\Work\home-hub-project\main\scripts\CodexSandboxTask.ps1` and is **not**
+updated by a GitHub PR merge alone. This code is implementation evidence for
+review, not live safety or an active policy change.
 
 Both implementations use the existing, required `codex-run-locks` directory and
 `lifecycle-<sha256>.lock`, hashing UTF-8 lowercase Windows-normalized absolute
@@ -552,10 +559,10 @@ the handle. No real target lock or removal is used. Existing guard tests mock
 all destructive/network operations.
 
 P2 closure follow-up to independent read-only review
-`1ee5635be05448d2af2043548e2283fe` (2026-11-06), still local/uncommitted on
-`20a1573ad8fce69184388ec03ecf78c115a3cac3`: the alias policy and global registry
-drain address P2 #1; locked state reload, launch generation identity, serialized
-Resume/Supersede and exception-safe handle disposal address P2 #2. Deterministic
+`1ee5635be05448d2af2043548e2283fe` (2026-11-06), originally local and
+now published at `5771ee638b82b78130c04168ceb3736e58a5df90`: the alias
+policy and global registry drain address P2 #1; locked state reload,
+launch generation identity, serialized Resume/Supersede and exception-safe handle disposal address P2 #2. Deterministic
 PowerShell fixtures execute extracted action blocks with launch/process stubs,
 exercise Resume/Supersede contention and ordered transitions, reject completed,
 superseded and older-generation queued workers, and check real task/lifecycle/
@@ -566,17 +573,57 @@ Validation on 2026-11-06: Python 3.13.15 passed 23 guard unit tests and 10
 launcher tests (33 total), including real Windows FileShare interop and task
 exclusion. Ruff 0.15.10 and the Windows PowerShell 5.1.26100.9818 parser passed;
 `git diff --check` passed. Fixtures never invoke the launcher entrypoint or Codex.
-Only the five task-authorized paths are changed. No launcher integration, network,
-publication, Codex child, real removal or main write is part of these fixtures.
-Independent review is still required before publication/integration or any apply.
-Review path-policy compatibility, lock/generation admission, exceptional release,
-and legacy migration. Residual TOCTOU: separate path-attribute checks are not
-handle-pinned filesystem identity; hostile concurrent rename/reparse replacement
+The initial five-file test task did not itself integrate the launcher or perform
+any destructive action. The follow-up was published in PR #508 on 2026-11-07;
+independent read-only reviews found no P0–P2 blockers for **review-only**
+publication. Hosted Linux CI passed at exact head `5771ee638b82b78130c04168ceb3736e58a5df90`.
+Neither fixture success nor GitHub review status proves effective launcher
+integration or safe live removal. Reverify path-policy compatibility,
+lock/generation admission, exceptional release and legacy migration before apply.
+Residual TOCTOU: separate path-attribute checks are not handle-pinned
+filesystem identity; hostile concurrent rename/reparse replacement
 and noncooperating/legacy launchers remain outside this cooperative protocol.
 A global registry scan is a conservative snapshot, not a global transaction;
 new unrelated tasks can appear afterward. Target-scoped lifecycle exclusion
 protects cooperating target admissions, not arbitrary registry or filesystem
 writers. No live deletion-safety claim follows from fixture success.
+
+#### Pre-merge policy and effective launcher checkpoint — 2026-11-07
+
+[PR #508](https://github.com/agatte/home-hub/pull/508) is review-ready with full
+hosted CI success at `5771ee638b82b78130c04168ceb3736e58a5df90`.
+Review-ready and mergeable do **not** mean approved for policy activation,
+effective launcher replacement, or any real worktree removal. Independent
+read-only rollout review `72220f8286e64fe1972222581aee0b83` identified
+policy language that could incorrectly imply automatic activation at merge;
+the proposed `AGENTS.md` text now explicitly requires a separate
+owner-approved policy-activation decision **after** verified launcher rollout.
+
+The actual Sandbox entrypoint
+`C:\Work\PC-Performance-Audit\.rdc-sandbox-state\Invoke-CodexProjectTask.ps1`
+hardcodes `C:\Work\home-hub-project\main\scripts\CodexSandboxTask.ps1`.
+Its current file and `origin/master` have the same old Git blob
+`5d7e9d7bb3f6cef7887ccf0ae677936b16ed4403`; PR #508 proposes
+`d85a12ff8dec90178fce7f063d4f05e94310656f`. A GitHub merge does not
+update that effective Sandbox script. At this read-only checkpoint `main`
+was `41f8a1d1`, 149 commits behind local `origin/master=0787b5e7`,
+with two unrelated, dirty monitor-brightness files also changed upstream.
+Do not fast-forward or overwrite them as an incidental launcher rollout.
+
+For a future **separately authorized** narrow Sandbox script rollout, first
+stop new admissions and confirm no active/queued/orphaned legacy workers.
+Take a verified exact-file backup, replace only the effective `main`
+launcher, verify source and destination byte hashes, then perform separately
+approved disposable Start/Worker/Resume Read+Write and child-workdir tests
+through the actual external entrypoint. At this checkpoint the existing
+launcher SHA-256 is
+`652B4681AF3155D164308454F3BB8AD9793EA6820108CAC8CDD0976B06CD8A69`;
+the reviewed PR file SHA-256 is
+`682E70FDF8E6EC5A0C15250EE652529D852C02F38F831A3E994B3331018DB60C`.
+No replacement, backup write, integration test or rollout occurred during
+this review. Any rollback also requires quiescence and task-state inspection.
+Only afterward may the owner separately consider policy activation and an
+exact-target removal, with fresh remote evidence and operator quiescence.
 
 ### Current registered-worktree checkpoint — 2026-10-07
 
