@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,6 +22,8 @@ from backend.services.living_room_atmosphere import (
 
 
 START = datetime(2026, 8, 12, 19, 0, tzinfo=timezone.utc)
+# Outside both the 18:00–18:30 sunset handoff and the wind-down transition.
+FIXED_EVENING = datetime(2026, 8, 12, 19, 0, tzinfo=ZoneInfo("America/Indiana/Indianapolis"))
 
 
 class Clock:
@@ -75,7 +78,11 @@ def _envelope(
 
 
 def _pin_evening_outside_winddown_ramp(engine: AutomationEngine) -> None:
-    """Keep evening-state tests independent of the wall-clock ramp window."""
+    """Pin authored Evening tests outside both time-based light transitions."""
+    # _get_time_period is stubbed by callers, but _compose_period_handoff uses
+    # the engine's own clock for the sunset blend. Freeze that clock rather
+    # than bypassing the real interpolation logic under test.
+    engine._now = lambda: FIXED_EVENING
     engine._schedule_config.weekday.winddown_start_hour = 0
     engine._schedule_config.weekend.winddown_start_hour = 0
 
