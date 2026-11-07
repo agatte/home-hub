@@ -378,13 +378,15 @@ or repository Git configuration. It refuses:
   metadata/known cache entries, or Ruff cache metadata/version/numeric entries.
   This is a path whitelist, not content authentication. Unknown ignored files,
   including secrets and other versions/layouts, fail closed; no contents are read.
-- Missing/malformed task registry or any matched task outside `completed` and
-  `superseded` (including `failed`). Only task/state metadata is read, never
-  prompts, logs, credentials or guest Codex databases. Unresolved task workdirs
-  at the target or under any target subdirectory are refused. Apply holds the launcher's
-  exact workdir lease with Windows FileShare.None; a missing individual lock
-  file is opened or created, without creating lock directories. Malformed
-  other task records also block.
+- Missing/malformed task registry or any global task in an active, queued,
+  unverified or unknown state. Historical `failed` tasks outside the exact target
+  and its lexical descendants are terminal; failed target/descendant tasks block.
+  This is not proof that an unrelated failed task did not use an old path alias;
+  operator review and quiescence are still required before live removal.
+  Only task/state metadata is read, never prompts, logs, credentials or guest
+  Codex databases. The proposed apply holds the shared root-worktree lifecycle
+  key with Windows FileShare.None; a missing individual lock file is opened or
+  created without creating lock directories. Malformed records also block.
 - Missing exact lowercase 40hex `--expected-head` / `--expected-master`, wrong
   `--expected-branch`, local `origin/master` mismatch, or HEAD not an ancestor of
   that master. Squash/rebase-equivalent work is not sufficient proof.
@@ -428,19 +430,18 @@ generated cache bytes are not backed up or recoverable.
 
 Safety review limits: this is a cooperative local guard, not an OS security
 boundary. Protected mappings remain the boundary; guest username does not prove
-the active WSB hash. The launcher lease excludes cooperating Write workers, not
-arbitrary editors/Git commands, new queued tasks or Read workers. All target
+the active WSB hash. The proposed lifecycle lease excludes cooperating Read/Write
+launchers and workers, but not arbitrary editors/Git commands or legacy launchers. All target
 users must be quiescent. Remote refs, filesystem paths and registrations can race
 after checks. Metadata/status comparison detects ordinary main edits without
 reading secrets; it cannot prove byte identity against same-size/restored-mtime
 edits or verify untouched bytes throughout every other worktree. The only destructive operation is native Git's target removal; the helper
 may also create a file in the existing Codex lock directory. Preservation
 against concurrent or malicious writers is not guaranteed. Trusted Git executable/configuration and a
-quiet environment are prerequisites. The Windows lock was probed directly against a PowerShell FileShare.None
-open: concurrent acquisition was denied and re-acquisition after release
-succeeded. This does not close the launch race for a new Codex worker in a
-child workdir with a different lock key. Operator quiescence or a reviewed
-shared retirement/launch interlock is still required before live use.
+quiet environment are prerequisites. The original exact-workdir Write lease had
+a P2 child-workdir/Read launch race; the local interlock proposal below addresses
+cooperating launchers only. Operator quiescence and reviewed, verified launcher
+rollout are still required before live use.
 The separately authorized pilot remains unexecuted; destructive and remote
 tests were mocked.
 
@@ -463,6 +464,119 @@ all destructive boundaries were mocked. A later supervising, real-target
 DRY-RUN completed successfully without a removal or remote query. An initial
 attempt correctly refused the host-mapped Git checkout until per-command
 safe.directory was added; no Git global setting or credential was changed.
+
+#### Local shared-worktree lifecycle interlock proposal (PR #508 follow-up)
+
+Uncommitted follow-up based on `20a1573ad8fce69184388ec03ecf78c115a3cac3`,
+same isolated branch, 2026-11-06. Issue/PR context is the supplied task and this
+branch; no network refresh, publication, live apply or worktree removal occurred.
+The existing main entrypoint has **not** been integrated or updated. This is
+implementation evidence for review, not live safety or an active policy change.
+
+Both implementations use the existing, required `codex-run-locks` directory and
+`lifecycle-<sha256>.lock`, hashing UTF-8 lowercase Windows-normalized absolute
+root `c:\work\home-hub-project\worktrees\<name>`. Only ASCII-named direct
+Sandbox siblings participate. Root and child workdirs share a case-insensitive
+key. Every accepted workspace path, including main, OSRS, audit and TEMP, must
+use an absolute ASCII C: spelling with canonical components: UNC/device paths,
+ADS, short-name tildes, Unicode, dot traversal, duplicate/trailing separators,
+trailing dots/spaces and reserved device components are refused before path I/O.
+After allowed-root validation, all ancestors are inspected from volume root
+down for reparse points before leaf existence checks or lifecycle classification.
+Other permitted Sandbox locations omit the lifecycle lease only after these checks. Missing sibling roots cannot silently
+fall back to that behavior. Missing/access-denied paths, reparse ancestry,
+invalid names, missing registrations, nested repositories and wrong Git
+common/root directories fail closed. No lifecycle directory is auto-created.
+Participating launcher validation refuses inherited `GIT_*` variables to prevent
+repository redirection; use a clean launcher environment.
+
+Start and Resume acquire `FileAccess.Read` / `FileShare.Read` before target
+validation, snapshots, queued-record writes or worker spawn, releasing in
+`finally`. Worker independently acquires the same shared handle in both modes
+before task-exclusive and legacy Write-workdir-exclusive handles. Acquisition
+is immediate/nonblocking, in that order, with no wait/retry cycle. Worker reloads
+state.json under the task lock and requires both queued status and the exact
+launch generation token before marking running. Start and every Resume mint a
+new token; delayed workers from older attempts and legacy tokenless queued
+records fail closed. Resume and Supersede acquire the same task-exclusive lock
+before reading or changing state. Supersede takes only that lock; Resume takes
+lifecycle then task. Resume releases task ownership after persisting the token
+and before spawning; a Supersede in this gap invalidates the child at admission.
+There are no automatic retries or force transitions. Worker holds all handles
+through Codex and postflight; an outer finally also covers initial state saves,
+attempt-directory creation and failing result/postflight writes. After acquisition, every path verifies workdir
+existence, exact registration, Git top-level and common directory. Worker cannot
+mark `running` or invoke Codex before admission, including exact-thread Resume.
+
+Retirement holds `ReadWrite` / `FileShare.None` through validation, repeated
+registry/preflight, native removal and postflight. Registry is checked under
+exclusive ownership and again before final full preflight. Cooperating launchers
+cannot queue target tasks during this interval. Global queued, running,
+unverified, or unknown task states block retirement regardless of workdir.
+Historical `failed` records are terminal **only when their lexical workdirs
+are outside the exact target and descendants**; failed target/child records
+remain blockers for possible unique work. The live registry previously contained
+30 failed task records, none lexically under the #507 pilot target, so rejecting
+all failures globally would permanently prevent useful cleanup. Legacy alias
+records are not canonically resolved, and a failed record outside the target
+could conceal an old aliased workdir; review that historical uncertainty and
+ensure all target users are quiescent before any separately approved apply.
+Previously queued tasks block retirement; even if delayed or superseded out of band, a worker
+cannot acquire during retirement and must reject a removed root after release.
+Admission failure leaves it queued/unresolved, never falsely running. Do not
+auto-resume or supersede it without existing process inspection.
+
+Rollout gate: review/merge and separately authorized integration must establish
+which script the main entrypoint actually invokes. Drain/inspect existing
+workers and queued tasks, including child workdirs and Read mode. Old queued
+records without generation tokens cannot be launched by the new Worker: inspect
+process trees and explicitly supersede or recover through the existing gates;
+never add tokens by hand or automatically retry. Verify all
+Start/Resume/Worker paths use the protocol before separately authorized removal.
+Older script copies, direct Codex launches, orphaned Codex children after worker
+death, manual user/editor activity and uncooperative filesystem/Git writers
+bypass this cooperative lock. Terminal records alone do not prove migration.
+Operator quiescence, trusted lock-directory ancestry and fresh remote/target
+authorization remain mandatory. Malicious concurrent path replacement is outside
+this protocol. The host-only mandatory removal rule remains active.
+
+`tests/test_codex_sandbox_lifecycle_lock.py` extracts functions using PowerShell
+5.1 AST parsing without invoking the launcher or Codex. It covers case/root/child
+keys, foreign locations, actual read-only registration validation, missing
+workdirs, injected link/access failures and admission order. A disposable fixture
+inside this worktree probes real Windows interoperability: two launcher shared
+handles coexist and exclude Python exclusive acquisition; release permits later
+exclusive acquisition; Python exclusive ownership excludes launcher admission;
+simulated removed-registration validation fails after acquisition and releases
+the handle. No real target lock or removal is used. Existing guard tests mock
+all destructive/network operations.
+
+P2 closure follow-up to independent read-only review
+`1ee5635be05448d2af2043548e2283fe` (2026-11-06), still local/uncommitted on
+`20a1573ad8fce69184388ec03ecf78c115a3cac3`: the alias policy and global registry
+drain address P2 #1; locked state reload, launch generation identity, serialized
+Resume/Supersede and exception-safe handle disposal address P2 #2. Deterministic
+PowerShell fixtures execute extracted action blocks with launch/process stubs,
+exercise Resume/Supersede contention and ordered transitions, reject completed,
+superseded and older-generation queued workers, and check real task/lifecycle/
+workdir handle release after setup/result-write failures. Reparse ancestry is
+injected, without creating junctions or accessing aliased destinations.
+
+Validation on 2026-11-06: Python 3.13.15 passed 23 guard unit tests and 10
+launcher tests (33 total), including real Windows FileShare interop and task
+exclusion. Ruff 0.15.10 and the Windows PowerShell 5.1.26100.9818 parser passed;
+`git diff --check` passed. Fixtures never invoke the launcher entrypoint or Codex.
+Only the five task-authorized paths are changed. No launcher integration, network,
+publication, Codex child, real removal or main write is part of these fixtures.
+Independent review is still required before publication/integration or any apply.
+Review path-policy compatibility, lock/generation admission, exceptional release,
+and legacy migration. Residual TOCTOU: separate path-attribute checks are not
+handle-pinned filesystem identity; hostile concurrent rename/reparse replacement
+and noncooperating/legacy launchers remain outside this cooperative protocol.
+A global registry scan is a conservative snapshot, not a global transaction;
+new unrelated tasks can appear afterward. Target-scoped lifecycle exclusion
+protects cooperating target admissions, not arbitrary registry or filesystem
+writers. No live deletion-safety claim follows from fixture success.
 
 ### Current registered-worktree checkpoint — 2026-10-07
 

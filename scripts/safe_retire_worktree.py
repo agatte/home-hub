@@ -120,24 +120,29 @@ def registry_clear(target):
         require(isinstance(task.get("workdir"), str) and bool(task["workdir"]),
                 "Unparseable task workdir")
         require(isinstance(state.get("status"), str), "Unparseable task state")
-        # A Write worker may run inside the checkout (e.g. <target>\backend);
-        # its launcher lease would hash that subdirectory, not the target root.
+        # Global drain is intentional: aliases may hide unresolved target
+        # workers. Historical failures elsewhere are terminal, but a failure
+        # against this exact target (or a lexical child) retains unique-work
+        # risk and must be reviewed before retirement. No path traversal.
         workdir = key(task["workdir"])
-        target_key = key(target)
-        if workdir == target_key or workdir.startswith(target_key + "\\"):
-            require(state["status"] in {"completed", "superseded"}, "Unresolved Codex task")
+        exact = key(target)
+        same_tree = workdir == exact or workdir.startswith(exact + "\\")
+        allowed = {"completed", "superseded"}
+        if not same_tree:
+            allowed.add("failed")
+        require(state["status"] in allowed, "Unresolved Codex task")
 
 
 @contextlib.contextmanager
 def lease(target):
-    # CodexSandboxTask.ps1 uses OpenOrCreate/FileShare.None on this exact key.
-    # Read-mode worktrees may have no lock yet. Create only the lock file, not
-    # an arbitrary directory, using OPEN_ALWAYS and OPEN_REPARSE_POINT.
-    digest = hashlib.sha256(str(target).lower().encode("utf-8")).hexdigest()
+    # Separate namespace from legacy per-workdir Write locks. The launcher uses
+    # Read/FileShare.Read; retirement uses ReadWrite/FileShare.None.
+    target = target_path(str(target))
+    digest = hashlib.sha256(key(target).encode("utf-8")).hexdigest()
     lock_root = RUNS.parent / "codex-run-locks"
     no_links(lock_root)
     require(lock_root.is_dir(), "Codex lease directory unavailable")
-    lock = lock_root / (digest + ".lock")
+    lock = lock_root / ("lifecycle-" + digest + ".lock")
     if lock.exists() or lock.is_symlink():
         no_links(lock)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)

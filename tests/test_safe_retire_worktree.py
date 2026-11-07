@@ -186,10 +186,19 @@ class RegistryTests(unittest.TestCase):
             ({"workdir": TARGET}, {"status": "superseded"}, True),
             ({"workdir": TARGET + r"\backend"}, {"status": "completed"}, True),
             ({"workdir": TARGET + r"\backend"}, {"status": "running"}, False),
+            ({"workdir": TARGET + r"\backend"}, {"status": "failed"}, False),
             ({"workdir": TARGET + r"\backend\service"}, {"status": "queued"}, False),
-            ({"workdir": TARGET + r"-similar"}, {"status": "running"}, True),
+            ({"workdir": TARGET + r"-similar"}, {"status": "running"}, False),
+            ({"workdir": TARGET + r"-similar"}, {"status": "failed"}, True),
             *[({"workdir": TARGET}, {"status": s}, False)
               for s in ["running", "queued", "failed", "interrupted-or-unverified", "unknown"]],
+            *[({"workdir": alias}, {"status": status}, False)
+              for alias in [r"C:\Work\home-hub-project\main\junction\backend",
+                            r"C:\Work\HOME-H~1\alias", "C:\\Work\\unicode-\u00e4",
+                            r"C:\Work\osrs-flip-assistant-project"]
+              for status in ["queued", "running", "unverified"]],
+            ({"workdir": r"C:\Work\home-hub-project\main\junction\backend"},
+             {"status": "failed"}, True),
             ({}, {"status": "completed"}, False),
             ({"workdir": TARGET}, {}, False),
         ]:
@@ -341,6 +350,9 @@ class NativeTests(unittest.TestCase):
                 kernel.CloseHandle.assert_not_called()
             call = kernel.CreateFileW.call_args.args
             self.assertEqual(call[2], 0)  # FileShare.None
+            self.assertEqual(call[1], 0xC0000000)  # ReadWrite, exclusive retirement
+            digest = guard.hashlib.sha256(guard.key(TARGET).encode("utf-8")).hexdigest()
+            self.assertEqual(Path(call[0]).name, "lifecycle-" + digest + ".lock")
             self.assertEqual(call[4], 4)  # OPEN_ALWAYS; Read tasks may lack lock
             self.assertTrue(call[5] & 0x00200000)  # OPEN_REPARSE_POINT
             kernel.CloseHandle.assert_called_once_with(123)
