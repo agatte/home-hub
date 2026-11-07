@@ -30,6 +30,7 @@ their subject is actually involved.
 - Worktree deletion is safety-critical. Never recursively delete a worktree with `Remove-Item`, `rm`, `rmdir`, `rd`, `del`, or equivalent. Remove it only with `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1 -Project home-hub -WorktreePath <absolute-path>`; the guard requires an exact registered clean worktree and refuses protected/out-of-project paths.
 - Production is the Latitude. Windows is the development/desktop-agent machine.
   Do not casually restart `home-hub-ambient.service`.
+- **Proposed Sandbox exception only (#504; NOT an active removal policy):** A future, separately owner-approved policy may permit protected Windows Sandbox `WDAGUtilityAccount` to use repo-local `scripts/safe_retire_worktree.py` for a separately authorized exact-target retirement, with fixed `C:\Work\home-hub-project\worktrees` scope, verified shared Codex lifecycle locking in the *effective* Start/Resume/Worker launcher, inspected legacy task/process quiescence, exact HEAD/branch/master, fresh remote evidence and explicit apply gates. **Merging the code or this proposal alone does not activate the exception or authorize any removal.** Until a distinct policy-activation decision and launcher rollout/acceptance, the mandatory host-only guard rule above still applies; the host procedure is never replaced. See `docs/LOCAL_WORKSPACE.md` and #504 for open gates and limits.
 
 ## Durable knowledge workflow
 

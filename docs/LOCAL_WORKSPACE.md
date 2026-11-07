@@ -347,6 +347,284 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ## Worktrees
 
+### Proposed Sandbox retirement helper (#504, 2026-11-06; not approved policy)
+
+`scripts/safe_retire_worktree.py` began as a local, uncommitted tooling proposal
+on 2026-11-06. As of 2026-11-07, it and the proposed Codex launcher interlock
+are published for review in [PR #508](https://github.com/agatte/home-hub/pull/508),
+head `5771ee638b82b78130c04168ceb3736e58a5df90` (six files, full hosted
+CI green). **The proposal is not an active removal policy, even if this PR is
+later merged.** The host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1`
+rule remains mandatory until an independently approved policy activation and
+verified effective Sandbox launcher rollout. A separate exact-target removal
+and any remote-read authorization remain required. No real removal was exercised.
+The initial design task's no-network restriction is historical; current issue
+and PR status must be verified live.
+
+The helper defaults to dry-run. It uses existing Windows Python 3.13 and native
+`C:\Tools\Git\cmd\git.exe`, with no install, fetch, force, prune, cache cleanup,
+branch deletion or raw filesystem deletion. Each Git subprocess passes a
+per-command safe.directory for the mapped checkout, without changing global
+or repository Git configuration. It refuses:
+
+- Any account other than Windows guest `WDAGUtilityAccount`, any target outside
+  a direct child of `C:\Work\home-hub-project\worktrees`, main, project root,
+  child paths, traversal, alternate drives and noncanonical paths.
+- Reparse points/junctions/symlinks in target ancestry or tree, malformed/non-file
+  `.git`, linked admin directory outside main's `.git\worktrees`, broken backlink,
+  wrong common directory/root, or missing/duplicate/locked/prunable/detached or
+  mismatched target registration.
+- Dirty tracked/submodule state, any `assume-unchanged`/`skip-worktree`
+  (including sparse-checkout) index flags, or any untracked content. All
+  `git ls-files -v -z` tracked entries must have the ordinary `H` tag;
+  unfamiliar flags or malformed output fail closed. Ignored files must
+  match exact generated CPython 3.13 `__pycache__` filenames, pytest cache
+  metadata/known cache entries, or Ruff cache metadata/version/numeric entries.
+  This is a path whitelist, not content authentication. Unknown ignored files,
+  including secrets and other versions/layouts, fail closed; no contents are read.
+- Missing/malformed task registry or any global task in an active, queued,
+  unverified or unknown state. Historical `failed` tasks outside the exact target
+  and its lexical descendants are terminal; failed target/descendant tasks block.
+  This is not proof that an unrelated failed task did not use an old path alias;
+  operator review and quiescence are still required before live removal.
+  Only task/state metadata is read, never prompts, logs, credentials or guest
+  Codex databases. The proposed apply holds the shared root-worktree lifecycle
+  key with Windows FileShare.None; a missing individual lock file is opened or
+  created without creating lock directories. Malformed records also block.
+- Missing exact lowercase 40hex `--expected-head` / `--expected-master`, wrong
+  `--expected-branch`, local `origin/master` mismatch, or HEAD not an ancestor of
+  that master. Squash/rebase-equivalent work is not sufficient proof.
+
+Offline dry-run demonstrates **local ancestry only**. It never claims stale
+`origin/master` is updated remote evidence. Apply also requires `--verify-remote`,
+which performs a separately authorized read-only `git ls-remote origin
+refs/heads/master` and demands that exact expected master. It never fetches or
+advances local refs; stale local refs stop for a separately approved update.
+The remote query uses existing Git configuration; no credential configuration
+changes or interactive prompts are allowed. Do not use this option under a
+no-network/no-credential-access task. No network option was exercised here.
+
+Illustrative offline command after review (replace placeholders):
+
+```powershell
+& C:\Work\home-hub-project\main\.venv\Scripts\python.exe scripts\safe_retire_worktree.py 'C:\Work\home-hub-project\worktrees\<name>' --expected-head <40hex> --expected-branch <branch> --expected-master <40hex>
+```
+
+Only after separate policy/target/network gates would both `--apply` and
+`--verify-remote` be added. The pilot is never an implicit default. This design
+task explicitly preserves `ci-pr-merge-scope-504-20261106` at
+`c7ed184fb0e29baa82d144dadce93b173b826132`, branch
+`work/504-pr-merge-scope-20261106`; its separate pilot approval is not exercised.
+
+Before the sole destructive command, the helper repeats registry and full
+target/main/registration preflight. It calls **only** native `git worktree remove
+<exact-target>`, without force. If Git refuses (including ignored caches), stop
+and retain the blocker; never auto-clean or force. Git failure/timeout can leave
+uncertain partial state: inspect read-only before new authorization, never retry
+or repair automatically.
+
+After success it requires target path/registration absent, branch still at exact
+expected HEAD, all other registration records unchanged, and main tracked/
+untracked status plus listed-file size/mtime/inode metadata unchanged. It prints
+sanitized phase/target/ref evidence and snapshot digests; retain stdout and exit
+status in a separately approved operator evidence location. No file contents or
+Git stderr are printed. Postflight failure stops without rollback; source can be
+recovered from the preserved branch only under a new reviewed action. Ignored
+generated cache bytes are not backed up or recoverable.
+
+Safety review limits: this is a cooperative local guard, not an OS security
+boundary. Protected mappings remain the boundary; guest username does not prove
+the active WSB hash. The proposed lifecycle lease excludes cooperating Read/Write
+launchers and workers, but not arbitrary editors/Git commands or legacy launchers. All target
+users must be quiescent. Remote refs, filesystem paths and registrations can race
+after checks. Metadata/status comparison detects ordinary main edits without
+reading secrets; it cannot prove byte identity against same-size/restored-mtime
+edits or verify untouched bytes throughout every other worktree. The only destructive operation is native Git's target removal; the helper
+may also create a file in the existing Codex lock directory. Preservation
+against concurrent or malicious writers is not guaranteed. Trusted Git executable/configuration and a
+quiet environment are prerequisites. The original exact-workdir Write lease had
+a P2 child-workdir/Read launch race; the local interlock proposal below addresses
+cooperating launchers only. Operator quiescence and reviewed, verified launcher
+rollout are still required before live use.
+The separately authorized pilot remains unexecuted; destructive and remote
+tests were mocked.
+
+Local validation uses `unittest` with mocked filesystem/registry/remote/removal,
+Ruff, in-memory Python compilation and `git diff --check`. No real
+worktree, branch, cache or registration was removed by the initial design task.
+This initial 2026-11-06 snapshot predates the reviewed PR #508 publication;
+the newer exact-head status and acceptance gates are stated above.
+
+Local proposal verification (2026-11-06, base
+`0787b5e794827a1ff55b31db50a3bf9b38abda58`, branch
+`work/504-sandbox-worktree-guard-20261106`): 23 offline unit tests passed using
+the existing main venv Python; Ruff passed for the helper and its tests.
+Tests cover path/link rejection, registration/admin anomalies, hidden
+index flags, tracked/untracked and ignored state, SHA/branch/ancestry and
+remote mismatch, nested Codex workdir registry states, lease API contract,
+preflight races, dry-run, native refusal, and postflight
+registration/branch/main changes. Windows API calls, network and
+all destructive boundaries were mocked. A later supervising, real-target
+DRY-RUN completed successfully without a removal or remote query. An initial
+attempt correctly refused the host-mapped Git checkout until per-command
+safe.directory was added; no Git global setting or credential was changed.
+
+#### Local shared-worktree lifecycle interlock proposal (PR #508 follow-up)
+
+Initially an uncommitted follow-up based on `20a1573ad8fce69184388ec03ecf78c115a3cac3`
+on 2026-11-06; since 2026-11-07 it is published at PR #508 head
+`5771ee638b82b78130c04168ceb3736e58a5df90`. The initial implementation
+task itself performed no remote operation, live apply or worktree removal.
+The effective Sandbox entrypoint still hardcodes the older
+`C:\Work\home-hub-project\main\scripts\CodexSandboxTask.ps1` and is **not**
+updated by a GitHub PR merge alone. This code is implementation evidence for
+review, not live safety or an active policy change.
+
+Both implementations use the existing, required `codex-run-locks` directory and
+`lifecycle-<sha256>.lock`, hashing UTF-8 lowercase Windows-normalized absolute
+root `c:\work\home-hub-project\worktrees\<name>`. Only ASCII-named direct
+Sandbox siblings participate. Root and child workdirs share a case-insensitive
+key. Every accepted workspace path, including main, OSRS, audit and TEMP, must
+use an absolute ASCII C: spelling with canonical components: UNC/device paths,
+ADS, short-name tildes, Unicode, dot traversal, duplicate/trailing separators,
+trailing dots/spaces and reserved device components are refused before path I/O.
+After allowed-root validation, all ancestors are inspected from volume root
+down for reparse points before leaf existence checks or lifecycle classification.
+Other permitted Sandbox locations omit the lifecycle lease only after these checks. Missing sibling roots cannot silently
+fall back to that behavior. Missing/access-denied paths, reparse ancestry,
+invalid names, missing registrations, nested repositories and wrong Git
+common/root directories fail closed. No lifecycle directory is auto-created.
+Participating launcher validation refuses inherited `GIT_*` variables to prevent
+repository redirection; use a clean launcher environment.
+
+Start and Resume acquire `FileAccess.Read` / `FileShare.Read` before target
+validation, snapshots, queued-record writes or worker spawn, releasing in
+`finally`. Worker independently acquires the same shared handle in both modes
+before task-exclusive and legacy Write-workdir-exclusive handles. Acquisition
+is immediate/nonblocking, in that order, with no wait/retry cycle. Worker reloads
+state.json under the task lock and requires both queued status and the exact
+launch generation token before marking running. Start and every Resume mint a
+new token; delayed workers from older attempts and legacy tokenless queued
+records fail closed. Resume and Supersede acquire the same task-exclusive lock
+before reading or changing state. Supersede takes only that lock; Resume takes
+lifecycle then task. Resume releases task ownership after persisting the token
+and before spawning; a Supersede in this gap invalidates the child at admission.
+There are no automatic retries or force transitions. Worker holds all handles
+through Codex and postflight; an outer finally also covers initial state saves,
+attempt-directory creation and failing result/postflight writes. After acquisition, every path verifies workdir
+existence, exact registration, Git top-level and common directory. Worker cannot
+mark `running` or invoke Codex before admission, including exact-thread Resume.
+
+Retirement holds `ReadWrite` / `FileShare.None` through validation, repeated
+registry/preflight, native removal and postflight. Registry is checked under
+exclusive ownership and again before final full preflight. Cooperating launchers
+cannot queue target tasks during this interval. Global queued, running,
+unverified, or unknown task states block retirement regardless of workdir.
+Historical `failed` records are terminal **only when their lexical workdirs
+are outside the exact target and descendants**; failed target/child records
+remain blockers for possible unique work. The live registry previously contained
+30 failed task records, none lexically under the #507 pilot target, so rejecting
+all failures globally would permanently prevent useful cleanup. Legacy alias
+records are not canonically resolved, and a failed record outside the target
+could conceal an old aliased workdir; review that historical uncertainty and
+ensure all target users are quiescent before any separately approved apply.
+Previously queued tasks block retirement; even if delayed or superseded out of band, a worker
+cannot acquire during retirement and must reject a removed root after release.
+Admission failure leaves it queued/unresolved, never falsely running. Do not
+auto-resume or supersede it without existing process inspection.
+
+Rollout gate: review/merge and separately authorized integration must establish
+which script the main entrypoint actually invokes. Drain/inspect existing
+workers and queued tasks, including child workdirs and Read mode. Old queued
+records without generation tokens cannot be launched by the new Worker: inspect
+process trees and explicitly supersede or recover through the existing gates;
+never add tokens by hand or automatically retry. Verify all
+Start/Resume/Worker paths use the protocol before separately authorized removal.
+Older script copies, direct Codex launches, orphaned Codex children after worker
+death, manual user/editor activity and uncooperative filesystem/Git writers
+bypass this cooperative lock. Terminal records alone do not prove migration.
+Operator quiescence, trusted lock-directory ancestry and fresh remote/target
+authorization remain mandatory. Malicious concurrent path replacement is outside
+this protocol. The host-only mandatory removal rule remains active.
+
+`tests/test_codex_sandbox_lifecycle_lock.py` extracts functions using PowerShell
+5.1 AST parsing without invoking the launcher or Codex. It covers case/root/child
+keys, foreign locations, actual read-only registration validation, missing
+workdirs, injected link/access failures and admission order. A disposable fixture
+inside this worktree probes real Windows interoperability: two launcher shared
+handles coexist and exclude Python exclusive acquisition; release permits later
+exclusive acquisition; Python exclusive ownership excludes launcher admission;
+simulated removed-registration validation fails after acquisition and releases
+the handle. No real target lock or removal is used. Existing guard tests mock
+all destructive/network operations.
+
+P2 closure follow-up to independent read-only review
+`1ee5635be05448d2af2043548e2283fe` (2026-11-06), originally local and
+now published at `5771ee638b82b78130c04168ceb3736e58a5df90`: the alias
+policy and global registry drain address P2 #1; locked state reload,
+launch generation identity, serialized Resume/Supersede and exception-safe handle disposal address P2 #2. Deterministic
+PowerShell fixtures execute extracted action blocks with launch/process stubs,
+exercise Resume/Supersede contention and ordered transitions, reject completed,
+superseded and older-generation queued workers, and check real task/lifecycle/
+workdir handle release after setup/result-write failures. Reparse ancestry is
+injected, without creating junctions or accessing aliased destinations.
+
+Validation on 2026-11-06: Python 3.13.15 passed 23 guard unit tests and 10
+launcher tests (33 total), including real Windows FileShare interop and task
+exclusion. Ruff 0.15.10 and the Windows PowerShell 5.1.26100.9818 parser passed;
+`git diff --check` passed. Fixtures never invoke the launcher entrypoint or Codex.
+The initial five-file test task did not itself integrate the launcher or perform
+any destructive action. The follow-up was published in PR #508 on 2026-11-07;
+independent read-only reviews found no P0–P2 blockers for **review-only**
+publication. Hosted Linux CI passed at exact head `5771ee638b82b78130c04168ceb3736e58a5df90`.
+Neither fixture success nor GitHub review status proves effective launcher
+integration or safe live removal. Reverify path-policy compatibility,
+lock/generation admission, exceptional release and legacy migration before apply.
+Residual TOCTOU: separate path-attribute checks are not handle-pinned
+filesystem identity; hostile concurrent rename/reparse replacement
+and noncooperating/legacy launchers remain outside this cooperative protocol.
+A global registry scan is a conservative snapshot, not a global transaction;
+new unrelated tasks can appear afterward. Target-scoped lifecycle exclusion
+protects cooperating target admissions, not arbitrary registry or filesystem
+writers. No live deletion-safety claim follows from fixture success.
+
+#### Pre-merge policy and effective launcher checkpoint — 2026-11-07
+
+[PR #508](https://github.com/agatte/home-hub/pull/508) is review-ready with full
+hosted CI success at `5771ee638b82b78130c04168ceb3736e58a5df90`.
+Review-ready and mergeable do **not** mean approved for policy activation,
+effective launcher replacement, or any real worktree removal. Independent
+read-only rollout review `72220f8286e64fe1972222581aee0b83` identified
+policy language that could incorrectly imply automatic activation at merge;
+the proposed `AGENTS.md` text now explicitly requires a separate
+owner-approved policy-activation decision **after** verified launcher rollout.
+
+The actual Sandbox entrypoint
+`C:\Work\PC-Performance-Audit\.rdc-sandbox-state\Invoke-CodexProjectTask.ps1`
+hardcodes `C:\Work\home-hub-project\main\scripts\CodexSandboxTask.ps1`.
+Its current file and `origin/master` have the same old Git blob
+`5d7e9d7bb3f6cef7887ccf0ae677936b16ed4403`; PR #508 proposes
+`d85a12ff8dec90178fce7f063d4f05e94310656f`. A GitHub merge does not
+update that effective Sandbox script. At this read-only checkpoint `main`
+was `41f8a1d1`, 149 commits behind local `origin/master=0787b5e7`,
+with two unrelated, dirty monitor-brightness files also changed upstream.
+Do not fast-forward or overwrite them as an incidental launcher rollout.
+
+For a future **separately authorized** narrow Sandbox script rollout, first
+stop new admissions and confirm no active/queued/orphaned legacy workers.
+Take a verified exact-file backup, replace only the effective `main`
+launcher, verify source and destination byte hashes, then perform separately
+approved disposable Start/Worker/Resume Read+Write and child-workdir tests
+through the actual external entrypoint. At this checkpoint the existing
+launcher SHA-256 is
+`652B4681AF3155D164308454F3BB8AD9793EA6820108CAC8CDD0976B06CD8A69`;
+the reviewed PR file SHA-256 is
+`682E70FDF8E6EC5A0C15250EE652529D852C02F38F831A3E994B3331018DB60C`.
+No replacement, backup write, integration test or rollout occurred during
+this review. Any rollback also requires quiescence and task-state inspection.
+Only afterward may the owner separately consider policy activation and an
+exact-target removal, with fresh remote evidence and operator quiescence.
+
 ### Current registered-worktree checkpoint — 2026-10-07
 
 The 2026-09-20 recovery-era statement below that `main` was the only registered worktree is historical, not current. The bounded Project Admin reconciliation found multiple registered task/diagnostic worktrees in the writable Sandbox project root.
