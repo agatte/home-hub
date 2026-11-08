@@ -347,17 +347,17 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ## Worktrees
 
-### Sandbox worktree-retirement policy candidate (#504; NOT ACTIVE)
+### Sandbox worktree-retirement policy (#504; owner-activated, no target removal authorized)
 
 The implementation and lifecycle tests merged in [PR #508](https://github.com/agatte/home-hub/pull/508) (`b12a6e0e`); the follow-up [PR #509](https://github.com/agatte/home-hub/pull/509) (`faa6b750`) restored successful full `master` CI. The reviewed launcher was separately installed at the actual protected Sandbox entrypoint and verified through no-edit Read/Write, child-workdir, lifecycle-lock exclusion and interrupted-task exact-thread Resume probes. Issue [#504](https://github.com/agatte/home-hub/issues/504) contains dated acceptance evidence, **not** permission to remove a worktree. No live retirement has been authorized or executed.
 
-The host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` rule remains in force. The following is a **policy review candidate**, not an activated Sandbox exception.
+The real-host `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` guard remains mandatory on the real host. The separate, narrowly scoped **Sandbox-only policy** is owner-activated; it does not replace that host procedure or grant blanket deletion authority.
 
-#### Proposed activation contract (separate owner decision required)
+#### Activation record and mandatory separate target approvals
 
-Activation requires **both** (1) a distinct affirmative owner decision recorded in #504 approving the Sandbox-only policy exception and (2) merge of its reviewed policy wording. Draft publication, CI, launcher rollout and even merge **without that separately recorded activation decision** do not activate it. Until both exist, **no worktree retirement from Sandbox**. Activation never authorizes a particular target, remote read, ref update or removal; those are separate gates.
+The reviewed policy wording was merged in [PR #510](https://github.com/agatte/home-hub/pull/510) as `1e4ac6db1ae22ac0126bbc6e526ec4b55c3a38ee` with successful [post-merge full CI](https://github.com/agatte/home-hub/actions/runs/42432306306). On 2026-11-08, the owner then **separately approved policy activation**, explicitly recorded in [#504's activation decision](https://github.com/agatte/home-hub/issues/504#issuecomment-6717817509). Both governance requirements are satisfied. The earlier merge alone did **not** activate the policy. No particular worktree has been approved for retirement, and the historical pilot remains preserved. Operators must confirm the current canonical text is aligned and obtain fresh, distinct target-scoped authorization before any apply, remote read, ref update or removal; uncertainty is a stop condition.
 
-After activation, a separately approved single exact-target operation could use `scripts/safe_retire_worktree.py` only inside the verified protected Windows Sandbox as `WDAGUtilityAccount`, for direct children of `C:\Work\home-hub-project\worktrees`. Username alone does not prove the active protected Sandbox mapping. The real-host guard remains mandatory on the real host; generic host C: access, direct deletion and broad cleanup remain prohibited.
+Under the activated policy, a **separately approved single exact-target** operation may use `scripts/safe_retire_worktree.py` only inside the verified protected Windows Sandbox as `WDAGUtilityAccount`, for direct children of `C:\Work\home-hub-project\worktrees`. Username alone does not prove the active protected Sandbox mapping. The real-host guard remains mandatory on the real host; generic host C: access, direct deletion and broad cleanup remain prohibited.
 
 Each target needs fresh, documented preflight and explicit owner approval covering all four safeguards:
 
