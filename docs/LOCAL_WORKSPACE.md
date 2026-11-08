@@ -347,19 +347,34 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ## Worktrees
 
-### Proposed Sandbox retirement helper (#504, 2026-11-06; not approved policy)
+### Sandbox worktree-retirement policy candidate (#504; NOT ACTIVE)
 
-`scripts/safe_retire_worktree.py` began as a local, uncommitted tooling proposal
-on 2026-11-06. As of 2026-11-07, it and the proposed Codex launcher interlock
-are published for review in [PR #508](https://github.com/agatte/home-hub/pull/508),
-head `5771ee638b82b78130c04168ceb3736e58a5df90` (six files, full hosted
-CI green). **The proposal is not an active removal policy, even if this PR is
-later merged.** The host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1`
-rule remains mandatory until an independently approved policy activation and
-verified effective Sandbox launcher rollout. A separate exact-target removal
-and any remote-read authorization remain required. No real removal was exercised.
-The initial design task's no-network restriction is historical; current issue
-and PR status must be verified live.
+The implementation and lifecycle tests merged in [PR #508](https://github.com/agatte/home-hub/pull/508) (`b12a6e0e`); the follow-up [PR #509](https://github.com/agatte/home-hub/pull/509) (`faa6b750`) restored successful full `master` CI. The reviewed launcher was separately installed at the actual protected Sandbox entrypoint and verified through no-edit Read/Write, child-workdir, lifecycle-lock exclusion and interrupted-task exact-thread Resume probes. Issue [#504](https://github.com/agatte/home-hub/issues/504) contains dated acceptance evidence, **not** permission to remove a worktree. No live retirement has been authorized or executed.
+
+The host-only `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` rule remains in force. The following is a **policy review candidate**, not an activated Sandbox exception.
+
+#### Proposed activation contract (separate owner decision required)
+
+Activation requires **both** (1) a distinct affirmative owner decision recorded in #504 approving the Sandbox-only policy exception and (2) merge of its reviewed policy wording. Draft publication, CI, launcher rollout and even merge **without that separately recorded activation decision** do not activate it. Until both exist, **no worktree retirement from Sandbox**. Activation never authorizes a particular target, remote read, ref update or removal; those are separate gates.
+
+After activation, a separately approved single exact-target operation could use `scripts/safe_retire_worktree.py` only inside the verified protected Windows Sandbox as `WDAGUtilityAccount`, for direct children of `C:\Work\home-hub-project\worktrees`. Username alone does not prove the active protected Sandbox mapping. The real-host guard remains mandatory on the real host; generic host C: access, direct deletion and broad cleanup remain prohibited.
+
+Each target needs fresh, documented preflight and explicit owner approval covering all four safeguards:
+
+1. **Exact Git/filesystem identity.** Check ancestors and tree for reparse points; the linked worktree registration/admin backlink and branch; clean tracked, submodule, index/hidden flags, untracked and ignored-cache inventory; unique state; exact HEAD and ancestry to current master. Preserve dirty `main` and every other worktree—no incidental reset, stash, fast-forward or overwrite.
+2. **Operator and lifecycle quiescence.** Inspect global task metadata, including Read/Write, queued, stale, interrupted, older failed target/child tasks and historical aliases; independently inspect live worker/process trees, older launcher copies, direct Codex/Git, editors and real-host writers. The shared lifecycle lock protects *cooperating* launchers only. A stale or uncertain writer is a stop condition, even if the task registry is all terminal.
+3. **Fresh remote authority.** Confirm exact GitHub `master` versus local `origin/master`. The helper never fetches. Obtain **separate authorization** for any needed fetch-only ref alignment and for the read-only `git ls-remote origin refs/heads/master` used by `--verify-remote`; reject mismatch or network/credential surprises. Offline dry-run is not current remote evidence.
+4. **Exact apply and postflight.** Obtain a distinct owner decision naming target, expected HEAD/branch/master, approved remote read and explicit `--apply --verify-remote` arguments. The guard repeats registration, registry and full preflight under an exclusive target lifecycle lock; its only destructive step is native `git worktree remove <exact-target>` without force. Verify target/registration gone, branch unchanged and other registrations/main snapshot preserved. On refusal, timeout, unknown result or failed postflight, stop—no automatic cleanup, retry or rollback.
+
+The protocol is **cooperative, not an OS security boundary**. It cannot exclude manual/legacy Git writers, malicious path swaps, alias history or concurrent real-host edits. A green test suite or another worktree's clean state does not establish a new candidate's safety. The historical pilot `ci-pr-merge-scope-504-20261106` remains **preserved and not preapproved**.
+
+#### Read-only pre-activation checkpoint — November 7, 2026
+
+A metadata-only registry audit found **610 terminal tasks** (579 completed, 30 failed, 1 superseded), none unresolved/malformed and no noncanonical path spellings. Historical paths also include staging, snapshot and guest-profile locations outside registered worktrees; they cannot conclusively rule out all old aliases. A Sandbox process snapshot showed zero Codex workers, Git or recognized editors, not proof of ongoing or real-host quiescence.
+
+The proposed pilot remained registered/clean at `c7ed184fb0e29baa82d144dadce93b173b826132` (`work/504-pr-merge-scope-20261106`), with one completed target task, no failed/unresolved target records, 998 ordinary tracked entries, zero hidden index flags/untracked items and ten known ignored cache entries. The reviewed helper passed a local **offline dry-run** (`apply=false`, `remote_verified=false`), and no worktree was removed. There were 167 registered worktrees, including two prunable and 36 detached; none is automatically eligible for retirement.
+
+**Remote freshness remains open:** Sandbox local `origin/master=b12a6e0e` lagged GitHub `master=faa6b750`; no fetch or remote query was done. These observations are dated and must be repeated before each target operation.
 
 The helper defaults to dry-run. It uses existing Windows Python 3.13 and native
 `C:\Tools\Git\cmd\git.exe`, with no install, fetch, force, prune, cache cleanup,
