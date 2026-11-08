@@ -347,15 +347,21 @@ Inspect the resulting ZIP and require all of the following before closeout:
 
 ## Worktrees
 
-### Sandbox worktree-retirement policy (#504; owner-activated, no target removal authorized)
+### Sandbox worktree-retirement policy (#504; owner-activated, per-target approval required)
 
-The implementation and lifecycle tests merged in [PR #508](https://github.com/agatte/home-hub/pull/508) (`b12a6e0e`); the follow-up [PR #509](https://github.com/agatte/home-hub/pull/509) (`faa6b750`) restored successful full `master` CI. The reviewed launcher was separately installed at the actual protected Sandbox entrypoint and verified through no-edit Read/Write, child-workdir, lifecycle-lock exclusion and interrupted-task exact-thread Resume probes. Issue [#504](https://github.com/agatte/home-hub/issues/504) contains dated acceptance evidence, **not** permission to remove a worktree. No live retirement has been authorized or executed.
+The implementation and lifecycle tests merged in [PR #508](https://github.com/agatte/home-hub/pull/508) (`b12a6e0e`); the follow-up [PR #509](https://github.com/agatte/home-hub/pull/509) (`faa6b750`) restored successful full `master` CI. The reviewed launcher was separately installed at the actual protected Sandbox entrypoint and verified through no-edit Read/Write, child-workdir, lifecycle-lock exclusion and interrupted-task exact-thread Resume probes. Issue [#504](https://github.com/agatte/home-hub/issues/504) contains dated acceptance evidence, **not** permission to remove a worktree. At that original implementation checkpoint, no live retirement had yet been authorized or executed; the later approved pilot retirement is recorded below.
 
 The real-host `C:\RecoveryTools\Safe-RemoveGitWorktree.ps1` guard remains mandatory on the real host. The separate, narrowly scoped **Sandbox-only policy** is owner-activated; it does not replace that host procedure or grant blanket deletion authority.
 
 #### Activation record and mandatory separate target approvals
 
-The reviewed policy wording was merged in [PR #510](https://github.com/agatte/home-hub/pull/510) as `1e4ac6db1ae22ac0126bbc6e526ec4b55c3a38ee` with successful [post-merge full CI](https://github.com/agatte/home-hub/actions/runs/42432306306). On 2026-11-08, the owner then **separately approved policy activation**, explicitly recorded in [#504's activation decision](https://github.com/agatte/home-hub/issues/504#issuecomment-6717817509). Both governance requirements are satisfied. The earlier merge alone did **not** activate the policy. No particular worktree has been approved for retirement, and the historical pilot remains preserved. Operators must confirm the current canonical text is aligned and obtain fresh, distinct target-scoped authorization before any apply, remote read, ref update or removal; uncertainty is a stop condition.
+The reviewed policy wording was merged in [PR #510](https://github.com/agatte/home-hub/pull/510) as `1e4ac6db1ae22ac0126bbc6e526ec4b55c3a38ee` with successful [post-merge full CI](https://github.com/agatte/home-hub/actions/runs/42432306306). On 2026-11-08, the owner then **separately approved policy activation**, explicitly recorded in [#504's activation decision](https://github.com/agatte/home-hub/issues/504#issuecomment-6717817509). Both governance requirements are satisfied. The earlier merge alone did **not** activate the policy. The first target-specific approval and completed retirement are documented below; policy activation alone approves no other target. Operators must confirm the current canonical text is aligned and obtain fresh, distinct target-scoped authorization before any apply, remote read, ref update or removal; uncertainty is a stop condition.
+
+#### First guarded single-target retirement — November 8, 2026
+
+After separate owner authorization for the exact target, including an operator Resource Monitor check reporting no associated host handles, the reviewed Sandbox guard ran once with `--apply --verify-remote` for `C:\Work\home-hub-project\worktrees\ci-pr-merge-scope-504-20261106` (branch `work/504-pr-merge-scope-20261106`, HEAD `c7ed184fb0e29baa82d144dadce93b173b826132`, verified master `aa9305143e5331ecbeb7b3ee6f18e6817aed2719`). The guard returned exit 0 and used only native Git worktree removal without force. [Approval, output and independent postflight](https://github.com/agatte/home-hub/issues/504#issuecomment-6725057403).
+
+Independent postflight found the target directory and registration absent (166 remaining registrations, previously 167), the original Git branch preserved at its exact HEAD, and the unrelated Sandbox `main` checkout unchanged at `41f8a1d1f78587b39a3c753c0933cb931c0ef936` with three preexisting tracked edits. No branch deletion, broad cleanup or other worktree retirement was authorized. The host no-handles report and guest process checks were point-in-time evidence, not a permanent guarantee against concurrent writers. Each subsequent target requires its own approval, verification and guard execution.
 
 Under the activated policy, a **separately approved single exact-target** operation may use `scripts/safe_retire_worktree.py` only inside the verified protected Windows Sandbox as `WDAGUtilityAccount`, for direct children of `C:\Work\home-hub-project\worktrees`. Username alone does not prove the active protected Sandbox mapping. The real-host guard remains mandatory on the real host; generic host C: access, direct deletion and broad cleanup remain prohibited.
 
@@ -366,7 +372,7 @@ Each target needs fresh, documented preflight and explicit owner approval coveri
 3. **Fresh remote authority.** Confirm exact GitHub `master` versus local `origin/master`. The helper never fetches. Obtain **separate authorization** for any needed fetch-only ref alignment and for the read-only `git ls-remote origin refs/heads/master` used by `--verify-remote`; reject mismatch or network/credential surprises. Offline dry-run is not current remote evidence.
 4. **Exact apply and postflight.** Obtain a distinct owner decision naming target, expected HEAD/branch/master, approved remote read and explicit `--apply --verify-remote` arguments. The guard repeats registration, registry and full preflight under an exclusive target lifecycle lock; its only destructive step is native `git worktree remove <exact-target>` without force. Verify target/registration gone, branch unchanged and other registrations/main snapshot preserved. On refusal, timeout, unknown result or failed postflight, stop—no automatic cleanup, retry or rollback.
 
-The protocol is **cooperative, not an OS security boundary**. It cannot exclude manual/legacy Git writers, malicious path swaps, alias history or concurrent real-host edits. A green test suite or another worktree's clean state does not establish a new candidate's safety. The historical pilot `ci-pr-merge-scope-504-20261106` remains **preserved and not preapproved**.
+The protocol is **cooperative, not an OS security boundary**. It cannot exclude manual/legacy Git writers, malicious path swaps, alias history or concurrent real-host edits. A green test suite or another worktree's clean state does not establish a new candidate's safety. Policy activation did **not** preapprove the historical pilot `ci-pr-merge-scope-504-20261106`; it was later removed only under the separate documented target approval above.
 
 #### Read-only pre-activation checkpoint — November 7, 2026
 
@@ -374,7 +380,7 @@ A metadata-only registry audit found **610 terminal tasks** (579 completed, 30 f
 
 The proposed pilot remained registered/clean at `c7ed184fb0e29baa82d144dadce93b173b826132` (`work/504-pr-merge-scope-20261106`), with one completed target task, no failed/unresolved target records, 998 ordinary tracked entries, zero hidden index flags/untracked items and ten known ignored cache entries. The reviewed helper passed a local **offline dry-run** (`apply=false`, `remote_verified=false`), and no worktree was removed. There were 167 registered worktrees, including two prunable and 36 detached; none is automatically eligible for retirement.
 
-**Remote freshness remains open:** Sandbox local `origin/master=b12a6e0e` lagged GitHub `master=faa6b750`; no fetch or remote query was done. These observations are dated and must be repeated before each target operation.
+**At this November 7 checkpoint, remote freshness remained open:** Sandbox local `origin/master=b12a6e0e` lagged GitHub `master=faa6b750`; no fetch or remote query was done. These observations are dated and must be repeated before each target operation.
 
 The helper defaults to dry-run. It uses existing Windows Python 3.13 and native
 `C:\Tools\Git\cmd\git.exe`, with no install, fetch, force, prune, cache cleanup,
@@ -417,7 +423,7 @@ refs/heads/master` and demands that exact expected master. It never fetches or
 advances local refs; stale local refs stop for a separately approved update.
 The remote query uses existing Git configuration; no credential configuration
 changes or interactive prompts are allowed. Do not use this option under a
-no-network/no-credential-access task. No network option was exercised here.
+no-network/no-credential-access task. At the historical pre-activation checkpoint, no network option was exercised.
 
 Illustrative offline command after review (replace placeholders):
 
@@ -425,11 +431,11 @@ Illustrative offline command after review (replace placeholders):
 & C:\Work\home-hub-project\main\.venv\Scripts\python.exe scripts\safe_retire_worktree.py 'C:\Work\home-hub-project\worktrees\<name>' --expected-head <40hex> --expected-branch <branch> --expected-master <40hex>
 ```
 
-Only after separate policy/target/network gates would both `--apply` and
-`--verify-remote` be added. The pilot is never an implicit default. This design
-task explicitly preserves `ci-pr-merge-scope-504-20261106` at
+For any future separately approved target, `--apply` and `--verify-remote`
+are both required. The original design checkpoint preserved
+`ci-pr-merge-scope-504-20261106` at
 `c7ed184fb0e29baa82d144dadce93b173b826132`, branch
-`work/504-pr-merge-scope-20261106`; its separate pilot approval is not exercised.
+`work/504-pr-merge-scope-20261106`; its later approved removal is documented above.
 
 Before the sole destructive command, the helper repeats registry and full
 target/main/registration preflight. It calls **only** native `git worktree remove
@@ -460,9 +466,9 @@ against concurrent or malicious writers is not guaranteed. Trusted Git executabl
 quiet environment are prerequisites. The original exact-workdir Write lease had
 a P2 child-workdir/Read launch race; the local interlock proposal below addresses
 cooperating launchers only. Operator quiescence and reviewed, verified launcher
-rollout are still required before live use.
-The separately authorized pilot remains unexecuted; destructive and remote
-tests were mocked.
+rollout were required before first live use. At this original design checkpoint,
+the pilot remained unexecuted and destructive and remote tests were mocked;
+its later supervised retirement is documented above.
 
 Local validation uses `unittest` with mocked filesystem/registry/remote/removal,
 Ruff, in-memory Python compilation and `git diff --check`. No real
@@ -490,10 +496,10 @@ Initially an uncommitted follow-up based on `20a1573ad8fce69184388ec03ecf78c115a
 on 2026-11-06; since 2026-11-07 it is published at PR #508 head
 `5771ee638b82b78130c04168ceb3736e58a5df90`. The initial implementation
 task itself performed no remote operation, live apply or worktree removal.
-The effective Sandbox entrypoint still hardcodes the older
-`C:\Work\home-hub-project\main\scripts\CodexSandboxTask.ps1` and is **not**
-updated by a GitHub PR merge alone. This code is implementation evidence for
-review, not live safety or an active policy change.
+At the original PR-review checkpoint, the effective Sandbox entrypoint still
+hardcoded the older `C:\Work\home-hub-project\main\scripts\CodexSandboxTask.ps1`;
+a GitHub PR merge alone did not update it. The subsequently verified effective
+launcher and live first-retirement acceptance are recorded above and in #504.
 
 Both implementations use the existing, required `codex-run-locks` directory and
 `lifecycle-<sha256>.lock`, hashing UTF-8 lowercase Windows-normalized absolute
