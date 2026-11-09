@@ -52,6 +52,20 @@ purge. Default challenge randomness is lazy secure randomness; deterministic
 injection is fictional-test-only. A new object has no old challenge state.
 This is not a receiver replacement or production replay ledger.
 
+`backend/services/apple_music_offline_raw_ingress.py` adds an OFFLINE-only
+candidate for the existing exact eight-field body, using invented fixtures only.
+It accepts exact bytes up to a proposed 2048-byte raw limit (including whitespace),
+rejects BOM/invalid UTF-8, decoded duplicate keys recursively, numeric tokens,
+invalid Unicode/control characters, unknown fields and changed fixed flags.
+It reuses the receiver's semantic validation, including the separate reserialized
+1024-byte and artist 512-byte UTF-8/256-character limits. Its immutable review repr
+and fixed refusals are redacted; decoder exceptions are not chained into refusals.
+It is not an authenticated endpoint; no transport, header trust, streaming reader,
+sender integration, admission state, retention approval or live authority exists.
+Origin/Host/forwarded headers and `transport_verified` cannot prove anything here.
+This candidate introduces no envelope or version fields. Independent review and
+all live-transfer decisions below remain outstanding.
+
 ## Threat model and trust boundaries
 
 Protect the provisional name, consent context, credentials, nonce and temporary
@@ -116,8 +130,10 @@ logging. Sanitizing only application logging leaves other copies exposed.
    A server cannot independently infer GUI events: reviewed sender wiring and
    fictional mounted-event tests are an additional mandatory trust boundary.
 4. **Parse/admit:** bound streamed **raw body bytes before JSON parsing**, proposed
-   maximum 2048 bytes for the whole versioned envelope including bounded control
-   fields. Reject compressed bodies, oversized/chunked accumulation, duplicate
+   maximum 2048 bytes for the existing exact eight-field body. Any separate
+   envelope/control fields remain undecided and require independent schema review;
+   the offline raw parser introduces none. Reject compressed bodies,
+   oversized/chunked accumulation, duplicate
    JSON keys at every nesting level, invalid UTF-8, unknown fields and wrong types.
    Keep the existing exact eight-field name payload contract and 512-byte UTF-8
    label limit; envelope version/control fields require independent schema review.
@@ -162,8 +178,10 @@ needs lifecycle cleanup tests; synthetic object disposal cannot prove erasure.
 
 ## Acceptance, evidence and next approval gates
 
-Draft PR #498 publishes the fictional gate, its unittest module, the
-merged-status reconciliation and this PROPOSED protocol for code review.
+[PR #498](https://github.com/agatte/home-hub/pull/498) merged the fictional gate,
+its unittest module, status reconciliation and this PROPOSED protocol at
+`bfbc558f5b978b3a07fa5017a125863dedbece11` (supplied merged status and local
+Git HEAD; no network status fetch in this task).
 No API registration, auth change, TLS configuration, secret provisioning,
 private data, network or production effect is authorized by that publication.
 The focused suite covers refusal, binding, revision restoration, exact deadline,
@@ -192,9 +210,11 @@ ChatGPT owns integration/handoff. Before real transfer, in order:
    No remote-agent access to the private source or name is implied. Catalog,
    identity matching, persistence, ranking and device actions remain separately gated.
 
-Resume from draft PR #498 and issue #431; recheck the exact head and CI before
-integration. The three prior offline suites and the new suite are the bounded
-regression target, with AST parsing and Git whitespace/scope checks.
+Resume from merged PR #498, [PR #501](https://github.com/agatte/home-hub/pull/501)
+and issue #431. The three-path offline raw-parser candidate was published for
+review in PR #501; independently recheck its current state and exact-head CI
+before any integration. The four prior offline suites plus the raw-parser suite are the
+bounded regression target, with AST parsing and Git whitespace/scope checks.
 Their success proves synthetic behavior only, not human consent, TLS, cleanup
 of OS copies or live security.
 
@@ -204,5 +224,17 @@ prior single-artist suite **40 passed**; prior rehearsal suite **20 passed**;
 prior mounted Tk suite **5 passed**, no skips.
 Each ran separately with `-B -m unittest discover -s tests -p <module> -q`.
 Python AST parsing of both new Python files and `git diff --check` passed.
-The original four-file publication is review-only; any corrective push and
-merge need their own separate approval. No deployment is authorized.
+That original four-file publication is merged, offline only. The raw-parser
+candidate is published for review in PR #501; merging and deployment remain
+separate authorization gates. No deployment or real transfer is authorized.
+
+Raw-parser validation on 2026-11-05, approved Windows Sandbox, Python 3.13:
+**18 passed**, including exact raw/label limits, Unicode, nested/escaped duplicate
+keys, extreme numeric tokens, fixed errors without decoder context, repeat calls
+and a fresh-import application-I/O guard. These guards do not prohibit Python's
+own module-loading reads or prove erasure of traceback locals or memory copies.
+The four prior suites reran separately: single-artist **40**, rehearsal **20**,
+mounted Tk **5**, gate **20**, all passed with no skips. AST parsing of the two
+raw-parser Python files and Git whitespace checks passed. Exactly the parser,
+its tests and this protocol were included in the PR #501 publication;
+no HTTP endpoint, production deployment or real artist transfer was authorized.
