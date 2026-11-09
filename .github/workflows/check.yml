@@ -74,7 +74,9 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
-        run: python -u -m pytest tests/ -v -o faulthandler_timeout=90
+        # Show the slowest tests for #504 performance review without skipping
+        # coverage, changing fixture semantics, or weakening timeouts.
+        run: python -u -m pytest tests/ -v --durations=25 -o faulthandler_timeout=90
         env:
           APP_ENV: testing
 

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
+from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -134,7 +136,82 @@ def _make_orchestrator(
             gameday_service=gameday,
             viewer_sync=viewer_sync,
         )
+
+    # This helper only constructs mocked Hue/TTS/WS collaborators. Keep the
+    # authored class-level choreography intact (other tests validate actual
+    # per-fixture timing), but avoid real multi-second sleeps in dispatch,
+    # cooldown, and ownership tests that only assert actions and ordering.
+    # Per-instance copies prevent test mutations from changing other tests.
+    orch.SEQUENCES = {
+        key: replace(
+            sequence,
+            light_steps=[
+                replace(step, delay_ms=0, state=dict(step.state))
+                for step in sequence.light_steps
+            ],
+            tts_lines=list(sequence.tts_lines),
+        )
+        for key, sequence in CelebrationOrchestrator.SEQUENCES.items()
+    }
     return orch, hue, tts, ws, gameday
+
+
+def test_mock_orchestrator_fast_steps_do_not_mutate_authored_timing():
+    authored = CelebrationOrchestrator.SEQUENCES["touchdown"]
+    original = [
+        (step.light_id, step.delay_ms, dict(step.state))
+        for step in authored.light_steps
+    ]
+    assert any(delay_ms > 0 for _, delay_ms, _ in original)
+
+    orch, *_ = _make_orchestrator()
+    fast_steps = orch.SEQUENCES["touchdown"].light_steps
+    assert orch.SEQUENCES["touchdown"] is not authored
+    assert [step.light_id for step in fast_steps] == [
+        step.light_id for step in authored.light_steps
+    ]
+    assert all(step.delay_ms == 0 for step in fast_steps)
+    assert [step.state for step in fast_steps] == [
+        step.state for step in authored.light_steps
+    ]
+    assert [
+        (step.light_id, step.delay_ms, dict(step.state))
+        for step in authored.light_steps
+    ] == original
+
+
+@pytest.mark.asyncio
+async def test_light_step_waits_are_cumulative_and_ordered(monkeypatch):
+    """Keep real pacing logic covered without waiting for seconds of light FX."""
+    orch, hue, *_ = _make_orchestrator()
+    clock = [100.0]
+    waits = []
+
+    async def advance_clock(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    # Replace only names inside the orchestrator module, not global asyncio
+    # or time functions used by pytest/the event loop.
+    monkeypatch.setattr(
+        _orch_module, "time", SimpleNamespace(time=lambda: clock[0]),
+    )
+    monkeypatch.setattr(
+        _orch_module, "asyncio",
+        SimpleNamespace(sleep=advance_clock, CancelledError=asyncio.CancelledError),
+    )
+    steps = [
+        LightStep(light_id="3", delay_ms=40, state={"on": True}),
+        LightStep(light_id="1", delay_ms=0, state={"on": True}),
+        LightStep(light_id="2", delay_ms=20, state={"on": True}),
+    ]
+    written = await orch._run_light_steps(steps, "timing_contract")
+
+    assert written == {"1", "2", "3"}
+    assert [
+        call.args[0] for call in hue.set_light.await_args_list
+    ] == ["1", "2", "3"]
+    assert waits == pytest.approx([0.020, 0.020], abs=0.001)
 
 
 def _td_event(
