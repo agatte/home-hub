@@ -11,9 +11,14 @@
     selectedRoom = selectedRoom === id ? null : id
   }
   function closeLighting(event) {
-    if (event.key !== 'Escape' || !selectedRoom) return
+    if (event.key !== 'Escape' || event.defaultPrevented || !selectedRoom) return
     const prefix = window.matchMedia('(max-width:700px)').matches ? 'phone' : 'dock'
-    document.getElementById(`${prefix}-room-${selectedRoom}`)?.focus()
+    const trigger = document.getElementById(`${prefix}-room-${selectedRoom}`)
+    const reveal = document.getElementById(`${prefix}-reveal-${selectedRoom}`)
+    const focused = document.activeElement
+    // Escape from navigation or an overlay belongs to that context, not this room.
+    if (!focused || (focused !== trigger && !reveal?.contains(focused))) return
+    trigger?.focus()
     selectedRoom = null
     event.preventDefault()
   }
