@@ -74,7 +74,9 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
   })
 
   it('never opens a group dialog from Home or Control, and Back is not an X-to-Control', () => {
-    expect(home).toContain("href={lightingDetailHref(group.id, 'home')}")
+    expect(home).not.toContain('lightingDetailHref')
+    expect(home).toContain('on:click={() => toggleRoom(group.id)}')
+    expect(home).toContain('href="/quiet-atlas/control"')
     expect(home).toContain('href={CONTROL_SCENES_HREF}')
     expect(control).toContain('parseControlIntent($page.url.searchParams)')
     expect(experience).toContain("goto(lightingDetailHref(id, 'control'))")
