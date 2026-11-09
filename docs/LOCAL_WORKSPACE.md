@@ -345,6 +345,23 @@ Inspect the resulting ZIP and require all of the following before closeout:
 - any test snapshot is removed afterward so recovery validation does not become
   permanent clutter.
 
+## Supported Sandbox-native test route (#504)
+
+Use the **existing protected Windows Sandbox** (`WDAGUtilityAccount`, mapped `C:\Work`) for focused local checks. Verify the exact checkout, Git status, available binaries, and Codex registry before any change. This route does **not** require global PATH changes, package installation, script-policy changes, or real-host access. Run from the intended HomeHub checkout (not automatically from the dirty `main`).
+
+```powershell
+Set-Location 'C:\Work\home-hub-project\worktrees\<owned-clean-checkout>'
+$env:APP_ENV = 'testing'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+& 'C:\Work\home-hub-project\main\.venv\Scripts\python.exe' -B -m pytest tests/test_ci_change_scope.py -q -p no:cacheprovider --disable-warnings --maxfail=1
+& 'C:\Work\PC-Performance-Audit\.rdc-sandbox-state\node\node.exe' --check frontend-svelte/tests/unit/quietAtlasControlDeepLinks.test.js
+```
+
+These are **examples**, not a requirement to create a new checkout. On November 8, 2026, both commands passed in the existing #504 Sandbox docs checkout: pytest **20 passed plus 30 subtests**, and Node syntax exit **0**, with no untracked project files afterward. The Python interpreter was **3.13.15** and the guest-local Node binary **v24.21.0** at that observation. Check existence/version before reuse after a Sandbox restart; never assume a `python`, `codex` or `ruff` command is globally available. Python's interpreter in `main\.venv` supplies dependencies but the selected checkout supplies the test source; verify imports for cross-checkout safety.
+
+These smoke checks do **not** substitute for full backend safety regression, Svelte type/unit/build checks, browser/device acceptance or Linux behavior. If the existing dependencies are unavailable or Windows binary policy blocks a local command, record the precise blocker and rely on the **already-supported GitHub Linux PR CI** for full verification; do not launch an open-ended toolchain, Defender or host-security remediation. For actual frontend changes, CI runs Svelte checks, Vitest and production build; for shared/backend/CI/unknown changes and on `master`, preserve conservative full-suite checks. See [standard delivery loop](PROJECT_ADMIN_HUB.md#standard-change-delivery-loop-504-adopted-throughput-validation-pending) and [Check workflow](../.github/workflows/check.yml).
+
 ## Worktrees
 
 ### Sandbox worktree-retirement policy (#504; owner-activated, per-target approval required)

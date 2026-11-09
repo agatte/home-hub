@@ -19,7 +19,7 @@
 
 The [documentation index](README.md) routes to subsystem material. [Roadmap issue #142](https://github.com/agatte/home-hub/issues/142) is a portfolio index, **not** a parallel execution queue.
 
-## Standard change delivery loop (#504; proposed)
+## Standard change delivery loop (#504; adopted; throughput validation pending)
 
 Use this **one-milestone loop** for normal HomeHub changes. It implements the existing [AGENTS.md](../AGENTS.md) safety boundaries and [knowledge workflow](KNOWLEDGE_WORKFLOW.md); it is not another backlog, agent runtime, permission system, or instruction to work on only one unrelated project at a time. [Issue #504](https://github.com/agatte/home-hub/issues/504) owns process acceptance; the **feature's owning issue** owns its scope and result.
 
@@ -34,6 +34,10 @@ Use this **one-milestone loop** for normal HomeHub changes. It implements the ex
 **Do less process, not less safety.** Different workstreams can progress in parallel with distinct ownership and compatible worktrees; one workstream's lighting, host or production gate must not interrupt unrelated read-only/UI work. Avoid serial prompts for diagnostics, tests, review or CI polling already within approved scope. Do not create new Codex agents, PRs, worktrees or reviewers just to satisfy a ritual. If a tool disconnects, recover the existing task and state per [LOCAL_WORKSPACE.md](LOCAL_WORKSPACE.md) before retrying.
 
 **Measure real improvement:** For two ordinary feature milestones, capture (a) request/approval → integration-ready elapsed time, (b) exact-head CI wall and runner minutes, including duplicate/superseded runs, (c) review/CI cycles, (d) user prompts **other than unavoidable authorization/product decisions**, and (e) usable/physical acceptance. Compare with the dated baseline in [#504](https://github.com/agatte/home-hub/issues/504); a faster docs-only check does not prove frontend-only routing or user-facing delivery. Use the **next genuine** frontend-only PR to validate that routing; do not create artificial code changes for a CI demonstration.
+
+**Review and delegation default:** Reuse an existing clean, owned checkout and consume any finished Codex evidence before launching a worker. For routine docs, deterministic tests, read-only analysis or presentation-only changes, direct work plus focused checks may be sufficient; there is no mandatory second agent or heavyweight review. For actual lifecycle, security, data-integrity, device/lighting ownership or concurrency changes, use independent review proportional to the demonstrated risk. A failed assertion or new evidence can justify escalation; a hypothetical concern alone does not become a new prerequisite.
+
+**Approval and notification default:** Complete investigation, fixes, targeted tests and permitted CI/status reads without asking for repeated “continue” messages. At each *actual* consequential action, request one precise approval naming the target/head/action and applicable conditions; later merge, deploy, migration, credentials, host/device writes and destructive work remain distinct gates. A green workflow is not permission to cross those gates. Prefer existing GitHub PR/Actions notifications and an on-demand exact-head status check; do not create a background CI watcher, bot or duplicate issue queue without a specific opt-in. End each milestone with only **changed / verified / usable / blocked / next exact gate** in its owning issue or PR.
 
 ## Workstreams: one primary owner, linked dependencies
 
