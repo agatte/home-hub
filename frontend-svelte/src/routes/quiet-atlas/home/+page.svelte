@@ -3,7 +3,25 @@
   import { onMount } from 'svelte'
   import { connected } from '$lib/stores/connection.js'
   import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
-  import { controlGroupHref, CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
+  import { CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
+  import QuietAtlasHomeLightingReveal from '$lib/components/QuietAtlasHomeLightingReveal.svelte'
+  let selectedRoom = null
+  let lightingDrafts = {}
+  function toggleRoom(id) {
+    selectedRoom = selectedRoom === id ? null : id
+  }
+  function closeLighting(event) {
+    if (event.key !== 'Escape' || event.defaultPrevented || !selectedRoom) return
+    const prefix = window.matchMedia('(max-width:700px)').matches ? 'phone' : 'dock'
+    const trigger = document.getElementById(`${prefix}-room-${selectedRoom}`)
+    const reveal = document.getElementById(`${prefix}-reveal-${selectedRoom}`)
+    const focused = document.activeElement
+    // Escape from navigation or an overlay belongs to that context, not this room.
+    if (!focused || (focused !== trigger && !reveal?.contains(focused))) return
+    trigger?.focus()
+    selectedRoom = null
+    event.preventDefault()
+  }
   import {
     newHomeContextSnapshot, homeContextConnectionChanged, invalidateHomeContextRead,
     beginHomeContextRead, acceptHomeContextRead, failHomeContextRead, homeContextPresentation,
@@ -230,6 +248,8 @@
   <meta name="description" content="Read-only Quiet Atlas Home review with source-qualified HomeHub context and illustrative examples." />
 </svelte:head>
 
+<svelte:window on:keydown={closeLighting} />
+
 <main class:daylight class="home-review" aria-label="Quiet Atlas Home design review">
   <header class="foreword">
     <div>
@@ -260,17 +280,19 @@
     <div class="phone-actions-head">
       <span class="eyebrow">Read-only preview</span>
       <h2 id="phone-lighting-title">Browse lighting</h2>
-      <p>Open a room or explore scenes. These new Control screens are read-only design reviews, not light switches yet.</p>
+      <p>Unfold a room’s atmosphere here, or browse scenes separately. Design preview only — no light changes.</p>
     </div>
-    <nav class="phone-rooms" aria-label="Browse lighting by room">
+    <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
       {#each groups as group (group.id)}
-        <a href={controlGroupHref(group.id)} class="phone-room" aria-label={group.label}>
+        <button type="button" id={`phone-room-${group.id}`} class="phone-room" aria-label={`${group.name} atmosphere preview`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="phone-room-icon" aria-hidden="true"></span>
-          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail} · Browse fixtures</small></span>
-          <span class="phone-room-arrow" aria-hidden="true">↗</span>
-        </a>
+          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail} · Atmosphere preview</small></span>
+          <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
+        </button>
+        <QuietAtlasHomeLightingReveal id={`phone-reveal-${group.id}`} {group} open={selectedRoom === group.id} bind:drafts={lightingDrafts} />
       {/each}
-    </nav>
+    </div>
+    <a class="browse-link" href="/quiet-atlas/control">Control · precision workspace ↗</a>
     <a class="phone-scenes" href={CONTROL_SCENES_HREF}>
       <span><strong>Scenes &amp; presets</strong><small>Browse available names · no activation</small></span>
       <span aria-hidden="true">↗</span>
@@ -350,15 +372,18 @@
       </div>
       <a class="browse-link" href="/quiet-atlas/control">Open Control review <span aria-hidden="true">↗</span></a>
     </div>
-    <div class="groups" aria-label="Browse lighting groups">
+    <div class="groups" role="group" aria-label="Browse lighting groups">
       {#each groups as group}
-        <a href={controlGroupHref(group.id)} class="group" aria-label={group.label}>
+        <button type="button" id={`dock-room-${group.id}`} class="group" aria-label={`${group.name} atmosphere preview`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="group-mark" aria-hidden="true"></span>
-          <span class="group-copy"><strong>{group.name}</strong><small>{group.detail} · view lights</small></span>
-          <span class="group-arrow" aria-hidden="true">↗</span>
-        </a>
+          <span class="group-copy"><strong>{group.name}</strong><small>{group.detail} · Atmosphere</small></span>
+          <span class="group-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
+        </button>
       {/each}
     </div>
+    {#each groups as group (group.id)}
+      <QuietAtlasHomeLightingReveal id={`dock-reveal-${group.id}`} {group} open={selectedRoom === group.id} bind:drafts={lightingDrafts} />
+    {/each}
     <div class="scene-line">
       <span><strong>Scenes & presets</strong><small>Browse names from the existing read-only lighting review; no sample scenes are activated.</small></span>
       <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
@@ -649,6 +674,8 @@
   .home-review {min-width:0;overflow-wrap:anywhere;}
   .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
   .group-copy small {white-space:normal;}
+  .phone-room,.group {color:var(--ink);text-align:left;cursor:pointer;width:100%;font:inherit;}
+  .phone-room[aria-expanded="true"],.group[aria-expanded="true"] {border-color:var(--gold);background:radial-gradient(ellipse at 15% 50%,var(--glow),transparent 75%),var(--stage);}
   @media (prefers-reduced-motion:reduce) {
     .home-review * {transition:none!important;animation:none!important;}
   }

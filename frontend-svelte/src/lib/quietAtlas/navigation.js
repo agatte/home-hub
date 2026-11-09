@@ -1,13 +1,31 @@
 import { LIGHTING_GROUPS } from './lightingModel.js'
 
-const controlGroupIds = new Set(LIGHTING_GROUPS.map(({ id }) => id))
+// 'other' is a read-only group created only when the API reports extra fixtures.
+// This allowlist grants a display route, never device write authority.
+const controlGroupIds = new Set([...LIGHTING_GROUPS.map(({ id }) => id), 'other'])
 export const CONTROL_SCENES_HREF = '/quiet-atlas/control?view=scenes'
 
-/** Return only navigation destinations for known, display-only fixture groups. */
+/** Whether a route refers to an approved display-only lighting group. */
+export function isKnownLightingGroup(groupId) {
+  return typeof groupId === 'string' && controlGroupIds.has(groupId)
+}
+
+/** A focused, non-modal detail destination. Origin is an allowlisted tab, not a redirect. */
+export function lightingDetailHref(groupId, from = 'control') {
+  const origin = from === 'home' ? 'home' : 'control'
+  return isKnownLightingGroup(groupId)
+    ? `/quiet-atlas/lighting/${encodeURIComponent(groupId)}?from=${origin}`
+    : `/quiet-atlas/${origin}`
+}
+
+/** Direct/bookmarked links have a deterministic safe return destination. */
+export function lightingDetailOrigin(searchParams) {
+  return searchParams?.get('from') === 'home' ? 'home' : 'control'
+}
+
+/** Existing callers now receive the same non-modal detail destination. */
 export function controlGroupHref(groupId) {
-  return controlGroupIds.has(groupId)
-    ? `/quiet-atlas/control?group=${encodeURIComponent(groupId)}`
-    : '/quiet-atlas/control'
+  return lightingDetailHref(groupId, 'control')
 }
 
 /** Validate exactly one read-only detail target, never an arbitrary scene or device command. */
@@ -76,7 +94,8 @@ const READ_ONLY_PREVIEW_PATHS = new Set([
 
 /** @param {string} pathname */
 export function isQuietAtlasReadOnlyPreview(pathname) {
-  return READ_ONLY_PREVIEW_PATHS.has(pathname)
+  const match = /^\/quiet-atlas\/lighting\/([^/]+)$/.exec(pathname)
+  return READ_ONLY_PREVIEW_PATHS.has(pathname) || (match !== null && isKnownLightingGroup(match[1]))
 }
 
 export function shouldUseQuietAtlasShell(pathname, searchParams) {
@@ -108,7 +127,9 @@ export function withQuietAtlasShell(href) {
 
 // Route identity outranks an arbitrary fragment. A Music/Settings #control anchor
 // must not highlight the Control destination in the shared preview shell.
-export function activeQuietAtlasSection(pathname, _hash = '') {
+/** @param {URLSearchParams | null} [searchParams] */
+export function activeQuietAtlasSection(pathname, _hash = '', searchParams = null) {
+  if (pathname.startsWith('/quiet-atlas/lighting/')) return lightingDetailOrigin(searchParams)
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/insights') return 'insights'
   if (pathname === '/quiet-atlas/settings') return 'more'

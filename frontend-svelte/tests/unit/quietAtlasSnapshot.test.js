@@ -42,6 +42,42 @@ describe('Quiet Atlas read-only light snapshot / reconnect (#270)', () => {
     expect(acceptLightRead(next, a.ticket, fixtures, 1100)).toBe(next)
     expect(readStatus(next, 1100)).toBe('unverified')
   })
+  it('keeps still-fresh receipt evidence while a routine replacement GET is pending', () => {
+    const previous = fresh(1000)
+    const first = beginLightRead(previous)
+    expect(readStatus(first.state, 1100)).toBe('recent-read')
+    expect(first.state.fixtures).toBe(previous.fixtures)
+    // Request ID replacement, not whole-snapshot invalidation, rejects old responses.
+    const next = beginLightRead(first.state)
+    expect(acceptLightRead(next.state, first.ticket, [], 1150)).toBe(next.state)
+    const received = acceptLightRead(next.state, next.ticket, fixtures, 1200)
+    expect(readStatus(received, 1200)).toBe('recent-read')
+    expect(received.fixtures['2'].bri).toBe(previous.fixtures['2'].bri)
+    expect(readStatus(first.state, 31001)).toBe('stale-read')
+  })
+  it('finishes a delayed routine GET before the 30s receipt TTL when scheduled at 15s', () => {
+    const initial = fresh(100)
+    const pending = beginLightRead(initial)
+    // The page starts its next poll at 15s; even an 8s timeout finishes by 23s.
+    expect(readStatus(pending.state, 15000)).toBe('recent-read')
+    expect(readStatus(pending.state, 22999)).toBe('recent-read')
+    const unchanged = acceptLightRead(pending.state, pending.ticket, fixtures, 23000)
+    expect(readStatus(unchanged, 31000)).toBe('recent-read')
+    expect(unchanged.fixtures['2'].bri).toBe(initial.fixtures['2'].bri)
+    expect(readStatus(unchanged, 53001)).toBe('stale-read')
+  })
+  it('manual refresh off the polling phase must not defer a safe replacement', () => {
+    // Timer ticks at t=15s/30s. Manual GET settles at t=1.1s after an off-phase
+    // start. The following t=15s tick must be eligible, not skipped by a
+    // second 15s deadline. A delayed response at t=23s preserves draft evidence.
+    const manualReceipt = fresh(1100)
+    const pending = beginLightRead(manualReceipt) // at the next 15s timer tick
+    expect(readStatus(pending.state, 22000)).toBe('recent-read')
+    const unchanged = acceptLightRead(pending.state, pending.ticket, fixtures, 23000)
+    expect(readStatus(unchanged, 32000)).toBe('recent-read')
+    expect(unchanged.fixtures['2'].bri).toBe(manualReceipt.fixtures['2'].bri)
+    expect(readStatus(unchanged, 53001)).toBe('stale-read')
+  })
   it('out-of-order reads and old failures never clobber latest result', () => {
     const first = beginLightRead(connected())
     const second = beginLightRead(first.state)

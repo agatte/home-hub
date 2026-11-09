@@ -7,6 +7,7 @@ import { fixtureDraftEvidence } from '../../src/lib/quietAtlas/controlDraft.js'
 import GroupSheet from '../../src/lib/components/QuietAtlasGroupSheet.svelte'
 import sheet from '../../src/lib/components/QuietAtlasGroupSheet.svelte?raw'
 import experience from '../../src/lib/components/QuietAtlasLightingExperience.svelte?raw'
+import detail from '../../src/routes/quiet-atlas/lighting/[groupId]/+page.svelte?raw'
 
 const raw = {
   light_id: '2', name: 'Shaded desk lamp', reachable: true, on: true,
@@ -39,7 +40,8 @@ describe('Quiet Atlas local brightness review freshness (#461)', () => {
   })
 
   it('reconciles draft evidence only on this read-only sheet and keeps all writers absent', () => {
-    expect(experience).toContain('fixtureStates={snapshot.fixtures}')
+    expect(detail).toContain('<QuietAtlasGroupSheet inline={true} group={room} {snapshotStatus} fixtureStates={snapshot.fixtures} />')
+    expect(experience).not.toContain('<QuietAtlasGroupSheet')
     expect(sheet).toContain('export let fixtureStates = {}')
     expect(sheet).toContain('Object.entries(draftEvidence).some')
     expect(sheet).toContain('fixtureDraftEvidence(group.fixtures.find')
@@ -49,12 +51,13 @@ describe('Quiet Atlas local brightness review freshness (#461)', () => {
     expect(sheet).toContain("snapshotStatus !== 'recent-read'")
     expect(sheet).toContain('if (snapshotStatus !== \'recent-read\' || evidence === null) return')
     expect(sheet).toContain('Nothing is sent to HomeHub')
-    for (const source of [sheet, experience]) {
+    for (const source of [sheet, experience, detail]) {
       expect(source).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene)\s*\(/)
     }
     for (const [filename, source] of [
       ['QuietAtlasGroupSheet.svelte', sheet],
       ['QuietAtlasLightingExperience.svelte', experience],
+      ['quiet-atlas/lighting/[groupId]/+page.svelte', detail],
     ]) {
       expect(compile(source, { filename, generate: 'dom', css: 'external' }).warnings).toEqual([])
     }

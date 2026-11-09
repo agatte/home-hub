@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
 import home from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
-import { controlGroupHref, CONTROL_SCENES_HREF } from '../../src/lib/quietAtlas/navigation.js'
+import reveal from '../../src/lib/components/QuietAtlasHomeLightingReveal.svelte?raw'
+import { lightingDetailHref, CONTROL_SCENES_HREF } from '../../src/lib/quietAtlas/navigation.js'
 
 describe('Quiet Atlas phone-first Home composition', () => {
   it('uses a genuinely distinct phone hierarchy without reordering keyboard focus', () => {
@@ -24,15 +25,21 @@ describe('Quiet Atlas phone-first Home composition', () => {
     expect(home).toContain('{contextDisplay.house}')
     expect(home).toContain('{contextDisplay.activity}')
     expect(home).toContain('A recent REST response is not proof of sensor freshness or room location.')
-    expect(home).toContain('These new Control screens are read-only design reviews, not light switches yet.')
+    expect(home).toContain('Design preview only — no light changes.')
     expect(home).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
   })
 
   it('keeps rooms/presets prominent, readable and tap-sized without group fanout', () => {
     expect(home).toContain('aria-label="Browse lighting by room"')
-    expect(home).toContain('href={controlGroupHref(group.id)}')
+    expect(home).not.toContain('lightingDetailHref')
+    const phone = home.slice(home.indexOf('<div class="phone-rooms"'), home.indexOf('<a class="phone-scenes"'))
+    expect(phone).toContain('<button type="button"')
+    expect(phone).toContain('aria-controls={`phone-reveal-${group.id}`}')
+    expect(phone.indexOf('<QuietAtlasHomeLightingReveal')).toBeGreaterThan(phone.indexOf('</button>'))
+    expect(phone.indexOf('<QuietAtlasHomeLightingReveal')).toBeLessThan(phone.indexOf('{/each}'))
+    expect(phone).not.toContain('href={lightingDetailHref')
     expect(home).toContain('href={CONTROL_SCENES_HREF}')
-    expect(controlGroupHref('bedroom')).toBe('/quiet-atlas/control?group=bedroom')
+    expect(lightingDetailHref('bedroom', 'home')).toBe('/quiet-atlas/lighting/bedroom?from=home')
     expect(CONTROL_SCENES_HREF).toBe('/quiet-atlas/control?view=scenes')
     for (const label of ['Living', 'Bedroom', 'Kitchen', 'Plant']) {
       expect(home).toContain("name: '" + label + "'")
@@ -50,6 +57,8 @@ describe('Quiet Atlas phone-first Home composition', () => {
   it('compiles in Svelte with zero warnings and leaves existing status lifecycle intact', () => {
     const result = compile(home, { filename: 'QuietAtlasPhoneHome.svelte', generate: 'dom', css: 'external' })
     expect(result.warnings).toEqual([])
+    expect(compile(reveal, { filename: 'QuietAtlasHomeLightingReveal.svelte', generate: 'dom', css: 'external' }).warnings).toEqual([])
+    expect(compile(reveal, { filename: 'QuietAtlasHomeLightingReveal.svelte', generate: 'ssr', css: 'external' }).warnings).toEqual([])
     expect(home).toContain("fetch('/api/automation/status'")
     expect(home).toContain('newHomeContextSnapshot')
     expect(home).toContain('newRecentActivityLog')
