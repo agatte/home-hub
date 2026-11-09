@@ -57,9 +57,8 @@ describe('Quiet Atlas phone-first Home composition', () => {
   it('compiles in Svelte with zero warnings and leaves existing status lifecycle intact', () => {
     const result = compile(home, { filename: 'QuietAtlasPhoneHome.svelte', generate: 'dom', css: 'external' })
     expect(result.warnings).toEqual([])
-    for (const generate of ['dom', 'ssr']) {
-      expect(compile(reveal, { filename: 'QuietAtlasHomeLightingReveal.svelte', generate, css: 'external' }).warnings).toEqual([])
-    }
+    expect(compile(reveal, { filename: 'QuietAtlasHomeLightingReveal.svelte', generate: 'dom', css: 'external' }).warnings).toEqual([])
+    expect(compile(reveal, { filename: 'QuietAtlasHomeLightingReveal.svelte', generate: 'ssr', css: 'external' }).warnings).toEqual([])
     expect(home).toContain("fetch('/api/automation/status'")
     expect(home).toContain('newHomeContextSnapshot')
     expect(home).toContain('newRecentActivityLog')
