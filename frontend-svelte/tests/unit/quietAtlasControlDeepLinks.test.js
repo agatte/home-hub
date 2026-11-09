@@ -59,6 +59,20 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(parseControlIntent(null)).toBeNull()
   })
 
+  it('distinguishes a valid but unpopulated Other lights page from an invalid room', () => {
+    const empty = buildLightingOverview({}, true)
+    expect(empty.find(({ id }) => id === 'other')).toBeUndefined()
+    expect(isKnownLightingGroup('other')).toBe(true)
+    expect(isKnownLightingGroup('nonexistent')).toBe(false)
+    expect(detail).toContain('{#if !knownRoom}')
+    expect(detail).toContain('{:else if !room}')
+    expect(detail).toContain('LIGHTING / ADDITIONAL FIXTURES')
+    expect(detail).toContain('The latest HomeHub report lists no additional lights')
+    expect(detail).toContain("snapshotStatus === 'recent-read'")
+    expect(detail).toContain('disabled={!snapshot.connected || snapshot.pending}')
+    expect(detail).toContain("{snapshot.pending ? 'Checking report…' : 'Refresh report'}")
+  })
+
   it('never opens a group dialog from Home or Control, and Back is not an X-to-Control', () => {
     expect(home).toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(home).toContain('href={CONTROL_SCENES_HREF}')

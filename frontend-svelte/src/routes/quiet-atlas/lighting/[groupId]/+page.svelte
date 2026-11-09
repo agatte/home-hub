@@ -133,11 +133,25 @@
     <span class="read-only-label">Quiet Atlas · Read-only preview</span>
   </nav>
 
-  {#if !knownRoom || !room}
+  {#if !knownRoom}
     <section class="unknown-room">
       <p class="eyebrow">LIGHTING / NOT FOUND</p>
       <h1>Room unavailable</h1>
       <p>This lighting group is not part of the verified HomeHub design inventory.</p>
+      <a href={returnHref}>Return to {originLabel}</a>
+    </section>
+  {:else if !room}
+    <section class="unknown-room" aria-labelledby="other-lights-title">
+      <p class="eyebrow">LIGHTING / ADDITIONAL FIXTURES</p>
+      <h1 id="other-lights-title">Other lights</h1>
+      {#if snapshotStatus === 'recent-read'}
+        <p role="status">The latest HomeHub report lists no additional lights. This does not confirm physical availability.</p>
+      {:else}
+        <p role="status">{snapshotNote}</p>
+      {/if}
+      <button type="button" class="refresh-button" on:click={refresh} disabled={!snapshot.connected || snapshot.pending}>
+        {snapshot.pending ? 'Checking report…' : 'Refresh report'}
+      </button>
       <a href={returnHref}>Return to {originLabel}</a>
     </section>
   {:else}
@@ -229,6 +243,8 @@
   .unknown-room { max-width:630px; margin:30px auto; border:1px solid #56705c; border-radius:20px; padding:25px; }
   .unknown-room p { color:#b9c9b9; font-size:14px; line-height:1.6; }
   .unknown-room a { display:inline-flex; min-height:44px; align-items:center; color:#d6eccb; }
+  .unknown-room .refresh-button { display:block; margin:12px 0 8px; }
+  .refresh-button:disabled { opacity:.55; cursor:not-allowed; }
   @media(max-width:850px) {
     .detail-grid { grid-template-columns:minmax(0,1fr); gap:18px; }
     .room-overview { position:static; padding-top:3px; }
