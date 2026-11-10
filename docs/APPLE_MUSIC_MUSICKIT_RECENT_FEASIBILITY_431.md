@@ -1,6 +1,6 @@
 # #431 MusicKit recently played feasibility — fictional-only packet
 
-**Status: PUBLISHED FOR REVIEW AS DRAFT [PR #517](https://github.com/agatte/home-hub/pull/517); NOT APPROVED FOR LIVE USE — November 10, 2026.**
+**Status: MERGED IN SOURCE AS OFFLINE-ONLY [PR #517](https://github.com/agatte/home-hub/pull/517) (2026-11-10); NOT DEPLOYED OR APPROVED FOR LIVE USE.**
 
 Parent: [#254](https://github.com/agatte/home-hub/issues/254). Owner:
 [#431](https://github.com/agatte/home-hub/issues/431), Sensing & Intelligence.
@@ -9,6 +9,19 @@ It contains **no personal account data, token, HTTP client, key, request, file
 import, HomeHub runtime integration, persistence, recommendation update, or
 Sonos/device command**. Nothing here authorizes production deployment or private
 Apple Music transfer.
+
+## Owner-confirmed Apple Developer membership constraint (2026-11-10)
+
+**The owner does not have an active paid Apple Developer Program membership.**
+This has been confirmed by the owner and must not be asked again as an unknown
+prerequisite. **No developer enrollment, annual fee, media signing-key creation,
+or Apple account authorization has been approved.** The MusicKit developer-token
+path is therefore blocked under current account/cost constraints, regardless
+of the fictional API feasibility tests below. Prioritize a **no-paid-developer**
+approach using the already-available private Apple Data & Privacy export and
+other separately reviewed, opt-in options. Manual exports are not automatic
+native-iPhone history sync; the original #431 acceptance remains open.
+A future paid-membership decision would require new explicit owner approval.
 
 ## User goal and authority boundary
 
