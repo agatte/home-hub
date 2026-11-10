@@ -1,6 +1,6 @@
 # #431 — No-paid-developer native-iPhone scrobble feasibility and read-only probe
 
-**Status: SOURCE-ONLY DRAFT [PR #520](https://github.com/agatte/home-hub/pull/520); ONE-TIME OWNER-AUTHORIZED READ-ONLY LAST.FM PROBE COMPLETED; RECENT IPHONE DELIVERY NOT VERIFIED (2026-11-10).** Owner: [#431](https://github.com/agatte/home-hub/issues/431);
+**Status: SOURCE-ONLY DRAFT [PR #520](https://github.com/agatte/home-hub/pull/520); OWNER-VERIFIED NATIVE IPHONE → LAST.FM DELIVERY; HOMEHUB ADAPTER REMAINS UNREGISTERED / UNDEPLOYED (2026-11-10).** Owner: [#431](https://github.com/agatte/home-hub/issues/431);
 parent [#254](https://github.com/agatte/home-hub/issues/254).
 
 ## Why this separate lane exists
@@ -94,14 +94,47 @@ on Windows Python 3.13/PowerShell, covering optional fields, denial,
 mismatched user, current-track exclusion, timestamp collisions, JSON size
 budget, limit, and non-leakage. Live read also returned aggregate success.
 
-**Next operational gate:** Check inside the owner's iPhone scrobbler that
-the new plays show as **submitted to Last.fm**, not just seen locally,
-with the exact expected Last.fm account selected. Verify new tracks
-appear in Last.fm's Recent Tracks view; Apple Music permission and
-manual sync/catch-up may need operator attention. If they never appear,
-fix app-to-account delivery or try free Finale before writing a HomeHub
-background poller. Do not claim source attribution, freshness or
-recommendation effects before this observation.
+**Next integration gate (delivery proof passed):** The owner later inspected
+Scrobblie's local History (three tracks marked Scrobbled, Queue 0 pending /
+0 failed / 0 skipped) and opened Last.fm's own server-side Profile view.
+The same three newly played tracks appeared there; Last.fm's total rose
+from the **previously API-observed 1,105 to 1,108**. This is
+**OWNER-VERIFIED server-side delivery**, not an independent new assistant
+API fetch, long-term background/repeat/skip accuracy proof, or a HomeHub
+recommendation effect. The **older 2016-only API snapshot is now stale**;
+do not describe iPhone → Last.fm submission as blocked. iCloud Sync was
+OFF for this successful trial and is not required for Last.fm submission.
+No credentials, tracks or exact listening timestamps were shared in GitHub.
+Continue a source-qualified read-only **HomeHub** adapter offline first,
+then gate actual automatic account reads, persistent taste and deployment
+separately. No need to change iPhone configuration for this milestone.
+
+## Bounded Python source adapter — offline-tested, not yet registered
+
+`backend/services/apple_music_lastfm_recent_source.py` is the first
+HomeHub-shaped, manually invoked **read-only Python adapter**, sharing
+the existing pure `apple_music_lastfm_shadow_feasibility` parser. It
+prepares **one** official HTTPS `user.getrecenttracks` request at a fixed
+endpoint, with a single-page limit of 50, 12s timeout, system certificate
+validation, disabled redirects, <=512 kB response bound and fixed redacted
+errors. It accepts an explicitly supplied username and application API key
+**in memory only** and exposes anonymous freshness/collision counts with
+source qualification, never song/artist/account labels or timestamps.
+A test-only injected fetch function supplies fictional responses; the default
+would contact the provider **only when someone explicitly calls it**.
+Nothing in HomeHub imports it, invokes it on a schedule, stores a result,
+updates taste, infers presence or controls Sonos. The source itself does not
+establish verified independent plays (`verified_independent_plays=0`) and
+refuses to mark any observation as taste eligible.
+
+`tests/test_apple_music_lastfm_recent_source.py`: 10 synthetic unit
+tests cover fixed HTTPS request shape, bounded payloads, provider errors,
+private-data redaction, malformed dates and unexpected account mismatch,
+future timestamps, collision handling and no unearned reward. The standard
+library implementation keeps this testable on the protected Windows Sandbox
+without installing additional packages. These synthetic tests do **not**
+represent a new personal Last.fm account query or permission for unattended
+polling, persistence or live API route publication.
 
 ## What the current fictional code proves
 
@@ -141,10 +174,11 @@ immutability, and no network/DB access.
    plays; do not buy Pro before a meaningful trial. The owner must still
    create or choose a Last.fm profile and explicitly authorize the iPhone
    app, aware of the possible public listening profile. The owner reported
-   that setup seems to work; the authorized one-shot read confirmed only
-   legacy scrobbles, **not** fresh native iPhone playback. Do not treat this
-   as approval for continuous history reads, account changes, or importing
-   records into HomeHub.
+   that setup works and subsequently **confirmed three new scrobbles on
+   Last.fm's server-side website**, total **1,108**, after the earlier
+   one-shot API saw **1,105** historical records. Delivery is therefore
+   **owner-verified**; automatic HomeHub reads, account changes and
+   importing records still require their separate gates.
 2. **Small owner-present proof (after voluntary device setup):** Keep playing
    in the native Apple Music app. Test one saved-library song, one streamed
    non-library song, and a deliberate repeated/quickly skipped song, with
