@@ -109,7 +109,7 @@ Continue a source-qualified read-only **HomeHub** adapter offline first,
 then gate actual automatic account reads, persistent taste and deployment
 separately. No need to change iPhone configuration for this milestone.
 
-## Bounded Python source adapter — offline-tested, not yet registered
+## Bounded Python source adapter — offline-tested
 
 `backend/services/apple_music_lastfm_recent_source.py` is the first
 HomeHub-shaped, manually invoked **read-only Python adapter**, sharing
@@ -122,8 +122,9 @@ errors. It accepts an explicitly supplied username and application API key
 source qualification, never song/artist/account labels or timestamps.
 A test-only injected fetch function supplies fictional responses; the default
 would contact the provider **only when someone explicitly calls it**.
-Nothing in HomeHub imports it, invokes it on a schedule, stores a result,
-updates taste, infers presence or controls Sonos. The source itself does not
+The disabled-by-default runtime wrapper below can schedule it only after
+explicit valid configuration. It never updates taste, infers presence or
+controls Sonos. The source itself does not
 establish verified independent plays (`verified_independent_plays=0`) and
 refuses to mark any observation as taste eligible.
 
@@ -136,12 +137,71 @@ without installing additional packages. These synthetic tests do **not**
 represent a new personal Last.fm account query or permission for unattended
 polling, persistence or live API route publication.
 
+## Disabled runtime shadow feed — local implementation, not deployed
+
+The #431 development milestone adds `backend/services/lastfm_shadow.py`,
+lifespan registration, and GET `/api/music/lastfm-shadow/status`. Defaults
+are `LASTFM_SHADOW_ENABLED=false`, empty `LASTFM_SHADOW_USERNAME`, and
+`LASTFM_SHADOW_POLL_MINUTES=15` (5..1440). Existing `LASTFM_API_KEY`
+metadata behavior is unchanged. Disabled or invalid/missing configuration
+creates **no producer task and no Last.fm requests**. The runtime gate
+validates account shape, key shape and interval without displaying values.
+
+When separately authorized and configured, each poll uses one page of at
+most 50 historical resources plus an optional currently-playing resource.
+Current tracks and missing artist/title/date abstain from identity counting.
+Only assertions within the preceding seven days produce internal HMAC-SHA256
+fingerprints of source + artist + title + second, keyed with fresh random
+service-lifetime bytes. Raw music stays within transient parsing; fingerprints
+never leave the service. First success seeds a baseline. Subsequent unseen
+observations are counted against a maximum 4,096-entry, seven-day memory.
+Identical overlapping observations collapse; different artists/titles at the
+same second remain different assertions. No backfill or durable history exists.
+Eviction, provider corrections, page gaps and restarts prevent exact lifetime
+deduplication; counts are not sessions, preference, completion, Apple identity,
+or evidence of independence from Sonos. Restart resets every counter and key.
+
+Status returns anonymous counters, baseline and fetch freshness/state only.
+It contains no labels, account, keys, fingerprints or absolute timestamps.
+`recent_page_last_24_hours` is a provider assertion count from the last success;
+`freshness` describes the fetch, **not** proof of current listening. No success
+or more than two poll intervals since success is stale; failed polls report
+degraded and preserve prior counters. Reads never refresh the source.
+Both `require_api_key_strict` and `require_localhost` apply: strict auth alone
+would allow remote key holders, so the additional existing direct-loopback
+guard rejects LAN and tunnel-origin callers even with credentials. No new
+listener, tunnel or auth exception is introduced.
+
+The owned asyncio task uses `asyncio.to_thread` for urllib and the existing
+lifespan cancellation list. Cancellation does not wait for the worker request;
+an already-running thread cannot be forcibly stopped. Transport retains a 12s
+socket timeout, byte cap, no redirects, and a checked body-read deadline; DNS
+and platform socket behavior are not a guaranteed total wall-clock deadline.
+Cancelled worker results cannot update service state. No exception text or
+request details are logged, and there are no files, DB writes or downstream
+recommendation/control consumers.
+
+Validation uses fictional JSON and injected transports only. Python 3.13
+stdlib tests cover lifecycle, baseline/dedup, memory expiry/cap, failure/stale
+status, cancellation, redaction, and route/auth bodies. FastAPI is absent and
+there is no worktree virtual environment: actual ASGI dependency integration
+remains unverified; no packages were installed. No personal account was read.
+
+**Next exact gates:** validate the actual FastAPI route/configuration and
+lifespan in an authorized existing dependency environment; obtain separate
+publication/integration and deployment authorization; obtain explicit owner
+authorization for unattended reads of the chosen account and configuration
+before supplying its username/key and setting the flag true. Deployment must
+follow the existing release procedure. This task authorizes none of those
+actions. Preference/schema/persistence changes remain separately CLOSED and
+the original #431 acceptance remains OPEN.
+
 ## What the current fictional code proves
 
 `backend/services/apple_music_lastfm_shadow_feasibility.py` consumes a
 small, already-decoded **invented** collection of `user.getRecentTracks`
 responses. It makes **no** network call, reads no files, uses no credentials,
-stores nothing, and is not imported into the HomeHub runtime. Its three-page
+stores nothing. The bounded runtime source now reuses this parser; its three-page
 budget is only a synthetic test bound, **not** Last.fm's pagination limit.
 It accepts at most 200 resources/page, excludes `nowplaying`, verifies
 ASCII decimal timestamp *shape* in a conservative UTC range, and counts

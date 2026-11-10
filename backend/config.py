@@ -70,6 +70,9 @@ class Settings(BaseSettings):
 
     # Music Discovery
     LASTFM_API_KEY: Optional[str] = None
+    LASTFM_SHADOW_ENABLED: bool = False
+    LASTFM_SHADOW_USERNAME: str = ""
+    LASTFM_SHADOW_POLL_MINUTES: int = 15
 
     # Plant App Integration
     PLANT_APP_API_URL: Optional[str] = None

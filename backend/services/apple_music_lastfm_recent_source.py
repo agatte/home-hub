@@ -1,12 +1,14 @@
 """One-shot, read-only Last.fm recent scrobble assessment for HomeHub #431.
 
-Opt-in call only. NOT imported by live HomeHub routes/services; NO account
-authorization, scheduler, persistence, preferences, presence or Sonos actions.
+Opt-in reads only. The separate shadow service owns any runtime polling;
+this adapter has no persistence or downstream action authority.
 Server assertions do not prove Apple source, unique listens or preference.
 """
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import re
 import time
 from dataclasses import dataclass
@@ -74,7 +76,20 @@ def _read_https(request: Request) -> bytes:
     with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
         if response.status != 200:
             raise LastFmRecentUnavailable()
-        raw = response.read(MAX_RESPONSE_BYTES + 1)
+        deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
+        chunks = []
+        size = 0
+        while True:
+            if time.monotonic() >= deadline:
+                raise LastFmRecentUnavailable()
+            chunk = response.read1(min(16384, MAX_RESPONSE_BYTES + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > MAX_RESPONSE_BYTES:
+                raise LastFmRecentUnavailable()
+        raw = b"".join(chunks)
         if not raw or len(raw) > MAX_RESPONSE_BYTES:
             raise LastFmRecentUnavailable()
         return raw
@@ -87,12 +102,13 @@ def read_lastfm_recent_summary(
     limit: int = MAX_TRACKS,
     now_seconds: int | None = None,
     fetch_bytes: Callable[[Request], bytes] | None = None,
-) -> LastFmRecentSummary:
+    _fingerprint_key: bytes | None = None,
+) -> LastFmRecentSummary | _ObservedPage:
     """Return aggregated last-page exposure without retaining any track details.
 
     `fetch_bytes` is a synthetic-test injection point; the production default
     does a single explicit HTTPS GET with the supplied key. This function has
-    no callers in the live app and cannot launch automatically.
+    no scheduling behavior of its own.
     """
     try:
         if (not isinstance(username, str) or not _USER.fullmatch(username)
@@ -134,10 +150,14 @@ def read_lastfm_recent_summary(
             raise LastFmRecentUnavailable()
 
         assessed = assess_lastfm_recent_pages([data])
+        if (assessed.now_playing_observations > 1
+                or assessed.resource_observations - assessed.now_playing_observations > limit):
+            raise LastFmRecentUnavailable()
         total_text = meta.get("total")
         total = (int(total_text) if type(total_text) is str
                  and total_text.isascii() and total_text.isdecimal()
                  and len(total_text) <= 9 else None)
+        fingerprints = set()
         newest = 0
         recent_24 = recent_7 = 0
         for item in tracks:
@@ -154,7 +174,18 @@ def read_lastfm_recent_summary(
                 recent_24 += 1
             if 0 <= age <= 604800:
                 recent_7 += 1
-        return LastFmRecentSummary(
+                if _fingerprint_key is not None:
+                    artist = item.get("artist")
+                    artist = artist.get("#text") if type(artist) is dict else None
+                    title = item.get("name")
+                    if (type(artist) is str and artist.strip()
+                            and type(title) is str and title.strip()):
+                        identity = json.dumps(
+                            ["lastfm_reported_scrobbles_unverified", artist, title, second],
+                            ensure_ascii=True, separators=(",", ":"),
+                        ).encode("ascii")
+                        fingerprints.add(hmac.digest(_fingerprint_key, identity, hashlib.sha256))
+        summary = LastFmRecentSummary(
             reported_scrobbles_total=total,
             observations=assessed.resource_observations,
             now_playing=assessed.now_playing_observations,
@@ -166,7 +197,25 @@ def read_lastfm_recent_summary(
             last_7_days=recent_7,
             newest_age_hours=max(0, (now_seconds - newest) // 3600) if newest else None,
         )
+        if _fingerprint_key is not None:
+            return _ObservedPage(summary, frozenset(fingerprints))
+        return summary
     except Exception:
         # Third-party exception and request repr may contain sensitive query
         # parameters, account names, track text, exact dates, or raw JSON.
         raise LastFmRecentUnavailable() from None
+
+
+@dataclass(frozen=True, repr=False)
+class _ObservedPage:
+    """Internal only: opaque observations, never serialize to public status."""
+
+    summary: LastFmRecentSummary
+    fingerprints: frozenset[bytes]
+
+
+def read_lastfm_observed_page(username, api_key, *, fingerprint_key, **kwargs):
+    if type(fingerprint_key) is not bytes or len(fingerprint_key) < 32:
+        raise LastFmRecentUnavailable()
+    return read_lastfm_recent_summary(
+        username, api_key, _fingerprint_key=fingerprint_key, **kwargs)
