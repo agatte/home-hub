@@ -125,10 +125,29 @@ implementation, CI inspection, and code search do not require a skill.
 
 ## Publishing and live-system boundaries
 
-Commit, push, merge, deploy, migration, service restart, hardware/device write,
-credential change, and destructive actions are consequential steps. Perform one
-when already explicitly authorized in the current session; otherwise complete
-reversible preparation first and ask only at the concrete action gate.
+**Bounded low-risk authorization (#504, owner-approved November 10, 2026):**
+When the owner selects an identifiable low-risk development milestone, that
+request conditionally authorizes its in-scope commit, push, PR creation/update
+and guarded merge without repeated approval prompts. The original milestone,
+not the assistant's classification alone, determines scope. Before publication
+and merge, verify exact current ref/base, intended paths and behavior, required
+CI on the current head, proportionate review and clean mergeability. Fix
+ordinary in-scope test/documentation defects and reverify without asking for
+another "continue" or approval. A new SHA does not itself void the grant.
+Stop on changed scope or risk, red/missing/uncertain checks, unresolved review,
+conflicts, changed owner intent, or blocked branch rules. Never force a ref,
+bypass required checks, or infer authority to merge an older draft-only PR.
+
+Commit, push and merge remain separate **verified actions**, but one bounded
+owner instruction may authorize all three conditionally. This is not blanket
+permission for unrelated features. High-risk changes involving security,
+data integrity, ownership, lifecycle safety or physical systems need their
+own specific integration authorization. Deployment, database migrations or
+live writes, service restarts, host/device/lighting writes, credentials,
+private-data access, destructive operations and worktree retirement ALWAYS
+require separate explicit authorization. Continue all currently authorized
+checks in the present interaction; never request "continue" for routine CI
+reading or promise background monitoring without a configured mechanism.
 
 Start production investigation read-only. Prefer bounded read endpoints and
 SELECT-only queries before live writes; never infer live health from committed
