@@ -1,6 +1,6 @@
 # #431 MusicKit recently played feasibility — fictional-only packet
 
-**Status: LOCAL EXPERIMENT / NOT PUBLISHED OR APPROVED FOR LIVE USE — November 9, 2026.**
+**Status: PUBLISHED FOR REVIEW AS DRAFT [PR #517](https://github.com/agatte/home-hub/pull/517); NOT APPROVED FOR LIVE USE — November 10, 2026.**
 
 Parent: [#254](https://github.com/agatte/home-hub/issues/254). Owner:
 [#431](https://github.com/agatte/home-hub/issues/431), Sensing & Intelligence.
