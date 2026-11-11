@@ -233,3 +233,141 @@ Second-milestone local result: **186 passed** (118 receipt cases plus the origin
 Tracked/staged diff checks and all three untracked-source whitespace checks
 reported no whitespace errors (new-file `--no-index` checks return 1 for the
 file difference itself). No integration or real-world acceptance is implied.
+
+## Phase 3: dormant bounded capture seam (2026-11-11)
+
+**SOURCE-ONLY, OFF by default, never runtime-registered.** This milestone uses
+owner-specified base `88e7575a76bb5aee81c501004d16aa58c6bf63fd` in the isolated
+`action-feedback-capture-seam-131-20261111` worktree. Only the new capture module,
+its tests/demo and this document change. No fresh GitHub/network evidence was
+requested: the task prohibits network fetches. Integration status beyond the
+supplied base and production health remain unverified. No real household data,
+consent, authentication, collection or preference application was implemented.
+
+### Contract and invariants
+
+`lighting_feedback_capture_seam.py` reuses the Phase 2 frozen receipt contracts
+and evaluator. `CaptureSession()` retains nothing and rejects every producer.
+There is no runtime enable switch. `synthetic_for_tests()` is the sole opening
+factory: its caller-supplied flags represent fictional test claims, **never a
+real grant**. Preflight requires explicit consent, fictional principal, exact
+brightness/L2/working/evening/desk/policy scope, a nonempty allowed-verb subset,
+integer start/expiry (exclusive expiry, at most seven days), and no historical
+backfill. Each session has a distinct process-local object identity; a new
+session rejects old ports. Nothing survives a process restart.
+
+Separate methods accept decision emission, final-write ACK, owner/context
+interval evidence, and explicit UI producer receipt plus separate submitted
+payload. `SyntheticPort` is a separate trusted-side **fixture** argument, with
+producer/session identity and strict verification flags. UI additionally needs
+an explicit actor-qualified principal from that port; payload source/actor strings
+cannot supply it. No method derives producer evidence from submitted feedback.
+The demo creates UI-producer and submission objects separately. Equality is
+checked before the submitted payload is retained; Phase 2 alone builds the
+expected-link map from producer evidence during explicit offline evaluation.
+
+The sequential, single-thread API preserves each producer's arrival sequence;
+it never sorts, drops bad records or repairs gaps. Global capture time cannot
+reverse; producer timestamps cannot reverse; source capture lag is at most 30
+seconds; sequence numbers must be contiguous from 1. Source and capture timestamps
+must be within the consent interval, with no backfill before its start. Decision
+and session identities cannot replay. Scope, values, decision freshness and
+Home/automation context are screened before retention. Final writer intent must
+exactly match the decision and ACK must be exactly `True`; skipped, partial,
+deduplicated or failed writes are not ACKs. Owner intervals must cover the
+response endpoint with fresh context at decision and response. The same explicit
+owner revision is required at decision, ACK, owner interval and UI; conflicts or
+ABA must cancel the session rather than be hidden behind a repeated revision.
+Manual, transit, scene, ScreenSync, unknown ownership and Away/Sleeping context
+cannot qualify. Phase 2 revalidates the complete joined batch at evaluation.
+
+Every failed/malformed/duplicate/conflicting record destroys the entire batch and
+closes the session. Explicit `cancel()` handles a capture gap, takeover or restart;
+`clear()` and `revoke()` are also terminal and empty all retained rows/identity
+indexes. Retention is capped at 100 producer records (default 80); overflow
+invalidates rather than evicting negatives. UI submissions are capped one per UI
+record. Known string identities and policy IDs are capped at 80 characters.
+Timestamps are explicit caller inputs: there is no clock or expiry daemon. Every
+record and seal checks expiry; the caller must clear/revoke or discard an idle
+session to release memory. No claim of automatic wall-clock deletion is made.
+
+`seal(now=...)` requires a nonempty complete four-stream batch, returns frozen
+tuples, closes and clears the session, and **never invokes evaluation**.
+`OfflineBundle.evaluate_offline()` normally abstains with `coverage_unknown`:
+a short session cannot establish the assessor's 30-day coverage, quiet periods
+or absence of omitted negatives. Only explicitly named
+`synthetic_full_window_coverage=True` fabricates coverage for a test demonstration.
+It cannot prove real completeness. Five fictional decisions in distinct sessions
+on five days yield at most `human_review_suggestion` (140 in the demo).
+All results remain `unverified_offline_claims`. Reversal still vetoes the window.
+There is no apply callback, automatic evaluation, persistence or IO interface.
+
+### Threat model and realistic next integration design
+
+These dataclasses and Python object identities are consistency checks, not a
+security boundary. A caller can fabricate ports, verification flags, owner
+revisions, timestamps, all producer evidence and coverage. An omitted real
+negative or unreported takeover cannot be discovered by a pure module. Exported
+immutable bundles are detached fixture copies; revoking a session cannot erase
+copies already held by a caller. Real authentication remains unimplemented.
+
+A separately reviewed real design must establish the principal on the server,
+never from client JSON, and bind producer credentials/capabilities to independent
+writer, authority and UI boundaries. It must obtain exact intent and **successful
+L2 transport ACK** at the final write chokepoint, revalidate final writer ownership
+and context, and retain cancellation/revision evidence through the explicit UI
+response. Current source inspection confirms `LightingAcceptanceReceipt` is an
+outbound acceptance, not a transport ACK; `LightApplicator` separates successful,
+failed, skipped and deduplicated IDs. Its existing navigation incident hook is
+not a feedback adapter. `LightingAuthority` semantic/owner revision invalidation
+is relevant design evidence, not a real capture grant. `LightOverrideManager`
+manual/transit protection and EventLogger adjustment enrichment do not establish
+an authenticated action-feedback join. No changes to these interfaces were made.
+
+Future consent/retention UI must explain this exact light/context, verbs, finite
+expiry, memory/export limits, revoke/reset semantics and no historical backfill.
+Restart, cancel, disconnect, sequence gap, overflow and ownership takeover must
+invalidate collection, including ABA and missed intervals. A real source design
+must prove negative/reversal and quiet-period completeness over the entire
+assessment window or abstain; successful joins cannot substitute for coverage.
+The active LightingPreferenceLearner remains separate and unchanged.
+
+**Next authorization gate:** controller independently reviews these four paths
+and reruns local checks before deciding integration. A future real capture design,
+source authentication, consent UI, retention/export policy and bounded sanitized
+collection plan require separate explicit owner authorization. No runtime adapter,
+registration, live capture, production release or physical-system authority is
+included. The worker performed no commit, push, PR, merge or deployment.
+
+### Phase 3 local validation
+
+Using the existing Sandbox venv, with `-B`, no pytest cache and no downloads:
+
+```powershell
+& C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B -m pytest tests/test_lighting_feedback_capture_seam.py tests/test_action_feedback_receipts_shadow.py tests/test_action_feedback_shadow.py -q -p no:cacheprovider --disable-warnings
+& C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B -m ruff check --no-cache backend/services/ml/lighting_feedback_capture_seam.py scripts/demo_lighting_feedback_capture_seam.py tests/test_lighting_feedback_capture_seam.py
+& C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B scripts/demo_lighting_feedback_capture_seam.py
+git diff --check
+git diff --cached --check
+```
+
+Final focused result: **284 passed** (98 capture cases plus 186 prior milestone
+cases), **5.85 seconds**; no warning summary was emitted. Scoped Ruff passed.
+Two independent no-argument demo subprocesses emitted identical **888 bytes**,
+SHA-256 `9dffc6c1e7ba357dacce3127218d6affe410a3c459a0be79003655c37e824c4d`.
+The demo reports inactive/default zero retention, gap cancellation, unknown
+coverage abstention and explicitly fabricated review-only evidence. Staged and
+unstaged whitespace checks plus individual new-file `--no-index --check` checks
+passed (exit 1 from each new-file difference is expected, with no diagnostics).
+These are synthetic local contracts only; no runtime/physical acceptance is
+claimed. No tools were installed and no existing runtime source was edited.
+
+Git emitted only line-ending normalization warnings: docs/tests LF to CRLF and
+demo CRLF to LF on a future Git touch. No whitespace errors were reported.
+
+Controller review (2026-11-11): the bundle's evidence label is now a fixed
+read-only property, not a constructor field; even a synthetic caller cannot
+label the exported bundle as verified. A regression test rejects attempts
+to replace it with a forged status. These remain source-only consistency tests,
+not real actor/source verification. Final test count and Git integration are
+recorded on issue #131.
