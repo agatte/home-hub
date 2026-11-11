@@ -96,7 +96,18 @@ def overlay(
                 # Do not let passive exposure rewrite explicit/canonical
                 # judgment or accidentally change its ranking authority.
                 return old
-            return replace(old, familiarity=max(old.familiarity, target), depth=max(old.depth, depth))
+            promoted_familiarity = max(old.familiarity, target)
+            promoted_depth = max(old.depth, depth)
+            if promoted_familiarity == old.familiarity and promoted_depth == old.depth:
+                return old
+            return replace(
+                old,
+                familiarity=promoted_familiarity,
+                depth=promoted_depth,
+                # Preserve every prior source; identify the new passive
+                # exposure responsible for this offline-only enrichment.
+                sources=tuple(sorted(set(old.sources) | {SOURCE})),
+            )
         return TasteEntityEvidence(
             kind, identity, target, 0.0, 0.0, 0.0, depth, (SOURCE,), None,
         )

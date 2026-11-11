@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from backend.services.lastfm_taste_preview import (
-    CAP, CLOCK, MAX_RECORDS, Observation, demo, overlay, rankings,
+    CAP, CLOCK, MAX_RECORDS, SOURCE, Observation, demo, overlay, rankings,
     synthetic_baseline, synthetic_observations,
 )
 
@@ -132,6 +132,31 @@ def test_passive_track_overlay_cannot_dilute_existing_explicit_artist_judgment()
     track = next(item for item in enriched.diagnostics["tracks"]
                  if item["artist"] == "velvet abacus")
     assert "canonical_artist_feedback_guard" in track["reason_codes"]
+
+
+def test_enriched_neutral_evidence_retains_old_source_and_marks_synthetic_origin():
+    baseline = synthetic_baseline()
+    neutral = replace(
+        baseline.artists["velvet abacus"], identity="marble otters",
+        familiarity=0.2, preference=0.0, positive_weight=0.0,
+        negative_weight=0.0, depth=0, sources=("existing_neutral",), contexts={},
+    )
+    baseline.artists["marble otters"] = neutral
+    baseline.tracks["marble otters|paper comet"] = replace(
+        neutral, kind="track", identity="Paper Comet",
+    )
+    enriched = overlay(baseline, [
+        Observation("Marble Otters", "Paper Comet", CLOCK),
+    ]).snapshot
+    for item in (
+        enriched.artists["marble otters"],
+        enriched.tracks["marble otters|paper comet"],
+    ):
+        assert item.sources == ("existing_neutral", SOURCE)
+        assert item.preference == item.positive_weight == item.negative_weight == 0
+        assert item.familiarity > 0.2
+    assert baseline.artists["marble otters"].sources == ("existing_neutral",)
+    assert baseline.tracks["marble otters|paper comet"].sources == ("existing_neutral",)
 
 
 def test_actual_rank_flip_rejection_and_transparency():

@@ -288,7 +288,9 @@ canonical artists remain entirely unchanged, including their existing track-rank
 contribution: passive tracks for those artists stay diagnostic-only to prevent
 accidental dilution of explicit feedback in the existing classifier. Preference,
 weights, contexts, Sonos provenance and observation dates are never rewritten.
-No title-only keys are added. Counts describe provider assertions, not verified plays, likes,
+Existing source tags are retained, and the synthetic Last.fm source tag is
+added only when a neutral entity gains familiarity or depth. No title-only
+keys are added. Counts describe provider assertions, not verified plays, likes,
 dislikes, completion or Apple identity. Diagnostics separate observed counts,
 suppression and inferred targets. Existing canonical title-only fallback, if
 already present in a supplied baseline, remains the canonical classifier's
@@ -307,7 +309,7 @@ URLs and account identifiers. The existing HMAC-only runtime shadow status
 Validation is synthetic only: the focused regression suite covers repeat caps,
 permutations/dedup/idempotency, collisions, invalid records, exact identities,
 Sonos overlap, canonical preservation/rejection and deterministic CLI output,
-plus the neighboring taste/discovery suites: **50 tests passed** (18 preview,
+plus the neighboring taste/discovery suites: **51 tests passed** (19 preview,
 32 neighboring); scoped Ruff and `git diff --check` passed. Two CLI runs were
 byte-identical. No personal data was queried and
 no production behavior was verified. #431 and original #254 acceptance remain
