@@ -41,6 +41,18 @@ Use this **one-milestone loop** for normal HomeHub changes. It implements the ex
 
 **Approval and notification default:** Avoid serial continue/check-again requests. The owner's request to complete a bounded **low-risk** feature milestone preauthorizes its scoped commit, push, PR update and merge **only when** final-head CI and review are green, branch rules pass and scope/risk remain unchanged. A missing/failing check, scope ambiguity or high-risk integration requires a fresh explicit decision. Deployments, credentials/private data, live DB writes/migrations, host/device/lighting changes, restarts and destructive actions remain separately gated. Check available CI status in the same interaction; never promise unconfigured background polling. Prefer existing GitHub notifications; do not add a watcher/bot/duplicate queue without opt-in. End with **changed / verified / usable / blocked / next exact gate**.
 
+### Codex delegation and usage check (#504)
+
+Route **small, deterministic changes and Git/CI/status lookups directly**. Use one scoped Codex Write task for substantive multi-file engineering, unfamiliar cross-component debugging or extensive tests. Use Read mode only when a targeted scout materially reduces uncertainty, and reuse the result instead of spawning overlapping scouts. Start with the cheapest credible model; explicitly name the intended model/effort and reason in the task prompt, while preserving the caller's supported launcher model settings. Use higher-effort Sol or a distinct independent review for evidenced lifecycle, concurrency, security, data, lighting/ownership and other high-risk cases. A hypothetical concern does not justify an expensive repeat review.
+
+For a **read-only token inventory**, from the protected Windows Sandbox HomeHub checkout run:
+
+```powershell
+& 'C:\Work\home-hub-project\main\.venv\Scripts\python.exe' -B scripts/report_codex_usage.py --days 7
+```
+
+The script reads only `task.json`, `state.json` and `turn.completed` usage events from the existing Sandbox task registry. It emits **aggregate JSON** without prompt/response text, command logs, private worktree paths or task IDs; it neither changes task state nor connects to Codex or billing APIs. Totals include input, cached input, derived *uncached* input and output, by-day task counts and requested model overrides. Cached input is already included in total input. An unspecified model is reported as **launcher default (unresolved)**; do not infer its resolved model, monetary cost, rate-limit usage or remaining quota. A rise in token counts alone is not proof of waste?compare useful results and duplicate work. Run on demand, not on a background timer.
+
 ## Workstreams: one primary owner, linked dependencies
 
 These are navigation routes, not a rewrite of existing issue ownership:
