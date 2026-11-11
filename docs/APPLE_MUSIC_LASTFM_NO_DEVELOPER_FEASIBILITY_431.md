@@ -319,3 +319,82 @@ privacy/retention/revocation design, qualified named identity and Sonos overlap
 proof, persistence/schema review if proposed, and separately authorized
 deployment through the established release procedure. No live enablement is
 implied by this preview.
+
+## 2026-11-11: offline named-evidence consent rehearsal after PR #522
+
+Local development only, based on `d2d7fc1a`; no runtime registration or account
+read. `lastfm_named_evidence_dryrun.py` accepts a caller-supplied list of at most
+50 fabricated provider-shaped observations and a separate matching list of
+fictional source/Sonos qualifications. A fresh `FictionalConsent` requires
+both explicit synthetic-only and named-rehearsal opt-ins; it is consumed by one
+batch attempt. Every eligible row requires an out-of-band fictional source
+qualification, never a provider-carried authority field. These declarations
+**cannot authenticate consent or detect whether a caller has substituted
+personal data**. This API is for trusted synthetic tests,
+not a guard suitable for accepting real payloads. No live-source readiness is
+claimed. The delegated synthetic worker made no live API reads; the controller
+independently checked current GitHub issue scope.
+
+Exact artist + title + ASCII UTC epoch second is required. Now-playing, invalid
+markers, malformed identities/dates, future records and records older than seven
+days abstain. Each preview rechecks freshness against its explicit fixture clock.
+Exact normalized artist/title/second duplicates collapse. Distinct artists with
+the same title remain separate; title-only, delimiter-ambiguous and missing-name
+observations cannot create evidence. This is textual assertion matching, not
+recording/catalog resolution or Unicode-confusable identity verification.
+
+Out-of-band per-observation Sonos qualification must carry the fictional
+`synthetic:complete_sonos_coverage_non_overlap` marker. Confirmed overlap is
+suppressed; absent, malformed or ambiguous coverage abstains. The most restrictive
+qualification wins for duplicates, regardless of order. Provider-shaped rows
+asserting `authority` or `sonos_proof` are rejected: a Last.fm payload must
+never certify its own source identity or absence of Sonos overlap. A real
+implementation
+would need independently collected, source-qualified Sonos interval coverage,
+clock/time uncertainty and gap rules, and identity resolution. A lack of Sonos
+events, a timestamp/name match or this fixture marker is **not real overlap proof**.
+
+Eligible assertions enter the existing pure overlay on a private deep copy of
+the baseline. Any added provenance is `lastfm_unattributed`: neither Apple-verified
+identity nor independent plays, likes, dislikes, completion, genre/context
+preference or actuation. Existing canonical positive/negative evidence and
+rejection remain authoritative. No ranking engine is added. The identity-bearing
+overlay snapshot and its diagnostics are deliberately not exported: the public
+result contains aggregate counters and fixed qualifications only, with redacted
+object representations/errors. There is no fetch, polling, log, persistence or
+serialization path; explicit serialization of the session/token is refused.
+
+The temporary session owns copied primitive observations and a copied baseline.
+Use it as a context manager; exit (including exceptions), `drop()`, or token
+`revoke()` releases those references and blocks further previews. The consumed
+token cannot reopen a session: another batch needs new explicit fictional consent.
+Overlay results exist only during a preview and are discarded before returning
+aggregates. There is no background expiry worker or secure memory erasure promise.
+The caller owns its original inputs; Python debugger/traceback/private-attribute
+access and process-memory copies are outside this contract. Do not pass personal
+data or publish raw tracebacks with locals. Aggregate results already returned
+cannot be recalled. A future real-data design must separately define maximum
+session lifetime, automatic expiry, all consumer copies, retention and deletion.
+
+Staging gates remain separate: (1) controller review of these local synthetic
+diffs/tests; (2) explicit owner privacy approval for the exact account, real named
+read scope, transport/redaction and transient retention/revocation design;
+(3) independent identity/time and real Sonos overlap proof, with unknown coverage
+still abstaining; (4) separately approved retention/schema or ranking effects and
+their rollback/revocation consumers; (5) authorized integration/deployment and
+physical acceptance. This rehearsal grants none of those permissions and does
+not satisfy original #431 acceptance. The HMAC-only merged-but-not-deployed shadow
+feed intentionally has **no name bridge**; `lastfm_shadow.py`, its network source,
+bootstrap, canonical taste/discovery, DB and Sonos are untouched. No current
+Latitude health or deployed SHA was investigated.
+
+Local validation after independent trust-boundary correction: **81 passed**
+across `test_lastfm_named_evidence_dryrun.py`,
+`test_lastfm_taste_preview.py`, `test_music_taste.py` and
+`test_music_discovery.py`; scoped Ruff and `git diff --check` passed. Used the
+specified main venv, `APP_ENV=testing`, disabled bytecode/cache and plugin
+autoload, with `pytest_asyncio.plugin` explicitly enabled for the existing async
+tests. Initial local evidence was developed in isolated worktree
+`lastfm-evidence-contract-431-20261111`, branch
+`work/431-lastfm-evidence-contract-20261111`; GitHub publication/merge and any
+future release are evidenced separately under issue #431.
