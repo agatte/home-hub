@@ -127,3 +127,109 @@ Then separately authorize a bounded sanitized collection/evaluation plan. Existi
 LightAdjustment history alone cannot satisfy this gate. Controller independently
 reviews and integrates; no commit/push/PR/merge, live collection, migration,
 deployment, device write or new automation permission is authorized here.
+
+## Second milestone: fictional producer receipt join (2026-11-11)
+
+This source-only extension follows the first milestone merged in PR #524
+(controller-supplied baseline `a41f7102e93827c067db85722d4896654d94d6e6`).
+The first-milestone text above remains its historical contract. This worker used
+local source/docs only; no fresh GitHub status, production or personal history
+was read. Issue #131 remains the owning workstream; publication/integration and
+independent exact-head CI belong to the controller.
+
+`backend/services/ml/action_feedback_receipts_shadow.py` adds frozen stdlib
+receipt types and `evaluate()`, with no runtime, storage, device or network
+imports. It reuses `Context`, `Decision`, `Feedback`, `ExpectedLink`, `Assessment`
+and `assess()` unchanged. Four independent fictional producer streams describe:
+
+- Decision intent, including exact action/context/policy/session and brightness.
+- Final writer ACK, including its own exact intent copy and owner snapshot ID.
+  `acknowledged=True` illustrates an accepted final outbound write, not measured
+  physical brightness. An intent acceptance alone is insufficient: current
+  `LightingAcceptanceReceipt` explicitly is not a transport acknowledgement;
+  Hue v2 `_write_acknowledged` separately checks the resource/error envelope.
+- Authoritative owner/context interval covering decision through response.
+  This single interval is a deliberately conservative continuous-history claim,
+  captured at/after its end, with a separate Home/automation assertion and fresh
+  context timestamp at both endpoints. A second snapshot for the same decision,
+  including takeover/ABA, blocks rather than replacing the first.
+- Explicit UI response, including stable event ID, exact response contents,
+  ACK/owner IDs, independent owner-qualification claim and interaction type.
+  Submitted feedback must equal this independently supplied UI record in every
+  field. A raw slider, scene selection, silence or source string cannot qualify.
+
+The expected map is projected from corroborated producer receipts, never from
+submitted feedback. Exact decision equality binds final brightness and all intent
+fields; UI response equality separately binds the requested correction brightness.
+The explicit correction is feedback only: this module never applies it or grants
+permission to apply it. Manual ownership before the response blocks qualification.
+All supplied rows belong to one narrowly scoped batch. Mixed contexts/policies,
+missing/unreferenced receipts, duplicate IDs (even identical replays), duplicate
+final writes, wrong sessions, ambiguous owner timelines and suspicious extra rows
+block the whole batch. There is no salvage of five positives after dropping an
+uncertain sixth row. Missing/failed/unobserved ACKs cannot count.
+
+Each of decision/apply/owner/UI must supply exactly one complete, continuous
+coverage claim spanning the **entire existing 30-day assessor window through
+explicit `now`**, including quiet intervals. Ordered receipt manifests must match
+all supplied producer receipts exactly, with sequences 1..N, unique receipt IDs
+across streams and nondecreasing source/capture timestamps. Receipt arrival order
+is irrelevant. Missing/gapped/torn coverage blocks. Capture lag is at most 30
+seconds (owner interval lag is measured from its end); clocks cannot be future,
+non-integer or inconsistent with causal ordering. Decision/context/response
+freshness and scope checks, five-session/three-day evidence, variability screening
+and negative-window hysteresis remain owned by the original assessor. The
+two endpoint context checks require independently fresh observations at the
+originating decision (within 60 seconds) and explicit response (within 30
+seconds), so an old owner observation cannot qualify later feedback. The
+continuous-owner interval remains a synthetic claim, not authenticated history
+or a calibrated autonomy policy.
+
+**Threat model:** every stream, coverage manifest, source name, qualification flag
+and interval is still an unverified caller-supplied claim. A malicious source can
+forge all streams or hide a negative while fabricating complete coverage. These
+fixtures neither authenticate a person nor demonstrate real owner approval.
+Sequence/manifest checks detect inconsistencies in supplied evidence, not omitted
+real-world history. Every result always says `unverified_offline_claims`, including
+`human_review_suggestion`. No verified/provenance/actuation permission status is
+introduced. Real credential validation and trusted producer boundaries are absent.
+
+`python -B scripts/demo_action_feedback_receipts_shadow.py` emits fully fictional,
+deterministic before/after JSON to stdout: two linked responses abstain; five
+receipt-linked corrections on five dates yield at most a human-review candidate;
+missing final ACK, partial coverage or explicit reversal abstains. No files,
+database, host, Hue, real history or network are accessed by the demo beyond
+ordinary Python source imports. The tests separately exercise forged fields,
+coverage, replay, ownership, freshness, negative veto and input permutations.
+
+Still unimplemented and separately gated: real decision/final-ACK capture at the
+existing write chokepoint, independently authenticated UI delivery and actor
+qualification, authoritative continuous owner/context history and cancellation,
+restart-safe producer/session identities, trustworthy clock/sequence boundaries,
+complete negative/reversal capture, privacy/retention decisions, and a bounded
+sanitized evaluation plan. Existing `log_light_adjustment` cannot supply these
+joins. Music provenance is a precedent only; the active lighting learner and all
+runtime write paths remain untouched. No adapter, API auth, migration, durable
+history, config, live polling, transition or actuator policy is added here.
+
+Local verification commands (existing Sandbox venv, no downloads):
+
+```powershell
+& C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B -m pytest tests/test_action_feedback_receipts_shadow.py tests/test_action_feedback_shadow.py -q -p no:cacheprovider --disable-warnings
+& C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B -m ruff check --no-cache backend/services/ml/action_feedback_receipts_shadow.py scripts/demo_action_feedback_receipts_shadow.py tests/test_action_feedback_receipts_shadow.py
+& C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B scripts/demo_action_feedback_receipts_shadow.py
+git diff --check
+git diff --cached --check
+```
+
+The handoff reports final test counts, two-run demo identity and explicit
+new-file whitespace checks. Only the four second-milestone paths are changed;
+no worker commit/push/PR/merge/deployment or live action is authorized.
+
+Second-milestone local result: **186 passed** (118 receipt cases plus the original
+68), scoped Ruff passed, and two independent demo subprocesses emitted identical
+**2008 bytes**, SHA-256
+`08ecbb20e86c9ee5b5dd098f2776e9942da4a12afddc01f674646912de1ef41a`.
+Tracked/staged diff checks and all three untracked-source whitespace checks
+reported no whitespace errors (new-file `--no-index` checks return 1 for the
+file difference itself). No integration or real-world acceptance is implied.
