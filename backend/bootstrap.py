@@ -1233,6 +1233,17 @@ async def lifespan(app: FastAPI):
 
     # Background tasks
     tasks: list[asyncio.Task] = []
+    from backend.services.lastfm_shadow import LastFmShadowService
+    lastfm_shadow = LastFmShadowService(
+        enabled=settings.LASTFM_SHADOW_ENABLED,
+        username=settings.LASTFM_SHADOW_USERNAME,
+        api_key=settings.LASTFM_API_KEY,
+        poll_minutes=settings.LASTFM_SHADOW_POLL_MINUTES,
+    )
+    app.state.lastfm_shadow = lastfm_shadow
+    lastfm_shadow_task = lastfm_shadow.start()
+    if lastfm_shadow_task is not None:
+        tasks.append(lastfm_shadow_task)
 
     # Wire heartbeat registry into every service that runs a polling
     # loop. Each service publishes liveness via .tick(name) once per

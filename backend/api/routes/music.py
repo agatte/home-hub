@@ -4,6 +4,7 @@ Music discovery and mode-playlist mapping endpoints.
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
 from backend.api.auth import require_api_key, require_api_key_strict
+from backend.api.auth import require_localhost
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
@@ -12,6 +13,17 @@ from backend.services.music_requests import MusicRequest
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
+
+
+@router.get("/lastfm-shadow/status", dependencies=[
+    Depends(require_api_key_strict), Depends(require_localhost),
+])
+async def lastfm_shadow_status(request: Request) -> dict:
+    """Anonymous cached status only; direct loopback, no refresh operation."""
+    service = getattr(request.app.state, "lastfm_shadow", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Status unavailable")
+    return service.status()
 
 # Upload guards for /import. The parser is plistlib (expat under the hood),
 # which doesn't resolve external entities but does honor internal <!ENTITY>
