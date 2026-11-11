@@ -1,6 +1,6 @@
 # #431 — No-paid-developer native-iPhone scrobble feasibility and read-only probe
 
-**Status: SOURCE-ONLY DRAFT [PR #520](https://github.com/agatte/home-hub/pull/520); OWNER-VERIFIED NATIVE IPHONE → LAST.FM DELIVERY; HOMEHUB ADAPTER REMAINS UNREGISTERED / UNDEPLOYED (2026-11-10).** Owner: [#431](https://github.com/agatte/home-hub/issues/431);
+**Status (2026-11-11): [PR #520](https://github.com/agatte/home-hub/pull/520) and [PR #521](https://github.com/agatte/home-hub/pull/521) merged to GitHub master; Latitude remains UNDEPLOYED, Last.fm shadow polling remains DISABLED by default, and native iPhone → Last.fm delivery is OWNER-VERIFIED. The following ranking preview is entirely OFFLINE/SYNTHETIC.** Owner: [#431](https://github.com/agatte/home-hub/issues/431);
 parent [#254](https://github.com/agatte/home-hub/issues/254).
 
 ## Why this separate lane exists
@@ -263,3 +263,57 @@ immutability, and no network/DB access.
 Music app during travel should eventually improve HomeHub suggestions with
 zero presence/room or Sonos actuation. Neither this fictional module nor
 the manual export satisfies that real-world outcome.
+
+## Offline canonical ranking preview � #431 bounded development milestone
+
+`python -B scripts/demo_lastfm_taste_preview.py` runs a wholly synthetic,
+nonpersistent example using `lastfm_taste_preview.py`, the current
+`MusicTasteSnapshot.classify_candidate`, and the unchanged
+`MusicDiscoveryService.preview`. It has no account input or transport. Catalog
+verification is an invented fixture assertion, not a real catalog lookup; all
+tracks remain `metadata_only`. No runtime registration or API is added.
+
+The fixed-clock seven-day batch accepts at most 512 assertions and requires exact
+artist/title plus an aware date. It rejects malformed, now-playing, future and
+stale assertions. Exact artist/title/time duplicates collapse; different songs
+in the same second remain distinct. Explicit fixture-confirmed Sonos overlap
+suppresses familiarity, including conflicting duplicates. Names/times alone do
+not establish overlap or independence.
+
+The overlay deep-copies the baseline and uses absolute familiarity targets
+(0.45 for one observation, diminishing to a 0.80 cap), so replaying a batch is
+idempotent. Artist depth uses distinct named tracks, capped at four; track depth
+is capped at five. Existing greater familiarity/depth wins. Explicitly positive/negative
+canonical artists remain entirely unchanged, including their existing track-ranking
+contribution: passive tracks for those artists stay diagnostic-only to prevent
+accidental dilution of explicit feedback in the existing classifier. Preference,
+weights, contexts, Sonos provenance and observation dates are never rewritten.
+No title-only keys are added. Counts describe provider assertions, not verified plays, likes,
+dislikes, completion or Apple identity. Diagnostics separate observed counts,
+suppression and inferred targets. Existing canonical title-only fallback, if
+already present in a supplied baseline, remains the canonical classifier's
+behavior; this experiment supplies no such ambiguous evidence.
+
+The fictional gentle-policy example moves Copper Kites from second (0.5372)
+to first (0.6272): two distinct heard tracks supply 0.03 depth contribution,
+and repeated exact Paper Comet observations change novelty, supplying 0.06.
+Preference stays zero. Velvet Abacus retains its existing explicit positive
+artist evidence **and unchanged per-artist ranking score**, rather than being
+penalized for a neutral scrobble. Tin Orchard remains excluded by canonical Not for me feedback.
+A single observation of Marble Otters stays exploratory. Output omits dates,
+URLs and account identifiers. The existing HMAC-only runtime shadow status
+**does not expose named tracks** and is not a data source for this demo.
+
+Validation is synthetic only: the focused regression suite covers repeat caps,
+permutations/dedup/idempotency, collisions, invalid records, exact identities,
+Sonos overlap, canonical preservation/rejection and deterministic CLI output,
+plus the neighboring taste/discovery suites: **50 tests passed** (18 preview,
+32 neighboring); scoped Ruff and `git diff --check` passed. Two CLI runs were
+byte-identical. No personal data was queried and
+no production behavior was verified. #431 and original #254 acceptance remain
+open. Next gate is owner review/integration of this offline milestone. Any live
+adapter still requires separately authorized opt-in/account data access and
+privacy/retention/revocation design, qualified named identity and Sonos overlap
+proof, persistence/schema review if proposed, and separately authorized
+deployment through the established release procedure. No live enablement is
+implied by this preview.
