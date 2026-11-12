@@ -70,6 +70,21 @@ local LLM experiments do not gain device, lifecycle or host authority.
   to ask Anthony for separate Astra permission when the current task authorization
   already covers the work and Astra is the cheapest credible way to finish it.
 - Terra/legacy-class is fallback only.
+- **Default dispatch:** answer narrow Git/CI/status questions, one-line docs and
+  deterministic checks with direct tools. Delegate substantial multi-file
+  implementation, unfamiliar cross-component bugs, extensive tests or difficult
+  reasoning to **one scoped Codex worker**; do not launch one merely to look busy.
+- **Before a new Codex task:** inspect the existing registry/worktree and reuse
+  completed evidence, or resume an unresolved exact thread per LOCAL_WORKSPACE.
+  Avoid repeated Read scouts for the same question; after one bounded scout,
+  either implement, use direct tools or document a genuine blocker.
+- **Token and review discipline:** specify intended model/effort and why in the
+  task brief; reserve higher effort for evidenced lifecycle, safety, ownership,
+  security or data-integrity complexity. Review proportionately and never
+  multiply reviewers without a new risk or failure. Use read-only
+  `scripts/report_codex_usage.py` to view aggregate registry token telemetry;
+  cached input is part of input, not an extra cost, and launcher defaults do not
+  identify the resolved model or account billing.
 - Keep Codex model choice task-driven rather than pinning a repo/global default.
   Delegation prompts should name the recommended model/effort and why delegation
   helps, then give Goal, Context, Constraints, and Done When. Match review depth
