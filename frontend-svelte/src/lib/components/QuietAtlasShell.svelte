@@ -9,7 +9,7 @@
   import { MORE_DESTINATIONS, activeQuietAtlasSection, isQuietAtlasReadOnlyPreview, withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
 
   const NAV_ITEMS = [
-    { id: 'home', label: 'Home', href: '/quiet-atlas/home', icon: Home },
+    { id: 'home', label: 'Home', href: '/', icon: Home },
     { id: 'control', label: 'Control', href: '/quiet-atlas/control', icon: Sliders },
     { id: 'music', label: 'Music', href: '/quiet-atlas/music', icon: Music },
     { id: 'insights', label: 'Insights', href: '/quiet-atlas/insights', icon: BarChart3 },
@@ -111,9 +111,9 @@
 
 <div class="qa-shell">
   <aside class="qa-sidebar" aria-label="HomeHub navigation" inert={moreOpen}>
-    <a class="qa-brand" href="/quiet-atlas/home" aria-label="HomeHub Quiet Atlas Home">
+    <a class="qa-brand" href="/" aria-label="HomeHub Home">
       <span class="qa-brand-mark" aria-hidden="true">H</span>
-      <span class="qa-brand-copy"><strong>HomeHub</strong><small>Quiet Atlas</small></span>
+      <span class="qa-brand-copy"><strong>HomeHub</strong><small>Home &amp; Control</small></span>
     </a>
 
     <p class="qa-rail-kicker">APARTMENT CONTROL</p>
@@ -153,11 +153,11 @@
 
   <div class="qa-main" inert={moreOpen}>
     <header class="qa-mobile-header">
-      <a class="qa-mobile-brand" href="/quiet-atlas/home" aria-label="HomeHub Quiet Atlas Home">
+      <a class="qa-mobile-brand" href="/" aria-label="HomeHub Home">
         <span class="qa-brand-mark" aria-hidden="true">H</span>
-        <span><strong>HomeHub</strong><small>Quiet Atlas</small></span>
+        <span><strong>HomeHub</strong><small>Home &amp; Control</small></span>
       </a>
-      <span class="qa-preview-badge" class:functional={!readOnlyPreview}>{readOnlyPreview ? 'Read-only preview' : 'Functional HomeHub tools'}</span>
+      <span class="qa-preview-badge" class:functional={!readOnlyPreview}>{readOnlyPreview ? 'Read-only preview' : 'HomeHub controls'}</span>
     </header>
 
     <div class="qa-shell-content">
