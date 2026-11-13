@@ -30,7 +30,7 @@
     <h4 id={`${id}-heading`}>Live {roomLabel} lighting</h4>
     <span class:online={$connected} class="connection">{ $connected ? 'Hub connected' : 'Hub disconnected' }</span>
   </div>
-  <p class="provenance">Uses HomeHub's existing lighting controls. Displayed values are the latest received readings, not proof of physical completion. Room expansion never changes a light by itself.</p>
+  <p class="provenance">HomeHub-reported values only. A control sends a request, not a confirmed result: if a stronger lighting owner is active, the server may deny the change. Room expansion itself never changes a light.</p>
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
   {:else if fixtureIds.length === 0}
@@ -41,7 +41,7 @@
         <div class="fixture" aria-label={`Light L${lightId}`}>
           <div class="fixture-heading"><strong>L{lightId}</strong><span>{ $lights[lightId]?.name ?? 'No current reading' }</span></div>
           {#if $lights[lightId] && $lights[lightId].reachable === true}
-            <LightCard light={$lights[lightId]} />
+            <LightCard light={$lights[lightId]} optimisticStore={false} />
           {:else}
             <p role="status" class="warning">{ $lights[lightId] ? 'Fixture unreachable — controls unavailable' : 'Waiting for fixture state — controls unavailable' }</p>
           {/if}

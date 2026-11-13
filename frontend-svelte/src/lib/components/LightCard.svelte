@@ -8,6 +8,10 @@
   /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, ct?: number, colormode?: string, reachable: boolean }} */
   export let light
 
+  // New Home room panels may render only state reported by the HomeHub store.
+  // The original Apartment card preserves its existing optimistic behavior.
+  export let optimisticStore = true
+
   /** Additional light ids that should mirror every command sent from this
    *  card. Used to fuse the kitchen pair (L3+L4) into a single Kitchen card —
    *  the grid renders L3 with linkedIds=['4'] and hides the L4 card. The
@@ -24,8 +28,8 @@
 
   /** @param {string} id @param {Record<string, unknown>} state */
   function fanout(id, state) {
-    setLight(id, state)
-    for (const linked of linkedIds) setLight(linked, state)
+    setLight(id, state, { optimistic: optimisticStore })
+    for (const linked of linkedIds) setLight(linked, state, { optimistic: optimisticStore })
   }
 
   const COLOR_PRESETS = [
@@ -118,6 +122,7 @@
   let activePointerId = null
   let dragStartX = 0
   let didDrag = false
+  let dragPowerRequested = false
   /** @type {number | null} */
   let pendingBri = null
   /** @type {number | null} */
@@ -144,6 +149,7 @@
     activePointerId = e.pointerId
     dragging = true
     didDrag = false
+    dragPowerRequested = false
     dragStartX = e.clientX
     pendingBri = clampedBriFromX(e.clientX)
     optimisticBri = pendingBri
@@ -157,10 +163,10 @@
     const bri = clampedBriFromX(e.clientX)
     pendingBri = bri
     optimisticBri = bri
-    if (!light.on) {
-      // Drag-to-power-on: first move past threshold while off turns the
-      // light on at the dragged-to brightness. setLight's optimistic patch
-      // updates the store immediately so subsequent moves see light.on=true.
+    if (!light.on && !dragPowerRequested) {
+      // Even without optimistic store patches, issue only one power-on intent
+      // per drag; later moves use bounded brightness updates.
+      dragPowerRequested = true
       fanout(light.light_id, { on: true, bri, transitiontime: MID_DRAG_TRANSITION })
       lastSentAt = Date.now()
     } else {

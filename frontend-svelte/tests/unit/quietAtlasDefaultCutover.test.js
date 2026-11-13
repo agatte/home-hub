@@ -5,6 +5,8 @@ import classic from '../../src/routes/classic/+page.svelte?raw'
 import home from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
 import reveal from '../../src/lib/components/QuietAtlasHomeLightingReveal.svelte?raw'
 import controls from '../../src/lib/components/QuietAtlasRoomControls.svelte?raw'
+import cardSource from '../../src/lib/components/LightCard.svelte?raw'
+import initSource from '../../src/lib/stores/init.js?raw'
 import shell from '../../src/lib/components/QuietAtlasShell.svelte?raw'
 import { MORE_DESTINATIONS, activeQuietAtlasSection, shouldUseQuietAtlasShell, shouldShowGlobalErrorToast } from '../../src/lib/quietAtlas/navigation.js'
 
@@ -30,7 +32,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     for (const mapping of ["living: ['1']", "bedroom: ['2', '5']", "kitchen: ['3', '4']", "plant: ['6']"]) {
       expect(controls).toContain(mapping)
     }
-    expect(controls).toContain('<LightCard light={$lights[lightId]} />')
+    expect(controls).toContain('<LightCard light={$lights[lightId]} optimisticStore={false} />')
     expect(controls).not.toContain('linkedIds=')
     expect(controls).not.toContain('<LightGrid')
     expect(controls).not.toContain('fetch(')
@@ -38,6 +40,12 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(controls).toContain('!$connected')
     expect(controls).toContain('$lights[lightId].reachable === true')
     expect(controls).toContain('controls unavailable')
+    // No global optimistic patch in the new Home: a WS send is not an ACK.
+    expect(cardSource).toContain('export let optimisticStore = true')
+    expect(cardSource).toContain('setLight(id, state, { optimistic: optimisticStore })')
+    expect(initSource).toContain('if (options.optimistic !== false)')
+    // Don't flood repeated power-on events while an off light is dragged.
+    expect(cardSource).toContain('!light.on && !dragPowerRequested')
     expect(home).toContain('href="#phone-lighting-title"')
     expect(home).toContain('href="#lighting-title"')
   })

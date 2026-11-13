@@ -156,10 +156,16 @@ export function initStores() {
  * command is sent over the WebSocket.
  * @param {string} lightId
  * @param {Record<string, unknown>} state
+ * @param {{ optimistic?: boolean }} [options]
  */
-export function setLight(lightId, state) {
+export function setLight(lightId, state, options = {}) {
   socket?.send('light_command', { light_id: lightId, ...state })
-  optimisticLightPatch(lightId, /** @type {any} */ (state))
+  // Original Apartment controls retain their existing optimistic behavior.
+  // Functional Quiet Atlas panels opt out: a WebSocket send is not a server
+  // acknowledgement, and an ownership denial must not fabricate device state.
+  if (options.optimistic !== false) {
+    optimisticLightPatch(lightId, /** @type {any} */ (state))
+  }
 }
 
 /**
