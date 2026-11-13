@@ -214,3 +214,56 @@ controls remain on their separate legacy behavior. The server's rate limit may
 reject a frame before parsing its correlation ID; a client must treat a missing
 result as **uncertain**, not assume a non-write. Neither PR is a substitute for
 review of the REST light writer, physical readback or approved release.
+
+### Source-only REST manual writer closure (2026-11-13; NOT AUTHORIZED TO MERGE)
+
+A bounded fake-bridge investigation showed `PUT /api/lights/{id}` could
+report `status=ok` after issuing a Hue call without evaluating
+`validate_lighting_lease`. The initial WebSocket-only guard did not protect
+this existing REST path. The current **unreleased** #530 development update
+routes the single-fixture REST PUT through `dispatch_manual_light` with the
+same serial boundary, pre-queued lease, final Hue dispatch fence, ownership
+stamp and persistence confirmation. Only registered L1–L6 fixture IDs can
+be commanded; CT/HSB mixing is rejected. Accepted PUTs preserve the legacy
+`{"status":"ok","light_id":...}` shape, while preflight denied, unavailable,
+and physically uncertain outcomes are separated (409/503/409 respectively).
+An uncertain outcome specifically instructs the caller to inspect the actual
+bulb rather than retry blindly. Event logging failure cannot retroactively
+report a successful write as failed.
+
+The owner's REST brightness step (`POST /api/lights/brightness/{up,down}`)
+and manual bulk action (`POST /api/lights/all`) also previously dispatched
+direct Hue commands. They now reuse the **per-fixture** guard. They report
+`status=partial_failure` with explicit `updated`, `blocked`, `unavailable`
+and `uncertain` fixture lists if any individual outcome is not verified as
+a bridge ACK plus durable manual owner stamp. A missing automation engine
+fails closed. The bulk action no longer directly calls
+`HueService.set_all_lights` or emits immediate mid-transition WebSocket
+broadcasts; the existing Hue polling/EventStream paths report device state.
+An unknown newly discovered Hue fixture cannot join the manual group action
+merely because the bridge exposes it. This is **not an atomic all-fixture
+transaction**: earlier acknowledged bulbs are not automatically undone when
+a later bulb is denied or uncertain. Do not retry a partial batch blindly.
+
+Draft #529's legacy All Off card has a source-only UI update to indicate
+partial/uncertain results, disable repeated clicks while pending, and avoid
+claiming physical confirmation on successful transport ACK. The server's
+full per-fixture scene/effect pipeline is **not** replaced; explicit managed
+scene operations retain separate ownership and physical acceptance gates.
+
+Local fake-only evidence at this checkpoint: 52 focused REST/WebSocket tests
+passed, plus 28 parameterized owner/lifecycle cases and 222 broader authority,
+manual-hold, authentication and tunnel-proxy regression tests. Ruff and
+`git diff --check` passed. These numbers are *local developer evidence*,
+not hosted CI nor real bulbs. The expanded REST/UI changes are not shipped.
+
+**Required risk review before high-risk integration:** Per-fixture bulk
+sequencing may be slower and partly applied compared to prior parallel Hue
+writes; actual Hue inventory freshness, bridge load, 20s All Off UI timeout,
+readback, older API consumers, authenticated client trust boundaries and
+Cross-Client/ScreenSync/effect transitions need operational testing. The
+WebSocket endpoint's inherited unauthenticated/Origin-unvalidated surface
+remains tracked by security issue #284; this change does not address that
+finding. DND is documented as blocking autonomous changes while allowing
+explicit user actions, and must not silently become a blanket manual ban.
+No live host or Hue write, deployment, merge, or physical acceptance occurred.
