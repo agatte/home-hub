@@ -1,6 +1,6 @@
 <script>
   import { lights } from '$lib/stores/lights.js'
-  import { connected } from '$lib/stores/connection.js'
+  import { connected, deviceStatus } from '$lib/stores/connection.js'
   import LightCard from './LightCard.svelte'
 
   /** Existing HomeHub fixture IDs, not a new actuation authority. */
@@ -33,6 +33,8 @@
   <p class="provenance">HomeHub-reported values only. A control sends a request, not a confirmed result: if a stronger lighting owner is active, the server may deny the change. Room expansion itself never changes a light.</p>
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
+  {:else if $deviceStatus.light_command_results !== true}
+    <p role="status" class="warning">This HomeHub server does not yet support guarded lighting command results. These redesigned controls will stay unavailable until the matching server update. The original Apartment controls remain accessible below.</p>
   {:else if fixtureIds.length === 0}
     <p role="status" class="warning">No configured fixtures for this room.</p>
   {:else}
@@ -49,7 +51,7 @@
       {/each}
     </div>
   {/if}
-  <p class="footnote">Bedroom and Kitchen fixtures are individually addressable. Manual controls use the existing HomeHub command path; guarded ownership improvements remain a separate server-side release requirement.</p>
+  <p class="footnote">Bedroom and Kitchen fixtures are individually addressable. Guarded WebSocket receipts report server decisions, never physical completion. Server-side ownership changes and kiosk/iPhone acceptance require their own reviewed release.</p>
   <a href="/classic#apartment-controls">Original Apartment controls</a>
 </section>
 
