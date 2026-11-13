@@ -32,6 +32,7 @@ export function createLightCommandReceiptTracker({
   let statuses = {}
   let capable = false
 
+  /** @param {string} lightId @param {string} status @param {string | null} [commandId] */
   function publish(lightId, status, commandId = null) {
     statuses = { ...statuses, [lightId]: { status, commandId } }
     onUpdate({ ...statuses })
