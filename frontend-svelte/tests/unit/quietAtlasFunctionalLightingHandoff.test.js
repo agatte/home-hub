@@ -10,7 +10,7 @@ describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
     expect(control).toContain('href="/classic#apartment-controls"')
     expect(control).toContain('Adjust lights now')
     expect(control).toContain('still a read-only preview')
-    expect(control.match(/href="\/#apartment-controls"/g)).toHaveLength(1)
+    expect(control.match(/href="\/classic#apartment-controls"/g)).toHaveLength(1)
     expect(control).not.toMatch(/(?:apiPut|apiPost|light_command|activateScene|setLight)\s*\(/)
   })
 

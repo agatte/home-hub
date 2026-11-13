@@ -4,9 +4,6 @@
   export let id
   export let group
   export let open = false
-  // Preserve the caller's existing binding without allowing preview drafts
-  // to affect actual light states or send commands.
-  export let drafts = {}
 </script>
 
 <div class="reveal" class:open {id} hidden={!open}>
