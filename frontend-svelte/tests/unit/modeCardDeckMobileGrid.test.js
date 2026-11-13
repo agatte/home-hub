@@ -17,8 +17,12 @@ describe('phone functional mode handoff is discoverable (#461)', () => {
     expect(source).toContain('aria-pressed={activeMap[card.id]}')
   })
 
-  it('does not modify existing light and activity command handlers', () => {
-    expect(source).toContain("await apiPost('/api/lights/all', { on: false })")
+  it('shows partial or uncertain All Off results without blind retries', () => {
+    expect(source).toContain("await apiPost('/api/lights/all', { on: false }, { timeout: 20000 })")
+    expect(source).toContain("outcome?.status === 'partial_failure'")
+    expect(source).toContain("All Off result uncertain. Check the actual lights before trying again.")
+    expect(source).toContain('disabled={card.isAction && allOffPending}')
+    expect(source).toContain('role="status" aria-live="polite"')
     expect(source).toContain('await setManualMode(card.id)')
     expect(source).toContain('on:click={() => handleClick(card)}')
   })
