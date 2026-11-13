@@ -80,6 +80,7 @@ from backend.schemas.ws import (
     WSCommand,
 )
 from backend.services.hue_service import HueService
+from backend.services.ws_manual_light_guard import dispatch_manual_light
 from backend.services.sonos_service import SonosService
 from backend.services.tracing import (
     coerce_inbound_id,
@@ -555,31 +556,21 @@ async def _handle_light_command(
     app, data: LightCommandData, ws_manager: WebSocketManager,
 ) -> None:
     """Process a validated light control command from a WebSocket client."""
+    # The WebSocket client provides a target, never an authority claim.
+    # Reuse the engine's serialized final-write boundary and owner generations.
     hue: HueService = app.state.hue
-    if not hue.connected:
-        return
-
+    automation = getattr(app.state, "automation", None)
     light_id = data.light_id
-
-    # Build the bridge payload from only the fields the client actually set.
     state = data.model_dump(exclude={"light_id"}, exclude_none=True)
-    if not state:
+    result = await dispatch_manual_light(automation, hue, light_id, state)
+    if result.status != "acknowledged":
+        app_logger.info("WebSocket manual light write not acknowledged: %s", result.status)
         return
 
-    # Capture full before-state for event logging (bri, hue, sat, ct)
-    before = await hue.get_light(light_id) if any(
+    # This is a bridge transport ACK, not physical readback.
+    before = result.before if any(
         k in state for k in ("bri", "hue", "sat", "ct")
     ) else None
-
-    success = await hue.set_light(light_id, state)
-    if success is not True:
-        return
-
-    # Mark this light as manually overridden so automation skips it
-    automation = getattr(app.state, "automation", None)
-    if automation:
-        automation.mark_light_manual(str(light_id), state)
-        await automation.persist_manual_light_ownership()
 
     # No post-write broadcast: the bridge is mid-transition right now and a
     # fresh get_light read returns an intermediate value that the slider

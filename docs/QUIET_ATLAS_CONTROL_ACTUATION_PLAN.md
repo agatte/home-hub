@@ -150,3 +150,43 @@ idempotency handling, acknowledgement/persistence and physical readback.
 Legacy working controls must remain available; these proposed restrictions
 must not create permanent lockout. No takeover, deployment or physical
 convergence is approved or demonstrated by these offline tests.
+
+## Source-only WebSocket guard candidate (2026-11-13; NOT APPROVED FOR RELEASE)
+
+The existing HomeHub `light_command` path (used by legacy `LightCard` and
+draft #529's in-flow room reveal) formerly wrote to Hue before marking manual
+ownership, without checking the shared final-write lease. In the isolated
+`work/461-ws-manual-authority-20261113` development branch, a **candidate**
+`backend/services/ws_manual_light_guard.py` now routes that existing command
+through `LightingTransitionBoundary.serialized()` and
+`run_write(validator=...)`, with a pre-queue per-light authority lease,
+post-read revalidation and the existing HueService final dispatch rendezvous.
+It denies unknown fixture identity, inaccessible/unreachable bulbs, stale
+source generations, Away/Sleeping, external-off/host-return, active scene or
+effect, transit, ScreenSync, protected/external owners and unknown legacy owner
+notifiers. A second manual adjustment can continue while ordinary manual
+ownership remains current, but **no stronger-owner takeover is implied**.
+The command is single-fixture only; this changes neither scenes nor group
+fanout. Transport ACK, ownership persistence and post-stamp authority currency
+are treated separately; ambiguous outcomes are not retried or reported as
+physical confirmation.
+
+**Local synthetic evidence only:** 13 focused offline test cases passed,
+including 28 parametrized owner/lifecycle subcases, a directly invoked
+FastAPI WebSocket handler (without lifespan), and a real HueService
+dispatch/circuit-breaker implementation with a fake bridge; Ruff and
+`git diff --check` also passed. These are not physical Hue observations.
+The branch remains separate from draft #529 and is not in production.
+
+**Still blocking any high-risk integration/deployment:** the Svelte
+`setLight` client optimistically updates its shared store and receives no
+per-command rejection/acknowledgement, so a denied command could temporarily
+look successful. REST `PUT /api/lights/{id}` and other direct writers still
+need their own authority reviews; this WS candidate does not grant a new
+one-shot API or durable server operation-key/idempotency contract. Repeated
+250ms slider writes plus pre-write Hue inventory reads need latency/bridge-load
+acceptance, and owner-policy review still must resolve live Travel/DND evidence
+and per-light bedroom glare ceilings. Physical readback, source freshness,
+disconnect/restart, cross-client collision, kiosk/iPhone usability, and
+operator acceptance remain unverified. **No live host/device write or
+approval to merge/deploy has been given.**
