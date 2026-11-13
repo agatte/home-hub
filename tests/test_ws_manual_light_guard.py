@@ -374,5 +374,114 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.engine.stamps), 1)
         self.assertEqual(self.engine.persists, 1)
 
+    async def test_websocket_protocol_returns_private_correlated_result(self):
+        import json
+        from unittest.mock import AsyncMock, Mock
+        from fastapi.websockets import WebSocketDisconnect
+        from backend.main import websocket_endpoint
+
+        manager = SimpleNamespace(connect=AsyncMock(), disconnect=Mock())
+        self.engine.mode_source = "synthetic"
+        self.engine.manual_override = None
+        self.engine.activity = "general"
+        self.engine.get_time_period = lambda: "afternoon"
+        state = SimpleNamespace(
+            hue=self.hue, sonos=SimpleNamespace(connected=False),
+            automation=self.engine, ws_manager=manager, build_id="fake-sha",
+            ambient_sound=None, presence=None, event_logger=None,
+        )
+        command_id = "cmd_synthetic_001"
+        command = json.dumps({
+            "type": "light_command",
+            "data": {"light_id": "2", "bri": 101, "command_id": command_id},
+        })
+        ws = SimpleNamespace(
+            app=SimpleNamespace(state=state),
+            send_text=AsyncMock(),
+            receive_text=AsyncMock(side_effect=[command, WebSocketDisconnect()]),
+        )
+        await websocket_endpoint(ws)
+        frames = [json.loads(call.args[0]) for call in ws.send_text.await_args_list]
+        self.assertTrue(frames[0]["data"]["light_command_results"])
+        matching = [frame for frame in frames if frame["type"] == "light_command_result"]
+        self.assertEqual(matching, [{
+            "type": "light_command_result",
+            "data": {
+                "command_id": command_id,
+                "light_id": "2",
+                "status": "acknowledged",
+            },
+        }])
+        self.assertEqual(self.hue.calls, [("2", {"bri": 101})])
+        manager.disconnect.assert_called_once_with(ws)
+
+        # A denied change is acknowledged as a decision, not a Hue mutation.
+        self.setUp()
+        self.engine.mode_source = "synthetic"
+        self.engine.manual_override = None
+        self.engine.activity = "general"
+        self.engine.get_time_period = lambda: "afternoon"
+        self.engine._active_scene_override_key = "scene"
+        state.automation, state.hue = self.engine, self.hue
+        ws.send_text.reset_mock()
+        ws.receive_text = AsyncMock(side_effect=[command, WebSocketDisconnect()])
+        await websocket_endpoint(ws)
+        frames = [json.loads(call.args[0]) for call in ws.send_text.await_args_list]
+        self.assertEqual(
+            [f["data"]["status"] for f in frames if f["type"] == "light_command_result"],
+            ["denied"],
+        )
+        self.assertEqual(self.hue.calls, [])
+
+        # Existing Apartment clients send no command_id; they still work
+        # and receive no extra result event.
+        self.setUp()
+        self.engine.mode_source = "synthetic"
+        self.engine.manual_override = None
+        self.engine.activity = "general"
+        self.engine.get_time_period = lambda: "afternoon"
+        state.automation, state.hue = self.engine, self.hue
+        legacy = json.dumps({
+            "type": "light_command", "data": {"light_id": "2", "bri": 99},
+        })
+        ws.send_text.reset_mock()
+        ws.receive_text = AsyncMock(side_effect=[legacy, WebSocketDisconnect()])
+        await websocket_endpoint(ws)
+        frames = [json.loads(call.args[0]) for call in ws.send_text.await_args_list]
+        self.assertFalse([f for f in frames if f["type"] == "light_command_result"])
+        self.assertEqual(self.hue.calls, [("2", {"bri": 99})])
+
+    async def test_invalid_tracked_websocket_command_gets_private_invalid_result(self):
+        import json
+        from unittest.mock import AsyncMock, Mock
+        from fastapi.websockets import WebSocketDisconnect
+        from backend.main import websocket_endpoint
+
+        self.engine.mode_source = "synthetic"
+        self.engine.manual_override = None
+        self.engine.activity = "general"
+        self.engine.get_time_period = lambda: "afternoon"
+        manager = SimpleNamespace(connect=AsyncMock(), disconnect=Mock())
+        state = SimpleNamespace(
+            hue=self.hue, sonos=SimpleNamespace(connected=False),
+            automation=self.engine, ws_manager=manager, build_id="fake-sha",
+            ambient_sound=None, presence=None, event_logger=None,
+        )
+        cmd = json.dumps({
+            "type": "light_command",
+            "data": {"light_id": "2", "bri": 999, "command_id": "cmd_invalid_123"},
+        })
+        ws = SimpleNamespace(
+            app=SimpleNamespace(state=state), send_text=AsyncMock(),
+            receive_text=AsyncMock(side_effect=[cmd, WebSocketDisconnect()]),
+        )
+        await websocket_endpoint(ws)
+        frames = [json.loads(call.args[0]) for call in ws.send_text.await_args_list]
+        self.assertIn({
+            "type": "light_command_result",
+            "data": {"command_id": "cmd_invalid_123", "status": "invalid"},
+        }, frames)
+        self.assertEqual(self.hue.calls, [])
+
 if __name__ == "__main__":
     unittest.main()

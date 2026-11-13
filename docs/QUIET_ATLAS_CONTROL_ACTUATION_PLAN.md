@@ -190,3 +190,27 @@ and per-light bedroom glare ceilings. Physical readback, source freshness,
 disconnect/restart, cross-client collision, kiosk/iPhone usability, and
 operator acceptance remain unverified. **No live host/device write or
 approval to merge/deploy has been given.**
+
+### Correlated WebSocket result (draft #530 follow-up; source-only)
+
+A new `light_command` may optionally carry `command_id` (8–64 safe ASCII
+characters). The value is correlation **only**: it is not authentication,
+authorization, a durable operation key or idempotency. The endpoint advertises
+`light_command_results: true` in its existing connection handshake and sends
+`light_command_result` only back to the same requesting WebSocket with
+`command_id`, validated fixture ID and one status: `acknowledged` (Hue
+transport ACK + completed manual ownership persistence), `denied` (no write
+authorized), `unavailable` (unreachable/unknown bridge or fixture),
+`uncertain` (physical outcome or ownership durability not provable), or
+`invalid` (schema rejection with safely echoed ID). Commands without IDs
+remain backward compatible. No result is a physical readback.
+
+Draft UI PR #529 gates its redesigned room controls on the explicit handshake
+capability, sends *one* final drag command, matches only the latest in-flight
+result per fixture, and displays denial/unavailability/uncertainty visibly.
+A missing/older server never receives the new tracked room command, and
+disconnection/timeouts never trigger automatic retries. Original Apartment
+controls remain on their separate legacy behavior. The server's rate limit may
+reject a frame before parsing its correlation ID; a client must treat a missing
+result as **uncertain**, not assume a non-write. Neither PR is a substitute for
+review of the REST light writer, physical readback or approved release.
