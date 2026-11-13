@@ -45,7 +45,8 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     // No global optimistic patch in the new Home: a WS send is not an ACK.
     expect(cardSource).toContain('export let optimisticStore = true')
     expect(cardSource).toContain('setLight(id, state, { optimistic: optimisticStore })')
-    expect(initSource).toContain('if (options.optimistic !== false)')
+    expect(initSource).toContain('if (options.optimistic === false)')
+    expect(initSource).toContain('lightCommandTracker.submit(lightId, state')
     // Don't flood repeated power-on events while an off light is dragged.
     expect(cardSource).toContain('!light.on && !dragPowerRequested')
     expect(home).toContain('href="#phone-lighting-title"')
