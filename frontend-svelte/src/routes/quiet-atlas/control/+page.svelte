@@ -14,7 +14,7 @@
   <header class="page-heading">
     <h1>Control</h1>
     <p class="intro">Browse lighting groups and scenes below. Control is still a read-only preview.</p>
-    <a class="live-lighting-link" href="/#apartment-controls">
+    <a class="live-lighting-link" href="/classic#apartment-controls">
       <span>Adjust lights now</span>
       <span aria-hidden="true">↗</span>
     </a>

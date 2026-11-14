@@ -525,3 +525,184 @@ authentication, a real broker storage/journal/durability protocol, independent
 backend rollback floor and actuator enforcement, root-controlled package/dependency
 and ACL audit, an approved safe installer, recovery/restore invalidation gates,
 and measured manager activation. No production behavior or deployment changes.
+
+## November 14, 2026: second source-only protocol implementation
+
+The inactive verify-only client and separate browser/kiosk issuance contract are
+implemented locally; see [the foundation's second source milestone](SECURITY_IDENTITY_FOUNDATION.md#november-14-second-source-milestone-inactive-broker-and-browser-issuance)
+for exact wire schemas and trust gates. This does not change the selected OS
+broker architecture, authorize installation or complete #287/#293. Neither the
+synthetic storage broker nor the transport-only Linux prototype supports this
+new AuthN protocol. There is no socket connector or live issuer.
+
+The client requires trusted current generation AND revision observations to
+reject delayed responses across restore and security mutation; implementing and
+proving that protected freshness channel remains an operational prerequisite.
+Issuer evidence is opaque trusted injection, not proof from HTTP, a same-UID
+process or a synthetic signature. Uncertain issuance must be revoked through the
+separate privileged owner before retry; logout/rotate/restore require durable
+broker lifecycle transitions. No application DB fallback, pairing route, TLS
+change, host action or physical write was introduced. Offline tests prove only
+the source contracts; independent review and all operational/physical acceptance
+gates remain open. #461 guarded inline controls retain their original L1-L6,
+manual/ScreenSync/final-owner and kiosk/iPhone acceptance requirements.
+
+## November 14, 2026: standalone protected-state SOURCE milestone (inactive)
+
+Local uncommitted implementation in
+`worktrees/identity-287-broker-session-20261114` adds the stdlib-only package
+`security/homehub_identity_broker/` and
+`tests/test_identity_broker_state_runtime.py`. This is source engineering for
+#287 -> #293 -> #461, not installation, activation, credential provisioning,
+independent security review, or physical acceptance. The existing redesigned
+Home and guarded inline L1-L6 controls remain the primary product goal.
+Network reads were prohibited for this task; issue state was not freshly checked.
+
+`runtime.py` implements exact version-1 length-prefixed bounded ASCII VERIFY,
+strict duplicate/key/type validation, fixed source/profile/lane grants,
+browser_session/native_bearer distinction, salted PBKDF2-HMAC-SHA256 verifiers
+(600,000 iterations), per-use expiry/revocation and correlated generation/revision.
+`policy.py` is an independent fixed inventory; a test compares it to backend
+policy without importing the backend into the broker. No SQL/admin opcode,
+token echo, issuer, settings, backend DB dependency or network transport exists.
+Malformed envelopes raise a fixed sanitized error for a future transport to close;
+valid requests receive exactly a verified response or bounded denial envelope.
+
+The private SQLite state is independently authenticated by an HMAC journal and
+permanent denial fence using separately injected key material. The MAC covers
+all schema/version/generation/revision fields and every credential verifier,
+profile/source/grant/kind/revocation/expiry plus reserved rotation/delivery queues.
+Queues must be empty until an authenticated recipient delivery protocol exists;
+nonempty queues quarantine rather than pretend to implement delivery.
+Private rotate accepts prehashed replacement state, revokes the old record with
+zero overlap and enforces unchanged principal/profile. Private restore from
+healthy state empties every credential and changes generation. No recovery of
+quarantined state, re-enrollment or token minting is implemented.
+
+Transitions serialize with verification through one Broker object's thread lock:
+PENDING denial fence fsync/replace/directory-fsync, PENDING journal, SQLite FULL
+commit plus directory barrier, COMMITTED journal, DB reread, COMMITTED fence,
+full recheck, acknowledgment. Missing/mismatched/PENDING/stale state and leftover
+exclusive `.next` files quarantine; no automatic bootstrap, repair or cleanup.
+Initial error injection found that an fsync failure before rename could otherwise
+leave old committed state readable after reopen; persistent `.next` evidence now
+closes that path. In-memory uncertainty poisons the current object, with a
+best-effort persistent PENDING write. Simultaneous objects/processes are NOT
+supported: a future protected singleton launcher is mandatory.
+
+`offline_fixture.py` is deliberately separate from serving code. Its explicit
+fixture-intent flag is not OS authentication and cannot authorize live bootstrap.
+Only tests supply fake prehashed records and a fake HMAC key. No real credential
+or operator identity was created. File fsync and POSIX directory fsync are source
+operations; Windows explicitly refuses the default directory barrier. Tests inject
+a model barrier and use disposable registry and separate anchor directories.
+Exception hooks are not actual power loss. If storage cannot durably record final
+uncertainty, Python cannot prove persistence; Linux filesystem crash/power-loss
+and operational quarantine remain gates. Matching root rollback of registry,
+journal/fence and key remains undetectable, not TPM/monotonic proof.
+
+The optional Linux connector/daemon was deferred to finish the state/protocol
+correctly. Existing `tests/support/linux_broker_socket_prototype.py` remains
+transport-only, disconnected from this package. No root service or operator
+shortcut was created. Required next gate: independent source review, then a
+separately authorized disposable Linux exact-source durability and singleton/
+OS-custody integration harness, inherited socket and SO_PEERCRED checks, admin
+default-deny, and protected fresh generation/revision observer. Before any live
+activation additionally prove root-owned package/interpreter/dependencies/systemd,
+ACL/MAC/mount and socket replacement safety, backup exclusion, an independently
+protected backend downgrade floor, trusted OS-local recovery and recipient-bound
+credential delivery. Native/browser/kiosk/TLS migration and witnessed Home/iPhone
+L1-L6/manual/ScreenSync/final-owner acceptance remain separate gates. No install,
+service restart, host mutation, deployment or device writes occurred.
+
+Source milestone validation (final current-code run): **330 passed, 22 skipped**
+in 40.31s across `test_identity_broker_state_runtime.py`,
+`test_identity_broker_verify_client.py`, `test_identity_broker_protocol.py` and
+`test_linux_broker_socket_prototype.py`. Skips are Linux/POSIX gates. Executed
+with absolute `C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B`,
+APP_ENV=testing, PYTHONDONTWRITEBYTECODE=1, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1,
+`pytest -p pytest_asyncio.plugin -p no:cacheprovider`. Ruff `check --no-cache`
+passed on the package and new test; `git diff --check` passed. Tests cover
+independent journal/DB tampering, authenticated invalid policy, missing stores,
+fake bootstrap/reopen, expiry including expiry during PBKDF2, exact existing
+client compatibility, native/browser kind, revision/generation, app restore,
+identity restore invalidation, revoke/rotate, PENDING interruption at each stage,
+file and directory fsync failures at every anchor, SQLite failures, secret-error
+suppression and a verification/revocation race. These are synthetic exception
+and disposable-storage proofs, not real service/systemd/power-loss acceptance.
+
+Exact incremental paths (all other pre-existing work left intact):
+`security/homehub_identity_broker/__init__.py`,
+`security/homehub_identity_broker/policy.py`,
+`security/homehub_identity_broker/runtime.py`,
+`security/homehub_identity_broker/offline_fixture.py`,
+`security/homehub_identity_broker/README.md`,
+`tests/test_identity_broker_state_runtime.py`, this document and
+`docs/SECURITY_IDENTITY_FOUNDATION.md`. Branch remains
+`work/287-broker-session-contract-20261114`, HEAD
+`1f5d296e2c8f0504b8718ceedfaba89b1a961b8a`; nothing staged or published.
+
+## November 14, 2026: inert Linux VERIFY transport source boundary
+
+In the same local worktree/base, `security/homehub_identity_broker/linux_verify_server.py`
+adds a guarded **fixture-only, DO-NOT-INSTALL / NOT DEPLOYABLE** transport around
+the existing protected-state Broker.process. Production construction is refused.
+No CLI, production launch path, unit, enrollment/issuance/rotate socket, backend
+connector or ASGI change exists. The prior prototype remains transport-only and
+untouched. No change to the original #461 design/lighting files accompanies this
+milestone. All prior tracked/untracked work remains local and uncommitted.
+
+Injected systemd ABI metadata is checked against exact descriptor/path snapshots;
+it is not privileged attestation. Verify authenticates kernel SO_PEERCRED before
+reading data, permits only injected fixture UID/optional GID, requires EOF after
+one four-byte-framed <=2048-byte request and delegates only to strict existing v1
+verification. Admin closes before body and never invokes Broker. Nonblocking
+admission/I/O bounds active clients and whole exchange time; zero broker queue
+and one off-loop worker prevent PBKDF2 blocking the selector. Late decisions are
+discarded, capacity remains held until actual completion, stop closes pending
+clients without unlinking sockets, and same-object restart refuses an active old
+worker. This is not cross-process singleton or interruptible-storage proof.
+The [package README](../security/homehub_identity_broker/README.md#linux-verify-transport-experiment-do-not-install--not-deployable)
+records limits, fixture trust boundary and remaining custody/lifecycle gates.
+
+Owner-supplied Latitude evidence (not independently fetched): Ubuntu 24.04.5,
+systemd 255, kernel 7.0.0-42-generic; /var, /var/lib, /run and /etc/systemd/system
+root:root 0755; dedicated identities, broker units and data directories absent.
+Existing home-hub.service active and the named 04:30 application-DB backup script
+describe only that snapshot. They prove neither privileged custody nor restore
+floor, backup exclusion/absence of other backups, nor authority for host writes.
+The separate disposable kernel 6.18 primitive probes did not execute this source.
+
+Required gate: execute `tests/test_linux_identity_broker_verify_server.py` on an
+actual disposable Linux kernel, using these exact source files and synthetic
+tmp fixtures, without global sudo. Windows skips are not Linux verification.
+The Linux cases include peer denial before body, peer proof/token/nonce,
+malformed/truncated/oversized/duplicate/surplus frames, revoked/expired state,
+congestion/admin denial, deadlines/late results, same-object restart, real SIGTERM
+through a fixture-only launcher, and descriptor mismatch. Actual systemd activation,
+distinct dedicated principals, root custody/ACL/MAC/mount/replacement safety,
+cross-process singleton and filesystem crash/power-loss remain additional gates.
+
+Before any production composition additionally require hardened root-owned
+packaged executable/interpreter/dependencies, separately reviewed root provisioner
+attestation and real socket units, separate non-backend admin principal, protected
+key/state/journal backup exclusions, fresh protected generation/revision observer,
+root deployment/downgrade floor, approved issuance/recovery and recipient/session
+lifecycle, proxy/TLS/native/kiosk/iPhone rollout, separately authorized security
+integration/deployment, #293 and #461 guarded L1-L6 acceptance. No installation,
+network fetch, publication, host/account/credential change or live action occurred.
+
+Final Windows exact-source validation: **399 passed, 50 skipped in 77.80s** across
+`test_linux_identity_broker_verify_server.py`, `test_identity_broker_state_runtime.py`,
+`test_identity_broker_verify_client.py`, `test_identity_broker_protocol.py` and
+`test_linux_broker_socket_prototype.py`. Nine new Windows-runnable static cases
+passed; all 28 new actual-Linux cases and 22 existing Linux/POSIX cases skipped.
+Command used `C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B -m pytest
+-p pytest_asyncio.plugin -p no:cacheprovider <the five files> -q`, APP_ENV=testing,
+PYTHONDONTWRITEBYTECODE=1, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1. Both new Python files
+compiled without bytecode output; Ruff `check --no-cache` on the broker package
+and new test and `git diff --check` passed. This does not claim any new Linux
+kernel test passed. Exact incremental files for this transport task are the new
+module and new test, the package README, this document and
+`docs/SECURITY_IDENTITY_FOUNDATION.md`; existing runtime/policy/client/prototype,
+ASGI and #461 design/lighting sources were not edited.

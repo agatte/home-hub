@@ -7,6 +7,7 @@ export const connected = writable(false)
  * @typedef {Object} DeviceStatus
  * @property {boolean} hue
  * @property {boolean} sonos
+ * @property {boolean} [light_command_results] - guarded WS receipt capability
  */
 
 /** @type {import('svelte/store').Writable<DeviceStatus>} */

@@ -5,7 +5,7 @@ import reveal from '../../src/lib/components/QuietAtlasHomeLightingReveal.svelte
 
 describe('Quiet Atlas opt-in Home composition contract', () => {
   it('separates qualified live REST context from illustrative design examples', () => {
-    expect(homeRoute).toContain('Read-only review · context is HomeHub-reported; examples are illustrative')
+    expect(homeRoute).toContain('HomeHub reports context; example states are illustrative and do not change devices.')
     expect(homeRoute).toContain('HOUSE STATE')
     expect(homeRoute).toContain('ACTIVITY')
     expect(homeRoute).toContain('{contextDisplay.house}')
@@ -36,33 +36,24 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain('L3 · L4')
   })
 
-  it('keeps atmosphere drafts local, labelled and motion optional', () => {
-    expect(reveal).toContain('Design preview only — no light changes')
-    expect(reveal).toContain('not a device reading')
-    expect(reveal).toContain('<section class="shelf" aria-labelledby=')
-    expect(reveal).toContain('aria-describedby=')
-    expect(reveal).toContain('aria-pressed={draft.mood === mood}')
-    expect(reveal).toContain('aria-pressed={draft.on}')
-    expect(reveal).toContain("on:click={() => update({ on: !draft.on })}")
-    expect(reveal).toContain("{draft.on ? 'Preview on' : 'Preview off'}")
-    expect(reveal).toContain('draft.on ? draft.brightness / 100 : 0')
-    expect(reveal).toContain('type="range"')
+  it('reveals real existing room controls in place, not a fabricated second writer', () => {
+    expect(reveal).toContain("import QuietAtlasRoomControls from './QuietAtlasRoomControls.svelte'")
+    expect(reveal).toContain('<QuietAtlasRoomControls room={group.id}')
     expect(reveal).toContain('prefers-reduced-motion:reduce')
     expect(reveal).toContain('animation:none')
-    expect(reveal).toContain('transition:none')
     expect(reveal).not.toMatch(/fetch\(|apiPost|apiPut|goto\(|pushState|role="dialog"|aria-modal/)
+    expect(reveal).not.toContain('Preview on')
     expect(homeRoute).toContain('selectedRoom === id ? null : id')
     expect(homeRoute).toContain("event.key !== 'Escape'")
     expect(homeRoute).toContain('event.defaultPrevented')
     expect(homeRoute).toContain('const focused = document.activeElement')
     expect(homeRoute).toContain('focused !== trigger && !reveal?.contains(focused)')
     expect(homeRoute).toContain('trigger?.focus()')
-    expect(homeRoute).toContain('bind:drafts={lightingDrafts}')
     expect(homeRoute).not.toMatch(/goto\(|pushState|role="dialog"|aria-modal/)
   })
 
   it('keeps Apartment separate and introduces no light/scene writer', () => {
-    expect(homeRoute).toContain('href="/"')
+    expect(homeRoute).toContain('href="/classic"')
     expect(homeRoute).toContain('Apartment Canvas (#192)')
     expect(homeRoute).not.toMatch(/\b(apiPost|setLight|activateScene|setScene|hueWrite)\s*\(/)
     expect(homeRoute).toContain("fetch('/api/automation/status'")

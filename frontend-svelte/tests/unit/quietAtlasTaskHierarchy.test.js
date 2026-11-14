@@ -8,18 +8,18 @@ import settings from '../../src/routes/quiet-atlas/settings/+page.svelte?raw'
 describe('Quiet Atlas task-first route hierarchy (#157)', () => {
   it('offers working lighting before phone browsing and keeps Apartment separate', () => {
     const phone = home.slice(home.indexOf('<section class="phone-actions"'), home.indexOf('<section class="phone-apartment-entry"'))
-    expect(phone.indexOf('href="/#apartment-controls"')).toBeGreaterThan(-1)
+    expect(phone.indexOf('href="#phone-lighting-title"')).toBeGreaterThan(-1)
     expect(phone.indexOf('<div class="phone-rooms"')).toBeGreaterThan(-1)
-    expect(phone.indexOf('href="/#apartment-controls"')).toBeLessThan(phone.indexOf('<div class="phone-rooms"'))
+    expect(phone.indexOf('href="#phone-lighting-title"')).toBeLessThan(phone.indexOf('<div class="phone-rooms"'))
     expect(phone).toContain('Adjust lights now')
     expect(phone).toContain('on:click={() => toggleRoom(group.id)}')
     expect(phone).toContain('aria-expanded={selectedRoom === group.id}')
     expect(phone).not.toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(phone).toContain('href={CONTROL_SCENES_HREF}')
-    expect(home).toContain('class="working-lighting-link" href="/#apartment-controls"')
+    expect(home).toContain('class="working-lighting-link" href="#lighting-title"')
     expect(home).toContain('SPATIAL PLACEHOLDER · NOT A FLOOR PLAN')
-    expect(home).toContain('Open Apartment &amp; household tools')
-    expect(control).toContain('href="/#apartment-controls"')
+    expect(home).toContain('Open original Apartment &amp; household tools')
+    expect(control).toContain('href="/classic#apartment-controls"')
     expect(control).toContain('<QuietAtlasLightingExperience {routeIntent} />')
   })
 

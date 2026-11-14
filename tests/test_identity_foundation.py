@@ -215,10 +215,14 @@ def test_reviewed_profile_grant_snapshot():
             ("GET /api/automation/status", "browser"),
             ("POST /api/automation/override", "browser"),
             ("WS /ws:mode_update", "browser"),
+            ("WS /ws:light_command", "browser"),
+            ("WS /ws:sonos_command", "browser"),
         },
         "kiosk": {
             ("GET /api/automation/status", "display"),
             ("WS /ws:mode_update", "display"),
+            ("WS /ws:light_command", "display"),
+            ("WS /ws:sonos_command", "display"),
         },
         "windows_desktop": {
             ("POST /api/automation/activity", "activity"),

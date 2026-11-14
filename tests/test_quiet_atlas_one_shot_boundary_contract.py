@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from backend.api.routes import lights
 from backend.api.schemas.lights import LightState
@@ -265,28 +266,63 @@ async def test_existing_repeated_cancellation_fences_pending_fake_io(rig, transp
 
 @pytest.mark.asyncio
 async def test_existing_manual_put_restamps_after_explicit_clear_in_fake_modes(rig):
-    """Characterize direct legacy PUT after manual clear and fake mode assignments.
+    """REST manual writes require a coherent Hue/engine boundary.
 
-    These are not genuine lifecycle transitions or native takeover permission.
+    In real lifespan HueService binds this shared boundary; a detached fake
+    must fail closed instead of silently using the legacy write-then-stamp
+    behavior. Explicitly test bound fake writes and Sleeping/disabled denial.
     """
     engine, _, hue, write, _ = rig
     request = SimpleNamespace(headers={}, app=SimpleNamespace(state=SimpleNamespace(
         hue=hue, automation=engine,
     )))
-    for mode, enabled, bri in [("working", True, 60), ("watching", True, 70),
-                               ("sleeping", False, 80), ("working", True, 90)]:
+    # A detached fake cannot simulate a production-eligible Hue writer.
+    with pytest.raises(HTTPException) as error:
+        await lights.set_light("2", LightState(bri=50), request)
+    assert error.value.status_code == 503
+    write.assert_not_awaited()
+
+    # Supply the same coherent boundary and source-qualified fixture identity
+    # as the actual HueService, with no bridge or physical I/O.
+    hue._transition_boundary = engine.lighting_transition_boundary
+    original_read = hue.get_light
+
+    async def qualified_read(light_id):
+        record = await original_read(light_id)
+        return {"light_id": str(light_id), **record} if record else None
+
+    hue.get_light = qualified_read
+    expected_writes = 0
+    for mode, enabled, bri, should_write in [
+        ("working", True, 60, True),
+        ("watching", True, 70, True),
+        ("sleeping", False, 80, False),
+        ("working", True, 90, True),
+    ]:
         engine._clear_per_light_overrides()
         engine._current_mode = mode
         engine.enabled = enabled
         assert engine.manual_light_overrides == {}
-        assert await lights.set_light("2", LightState(bri=bri), request) == {
-            "status": "ok", "light_id": "2",
-        }
-        assert (await hue.get_light("2"))["bri"] == bri
-        assert "2" in engine.manual_light_overrides
-        assert engine._state.manual_light_targets["2"]["bri"] == bri
-    assert write.await_count == 4
-    assert engine.persist_manual_light_ownership.await_count == 4
+        if should_write:
+            assert await lights.set_light("2", LightState(bri=bri), request) == {
+                "status": "ok", "light_id": "2",
+            }
+            expected_writes += 1
+            assert (await hue.get_light("2"))["bri"] == bri
+            assert "2" in engine.manual_light_overrides
+            assert engine._state.manual_light_targets["2"]["bri"] == bri
+            # An acknowledged manual writer evicts the prior automation dedup
+            # value so mode reconciliation after manual expiry cannot skip.
+            assert "2" not in engine._last_applied_per_light
+        else:
+            with pytest.raises(HTTPException) as denied:
+                await lights.set_light("2", LightState(bri=bri), request)
+            assert denied.value.status_code == 409
+            assert engine.manual_light_overrides == {}
+        assert write.await_count == expected_writes
+
+    assert write.await_count == 3
+    assert engine.persist_manual_light_ownership.await_count == 3
     engine._clear_per_light_overrides()
     async with engine.lighting_transition_boundary.serialized():
         assert engine.validate_lighting_lease(

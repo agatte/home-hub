@@ -1,8 +1,11 @@
 # Identity foundation for #287 — NOT LIVE
 
-This first offline slice is **NOT ENFORCED**, not provisioned, and not imported
-by existing routes, startup, legacy `backend/api/auth.py`, or any client. It does
-not complete #287. No production credential or migration is supplied.
+The identity core remains **unprovisioned** and is not an OS authority. The
+November 14 source-only WebSocket cutover below now imports its fixed identity
+contracts into `/ws` and startup, but installs no verifier, issuer or client
+credential. This unmerged branch denies `/ws` before accept by default. HTTP
+routes and legacy `backend/api/auth.py` are outside this cutover. Neither #287
+nor #293 is operationally complete; no production migration is supplied.
 
 `backend/identity_core.py` uses an explicitly supplied disposable SQLite path
 and opaque administrative capability. It has no default production path, CLI,
@@ -288,3 +291,484 @@ Open activation gates: choose and prove anchor atomicity/durability on owned
 hardware; define operator recovery custody and code-integrity enforcement;
 review broker account/IPC isolation and complete grant inventory. No live
 provisioning or irreversible hardware writes are authorized by this design.
+
+## Offline WebSocket manual-command operation matrix (#293 / #461; NOT LIVE)
+
+The existing `backend/identity_policy.py` inventory now proposes two exact,
+**inbound** operations: `WS /ws:light_command` and
+`WS /ws:sonos_command`. The pure `ws_command_operation` selector maps
+only precisely spelled current message kinds to these IDs; malformed,
+nested, unknown or alternate names return no operation. There is no URL
+prefix matching, dynamic role, generic wildcard or caller-chosen source.
+
+The fixed profile matrix grants these commands only to the **owner_browser**
+principal on server-bound `browser` lane and **kiosk** principal on
+server-bound `display` lane. Windows Supervisor (including its six shared
+credential lanes), Desktop Notifier, MCP, Latitude, guest gateway, Alexa,
+Shortcuts and local operator have **no** WebSocket light or Sonos command
+grant. The original `WS /ws:mode_update` subscription grants remain
+unchanged. The independent reviewed-grant snapshot is updated deliberately.
+
+Synthetic tests of `IdentityStore.authorize` exercise approved owner/kiosk
+lanes, wrong lanes, foreign source assertions, known non-owner profiles,
+unknown operation names, revocation and expiry. The server adapter in
+future #293 must derive operation and lane from **authenticated** principal
+and owned code, not `source`/device/lane values in a JSON frame or
+headers. Identity authorizes client intent; it never replaces Hue
+LightingAuthority, scene/ScreenSync/transit/manual ownership, Sonos audio
+ownership, source freshness or physical evidence.
+
+**Not implemented or authorized here:** This offline inventory is NOT
+imported by `backend/main.py:/ws`. No WebSocket auth, session cookie,
+Origin/Host enforcement, native-client credential provisioning, initial
+snapshot projection, broadcast filtering, revocation of connected sockets,
+rate/resource budgets or production rollout is performed. The current
+anonymous WebSocket is **still unsafe**. The final #293 implementation
+requires reviewed pre-accept verification and filtered outbound streams,
+plus separate owner/kiosk/iPhone and native client compatibility trials.
+There is no token in browser source code or URL, no new endpoint, and no
+live credential change.
+
+This addition only prepares the command authorization seam needed by
+the guarded lighting controls in #461/#530. It must not be merged or
+activated as a security fix on its own; #287, #293 and #284 remain open
+until their respective full original acceptance criteria are met.
+
+
+## #293 authenticated runtime source cutover
+
+November 14, 2026.
+
+**Current source evidence in this section supersedes the older offline-only
+WS statements above.** Local uncommitted target:
+`C:/Work/home-hub-project/worktrees/ws-cutover-293-20261114`, branch
+`work/293-ws-cutover-20261114`, base
+`1f5d296e2c8f0504b8718ceedfaba89b1a961b8a`. The 52-file synthetic seed was
+preserved, with bounded additional engineering in this target only. This is
+**source-ready for synthetic injection, NOT deployable, installed, live,
+merged, physically accepted or complete security enforcement**. Production
+remains unchanged because the branch is unmerged. No source A/B/C or original
+synthetic worktree was modified. Network issue reads were prohibited; acceptance
+here uses the owner's supplied #287/#293 contract and local source evidence.
+
+### Single socket owner and startup contract
+
+`backend/main.py:/ws` now delegates exclusively to `WebSocketManager.serve`.
+The manager has no legacy `connect`, raw connection set, accept or raw broadcast
+implementation. Every existing producer still calls the same `broadcast` API,
+which reaches `AuthenticatedBoundary` and its per-principal projection. Unknown
+events deny, including for owner. Initial and private frames take the same
+projection and fresh authorization path. Private receipts, reconciliation and
+errors categorically cannot be broadcast.
+
+`bootstrap.lifespan` accepts only explicitly supplied trusted application state
+`ws_runtime_configuration: WebSocketRuntimeConfiguration`. Its fields are a
+`TrustedAsyncAuthorizer`, exact `Endpoint` tuple and default-false
+`browser_issuer_ready`. Nothing in this branch populates that state, reads a
+credential file, opens broker IPC, creates an IdentityStore, issues cookies,
+exposes a configuration route or obtains same-process broker authority. Missing
+configuration rejects with close 1008 **before accept or snapshot evaluation**.
+A synchronous verifier is refused. This seam is application composition, not
+proof of OS isolation or a deployed verifier protocol.
+
+Browser/kiosk admission requires exact owned HTTPS origin, exact Host, ASGI
+`wss` scheme and `__Host-homehub_ws` cookie. Native admission requires the exact
+HTTPS endpoint, `wss`, Authorization bearer and no Origin/cookie. Query strings,
+subprotocol credentials, duplicate headers, Forwarded and x-forwarded-* deny.
+No request-derived endpoint, loopback/LAN exception, assume-HTTPS flag or proxy
+header normalization exists. TLS-terminating proxy scope normalization requires
+separate owned ASGI review; do not enable forwarded-header trust as a workaround.
+The HTTP numeric-loopback kiosk configuration still cannot admit Secure cookies.
+
+Authorization has independent bounded admission/active capacity, bounded work
+retained until an expired/canceled verifier really finishes, no grant cache and
+fixed operation/lane/source checks. There are at most 16 sessions by default,
+8 pending send callers per socket, 4096 input characters, 16384 serialized output
+characters, four inbound commands/second, eight admission attempts/second and
+bounded per-socket I/O. Authorization serializes per session; broadcast fanout
+is bounded by the session inventory. Excess pending sends deny without raw
+fallback. A slow client cannot hold another client's send. Session removal
+clears its bearer reference and cancels owned transport/dispatch work; post-await
+session checks and task-start checks prevent a closed session from resuming a
+queued send or command. Idle and dispatch-time watchdogs recheck at five seconds
+by default. Revocation is fresh point-in-time authorization, not an instantaneous
+network recall: bytes already sent cannot be recalled, and a write already
+started under the existing actuator transaction may have to settle.
+
+### Fixed producer, snapshot and consumer inventory
+
+A source AST inventory found these 25 literal producer event kinds; all known
+broadcast call sites use the shared manager. Dynamic manager forwarding does
+not add an event grant. The tables pin the currently supported contracts rather
+than imply arbitrary future emitters are safe.
+
+| Event(s) | Existing producer(s) | Runtime delivery |
+| --- | --- | --- |
+| light_update | Hue poll/v2 stream, guest/scenes routes, personality vibe router | owner/browser and kiosk/display only |
+| mode_update | AutomationEngine and initial memory snapshot | owner/kiosk; Windows display gets mode/time_period only |
+| sonos_update | Sonos poll | owner/kiosk only |
+| ambient_update | AmbientSoundService and initial memory snapshot | owner/kiosk, bounded status fields only |
+| dnd_update | DNDManager | owner/kiosk only |
+| music_suggestion, music_auto_played | MusicMapper | owner/kiosk, title/mode/status text only |
+| mode_suggestion, mode_suggestion_dismissed | RuleEngineService | owner/kiosk only |
+| brightness_suggestion, brightness_suggestion_dismissed | RuleEngineService | owner/kiosk, fixed single-fixture payload only |
+| camera_update | CameraService | owner/kiosk, explicit status fields only |
+| gameday_state, gameday_play | GameDayService | owner/kiosk, nested fixed game/play/drive fields |
+| gameday_viewer_state, gameday_viewer_sync | GameDayViewerSync | owner/kiosk, fixed game/viewer-clock fields |
+| gameday_celebration | CelebrationOrchestrator | owner/kiosk, sequence_key/started_at only |
+| notification | NotifierService, CameraService watchdog | Desktop Notifier only; text/factors; actions always empty |
+| champion_color | LoLChampionService | DENIED: no reviewed visual event contract |
+| ml_decision | MLDecisionLogger | DENIED: arbitrary factors/private inputs |
+| ml_prediction | AutomationEngine | DENIED: prediction/private diagnostics contract absent |
+| music_auto_play_failed | MusicMapper | DENIED: failure-detail contract absent |
+| music_weather_suggestion | MusicMapper | DENIED: weather/suggestion contract absent |
+| pipeline_state | PipelineBroadcaster | DENIED: arbitrary fusion/process/physical inputs |
+| scene_failed | AutomationEngine | DENIED: failure/scene-detail contract absent |
+
+Additional route-only frames are `connection_status`, private
+`light_command_result`, private `light_command_reconciliation` and bounded
+`error`. The old initial `presence_update` is **not evaluated or sent**: raw
+presence has no safe scoped contract. The old `rate_limit` event is retired;
+over-budget inbound sessions close instead. No initial device reads occur;
+L1-L6/Sonos observations still arrive from existing REST priming and producers.
+
+Critical wire allowlists (all unknown keys, including nested keys, are stripped;
+a malformed allowed field denies its event):
+
+| Contract | Allowed fields |
+| --- | --- |
+| Home fixture | light_id (exact 1-6), name, on, bri, hue, sat, ct, colormode, reachable |
+| Owner/kiosk mode | mode, time_period, source, manual_override, house_state, activity, override_source, override_user_owned |
+| Connection status | hue, sonos, build_id, request_id, light_command_results |
+| Sonos | state, track, artist, album, volume, mute, duration, position |
+| Game | status, opponent, kickoff_utc, score_colts, score_opp, quarter, clock, possession, last_play, current_drive |
+| Nested play | timestamp, play_type, description, player, kicker, yards, scoring_team, wpa |
+| Nested drive | team, plays, yards, elapsed |
+| Viewer clock | enabled, active, authoritative, presentation_active, reason, service, player, playback_status, media_timestamp, observed_at, sample_age_seconds, lag_seconds, normal_streak, seek_generation, last_seek_direction, program_time_offset_seconds |
+| Celebration | sequence_key, started_at |
+| Desktop brightness | mode, time_period (only windows_desktop/display) |
+| Notifier | title, subtitle, kind, output_delta; up to six factors containing label/value; actions=[] |
+| Private light result | command_id, light_id when valid, status (acknowledged/denied/unavailable/invalid/uncertain) |
+| Private reconciliation | command_id, light_id; never raw observation |
+
+Remaining exact DND, music/rule, camera and ambient scalar allowlists and their
+range/length checks live in `_OWNER_EVENTS` in
+`backend/services/ws_authenticated_boundary.py`; `_fields` recursively projects
+nested game and brightness objects. No key is accepted by prefix or wildcard.
+Sonos `art_url` and raw `error` text, ambient `sound_url`, sound inventory and
+mode/configuration maps, rule room/bulk brightness payloads and notifier action
+URLs remain denied. These are **known compatibility losses**, not complete
+feature parity. In particular pipeline diagnostics stop updating, artwork is
+absent from WS snapshots, ambient settings fields can be absent after status
+replacement, room-scoped suggestions may lack their payload, notifier buttons
+are unavailable, and failures/champion/weather suggestions are not delivered.
+A safe owned contract or explicit feature removal is needed before release.
+
+Actual consumers checked: `frontend-svelte/src/lib/stores/init.js` and its
+lighting/automation/Sonos/ambient/camera/pipeline/rule stores; isolated
+`stores/gameday.js` uses a second HubSocket and the five Game Day kinds;
+`pc_agent/monitor_brightness.py` consumes mode/time_period;
+`pc_agent/desktop_notifier.py` consumes notification and previously executable
+actions. `pc_agent/sleep_watcher.py` polls HTTP, not this WS display lane.
+`frontend-svelte/src/lib/ws.js` still uses same-origin new WebSocket(url):
+pre-accept denial never triggers onopen, so it retains disconnected/unavailable
+UX. No Authorization-in-browser workaround, JS credential or URL token was
+added. Native WS clients remain unmigrated and cannot authenticate yet.
+
+### Commands, receipts and actuator limits
+
+Exact strict commands select `WS /ws:light_command` or
+`WS /ws:sonos_command`; only owner/browser and kiosk/display have those grants.
+Client lane/source/role fields and mixed CT/HSB deny. The protected dispatcher
+passes validated light data to the existing `_handle_light_command` and
+`dispatch_manual_light`, preserving `LightingTransitionBoundary`, immutable
+queued authority, final Hue fence, manual persistence and uncertain cache
+reconciliation. Sonos requires audio ownership to exist, then uses the existing
+manual-intent revision and `run_manual` safeguards. No direct runtime fallback
+writes if audio ownership is missing.
+
+The dispatcher returns at most two private events; it receives no socket. Each
+receipt reauthorizes and projects separately. Capability is advertised only
+when the protected dispatcher exists. Safe invalid command correlation can be
+returned without echoing validation payloads. ACK remains bridge transport plus
+durable manual-owner state, never physical completion. Reconciliation contains
+only fixture/correlation IDs and requests the existing client-side version-fenced
+read; no server GET or stale/private observation is sent. Command cancellation,
+disconnect, expiry or revocation never fabricates an ACK or retries a write.
+Already-started shielded actuator transactions retain their established
+settle/ownership cleanup semantics, and may finish after socket close; identity
+is point-in-time intent permission, not a revocable physical write lease.
+
+### Remaining gates and next safe step
+
+The selected separate OS broker, protected registry, independently managed
+rollback journal, OS-authorized enrollment/recovery and downgrade floor from
+`SECURITY_RECOVERY_DECISION_287.md` are **not installed**. Its synthetic broker
+and Linux socket prototype remain test fixtures and are not imported at runtime.
+A typed injection-only verify-client contract now exists in the second source
+milestone below. The existing synthetic broker and Linux socket demo use
+different protocols and cannot serve it. No protected connector, production
+broker or secure issuer implementation exists.
+
+Next gate: independently review the read-only broker and issuer source contracts
+below, then separately authorize operational
+broker installation and secure browser/iPhone/kiosk session delivery. Prove
+kiosk TLS, owned proxy scope, CSRF/session lifecycle, expiry/revocation/rotation,
+native secret delivery and client migrations, omitted event contracts, rollback
+floor and credential-loss recovery. HTTP/API/guest trust migration remains
+separate; this WS change does not secure those routes. Follow with exact-head
+CI and proportionate independent security/ownership review, separately approved
+high-risk integration/publication, Latitude deployment via the release procedure,
+#296 fixture evidence and witnessed L1-L6/kiosk/iPhone acceptance. No host setup,
+credential delivery, physical action or retirement is authorized by this source
+work. Do not release this branch with its default disconnected clients.
+
+
+### Offline validation of this source integration
+
+- Combined scoped run: **669 passed, 32 subtests passed, zero failures**
+  (194.37s). This includes the original 626 identity/projection/guard/Hue/lighting
+  selection plus 40 route tests, two authenticated tracing tests and the real
+  projected Game Day JSON boundary test.
+- Final affected route/concurrency suite: **41/41 passed** (21.87s), including
+  the additional regression proving a transport-raised cancellation cannot
+  terminate its broadcast producer. This test was added after broad collection;
+  the 669 count does not include that additional case. It is not a second full
+  combined 670-test run.
+- Final existing cancellation/timeout/idle/resource regression selection:
+  **14 passed, 176 deselected** (15.37s) against the final boundary.
+- Existing dependency-free frontend suites: **58/58 passed**, no failures,
+  skips or frontend source changes. Covered actual LightCard handlers, command
+  tracking, private receipts, observed-state fencing and redesigned/classic Home.
+  No node_modules exists in this target; full frontend CI/build/browser trials
+  were not run and no dependency was installed or copied.
+- Ruff `check --no-cache`, tracked `git diff --check` and explicit UTF-8,
+  whitespace/conflict-marker checks on all 13 incremental paths passed.
+
+Python used `C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B`,
+`APP_ENV=testing`, `PYTHONDONTWRITEBYTECODE=1`,
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `-p pytest_asyncio.plugin` and
+`-p no:cacheprovider`. Only a pre-existing Starlette/httpx deprecation warning
+was emitted; no dependency update was attempted. Tests never run the application
+lifespan or use production stores, credentials, brokers, sockets or Hue/Sonos.
+The target has no .env file (existence checked without reading secret contents).
+All evidence is local and uncommitted, not hosted CI, deployment, live health,
+kiosk/iPhone witness or physical acceptance.
+
+### November 14 second source milestone: inactive broker and browser issuance
+
+Local, uncommitted work in `identity-287-broker-session-20261114` on
+`work/287-broker-session-contract-20261114`, base
+`1f5d296e2c8f0504b8718ceedfaba89b1a961b8a`. This extends the seeded cutover;
+it does not activate it, satisfy #287/#293, or complete #461 UI acceptance.
+No network/GitHub refresh was authorized for this offline task; November 14
+issue acceptance is supplied by the task brief, not independently fetched here.
+
+`backend/services/identity_broker_verify_client.py` implements a typed,
+verify-only `ProtectedVerifyIO.exchange_verify(bytes) -> bytes` contract and
+`VerifyClient.authorize` returning exactly `Identity` or `None`. Its
+`authorizer()` reuses `TrustedAsyncAuthorizer` without changing runtime defaults.
+There is no connector, environment switch, IdentityStore verifier, generic RPC,
+admin method, service or installation. Any real broker must separately implement
+this protocol; the Linux prototype's generic verify result is never AuthN.
+
+Wire v1 uses one connection and one request/response, four-byte unsigned
+big-endian body length (1..2048), ASCII JSON object, exact frame termination
+and no extra bytes. No duplicate keys, nonfinite JSON, malformed, truncated,
+unknown-version or surplus fields are accepted. `read_frame` bounds body reads
+before allocation; the future I/O adapter must own exact EOF checking, deadline,
+peer proof and connection cleanup. No retry, pool, cache or loopback fallback.
+
+Exact request keys: `version` (integer 1), `method` (`verify`), `nonce` (fresh
+32 lowercase hex), `token` (opaque `32hex.43urlsafe` verifier input), `operation`,
+`lane`, `generation` (32 lowercase hex), `revision` (integer 0..2^53-1).
+Operation/lane/stage are server-owned, checked against immutable `PROFILES`;
+no client profile/source argument can select privileges. Stage is local capacity
+selection, never a broker/admin operation. Credentials never enter command-line
+arguments, logs, URLs or cookies through this client.
+
+Every response has exactly `version`, correlated `nonce`, `status`, `generation`,
+`revision`. Denial statuses are `denied`, `revoked`, `expired`, `quarantined`,
+`unavailable`, `error`, with no identity or credential fields. `verified` requires
+exactly these additional fields: `principal_id` (32 lowercase hex), `profile`,
+`source`, `lane`, `operation`, `kind`, `expires_at` (finite Unix seconds).
+Kind must be `browser_session` for owner_browser/kiosk and `native_bearer` for
+other profiles. Source and grants must exactly match immutable policy; operation
+and lane must echo the server request. No token/verifier is ever returned.
+Unknown statuses and every failure collapse to `None`; parser errors have fixed
+text and no sensitive exception cause/context. Adapter exceptions are consumed
+without logging or propagation.
+
+Trusted nonblocking `generation()` and `revision()` observers must supply CURRENT
+protected broker state, not static config, HTTP input, app DB state or values
+learned from the response being checked. Revision advances on every security
+mutation, generation changes on restore; both are checked before and after I/O.
+A delayed pre-revocation/rotation response cannot cross an observed revision
+change. A real protected observer and its freshness/linearization protocol are
+**unimplemented operational dependencies**; these callbacks are injection seams,
+not independent OS proof. Read skew denies. Broker verification must serialize
+with mutation, independently validate its journal/downgrade floor, and bind
+credentials to current generation. Responses expire at consumption time; every
+WS use revalidates, without caching grants. Authorization is point-in-time:
+mutation after the final check cannot undo an actuator transaction already
+started under the existing ownership fences.
+
+The client reserves one admission slot and a separately configurable 1..64 active
+slots, with a 0..5 second (exclusive zero) whole exchange budget. Timeouts/caller
+cancellation discard authorization, retaining physical work capacity until actual
+completion. A stalled or cancellation-suppressing adapter can exhaust its bounded
+slots but cannot create late grants. A future adapter must guarantee bounded
+cleanup; no abandoned executor or unbounded queue is provided.
+
+For real AF_UNIX I/O, a reviewed Linux connector must verify the exact
+root-controlled socket path, trusted ancestors, socket type/owner/mode/group,
+ACL/MAC custody, peer SO_PEERCRED dedicated broker identity and replacement-race
+handling. Broker must also authenticate permitted backend peers. Same UID is
+never operator authority. Windows tests cannot establish Linux proof. This
+milestone deliberately provides **no actual connection implementation**.
+
+`backend/services/browser_session_issuance.py` defines a separate
+`PrivilegedBrowserIssuer.issue_browser_session(IssuanceRequest, *,
+operator_action, recipient_evidence, csrf_evidence) -> bytes` seam. Request fields
+are nonce, server-fixed owner_browser/kiosk profile, exact HTTPS origin,
+recipient_id, generation and issue/rotate action. Non-null opaque evidence is
+necessary but NEVER sufficient: only a future privileged issuer may authenticate
+fresh OS-authorized explicit operator action, particular recipient and
+session-bound CSRF evidence. Booleans are refused. No HTTP header, IP, first
+caller, same UID, local pairing or synthetic signature constitutes proof.
+
+Issuer responses use the same bounded frame codec with exactly version, nonce,
+status=`issued`, profile, origin, recipient_id, generation,
+kind=`browser_session`, token and expires_at. All request bindings are checked,
+as is current generation; expiry must allow 1..3600 seconds of remaining life.
+Raw native credentials cannot satisfy this kind contract. The protected issuer
+owns independent random session minting, one-way verifier storage, expiry,
+revocation, persistence and generation, outside the HomeHub DB. Nothing here
+mints a token. Issuer receives no authority to use the verify-only endpoint for
+mutation.
+
+The necessary delivery checks require exact Host and Origin, HTTPS, same-origin
+POST, empty query, no duplicate or forwarded headers. They do NOT establish
+recipient or OS authentication. Only a verified result produces CookieDelivery,
+whose sole delivery method returns a Set-Cookie header, never token JSON or a
+JS accessor. Exact format: `__Host-homehub_ws=<session>; Secure; HttpOnly;
+SameSite=Strict; Path=/; Max-Age=<1..3600>`, no Domain; age rounds down. Future
+HTTP delivery must have an empty no-store response and separately authenticated
+recipient/TLS provenance and CSRF; no route exists now. Plaintext loopback kiosk
+issuance is refused. Cookie attributes cannot be proven by a WS request.
+
+Rotate must durably revoke old sessions before acknowledging new delivery with
+zero overlap. Logout must durably revoke at the privileged broker before clearing
+its cookie; clearing alone is not revocation. Restore must change generation and
+invalidate sessions before serving. Uncertain delivery/cancellation requires
+privileged reconciliation and revocation of the minted session before another
+issuance; never blindly retry. The future issuance owner must bound admission,
+I/O deadlines and cleanup. This pure orchestration does not spawn a timed-out
+issuer task or claim to reconcile cancellation. None of these operational
+lifecycle duties is implemented by a fake issuer.
+
+Synthetic tests exercise framing/partial reads, nonce replay, response and
+identity forgery, denied/revoked/expired/error states, revision/generation races,
+timeouts/cancellation/capacity, WebSocketManager projection and revocation,
+issuer prerequisites, exact cookies and Origin/Host/TLS/CSRF rejection. Fixture
+object identity is only simulated authority. Existing real ASGI tests cover
+unconfigured /ws closing 1008 before accept and no snapshot/fallback.
+
+Release remains blocked by independent source security review, real protected
+broker/state observer/connector/issuer, protected storage+journal durability and
+rollback floor, authenticated operator and recipient delivery, CSRF and secure
+kiosk/iPhone TLS, bounded delivery reconciliation/logout/rotation, native secret
+provisioning and client migrations, omitted projection contracts, HTTP/guest
+trust migration, separately authorized integration and deploy, #296 fixture
+identity, and witnessed #461 guarded L1-L6/kiosk/iPhone acceptance. Identity is
+never lighting ownership; manual/ScreenSync/final-owner fences remain mandatory.
+
+#### Second milestone verification and exact local delta
+
+- Combined offline run: **639 passed** in 160.93s across
+  `test_identity_broker_verify_client`, `test_browser_session_issuance`,
+  `test_identity_foundation`, `test_identity_broker_protocol`,
+  `test_ws_authenticated_boundary`, `test_ws_identity_policy_proposal`,
+  `test_ws_native_projection`, and `test_websocket`.
+- Final new-contract run after adding three lifecycle/ASGI cases:
+  **122 passed** in 24.42s. This includes an issued-cookie handshake through
+  the actual ASGI /ws route, protected-verifier injection, profile projection,
+  revoked-cookie preaccept denial, issuer replay and secret-error suppression.
+  Counts overlap; no final combined 642-test run is claimed.
+- Existing Python from `main/.venv/Scripts/python.exe -B`, APP_ENV=testing,
+  PYTHONDONTWRITEBYTECODE=1, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1,
+  `-p pytest_asyncio.plugin -p no:cacheprovider`. No application lifespan,
+  actual authentication service, network, credentials or physical I/O.
+- Ruff check --no-cache passed for both new modules and both test files;
+  git diff --check passed. No frontend changes/build or installation.
+
+Exactly six intentional incremental paths relative to the preserved source:
+
+1. `backend/services/identity_broker_verify_client.py` (new)
+2. `backend/services/browser_session_issuance.py` (new)
+3. `tests/test_identity_broker_verify_client.py` (new)
+4. `tests/test_browser_session_issuance.py` (new)
+5. `docs/SECURITY_IDENTITY_FOUNDATION.md` (focused update and appended evidence)
+6. `docs/SECURITY_RECOVERY_DECISION_287.md` (appended gate note)
+
+Preservation comparison expanded the source's status entries to 59 files. All
+remain present; source content is preserved outside the intentional foundation
+doc update. Four additional byte differences are **only CRLF/LF** in
+`backend/identity_policy.py`, `backend/main.py`,
+`backend/services/websocket_manager.py`, `tests/test_websocket.py`; these four
+files were not edited by this task. They are reported rather than silently
+normalized to satisfy the task brief's byte-identical seed description. All
+other seeded files compare byte-for-byte. No source/main writes, staging,
+commit, push, PR, merge, deployment, host mutation or live acceptance occurred.
+Independent review belongs to the next caller; these results are not that review.
+
+## November 14: standalone broker protected-state source, still inactive
+
+The next local source milestone adds `security/homehub_identity_broker/` and
+`tests/test_identity_broker_state_runtime.py`; see the [recovery decision source
+milestone](SECURITY_RECOVERY_DECISION_287.md#november-14-2026-standalone-protected-state-source-milestone-inactive)
+for the exact state protocol, limits and next gates. The package has no backend
+imports, network listener, issuer, installation or runtime composition. It
+implements strict compatible VERIFY, immutable profile parity, salted PBKDF2,
+HMAC over complete state, independent PENDING denial, serialized private
+revoke/zero-overlap rotate/empty-generation restore, and fail-closed reopen.
+Offline bootstrap is isolated in a fixture-only module and supplies no OS privilege.
+Reserved pending-delivery queues remain unsupported and must be empty.
+
+Windows disposable tests model directory durability and inject crash/I/O failures;
+they cannot prove Linux custody, actual power loss, systemd, external rollback
+floors or recipient delivery. One object serializes all decisions/mutations;
+protected multi-process singleton enforcement is not implemented. No integrated
+AF_UNIX connector/daemon or fresh protected revision observer is supplied.
+Independent source review belongs to the caller. No production readiness or
+credential issuance follows from this milestone. Root-owned packaging/systemd,
+OS custody and fresh observer, independent backend rollback enforcement,
+OS-local recovery/recipient delivery, client/TLS migration and real Home/iPhone
+L1-L6 acceptance remain open. No network issue refresh was permitted; evidence
+is local and uncommitted, with earlier unrelated work preserved.
+
+Final scoped current-code validation: **330 passed, 22 Linux/POSIX skips** in
+40.31s across state-runtime, verify-client, synthetic broker-protocol and Linux
+socket-prototype tests. Ruff package/new-test check and `git diff --check` passed.
+Exact command environment and incremental paths are recorded in the linked
+recovery decision; no Linux service, root custody or live acceptance is claimed.
+
+### November 14: guarded Linux VERIFY transport source, still not deployable
+
+`security/homehub_identity_broker/linux_verify_server.py` now has an injection-only
+fixture transport for the existing Broker.process, exact inherited-descriptor
+snapshots and SO_PEERCRED-before-body checks. It refuses production construction;
+fixture intent is not root provisioner attestation. There is no CLI/unit, actual
+backend connector, admin implementation, issuer or change to /ws, the redesigned
+UI or lighting. Bounded nonblocking I/O, one off-loop broker worker with zero
+work queue, late-result discard and cancellation are source mechanisms, not
+proof of continuous path custody or interruptible storage. Admin always closes
+without reading data. Tests include a disposable SIGTERM launcher only.
+
+See the [dated recovery boundary](SECURITY_RECOVERY_DECISION_287.md#november-14-2026-inert-linux-verify-transport-source-boundary)
+and [package limitations](../security/homehub_identity_broker/README.md#linux-verify-transport-experiment-do-not-install--not-deployable).
+Exact-source Linux execution, protected root packaging/OS custody/singleton,
+freshness observer, backup exclusions and deployment floor, distinct admin
+principal, approved issuance/recovery/proxy/TLS/client rollout and #293/#461
+L1-L6/kiosk/iPhone acceptance remain open. Windows static tests and the supplied
+Latitude parent snapshot or separate primitive probes do not satisfy them.

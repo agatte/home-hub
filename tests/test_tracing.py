@@ -103,22 +103,21 @@ class TestHttpMiddleware:
 
 
 class TestWebSocketCorrelation:
-    """Per-connection IDs surfaced via connection_status."""
+    """Only authenticated connections receive a scoped correlation ID."""
 
-    def test_connection_status_includes_request_id(self, client):
-        with client.websocket_connect("/ws") as ws:
-            msg = json.loads(ws.receive_text())
-            assert msg["type"] == "connection_status"
-            rid = msg["data"].get("request_id")
-            assert rid is not None
-            assert len(rid) == 12
+    def test_connection_status_includes_request_id(self):
+        import asyncio
+        from tests.test_websocket import exchange, frames, state_app
+        result = frames(asyncio.run(exchange(state_app())))
+        assert len(result[0]["data"]["request_id"]) == 12
+        assert request_id_var.get() is None
 
-    def test_two_connections_get_distinct_ids(self, client):
-        with client.websocket_connect("/ws") as ws_a:
-            a = json.loads(ws_a.receive_text())["data"]["request_id"]
-        with client.websocket_connect("/ws") as ws_b:
-            b = json.loads(ws_b.receive_text())["data"]["request_id"]
-        assert a != b
+    def test_two_connections_get_distinct_ids(self):
+        import asyncio
+        from tests.test_websocket import exchange, frames, state_app
+        ids = [frames(asyncio.run(exchange(state_app())))[0]["data"]["request_id"]
+               for _ in range(2)]
+        assert ids[0] != ids[1]
 
 
 class TestRequestContextFilter:
