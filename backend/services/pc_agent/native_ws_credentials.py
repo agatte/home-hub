@@ -1,12 +1,9 @@
-"""Read-only, fixed-profile native WS credentials. No provisioning authority.
-
-The operator-configured server URL is trusted configuration, never event input.
-Only Windows Generic Credentials at the two exact targets below are read.
-"""
+"""Read-only profile AND endpoint-bound credentials. No provisioning authority."""
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import ipaddress
 import logging
 import re
 import sys
@@ -27,6 +24,42 @@ WS_LOGGER.propagate = False
 
 class NativeCredentialError(Exception):
     """Static, non-secret failure status; callers must not log underlying errors."""
+
+
+def _endpoint(url: str) -> tuple[str, str]:
+    """Strict ASCII URI; only omitted default ports are normalized.
+
+    Reject alternate spellings rather than relying on URL/OS/IDNA normalization.
+    The target includes the effective port even when omitted in the URI.
+    """
+    if not isinstance(url, str) or any(ord(c) <= 32 or ord(c) >= 127 for c in url):
+        raise ValueError
+    match = re.fullmatch(r'(ws|wss)://(\[[0-9a-f:]+\]|[a-z0-9.-]+)(?::([0-9]+))?/ws', url)
+    if match is None:
+        raise ValueError
+    scheme, host, port_text = match.groups()
+    if host.startswith('['):
+        address = ipaddress.IPv6Address(host[1:-1])
+        if host != '[' + address.compressed + ']':
+            raise ValueError
+    else:
+        if len(host) > 253 or any(
+            not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+            or label.startswith('xn--') for label in host.split('.')
+        ):
+            raise ValueError
+        # Numeric addresses must be canonical IPv4, never legacy numeric forms.
+        if re.fullmatch(r'[0-9.]+', host):
+            if str(ipaddress.IPv4Address(host)) != host:
+                raise ValueError
+    port = int(port_text) if port_text else (443 if scheme == 'wss' else 80)
+    if not 1 <= port <= 65535 or (port_text and str(port) != port_text):
+        raise ValueError
+    # Independent parser agreement guards future changes to either parser.
+    parsed = urlsplit(url)
+    if parsed.hostname != host.strip('[]') or parsed.path != '/ws':
+        raise ValueError
+    return scheme, f'{host}:{port}/ws'
 
 
 class _Credential(ctypes.Structure):
@@ -74,31 +107,25 @@ def connection_options(profile: Profile, url: str) -> dict:
     if profile not in _TARGETS:
         raise NativeCredentialError("profile denied")
     try:
-        parsed = urlsplit(url)
-        if (parsed.scheme not in {"ws", "wss"} or not parsed.hostname
-                or parsed.username is not None or parsed.password is not None
-                or parsed.query or parsed.fragment or "?" in url or "#" in url
-                or any(ord(c) <= 32 or ord(c) == 127 for c in url)):
-            raise NativeCredentialError("endpoint denied")
-        parsed.port  # Validate malformed ports before touching the credential store.
+        scheme, endpoint = _endpoint(url)
     except Exception:
         raise NativeCredentialError("endpoint denied") from None
+    options = {"logger": WS_LOGGER}
+    if scheme == "ws":
+        return options  # Legacy plaintext must NEVER touch the credential store.
     token = None
     failed = False
     try:
         if sys.platform == "win32":
-            token = _read_windows(_TARGETS[profile])
+            token = _read_windows(_TARGETS[profile] + '/' + endpoint)
     except Exception:
         failed = True
     # Raise outside the handler so the original secret-bearing exception is discarded.
     if failed:
         raise NativeCredentialError("credential unavailable")
-    options = {"logger": WS_LOGGER}
     if token is None:
         return options
     if not isinstance(token, str) or not _TOKEN.fullmatch(token):
         raise NativeCredentialError("credential invalid")
-    if parsed.scheme != "wss":
-        raise NativeCredentialError("credential requires TLS")
     options["additional_headers"] = {"Authorization": "Bearer " + token}
     return options

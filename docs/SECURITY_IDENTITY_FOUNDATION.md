@@ -776,34 +776,53 @@ Latitude parent snapshot or separate primitive probes do not satisfy them.
 
 ### November 14: Windows native WS consumer source migration (#287/#293/#461)
 
-`backend/services/pc_agent/native_ws_credentials.py` reads only Windows Generic
-Credential targets `HomeHub/identity/windows_desktop/ws` (brightness) and
-`HomeHub/identity/desktop_notifier/ws` (Notifier). The fixed profile is selected
-by each consumer, never by a WS event. Blob contract is exactly 152 bytes of
-UTF-16LE: the 76-character opaque native bearer, without a terminator. There is
-no credential creation, mutation, enumeration, file/env/argv fallback or cache.
-Each reconnect reads anew and frees the CredReadW allocation with CredFree.
-These targets separate accidental profile selection, not same-login OS access.
+`backend/services/pc_agent/native_ws_credentials.py` reads Windows Generic
+Credentials bound to both profile and exact WSS destination. Reserved prefixes are
+`HomeHub/identity/windows_desktop/ws` (brightness) and
+`HomeHub/identity/desktop_notifier/ws` (Notifier). The exact target is
+`<prefix>/<canonical-host>:<effective-port>/ws`, for example
+`HomeHub/identity/windows_desktop/ws/homehub.example:443/ws` or
+`HomeHub/identity/desktop_notifier/ws/[2001:db8::1]:8443/ws`.
+These are illustrative destinations, not production hostnames. Omitted WSS ports
+and explicit `:443` select the same target. Other ports/hosts require separately
+provisioned targets; there is no generic profile-only fallback or allowlist input.
 
-Without a credential (including non-Windows), existing unauthenticated WS behavior
-is preserved. A present malformed credential or plaintext WS endpoint refuses
-the connection attempt. Bearers are sent only as Authorization on WSS, with
-standard websocket TLS certificate/hostname validation. The server URL is trusted
-operator configuration; never supply it from notification/event data. URL userinfo,
-queries and fragments are refused. Handshake logging is suppressed and connection
-failures report static status without raw URLs, headers or exception tracebacks.
-Notification and mode parsers and stop/backoff behavior remain unchanged.
+Later, separately authorized real-host enrollment must independently verify the
+HomeHub endpoint and its certificate trust, then provision the exact URL-bound
+profile target. Changing `--server` cannot retrieve an existing credential bound
+to another destination. TLS validation alone does not authorize a destination;
+operator enrollment of that target supplies the independent host pinning. Targets
+separate profile/destination selection, not same-login OS access. Do not provision
+attacker-selected targets or reuse bearer values across destination/profile targets.
 
-This is source-only readiness, not operational auth. Real OS-managed per-profile
-credential issuance/delivery, approved WSS endpoints and certificate trust,
-packaged Notifier rebuild, host rollout and authenticated compatibility acceptance
-remain separate authorized gates. Current plaintext defaults remain unchanged;
-provisioning credentials before WSS configuration intentionally prevents reconnect.
+Only strict lower-case ASCII DNS labels (no IDNA A-labels), canonical IPv4 or
+compressed lower-case bracketed IPv6, canonical decimal ports 1?65535, and exact
+`/ws` are accepted. Unicode, percent escapes, userinfo, queries, fragments,
+controls, trailing DNS dots and alternate spellings reject before any lookup.
+Legacy valid `ws://` URLs read no credentials and send no Authorization header,
+even when a corresponding WSS credential exists. Missing WSS credentials preserve
+no-header behavior; an enforcing server will deny until enrollment is complete.
+Malformed credentials refuse the attempt. WSS uses standard certificate/hostname
+validation. Handshake logging is suppressed; errors never log raw URLs, target
+names, headers or underlying exceptions. No credentials belong in logs, argv,
+environment variables or source.
+
+Blob contract remains exactly 152 bytes of UTF-16LE: the 76-character opaque
+native bearer without a terminator. There is no creation, mutation, enumeration,
+file/env/argv fallback or cache. Each reconnect reads anew using System32
+CredReadW and frees its allocation using CredFree. Both worker loops preserve
+parsing, stop and backoff behavior.
+
+This is source-only readiness. Real OS credential enrollment and acceptance,
+secure WSS endpoint/certificate rollout, Broker protected issuer/delivery gates,
+packaged Notifier rebuild and host rollout remain separately authorized work.
 No real credential store, network, device or host lifecycle action was exercised.
 
-Offline validation for this migration: 304 tests passed across
+Offline P1 remediation validation: 341 tests passed across
 `test_native_ws_credentials`, `test_monitor_brightness`,
 `test_ws_authenticated_boundary` and `test_ws_native_projection` using the
 Sandbox Python with APP_ENV=testing and pytest plugin autoload disabled.
-Targeted Ruff and `git diff --check` passed. Credential API ownership and both
-worker loops use synthetic mocks; no real Credential Manager reads occur.
+After strengthening Win32 target-mismatch/freeing and worker integration checks,
+all 66 final credential tests passed. Targeted Ruff and `git diff --check` passed.
+Credential API ownership and both worker loops use synthetic mocks; no real
+Credential Manager reads occur. These results are local source evidence only.

@@ -31,7 +31,7 @@ def test_fixed_profile_fresh_read(monkeypatch, profile):
         options = native.connection_options(profile, 'wss://configured.example/ws')
         assert options['additional_headers'] == {'Authorization': 'Bearer ' + TOKEN}
         assert options['logger'].getEffectiveLevel() > logging.CRITICAL
-    assert calls == [native._TARGETS[profile]] * 2
+    assert calls == [native._TARGETS[profile] + '/configured.example:443/ws'] * 2
 
 
 def test_unknown_profile_no_read(monkeypatch):
@@ -60,9 +60,8 @@ def test_invalid_secret_sanitized(monkeypatch, token):
 
 @pytest.mark.parametrize('url', ['ws://127.0.0.1/ws', 'ws://192.168.86.210/ws'])
 def test_no_plaintext_bearer(monkeypatch, url):
-    monkeypatch.setattr(native, '_read_windows', lambda _: TOKEN)
-    with pytest.raises(native.NativeCredentialError, match='requires TLS'):
-        native.connection_options('windows_desktop', url)
+    monkeypatch.setattr(native, '_read_windows', lambda _: pytest.fail('plaintext read'))
+    assert 'additional_headers' not in native.connection_options('windows_desktop', url)
 
 
 @pytest.mark.parametrize('url', [
@@ -88,14 +87,19 @@ def test_provider_error_discarded(monkeypatch):
     assert error.value.__context__ is None
 
 
-@pytest.mark.parametrize('invalid', [False, True])
+@pytest.mark.parametrize('invalid', [None, 'size', 'profile', 'destination', 'decode'])
 def test_mock_windows_api_frees(monkeypatch, invalid):
     # Exercise actual ctypes structure/pointer ownership without loading a DLL.
-    raw = TOKEN.encode('utf-16-le')
+    raw = TOKEN.encode('utf-16-le') if invalid != 'decode' else b'\x00\xd8' * 76
     blob = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
-    target = native._TARGETS['windows_desktop']
-    credential = native._Credential(Type=1, TargetName=target,
-        CredentialBlobSize=2 if invalid else len(raw), CredentialBlob=blob)
+    target = native._TARGETS['windows_desktop'] + '/configured.example:443/ws'
+    stored_target = target
+    if invalid == 'profile':
+        stored_target = target.replace('windows_desktop', 'desktop_notifier')
+    elif invalid == 'destination':
+        stored_target = target.replace('configured.example', 'attacker.example')
+    credential = native._Credential(Type=1, TargetName=stored_target,
+        CredentialBlobSize=2 if invalid == 'size' else len(raw), CredentialBlob=blob)
     freed = []
     def read(name, kind, flags, output):
         assert (name, kind, flags) == (target, 1, 0)
@@ -107,12 +111,16 @@ def test_mock_windows_api_frees(monkeypatch, invalid):
         def __call__(self, *args):
             return self.fn(*args)
     api = SimpleNamespace(CredReadW=Function(read), CredFree=Function(freed.append))
-    monkeypatch.setattr(ctypes, 'WinDLL', lambda *a, **kw: api, raising=False)
+    def load(name, **kwargs):
+        assert name == 'Advapi32.dll'
+        assert kwargs == {'use_last_error': True, 'winmode': 0x800}
+        return api
+    monkeypatch.setattr(ctypes, 'WinDLL', load, raising=False)
     # Recover original implementation, replaced by the autouse mock.
     namespace = {'__name__': 'synthetic_native'}
     exec(compile(Path(native.__file__).read_text(encoding='utf-8-sig'), native.__file__, 'exec'), namespace)
     if invalid:
-        with pytest.raises(namespace['NativeCredentialError']):
+        with pytest.raises((namespace['NativeCredentialError'], UnicodeDecodeError)):
             namespace['_read_windows'](target)
     else:
         assert namespace['_read_windows'](target) == TOKEN
@@ -132,7 +140,9 @@ def test_worker_reconnect_stop_and_sanitized_logs(monkeypatch, caplog, module, c
     calls = []
     def options(p, url):
         calls.append((p, url))
-        return {'additional_headers': {'Authorization': 'Bearer ' + TOKEN}}
+        return native.connection_options(p, url)
+    monkeypatch.setattr(native, '_read_windows', lambda target: TOKEN if target ==
+        native._TARGETS[profile] + '/configured.example:443/ws' else None)
     def connect(url, **kwargs):
         assert kwargs['additional_headers']['Authorization'] == 'Bearer ' + TOKEN
         if len(calls) == 2:
@@ -152,3 +162,67 @@ def test_worker_reconnect_stop_and_sanitized_logs(monkeypatch, caplog, module, c
     assert calls == [(profile, worker._url)] * 2
     assert TOKEN not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.parametrize('profile', ['windows_desktop', 'desktop_notifier'])
+@pytest.mark.parametrize('url', [
+    'wss://attacker.example/ws', 'wss://homehub.example:444/ws',
+    'wss://homehub.example.attacker.example/ws',
+    'wss://127.0.0.1/ws', 'wss://[::1]/ws',
+])
+def test_changed_destination_cannot_reuse_token(monkeypatch, profile, url):
+    approved = native._TARGETS[profile] + '/homehub.example:443/ws'
+    calls = []
+    def read(target):
+        calls.append(target)
+        return TOKEN if target == approved else None
+    monkeypatch.setattr(native, '_read_windows', read)
+    assert 'additional_headers' not in native.connection_options(profile, url)
+    assert calls == [native._TARGETS[profile] + '/' + native._endpoint(url)[1]]
+    assert calls[0] != approved
+    assert native.connection_options(profile, 'wss://homehub.example/ws')[
+        'additional_headers'] == {'Authorization': 'Bearer ' + TOKEN}
+
+
+def test_profile_binding(monkeypatch):
+    approved = native._TARGETS['windows_desktop'] + '/homehub.example:443/ws'
+    monkeypatch.setattr(native, '_read_windows', lambda target: TOKEN if target == approved else None)
+    assert 'additional_headers' not in native.connection_options(
+        'desktop_notifier', 'wss://homehub.example/ws')
+
+
+@pytest.mark.parametrize('url', [
+    'wss://homehub.example/other', 'wss://homehub.example/ws/',
+    'wss://homehub.example/%77s', 'wss://homehub.example/ws?',
+    'wss://homehub.example/ws#', 'wss://homehub.example./ws',
+    'wss://HOMEHUB.example/ws', 'wss://homehub.example:0443/ws',
+    'wss://homehub.example:0/ws', 'wss://homehub.example:65536/ws',
+    'wss://homehub.example:/ws', 'wss://homehub%2eexample/ws',
+    'wss://homehub.example\\attacker.example/ws', 'wss://xn--homehub-9jg.example/ws',
+    'wss://h?mehub.example/ws', 'wss://127.1/ws', 'wss://0177.0.0.1/ws',
+    'wss://[0:0:0:0:0:0:0:1]/ws', 'wss://[::1%25eth0]/ws',
+    'wss://[::FFFF:127.0.0.1]/ws',
+])
+def test_strict_endpoint_no_lookup(monkeypatch, url):
+    monkeypatch.setattr(native, '_read_windows', lambda _: pytest.fail('unexpected read'))
+    with pytest.raises(native.NativeCredentialError, match='endpoint denied'):
+        native.connection_options('windows_desktop', url)
+
+
+@pytest.mark.parametrize('authority,target', [
+    ('homehub.example', 'homehub.example:443'),
+    ('homehub.example:443', 'homehub.example:443'),
+    ('homehub.example:8443', 'homehub.example:8443'),
+    ('192.168.1.2', '192.168.1.2:443'),
+    ('[::1]', '[::1]:443'), ('[2001:db8::1]:8443', '[2001:db8::1]:8443'),
+])
+def test_exact_canonical_target(monkeypatch, caplog, authority, target):
+    calls = []
+    def read(name):
+        calls.append(name)
+        return TOKEN
+    monkeypatch.setattr(native, '_read_windows', read)
+    assert native.connection_options('windows_desktop', 'wss://' + authority + '/ws')[
+        'additional_headers'] == {'Authorization': 'Bearer ' + TOKEN}
+    assert calls == [native._TARGETS['windows_desktop'] + '/' + target + '/ws']
+    assert not caplog.records
