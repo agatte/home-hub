@@ -441,3 +441,51 @@ PYTHONDONTWRITEBYTECODE=1, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1,
 compile of both new Python files and `git diff --check` passed. The ten existing
 file contents (README original byte prefix) and Git index were preserved. No
 native Linux/systemd acceptance, network, publication or activation was performed.
+### November 14 actual-kernel metadata preflight candidate (inert)
+
+`linux_os_preflight.probe()` is a standalone read-only, Linux-only diagnostic
+with no arguments, CLI, service wiring or installer. It traverses the fixed
+`custody_plan.ARTIFACTS` paths from a held `/` descriptor using Linux
+`O_PATH|O_NOFOLLOW|O_CLOEXEC`, checks root-owned nonwritable ancestors, leaf
+type/mode/link count and available root identities, and rechecks every held
+name/inode/metadata binding. It observes real/saved/effective process IDs and
+supplementary groups directly through kernel APIs. It reads no file contents,
+resolves no usernames/NSS, connects no socket and executes no commands. Output
+contains only fixed artifact ordinals and bounded status codes; ordinal order
+is the source ARTIFACTS order. For the two intentionally broker-owned 0700 state
+directories, this probe can inspect the directory's type/mode but cannot bind
+its numeric UID/GID to the named broker account. Its descendants (including
+WAL/SHM, journal and pending .next files) are explicitly marked
+`private-ancestor-identity-unverified` and **not inspected**; that status never
+proves absence or safe custody. A trusted independent account-binding and
+root-owned composition must inspect those children before activation.
+
+This is useful for detecting absent installation, unsafe ancestors, wrong root
+ownership/modes, symlinks and persistent replacement in the current namespace.
+An O_PATH FD pins metadata without opening a FIFO/device or secret for reading.
+Failures suppress raw exceptions and paths. No arbitrary path enters the public
+probe. Private dirfd helpers are disposable-test primitives, not privileged APIs.
+Dedicated account UID/GID binding is explicitly unverified; no caller identity
+or 'approved' string can fill it in. Clean metadata does not authenticate source,
+process root identity, namespace, installation or file contents. An adversarial
+kernel/filesystem or blocked filesystem syscall is outside this diagnostic's
+proof and time bounds. It must not be run through an unreviewed privileged wrapper.
+
+Every report retains unconditional missing requirements and
+`runtime_authorized == False`. No snapshot-consistent success or attestation
+token is issued. ACL/MAC, mount aliases, loaded interpreter/dependency closure,
+actual PID1/system-manager descriptor creator provenance, dedicated identities
+and supplementary membership, reboot/inode/ABA continuity, backup exemptions,
+crash durability and external backend rollback/startup/deploy floor remain
+unproved. Root ownership of backend-floor.json cannot enforce a floor outside
+the app. `RootCustodyProof.check` is unchanged and always denies.
+
+`tests/test_linux_os_preflight.py` uses disposable native Linux files and actual
+O_PATH/dirfd/fstat syscalls, including wrong/unavailable identities, replacement,
+hardlink, mode and symlink cases. It requires no sudo and changes nothing outside
+pytest temporary directories. Windows executes static/default-denial cases and
+explicitly skips native cases. Exact-source Linux CI execution remains required;
+Windows skips are not kernel acceptance. No backend, WebSocket, issuer, UI or
+lighting cutover is supplied. Real mobile Home/kiosk and guarded L1-L6 remain
+blocked on the previously documented provisioning and separately authorized
+root composition, security integration, deployment and physical acceptance.

@@ -898,3 +898,44 @@ Current raw-workspace source SHA-256 (normalization requires recomputation):
 | `backend/services/linux_identity_broker_io.py` | `9A2454F13E262A87B7DA011557F78FD41F387E08AE33CCC79D89D7D43F5188D3` |
 | `backend/services/identity_broker_verify_client.py` | `9A63EEB7B8BB553C91F386F8112D91E656D31E1A8C5239C4778E0003F1AA7DAA` |
 | `tests/test_linux_protected_verify_integration.py` | `9C9F8875D2CF4820C144CC3CBFA3EF800A1689EC747A94305BE3089813FD29E9` |
+## November 14 Linux OS metadata blocker probe (local source only)
+
+This bounded follow-up adds `linux_os_preflight.py` and
+`tests/test_linux_os_preflight.py`; the package README describes its exact
+observation/trust split. No runtime, backend, WebSocket, unit template or custody
+proof changed. The public zero-argument probe performs actual Linux kernel
+credential and held-dirfd metadata observations of only the fixed proposed
+deployment. It never reads key/registry/config contents or accepts caller paths,
+identity approval strings, floor assertions or executable commands. It detects
+unsafe root ancestors, leaf type/mode/link/known-root-owner errors, symlinks
+and persistent binding changes. The two deliberately broker-owned 0700 private
+state directories cannot have their owner IDs independently authenticated here.
+Their descendants, including WAL/SHM and pending anchors, are **uninspected** and
+explicitly `private-ancestor-identity-unverified` rather than misclassified as
+unsafe or absent. Account IDs are not authenticated through NSS; unknown
+dedicated ownership and all private-child inspection remain missing.
+
+The output is a bounded blocker report, never an authorization. All reports
+retain missing root-controlled code/dependency closure, dedicated account and
+supplementary membership, PID1 descriptor provenance, ACL/MAC, namespace/mount
+alias protection, continuous custody/reboot/ABA, backup/crash durability and
+independent external backend startup/deploy/rollback floor. A same-directory
+floor file supplies no independent enforcement. `RootCustodyProof.check` remains
+unconditional Denied. There is no startable service, installer or CLI. Native
+tests use temporary files only and require no sudo; Windows native skips do not
+prove these mechanisms. Next gate is exact-source disposable Linux execution
+and review, then separately authorized root-controlled composition and OS
+acceptance. Existing issuer/freshness/TLS/mobile/kiosk/#293/#461 gates remain.
+
+Evidence is local to the named identity-287-broker-session-20261114 worktree,
+HEAD `01824867a796a3386205dccdad7839c1ef9d1a46`, preserving the initial 13-path
+dirty state. Owner-supplied draft #533 head `330e26e6bc16484fdb52a854cafc124d42fcacf4`
+and green CI were not independently checked: network/issue retrieval/publication
+were prohibited. No commit, ref update, install, credential, host/live write,
+deployment, restart or cleanup occurred. The existing /ws provisioning blocker
+and unconditional production custody denial remain in force.
+
+Local Windows validation: focused preflight/custody/unit-contract/protected
+integration suites **284 passed, 43 skipped**; the new suite contributes
+**3 passed, 15 explicitly native Linux skips**. Ruff without cache, in-memory
+compilation and `git diff --check` passed. No native Linux test was executed.
