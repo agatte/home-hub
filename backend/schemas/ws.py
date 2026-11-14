@@ -19,6 +19,9 @@ class LightCommandData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     light_id: str
+    # Correlation only; never authorizes a light write or a retry.
+    command_id: Optional[str] = Field(default=None, min_length=8, max_length=64,
+                                      pattern=r'^[A-Za-z0-9_-]+$')
     on: Optional[bool] = None
     bri: Optional[int] = Field(default=None, ge=0, le=254)
     hue: Optional[int] = Field(default=None, ge=0, le=65535)
