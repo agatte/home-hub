@@ -199,6 +199,24 @@
     setTimeout(() => { optimisticBri = null }, 50)
   }
 
+  /** A canceled pointer gesture is not an explicit brightness commit.
+   *  On classic controls, earlier mid-drag sends cannot be undone, but
+   *  the trailing timer must not send another command after cancellation.
+   */
+  /** @param {PointerEvent} e */
+  function onPointerCancel(e) {
+    if (!dragging || e.pointerId !== activePointerId) return
+    try { cardEl?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
+    pendingState = null
+    pendingBri = null
+    activePointerId = null
+    dragging = false
+    didDrag = false
+    dragPowerRequested = false
+    optimisticBri = null
+  }
+
   /** @param {KeyboardEvent} e */
   function onKeydown(e) {
     if (!light.reachable || commandPending) return
@@ -277,7 +295,7 @@
     on:pointerdown={onPointerDown}
     on:pointermove={onPointerMove}
     on:pointerup={onPointerEnd}
-    on:pointercancel={onPointerEnd}
+    on:pointercancel={onPointerCancel}
     on:keydown={onKeydown}
     aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
     disabled={!light.reachable || commandPending}

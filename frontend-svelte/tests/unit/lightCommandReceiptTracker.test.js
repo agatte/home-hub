@@ -55,6 +55,21 @@ describe('correlated guarded light WebSocket receipts (#461)', () => {
     expect(sent).toHaveLength(2)
   })
 
+  it('never commits a canceled pointer drag or its delayed trailing update', () => {
+    expect(card).toContain('on:pointerup={onPointerEnd}')
+    expect(card).toContain('on:pointercancel={onPointerCancel}')
+    const cancelHandler = card.split('function onPointerCancel(e) {')[1]
+      ?.split('/** @param {KeyboardEvent} e */')[0]
+    expect(cancelHandler).toBeDefined()
+    expect(cancelHandler).toContain('if (!dragging || e.pointerId !== activePointerId) return')
+    expect(cancelHandler).toContain('clearTimeout(throttleTimer)')
+    expect(cancelHandler).toContain('pendingState = null')
+    expect(cancelHandler).toContain('optimisticBri = null')
+    expect(cancelHandler).not.toContain('flushBrightness(')
+    expect(cancelHandler).not.toContain('fanout(')
+    expect(cancelHandler).not.toContain('setLight(')
+  })
+
   it('keeps redesigned light values source-qualified with explicit status text', () => {
     expect(card).toContain('export let optimisticStore = true')
     expect(card).toContain('if (!optimisticStore) return')
