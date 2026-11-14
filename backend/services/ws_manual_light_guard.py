@@ -7,11 +7,14 @@ physical confirmation. No production activation is authorized by this module.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from backend.services.light_state_calculator import ALL_LIGHT_IDS
 from backend.services.lighting_transition_boundary import settle_lighting_io
+
+logger = logging.getLogger(__name__)
 
 
 _COMMAND_FIELDS = frozenset({"on", "bri", "hue", "sat", "ct"})
@@ -92,6 +95,18 @@ async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any
     # lease to the final raw-generation snapshot as well as the policy check.
     allowed.dispatch_lease = lease
 
+    def forget_uncertain() -> None:
+        # An unacknowledged bridge command may still have changed the bulb.
+        # Drop stale dedup state, without taking ownership from ScreenSync.
+        try:
+            engine.forget_ambiguous_light_write(
+                [light_id], preserve_screen_sync=True,
+            )
+        except Exception:
+            # The physical result is already uncertain. A broken cache
+            # reconciler must not surface a generic retryable exception.
+            logger.exception("Unable to invalidate uncertain light cache")
+
     async def transaction() -> ManualLightDispatch:
         async with boundary.serialized():
             if not allowed():
@@ -116,18 +131,27 @@ async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any
                 )
             except Exception:
                 # Even exceptions might follow a partial Hue bridge mutation.
+                forget_uncertain()
                 return ManualLightDispatch("uncertain")
             if ack is not True:
+                forget_uncertain()
                 return ManualLightDispatch("uncertain")
             # A stronger owner can arrive during the physical bridge call.
             # Never stamp manual over an owner that superseded this request.
             if not allowed():
+                forget_uncertain()
                 return ManualLightDispatch("uncertain")
             # A valid Hue ACK is not physical completion. Publishing our manual
             # stamp invalidates the original lease; issue a fresh evidence
             # checkpoint only AFTER the stamp to detect later owner takeover.
             try:
                 engine.mark_light_manual(light_id, state)
+                # Marking first retains the existing target base. The later
+                # canonical leased-write record evicts stale automation dedup
+                # so a mode reconciliation after manual expiry cannot skip.
+                engine.record_leased_light_write(
+                    light_id, state, supersede_screen_sync=False,
+                )
                 stamped_lease = boundary.authority.issue(
                     "websocket_manual_ack", [light_id],
                 )

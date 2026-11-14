@@ -311,6 +311,9 @@ async def test_existing_manual_put_restamps_after_explicit_clear_in_fake_modes(r
             assert (await hue.get_light("2"))["bri"] == bri
             assert "2" in engine.manual_light_overrides
             assert engine._state.manual_light_targets["2"]["bri"] == bri
+            # An acknowledged manual writer evicts the prior automation dedup
+            # value so mode reconciliation after manual expiry cannot skip.
+            assert "2" not in engine._last_applied_per_light
         else:
             with pytest.raises(HTTPException) as denied:
                 await lights.set_light("2", LightState(bri=bri), request)

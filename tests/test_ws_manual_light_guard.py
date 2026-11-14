@@ -61,6 +61,9 @@ class Engine:
         self._applicator = SimpleNamespace(external_owned_light_ids=lambda: set(self._external))
         self.stamps = []
         self.persists = 0
+        self._last_applied_per_light = {"2": {"on": True, "bri": 80}}
+        self.leased_records = []
+        self.ambiguous_forgets = []
         self.persist_error = False
         self.persist_wait = None
         self.persist_hook = None
@@ -86,6 +89,20 @@ class Engine:
         self.stamps.append((lid, dict(state)))
         self.manual_light_overrides.add(lid)
         self._transition_boundary.authority.invalidate([lid])
+
+    def record_leased_light_write(self, light_id, state, *, supersede_screen_sync=True):
+        assert self._transition_boundary.held_by_current_task
+        assert supersede_screen_sync is False
+        self.leased_records.append((light_id, dict(state)))
+        self._last_applied_per_light.pop(light_id, None)
+        self._transition_boundary.authority.invalidate([light_id])
+
+    def forget_ambiguous_light_write(self, light_ids, *, preserve_screen_sync=False):
+        assert self._transition_boundary.held_by_current_task
+        assert preserve_screen_sync is True
+        self.ambiguous_forgets.extend(str(lid) for lid in light_ids)
+        for lid in light_ids:
+            self._last_applied_per_light.pop(str(lid), None)
 
     async def persist_manual_light_ownership(self, *, raise_on_error):
         assert raise_on_error is True
@@ -150,6 +167,10 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hue.calls, [("2", {"bri": 100})])
         self.assertEqual(self.engine.stamps, [("2", {"bri": 100})])
         self.assertEqual(self.engine.persists, 1)
+        # A real manual write must evict the formerly automated dedup value.
+        self.assertEqual(self.engine._last_applied_per_light, {})
+        self.assertEqual(self.engine.leased_records, [("2", {"bri": 100})])
+        self.assertEqual(self.engine.ambiguous_forgets, [])
         again = await self.send(state={"on": False})
         self.assertEqual(again.status, "acknowledged")
         self.assertEqual(self.hue.calls, [
@@ -245,6 +266,9 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.hue.calls), 1)
         self.assertEqual(self.engine.stamps, [])
         self.assertEqual(self.engine.persists, 0)
+        self.assertEqual(self.engine._last_applied_per_light, {})
+        self.assertEqual(self.engine.ambiguous_forgets, ["2"])
+        self.assertEqual(self.engine.leased_records, [])
 
         self.setUp()
         self.engine.persist_error = True
@@ -252,6 +276,8 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.hue.calls), 1)
         self.assertEqual(self.engine.stamps, [("2", {"bri": 100})])
         self.assertEqual(self.engine.persists, 1)
+        self.assertEqual(self.engine._last_applied_per_light, {})
+        self.assertEqual(self.engine.leased_records, [("2", {"bri": 100})])
 
     async def test_caller_cancellation_drains_hue_ack_and_manual_stamp(self):
         entered = asyncio.Event()

@@ -267,3 +267,29 @@ remains tracked by security issue #284; this change does not address that
 finding. DND is documented as blocking autonomous changes while allowing
 explicit user actions, and must not silently become a blanket manual ban.
 No live host or Hue write, deployment, merge, or physical acceptance occurred.
+
+### Manual writer dedup/cache reconciliation — source-only safety refinement
+
+A shared-authority manual Hue write also needs to reconcile the engine's
+`last_applied_per_light` automation dedup state. Without that step, an
+acknowledged manual adjustment could leave the previously automated target
+cached as if it still matched the bridge, and the post-expiry/mode-change
+reconciliation might dedup-skip the needed restore.
+
+The guarded writer therefore records an acknowledged manual mutation through
+the existing `AutomationEngine.record_leased_light_write`, **after** marking
+manual ownership (so target inference can read the old cached base) and
+**before** the fresh persistence checkpoint. This evicts that fixture's
+automated dedup record without stealing stronger ScreenSync ownership. On an
+uncertain write or late owner conflict, it calls
+`AutomationEngine.forget_ambiguous_light_write(...,
+preserve_screen_sync=True)` while the existing lighting boundary remains
+held. This clears only uncertain cached state, not owner/physical status,
+and never retries the Hue command. Fake-boundary regression tests assert
+both accepted and ambiguous cache invalidations and deny any false manual
+stamp. The refined change is **not physical confirmation**.
+
+These changes still require exact-head CI, independent ownership review,
+separately approved high-risk merge and Latitude deployment, then witnessed
+real fixture and kiosk/iPhone acceptance. Do not infer those gates from the
+earlier green CI on the unrefined guarded writer.
