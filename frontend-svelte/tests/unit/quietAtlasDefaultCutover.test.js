@@ -51,7 +51,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     // requiring on:true with the final drag command. Inline Home does not
     // transmit intermediate drag values.
     expect(cardSource).toContain('dragPowerOn = !light.on || controlTarget.on === false')
-    expect(cardSource).toContain('if (!optimisticStore) return')
+    expect(cardSource).toContain('Both Classic and inline Home preview locally')
     expect(home).toContain('href="#phone-lighting-title"')
     expect(home).toContain('href="#lighting-title"')
   })

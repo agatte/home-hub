@@ -169,7 +169,7 @@ def test_malformed_event_dropped(event):
     assert redact_http_client_breadcrumbs(event, {}) is None
 
 
-def test_startup_order_and_websocket_generic_message():
+def test_startup_order_and_websocket_deny_without_trusted_runtime():
     source = (ROOT / 'backend/utils/logger.py').read_text(encoding='utf-8')
     tree = ast.parse(source)
     setup = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'setup_logging')
@@ -177,8 +177,16 @@ def test_startup_order_and_websocket_generic_message():
     assert calls.index('suppress_httpcore_debug_logging') < calls.index('RotatingFileHandler')
     assert calls.index('suppress_hue_httpx_logging') < calls.index('RotatingFileHandler')
     main = (ROOT / 'backend/main.py').read_text(encoding='utf-8')
-    assert 'app_logger.error("WebSocket command failed")' in main
+    manager = (ROOT / 'backend/services/websocket_manager.py').read_text(encoding='utf-8')
+    # The old, anonymous command loop and its generic error log were removed.
+    # Admission is delegated to the manager and missing trusted configuration
+    # denies before accepting a WebSocket or evaluating a household snapshot.
+    assert 'await manager.serve(websocket,' in main
+    assert 'await websocket.close(code=1008)' in main
+    assert 'if self._boundary is None:' in manager
+    assert 'await asyncio.wait_for(websocket.close(code=1008)' in manager
     assert 'WebSocket error: {e}' not in main
+    assert 'WebSocket error: {e}' not in manager
 
 
 def test_pinned_httpcore_trace_payloads_blocked(harness):

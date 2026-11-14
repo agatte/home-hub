@@ -11,7 +11,7 @@
   export let light
 
   // New Home room panels may render only state reported by the HomeHub store.
-  // Both views keep shared fixture values observational; classic allows rapid input.
+  // Both views keep shared fixture values observational and preview locally until release.
   export let optimisticStore = true
 
   $: commandStatus = optimisticStore ? null : ($lightCommandResults[light.light_id]?.status ?? null)
@@ -103,56 +103,10 @@
   let presetTab = 'color' // 'color' | 'temp'
   let showPresets = false
 
-  // Leading + trailing throttle: cap mid-drag updates to one per THROTTLE_MS.
-  // Flush on drag end so the final value always lands even if it arrived
-  // mid-throttle-window. Mid-drag commands ride a short transitiontime
-  // (~100ms) so the bridge follows the slider tightly without a long fade —
-  // without that, each new command interrupts the previous 0.4s transition
-  // mid-flight and the bulb visibly bounces between targets. The flush call
-  // deliberately omits transitiontime so the final landing gets phue2's
-  // default 0.4s smooth fade.
-  const THROTTLE_MS = 250
-  const MID_DRAG_TRANSITION = 1  // 100ms — snappy mid-drag follow
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let throttleTimer = null
-  /** @type {Record<string, unknown> | null} */
-  let pendingState = null
-  let lastSentAt = 0
-
-  /** @param {Record<string, unknown>} state */
-  function throttledUpdate(state) {
-    const now = Date.now()
-    const elapsed = now - lastSentAt
-    const payload = { ...state, transitiontime: MID_DRAG_TRANSITION }
-    if (elapsed >= THROTTLE_MS) {
-      lastSentAt = now
-      pendingState = null
-      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
-      fanout(light.light_id, payload)
-    } else {
-      pendingState = payload
-      if (!throttleTimer) {
-        throttleTimer = setTimeout(() => {
-          throttleTimer = null
-          if (pendingState) {
-            lastSentAt = Date.now()
-            const s = pendingState
-            pendingState = null
-            fanout(light.light_id, s)
-          }
-        }, THROTTLE_MS - elapsed)
-      }
-    }
-  }
-
-  /** Flush any pending update on drag end so the bulb lands on the
-   *  finger-up value. No transitiontime here — phue2's 0.4s default
-   *  gives a smooth landing. */
+  // Preview locally: a paired Classic card must stay below the authenticated
+  // socket frame cap and send only one final intent per independent fixture.
   /** @param {number} bri @param {boolean} powerOn */
   function flushBrightness(bri, powerOn) {
-    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
-    pendingState = null
-    lastSentAt = Date.now()
     fanout(light.light_id, { ...(powerOn ? { on: true } : {}), bri })
   }
 
@@ -207,6 +161,7 @@
     if (!cardEl) return
     // Touch / pen: stop the page from scrolling while we drag.
     if (e.pointerType !== 'mouse') e.preventDefault()
+    cancelGesture()
     cardEl.setPointerCapture(e.pointerId)
     activePointerId = e.pointerId
     dragging = true
@@ -228,21 +183,19 @@
     const bri = clampedBriFromX(e.clientX)
     pendingBri = bri
     optimisticBri = bri
-    // Inline Home commits once on release; dragging is only a local preview.
-    if (!optimisticStore) return
-    if (dragPowerOn) {
-      // Shared power remains observed state while the command is in flight.
-      // Keep off-light drag writes under the same throttle as on-light writes.
-      throttledUpdate({ on: true, bri })
-    } else {
-      throttledUpdate({ bri })
-    }
+    // Both Classic and inline Home preview locally until explicit release.
   }
 
   /** @param {PointerEvent} e */
   function onPointerEnd(e) {
     if (!dragging || e.pointerId !== activePointerId) return
     if (e.type === 'pointercancel' || e.type === 'lostpointercapture') { cancelGesture(); return }
+    finishBrightnessDrag()
+  }
+
+  function finishBrightnessDrag() {
+    if (!dragging) return
+    const pointerId = activePointerId
     const finalBri = pendingBri
     const wasDrag = didDrag
     const powerOn = dragPowerOn
@@ -250,7 +203,7 @@
     activePointerId = null
     didDrag = false
     pendingBri = null
-    try { cardEl?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    try { pointerId !== null && cardEl?.releasePointerCapture(pointerId) } catch { /* ignore */ }
     if (wasDrag && finalBri != null) {
       flushBrightness(finalBri, powerOn)
     }
@@ -259,9 +212,7 @@
   }
 
   function cancelGesture() {
-    if (throttleTimer) clearTimeout(throttleTimer)
-    throttleTimer = null
-    pendingState = null
+    keyboardBri = null
     dragging = false
     didDrag = false
     activePointerId = null
@@ -270,30 +221,38 @@
     dragPowerOn = false
   }
 
+  /** @type {number | null} */
+  let keyboardBri = null
+  let keyboardPowerOn = false
+  const brightnessKeys = ['ArrowRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'Home', 'End']
+
   /** @param {KeyboardEvent} e */
   function onKeydown(e) {
     if (!light.reachable || commandPending) return
-    let delta = 0
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') delta = 13      // ~5%
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') delta = -13
-    else if (e.key === 'Home') { setBri(1); return }
-    else if (e.key === 'End') { setBri(254); return }
-    else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); togglePower(); return }
-    else return
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault()
+      if (!e.repeat) togglePower()
+      return
+    }
+    if (!brightnessKeys.includes(e.key) || dragging) return
     e.preventDefault()
-    const target = Math.max(1, Math.min(254, (controlTarget.bri ?? light.bri ?? 1) + delta))
-    setBri(target)
+    if (keyboardBri === null) keyboardPowerOn = !light.on || controlTarget.on === false
+    const base = keyboardBri ?? controlTarget.bri ?? light.bri ?? 1
+    const delta = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 13 : -13
+    keyboardBri = e.key === 'Home' ? 1 : e.key === 'End' ? 254
+      : Math.max(1, Math.min(254, base + delta))
+    optimisticBri = keyboardBri
   }
 
-  /** @param {number} bri */
-  function setBri(bri) {
-    optimisticBri = bri
-    if (!(controlTarget.on ?? light.on)) {
-      fanout(light.light_id, { on: true, bri })
-    } else {
-      fanout(light.light_id, { bri })
-    }
-    setTimeout(() => { optimisticBri = null }, 100)
+  /** @param {KeyboardEvent} e */
+  function onKeyup(e) {
+    if (!brightnessKeys.includes(e.key) || keyboardBri === null) return
+    e.preventDefault()
+    const bri = keyboardBri
+    const powerOn = keyboardPowerOn
+    keyboardBri = null
+    optimisticBri = null
+    if (light.reachable && !commandPending) flushBrightness(bri, powerOn)
   }
 
   // ---- Derived display values ------------------------------------------
@@ -301,7 +260,7 @@
   // Otherwise, mirror the store. `displayOn` is true if the light is on OR
   // we're actively dragging an off card up (preview the upcoming state).
   $: displayBri = optimisticBri ?? light.bri ?? 1
-  $: displayOn = light.on || (dragging && didDrag)
+  $: displayOn = light.on || (dragging && didDrag) || keyboardBri !== null
   $: fillPct = displayOn ? Math.round((displayBri / 254) * 100) : 0
   $: pctLabel = fillPct + '%'
 
@@ -348,9 +307,12 @@
     on:pointerdown={onPointerDown}
     on:pointermove={onPointerMove}
     on:pointerup={onPointerEnd}
+    on:change={finishBrightnessDrag}
     on:pointercancel={onPointerEnd}
     on:lostpointercapture={onPointerEnd}
     on:keydown={onKeydown}
+    on:keyup={onKeyup}
+    on:blur={cancelGesture}
     aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
     disabled={!light.reachable || commandPending}
   >

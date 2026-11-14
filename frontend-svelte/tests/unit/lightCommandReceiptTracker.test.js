@@ -68,8 +68,8 @@ describe('correlated guarded light WebSocket receipts (#461)', () => {
     expect(endHandler).toContain("if (e.type === 'pointercancel' || e.type === 'lostpointercapture') { cancelGesture(); return }")
     expect(endHandler.indexOf('cancelGesture(); return')).toBeLessThan(endHandler.indexOf('flushBrightness('))
     expect(cancelHandler).toBeDefined()
-    expect(cancelHandler).toContain('clearTimeout(throttleTimer)')
-    expect(cancelHandler).toContain('pendingState = null')
+    expect(card).not.toContain('throttledUpdate')
+    expect(cancelHandler).toContain('pendingBri = null')
     expect(cancelHandler).toContain('optimisticBri = null')
     expect(cancelHandler).not.toContain('flushBrightness(')
     expect(cancelHandler).not.toContain('fanout(')
@@ -78,7 +78,7 @@ describe('correlated guarded light WebSocket receipts (#461)', () => {
 
   it('keeps redesigned light values source-qualified with explicit status text', () => {
     expect(card).toContain('export let optimisticStore = true')
-    expect(card).toContain('if (!optimisticStore) return')
+    expect(card).toContain('Both Classic and inline Home preview locally')
     expect(card).toContain("lightCommandResults")
     expect(card).toContain("commandPending")
     expect(card).toContain('role="status" aria-live="polite"')
