@@ -1,11 +1,12 @@
-"""Inactive v1 verify contract. No socket connector, settings, store or admin API.
+"""Inactive v1 verify contract. No settings, store or admin API.
 
 Only reviewed composition may inject ProtectedVerifyIO. That adapter MUST prove
 Linux root-controlled pathname/ancestors/ACL custody and kernel SO_PEERCRED of
 the dedicated broker (including replacement races); Windows cannot prove this.
 One connection/request, no reuse/retry or loopback fallback. The adapter must
 bound reads BEFORE allocation and close/reap on every path. This module is not
-deployable until such an adapter and the separately protected broker exist.
+deployable until privileged custody, freshness observer and issuance gates pass.
+linux_identity_broker_io supplies an inactive connector; bootstrap does not use it.
 """
 import asyncio
 import inspect

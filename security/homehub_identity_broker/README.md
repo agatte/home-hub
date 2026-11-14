@@ -14,7 +14,8 @@ single thread lock; multiple objects/processes serving the same paths are NOT
 supported. A future reviewed Linux launcher must enforce singleton ownership,
 root-controlled executable/dependencies, dedicated identity, safe pathname/ACL
 and mount custody, inherited sockets, SO_PEERCRED and separate admin default-deny.
-No such launcher or client connector is supplied here. Do not install this tree.
+No deployable launcher is supplied here. The later inactive connector/adapter
+below still require privileged attestation. Do not install this tree.
 
 Production durability defaults to file fsync, atomic replace and POSIX directory
 fsync; unsupported platforms refuse. Windows tests inject a no-op directory
@@ -136,3 +137,117 @@ durability; approved issuance/recovery, recipient/CSRF/session lifecycle;
 proxy/TLS and native/kiosk/iPhone rollout; #293 and #461 guarded L1-L6 acceptance.
 The owner-supplied November 14 Latitude parent/OS snapshot and five separate
 disposable Linux primitive probes do not satisfy any exact-source execution gate.
+
+## November 14 offline protected integration bridge (blocked at OS attestation)
+
+`linux_protected_verify.LinuxVerifyService` is a separate verify-only adapter
+around the shared bounded transport and the exact `runtime.Broker.process`.
+`FixtureVerifyServer` still requires `fixture_only=True`; its production guard
+and `PRODUCTION_SUPPORTED=False` remain. The adapter never binds a socket,
+creates state/lock files, reads ambient configuration, issues credentials, exposes
+admin methods or installs/enables a unit. No backend bootstrap uses it.
+
+The proposed fixed composition paths are `/run/homehub-identity/verify.sock`
+and separately protected `/run/homehub-identity-lock/verify.lock`. They are source
+constants, not HTTP/WS/env/CLI options. Root-controlled launch policy must pin
+distinct nonroot service/backend UID and GID, listener kernel descriptor and
+pathname identities, lock inode and exact socket creator PID/UID/GID. Service
+real/effective/saved IDs and
+supplementary groups are checked; the inherited listener must be non-inheritable,
+AF_UNIX stream/listening, at the exact path with root ownership and backend group
+0660. Accepted backend peers require exact kernel UID **and** GID before reads.
+Only a separately root-provisioned listener may be passed by the trusted launcher.
+
+`protected_path` walks from `/` with held no-follow directory FDs, checks
+root-owned ancestors without group/other write permission, rejects POSIX ACL
+xattrs with no unsupported-filesystem fallback, and pins complete identity chains
+across operations. Socket/lock type, owner, group, exact mode and inode are checked.
+This is deliberately **not** proof of mount namespace, bind-mount, MAC, privileged
+executable/dependency or key/storage custody. Those require root-only attestation.
+
+**Explicit blocker:** `RootCustodyProof.check` always raises in shipped source.
+Caller subclasses, booleans, arbitrary objects and policy snapshots cannot enable
+either adapter. There is no flag to waive this gate. A separately reviewed,
+independently root-packaged implementation must attest actual systemd descriptor
+provenance/launch policy, continuous namespace/ACL/MAC/mount custody, dedicated
+identities, packaged executable/interpreter/dependencies, separately protected key,
+registry/journal/fence, sidecars, backup exclusions and deployment/rollback floor.
+The exact injected objects must be bound by that attestor, not trusted because
+their fields claim root ownership. Python application objects are not an OS
+security boundary; Python code that can replace trusted modules is outside this
+model. Neither a mutable `valid` attribute nor a caller subclass is attestation.
+No such provider or root packaging is implemented in this slice. Thus this is
+tested narrower integration source, **not a startable production service**.
+
+After proof, service boot opens the existing protected lock without creation,
+checks FD/path identity and takes a fresh-description nonblocking exclusive kernel
+`flock`. It checks complete authenticated broker state and real POSIX directory
+fsync before serving. No fixture barrier is allowed. The lock is held through
+shutdown until storage work actually exits. A stopped transport cannot release
+singleton ownership while its old worker remains alive. Python cannot interrupt
+a blocked filesystem call: a trusted supervisor must ultimately terminate the
+process if necessary. Custody failure poisons the current broker/service; a
+quarantined Broker response also terminates serving. No repair, retry or writing
+through uncertain storage paths is attempted. Persistent corrupt/PENDING evidence
+remains; volatile poisoning is not an independent monotonic rollback fence.
+
+`backend/services/linux_identity_broker_io.LinuxProtectedVerifyIO` implements the
+existing `ProtectedVerifyIO` protocol. Before sending any token bytes it checks
+protected path custody, connects once, checks the exact attestor-bound socket creator PID/UID/GID, then rechecks custody. It pins the socket inode/ancestor chain, bounds the
+whole connect/write/read/EOF exchange to at most two seconds, bounds allocation
+to a 2048-byte JSON frame, requires exact EOF, closes on cancellation/failure and
+retains no grant or connection cache. Capacity is bounded with no work queue or
+retry. All exchange failures have fixed diagnostics without sensitive exception
+context. Synchronous custody syscalls still depend on the trusted local filesystem
+and provider; this is not a hard real-time storage-interruption guarantee.
+
+The Linux integration tests use the exact service, connector, VerifyClient and
+Broker with one synthetic `desktop_notifier` native profile token. They patch
+only the missing custody/policy gates for disposable paths and same-process test
+identities: they do **not** demonstrate root ownership, distinct OS accounts,
+real systemd activation or privileged attestation. Native sockets, SO_PEERCRED,
+cross-process flock, framing/deadlines, cancellation, saturation, worker shutdown,
+journal quarantine, revocation and zero-overlap rotation execute on Linux only.
+Windows runs source/default-denial/policy checks and explicitly skips native cases.
+
+Remaining gates: exact-source Linux execution, independently reviewed root-only
+attestor/service packaging and OS acceptance, crash/power-loss durability, fresh
+independent trusted `generation()`/`revision()` observer, real operator/recipient
+credential issuer and delivery/reconciliation, TLS/native/kiosk/iPhone rollout,
+separate integration/deployment authorization and witnessed #293/#461 physical
+L1-L6/manual/ScreenSync/final-owner acceptance. Test snapshot callbacks supply no
+freshness authority. No live injection or issuer is added here.
+
+
+### November 14 independent review P2/P3 remediation (local source)
+
+P2: `LaunchPolicy.creator_peer` explicitly pins the socket **creator** PID/UID/GID,
+not the later nonroot acceptor. Linux inherited root/PID1 listeners report creator
+credentials. The connector compares the entire tuple before request bytes and
+rechecks custody. Root UID alone, another root PID, and service acceptor credentials
+are insufficient. The unavailable root attestor must independently authenticate
+this exact binding against descriptor provenance and trusted launch policy; policy
+fields alone supply no authority. `RootCustodyProof.check` still always denies.
+No production provider, activation flag or environment fallback was added.
+
+P3: service finalization now stops transport and closes its owned listener even
+when preflight custody fails before transport entry. It joins any storage worker
+before closing the singleton lock; no caller pathname is unlinked. Synthetic
+Windows regression covers preflight denial/descriptor cleanup ordering. A separate
+Linux regression invalidates proof after construction and checks listener closure,
+actual flock reacquisition, broker poisoning and preservation of the socket path.
+
+Next gate: run the exact focused suites on Linux, including the new preflight
+flock regression and real SO_PEERCRED integration; skips are not verification.
+Then separately review/authorize a root-packaged attestor and demonstrate a real
+root/PID1-created inherited listener accepted by the dedicated nonroot service,
+with exact creator binding, denial before bytes for mismatches, protected custody
+and singleton/shutdown proof. Synthetic Windows creator tuples do not establish
+that OS acceptance. All prior issuer/freshness/durability/activation gates remain.
+
+
+Final Windows validation for this follow-up: **422 passed, 78 Linux skips** across
+six disjoint suites; Ruff without cache, five-file in-memory compilation and
+`git diff --check` passed. Exact suite counts, changed paths and current source
+fingerprints are recorded in the P2/P3 follow-up in
+[the recovery decision](../../docs/SECURITY_RECOVERY_DECISION_287.md).

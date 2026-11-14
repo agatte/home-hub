@@ -826,3 +826,23 @@ After strengthening Win32 target-mismatch/freeing and worker integration checks,
 all 66 final credential tests passed. Targeted Ruff and `git diff --check` passed.
 Credential API ownership and both worker loops use synthetic mocks; no real
 Credential Manager reads occur. These results are local source evidence only.
+
+### November 14: offline Linux protected verify integration, still blocked
+
+The [broker package bridge note](../security/homehub_identity_broker/README.md#november-14-offline-protected-integration-bridge-blocked-at-os-attestation)
+records the next concrete source components: a separate inherited-listener
+`LinuxVerifyService` around exact Broker.process with kernel singleton lifetime,
+and `LinuxProtectedVerifyIO` for the existing VerifyClient. The fixture server
+guard remains intact. No backend/bootstrap/main configuration changes are made.
+The connector checks broker SO_PEERCRED before sending token bytes; service
+checks exact backend UID/GID before reading. Framing, EOF, capacity, timeouts and
+cleanup remain bounded; no admin/issuance channel, retry or cached grants exists.
+
+Privileged systemd/key/storage/mount custody cannot be established by arbitrary
+Python objects. The shipped exact `RootCustodyProof` implementation **always
+denies**; caller subclasses/intent/snapshots cannot turn it on. A separately
+reviewed root-packaged attestor remains an explicit blocker. Disposable Linux
+tests patch that missing external gate; they do not constitute OS acceptance.
+The independent fresh generation/revision observer and real credential issuer
+remain missing. Do not inject into live runtime or claim #287/#293/#461 release
+readiness. See the dated recovery note for local validation and source outputs.

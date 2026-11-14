@@ -114,7 +114,7 @@ def inherited_fixture_listeners(environment, expected, *, fixture_only=False,
     raise Denied()
 
 
-class FixtureVerifyServer:
+class _VerifyTransport:
     """Guarded injection-only harness; not a production daemon or admin API.
 
     One daemon worker, zero queued broker operations. A timed-out operation keeps
@@ -125,8 +125,9 @@ class FixtureVerifyServer:
     """
 
     def __init__(self, broker, listeners, snapshots, *, backend_uid, backend_gid=None,
-                 fixture_only=False, max_clients=8, deadline=0.5):
-        if (sys.platform != "linux" or fixture_only is not True
+                 max_clients=8, deadline=0.5, custody_check=lambda: None,
+                 response_check=lambda response: None):
+        if (sys.platform != "linux"
                 or type(broker) is not Broker
                 or type(backend_uid) is not int or not 0 <= backend_uid < 2**32 - 1
                 or (backend_gid is not None and (type(backend_gid) is not int
@@ -151,6 +152,8 @@ class FixtureVerifyServer:
         self._serving = threading.Lock()
         self._work = None
         self._used = False
+        self._custody_check = custody_check
+        self._response_check = response_check
 
     def stop(self):
         """Cancellation seam; a future launcher must bind SIGTERM to this."""
@@ -190,10 +193,13 @@ class FixtureVerifyServer:
         def compute(raw, marker):
             response = None
             try:
+                self._custody_check()
                 response = self._broker.process(raw)
                 unframe(response)  # Fixed Broker only; no arbitrary response provider.
+                self._response_check(response)
+                self._custody_check()
             except BaseException:
-                pass
+                response = None
             result.put((marker, response))
 
         try:
@@ -211,6 +217,7 @@ class FixtureVerifyServer:
                         listener.setblocking(False)
                         selector.register(listener, selectors.EVENT_READ, name)
                     while not self._stop.is_set():
+                        self._custody_check()
                         now = time.monotonic()
                         for connection, state in list(pending.items()):
                             if now >= state["end"]:
@@ -239,6 +246,7 @@ class FixtureVerifyServer:
                                     continue
                                 connection.setblocking(False)
                                 try:
+                                    self._custody_check()
                                     allowed = self._peer_allowed(connection)
                                     _check_listener(key.fileobj, self._snapshots[key.data])
                                 except Exception:
@@ -279,6 +287,7 @@ class FixtureVerifyServer:
                                 # second frames, under the original whole deadline.
                                 if not chunk:
                                     unframe(bytes(raw))
+                                    self._custody_check()
                                     if busy is not None:
                                         close(connection)  # Zero broker work queue.
                                         continue
@@ -298,3 +307,14 @@ class FixtureVerifyServer:
             for listener in self._listeners.values():
                 listener.close()  # Never unlink externally owned pathnames.
             self._serving.release()
+
+
+class FixtureVerifyServer(_VerifyTransport):
+    """Disposable harness only; never a production launch mechanism."""
+
+    def __init__(self, broker, listeners, snapshots, *, backend_uid, backend_gid=None,
+                 fixture_only=False, max_clients=8, deadline=0.5):
+        if fixture_only is not True:
+            raise Denied()
+        super().__init__(broker, listeners, snapshots, backend_uid=backend_uid,
+            backend_gid=backend_gid, max_clients=max_clients, deadline=deadline)

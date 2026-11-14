@@ -706,3 +706,145 @@ kernel test passed. Exact incremental files for this transport task are the new
 module and new test, the package README, this document and
 `docs/SECURITY_IDENTITY_FOUNDATION.md`; existing runtime/policy/client/prototype,
 ASGI and #461 design/lighting sources were not edited.
+
+## November 14, 2026: next offline verify integration bridge
+
+Task base: clean branch `work/287-broker-session-contract-20261114`, HEAD
+`01824867a796a3386205dccdad7839c1ef9d1a46`, in the existing protected Sandbox
+worktree `identity-287-broker-session-20261114`. The task brief supplied draft
+#533 head/tree/CI context; no network fetch or independent hosted CI verification
+was authorized or attempted. Registry metadata showed earlier tasks completed
+and the current Write task running; no second worker/subagent was launched.
+
+Source outputs are `security/homehub_identity_broker/linux_protected_verify.py`
+(separate Linux service adapter, root-only proof seam, exact path/FD checks and
+protected cross-process flock lifetime),
+`backend/services/linux_identity_broker_io.py` (async ProtectedVerifyIO connector),
+and `tests/test_linux_protected_verify_integration.py` (synthetic exact-pair tests).
+The existing server now shares its bounded transport internally while preserving
+the fixture-only constructor guard; VerifyClient changes only its module status
+documentation. This note, the identity foundation note and package README record
+the narrower result and remaining gates. No runtime/bootstrap/UI/lighting,
+policy/runtime state algorithm, fixture issuer or installation changes occur.
+
+The [package bridge contract](../security/homehub_identity_broker/README.md#november-14-offline-protected-integration-bridge-blocked-at-os-attestation)
+details invariants. **Blocker:** shipped `RootCustodyProof.check` always denies.
+Caller subclasses and fabricated policy objects do not grant custody. No safe
+systemd/root mount/key/storage attestor is implemented without actual privileged
+OS integration; the task explicitly permits this fail-closed narrower outcome.
+Future reviewed root packaging must implement that interface independently and
+bind exact descriptors/policy/storage, never flip the fixture guard or install a
+permissive Python provider. Native tests intentionally patch missing custody and
+distinct-principal validation for disposable paths/same-process synthetic IDs.
+Their successes would prove socket/protocol/locking mechanisms, not root custody.
+
+The service holds its kernel lock until its final worker exits, quarantines
+custody/state mismatch, and never creates/unlinks listener or lock paths. No
+admin channel exists. The connector checks dedicated broker SO_PEERCRED before
+credential bytes, rechecks pinned socket/ancestor identities, enforces bounded
+framing/exact EOF/deadlines/capacity and closes without raw token diagnostics.
+No retry, reuse or grant cache. Directory/ACL errors have no security fallback.
+No Python deadline can interrupt a blocked local filesystem syscall; supervisor
+termination and protected filesystem behavior still require OS acceptance.
+
+Next gates remain independent trusted **fresh** generation/revision observation,
+actual issuance/operator/recipient delivery and lifecycle reconciliation, reviewed
+root packaging/attestor, exact-source disposable Linux execution, filesystem
+crash/power-loss and backup/downgrade floor acceptance, secure client/TLS rollout,
+separately authorized live integration/deployment and physical #293/#461 delivery.
+No source change in this task authorizes a live broker, browser issuer or Hue
+write. No secret store, real key/token, host/device/account/credential mutation,
+tool installation, network fetch, Git publication, deployment or cleanup occurred.
+
+Windows validation: **417 passed, 77 skipped in 80.19s** across
+`test_linux_protected_verify_integration.py`,
+`test_linux_identity_broker_verify_server.py`, `test_identity_broker_state_runtime.py`,
+`test_identity_broker_verify_client.py`, `test_identity_broker_protocol.py`, and
+`test_linux_broker_socket_prototype.py`. The new suite contributes **18 passed,
+27 native Linux skips**; existing suites contribute 399 passed/50 skips. Counts
+overlap focused runs; they are not additive. A final **18 passed, 27 skipped in
+2.46s** run verifies final source compilation, default-denial and policy checks,
+including distinct service/backend groups. Native listener type/non-inheritance
+checks remain unexecuted on Windows. Fingerprints identify final source below. Used existing
+`C:/Work/home-hub-project/main/.venv/Scripts/python.exe -B -m pytest
+-p pytest_asyncio.plugin -p no:cacheprovider <six files> -q`, `APP_ENV=testing`,
+`PYTHONDONTWRITEBYTECODE=1`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Ruff
+`check --no-cache` on the broker package, connector, client and new test passed;
+tracked diff whitespace checks passed. No native test or systemd check ran in
+this Windows Sandbox. Exact-source Linux execution remains a separate next gate,
+using the same six suites and disposable synthetic state, without sudo/install.
+
+Final source file SHA-256 fingerprints (raw workspace bytes; no secret material):
+
+| Source output | SHA-256 |
+| --- | --- |
+| `security/homehub_identity_broker/linux_protected_verify.py` | `27315E616BA7B51BA9328FF3ADCC7E541E482AF8C5B793FC6FEBA96C78A43954` |
+| `security/homehub_identity_broker/linux_verify_server.py` | `7CDB1597AC785DD8253F002278A82FBB1EBB58D309B6BDCF632E9A8B93BDCB29` |
+| `backend/services/linux_identity_broker_io.py` | `128E2BF4979DE5CED3C560518D32B039D2211F05AC83D904B23950B2E4A0B990` |
+| `backend/services/identity_broker_verify_client.py` | `9A63EEB7B8BB553C91F386F8112D91E656D31E1A8C5239C4778E0003F1AA7DAA` |
+| `tests/test_linux_protected_verify_integration.py` | `61A393C78CCEE20FF8905C42C8656B7237D54FF8D3A7E88497B342E58C640AD2` |
+
+Preserve these bytes for exact-source Linux testing, or explicitly record any
+Git CRLF/LF normalization and recompute fingerprints. Runtime/policy dependencies
+remain at the named task base. All eight incremental paths are unstaged and
+uncommitted; the other three paths are the package README and the two security
+documents. No main/other-worktree changes were made.
+
+
+### November 14 P2/P3 independent-review remediation (uncommitted)
+
+This follow-up supersedes the preceding source fingerprints for changed files.
+P2 now uses explicit `LaunchPolicy.creator_peer` (exact PID/UID/GID) for client
+SO_PEERCRED comparison, before request bytes. The unavailable root attestor must
+bind this value to trusted listener creation/provenance; root UID or caller policy
+alone is not trust. Root/PID1-created inherited sockets need not report the later
+nonroot acceptor. Production remains denied by the exact shipped proof class.
+P3 now closes the owned listener on preflight custody denial even when transport
+serve never runs, retaining worker-before-lock-release ordering and never unlinking
+caller paths. The initial quarantined state also goes through this finalizer.
+
+Changed in this follow-up only: `backend/services/linux_identity_broker_io.py`,
+`security/homehub_identity_broker/linux_protected_verify.py`,
+`tests/test_linux_protected_verify_integration.py`,
+`security/homehub_identity_broker/README.md` and this document. The pre-existing
+eight-file delta is preserved; no additional file is introduced.
+
+Final Windows validation, existing Sandbox venv Python, `-B`, APP_ENV=testing,
+PYTHONDONTWRITEBYTECODE=1, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1,
+`-p pytest_asyncio.plugin -p no:cacheprovider`:
+
+- `tests/test_linux_protected_verify_integration.py`,
+  `tests/test_linux_identity_broker_verify_server.py`,
+  `tests/test_identity_broker_verify_client.py`,
+  `tests/test_identity_broker_protocol.py`,
+  `tests/test_identity_broker_state_runtime.py`: **393 passed, 57 skipped, 87.55s**.
+- `tests/test_linux_broker_socket_prototype.py`: **29 passed, 21 skipped, 2.26s**.
+- Total disjoint final runs: **422 passed, 78 skipped**. Linux skips are NOT verified.
+- Ruff `check --no-cache` passed on the five Python source/test outputs below.
+  All five compiled in memory with `compile`; no bytecode cache was written.
+  `git diff --check` passed. No install, network, commit or live action occurred.
+
+The first run had four synthetic-test failures (389 passed/57 skipped) because
+Windows lacks AF_UNIX and the mock replaced the global socket factory. The test
+now injects a module-local socket facade, isolating asyncio; the final rerun above
+passed. Synthetic coverage accepts exact PID1/root creator with nonroot service
+policy, rejects acceptor credentials/other root PID/wrong GID before token bytes,
+and checks preflight listener closure and lock-release ordering.
+
+Next Linux gate: execute these same six suites from the exact source below,
+including the newly added post-construction custody-loss test proving actual FD
+closure, flock reacquisition, broker poisoning and preserved caller socket path.
+Then independently review/authorize root attestor/packaging and prove actual
+root/PID1-created listener handoff to a distinct nonroot acceptor; no synthetic
+Windows tuple proves those kernel or OS-custody properties. All previously named
+freshness, issuer, durability and production activation gates remain open.
+
+Current raw-workspace source SHA-256 (normalization requires recomputation):
+
+| Source output | SHA-256 |
+| --- | --- |
+| `security/homehub_identity_broker/linux_protected_verify.py` | `0142482A26FCDF580BD16FD7403D0202AD23E17ADAD2880B25FEA063F3CF7AE3` |
+| `security/homehub_identity_broker/linux_verify_server.py` | `7CDB1597AC785DD8253F002278A82FBB1EBB58D309B6BDCF632E9A8B93BDCB29` |
+| `backend/services/linux_identity_broker_io.py` | `9A2454F13E262A87B7DA011557F78FD41F387E08AE33CCC79D89D7D43F5188D3` |
+| `backend/services/identity_broker_verify_client.py` | `9A63EEB7B8BB553C91F386F8112D91E656D31E1A8C5239C4778E0003F1AA7DAA` |
+| `tests/test_linux_protected_verify_integration.py` | `9C9F8875D2CF4820C144CC3CBFA3EF800A1689EC747A94305BE3089813FD29E9` |
