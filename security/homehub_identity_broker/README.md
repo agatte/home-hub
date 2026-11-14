@@ -1,5 +1,77 @@
 # HomeHub identity broker source (inactive)
 
+## Offline custody install plan (November 14, 2026; NO INSTALL)
+
+`custody_plan.py` supplies a versioned, fixed manifest and pure injected-evidence
+linter. It performs no filesystem reads, account lookup, hashing of host files,
+network access, installation or execution. `manifest()` returns the exact proposed
+paths, principals, modes, verify-only creator contract, backup exclusions,
+independent floor and unit assertions. `lint_manifest()` rejects changed, missing
+or unknown fields (including bool substituted for integer version). It is a source
+contract, not a JSON configuration loader, signed package or proof of identity.
+
+`preflight()` accepts two complete **synthetic quiescent** metadata inventories,
+explicit absence entries, numeric principal mappings, independently expected
+release hashes, a clock and explicitly unresolved attestor requirements. It
+checks each ancestor from `/`, exact final ownership/mode/type, no symlinks,
+non-directory link count one, explicit no-ACL/reviewed-mount labels, distinct
+nonroot broker/backend UID and GID, and unchanged snapshot evidence. The four
+non-secret release artifacts require matching SHA-256 labels captured within
+60 seconds, without future timestamps. Hash labels are injected, not measured;
+there is no trust in a caller-supplied hash, clock, account or inventory.
+Never supply key, registry, journal or credential contents to this checker.
+
+`Report.snapshot_consistent` means only the observable fixture checks matched.
+Every report retains `root-attestor-required:*` issues, `advisory_only=True` and
+`runtime_authorized=False`. Missing/ambiguous mount, ACL, namespace, provisioner,
+closure, backup or floor evidence cannot become accepted OS evidence by passing
+a string/manifest. There is no attestor implementation, runtime import, service
+unit, ExecStart, CLI, installer or enable flag. `RootCustodyProof.check` remains
+unconditionally denied. Never use this report as that proof.
+
+The `/opt/.../package` and `/opt/.../runtime` artifacts are proposed sealed release
+objects, **not supplied executables**. Their transitive Python/native loader,
+libraries, imports, configuration and environment closure still needs a reviewed
+build inventory and independent root enforcement. File hashes alone cannot prove
+that closure. Ordinary checkout/venv execution is ineligible. The key is proposed
+root:broker 0640 below root-controlled parents; only the distinct broker may read
+it, and backend group membership in broker/root groups is forbidden. Private
+registry and anchor directories are broker:broker 0700 under protected parents.
+Registry DELETE-journal and unexpected WAL/SHM files must be private when present;
+their presence is not proof of valid SQLite state. The current runtime retains
+`state.deny` as an authenticated COMMITTED/PENDING fence; do not delete it on
+this plan's authority. `.json.next`/`.deny.next` presence is uncertainty and blocks
+the clean preflight. The checker does not authenticate state or repair anything.
+
+Snapshot comparisons miss ABA, mount aliases, delegated descriptors, supplementary
+group access and changes after return. A complete fake inventory cannot establish
+that a real directory has no other children. No Linux syscall, ACL/MAC, PID1,
+power-loss, actual hash measurement or continuous custody acceptance follows.
+Focused fixtures are in `tests/test_identity_broker_custody_plan.py`.
+
+Before any installation, the owner must separately approve the exact reviewed
+release/build closure, root-owned installer and rollback/recovery plan, explicit
+paths/accounts/groups, PID1/socket creation and exact creator PID/UID/GID binding.
+The installer design must refuse existing ambiguous state, links, mounts and ACLs
+without auto-chown/cleanup. Independently protect backend startup/deploy/rollback
+floor outside the backend UID and application backups, including all older launch
+paths; a floor file without enforcement is insufficient. Reject unsupported mount,
+namespace or MAC custody. Root/PID1 acceptance must measure dedicated-account
+isolation, backend denial of key/state/sidecars/admin, descriptor provenance,
+creator mismatch denial before bytes, singleton lock retention through worker
+exit, restart/stop, backup exclusions and downgrade rejection. Recovery preserves
+uncertain evidence and stays closed; intentional registry restore invalidates all
+old credentials via a fresh empty generation, never rewinds the journal/floor.
+Whole-root/disk rollback remains outside the selected software-journal boundary.
+
+First run the exact changed source tests on disposable Linux without skipping
+native integration cases. Root/PID1 acceptance is a subsequent separately approved
+disposable-system gate, not a reason to install on Latitude. Fresh generation/
+revision authority, secure operator/recipient issuance and delivery, client/TLS
+rollout and fail-closed cutover remain separate blockers. Draft #533 must not be
+merged/deployed while default-deny `/ws` would disconnect unprovisioned clients.
+Original #461 Home/kiosk/iPhone and guarded L1-L6 acceptance remains outstanding.
+
 This standalone standard-library package imports no HomeHub runtime. It has no
 CLI, production listener, service unit, installer, settings, credential issuer or
 operator endpoint. `runtime.Broker.process` accepts one already-bounded VERIFY

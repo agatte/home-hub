@@ -1,5 +1,55 @@
 # #287 recovery architecture decision — proposed, NOT LIVE
 
+## November 14, 2026: offline packaging/custody preflight candidate
+
+Local source only in `identity-287-broker-session-20261114`, base `01824867`;
+the existing eight-file draft delta was preserved. Network/host reads and Git
+publication were prohibited; draft #533 head `a4dd554e` and its previous Linux
+CI results are owner-supplied history, not independently reverified here.
+
+The [fixed offline custody plan](../security/homehub_identity_broker/README.md#offline-custody-install-plan-november-14-2026-no-install)
+adds `custody_plan.py` and `tests/test_identity_broker_custody_plan.py`. It is a
+NO-INSTALL manifest/linter, with no privileged provider, unit or installer. It
+narrows proposed package/runtime/config/key/state/sidecar/journal/fence/lock/floor
+paths and explicitly distinguishes fixture metadata/hash consistency from root
+attestation. All reports deny runtime authority, including a positive synthetic
+snapshot. All previous proof, transport and runtime code remains untouched.
+
+Blocking design decision: neither a manifest nor matching fresh metadata/hashes
+in a user-writable Python tree can establish continuous root-controlled execution,
+dependency closure, mount/namespace/ACL/MAC custody or independent rollback-floor
+enforcement. The chosen safe protocol is advisory lint only. `RootCustodyProof.check`
+continues unconditional denial; no runtime consumer uses this plan. A separately
+reviewed root-owned installer/attestor design and explicit owner approval remain
+necessary before any root/PID1 installation or acceptance. The README specifies
+the exact acceptance/recovery gates and observable/TOCTOU limits. No security
+integration, merge, deployment or #287/#293/#461 completion is claimed.
+
+Validation of this candidate (Windows Sandbox, existing interpreter only):
+
+- New `test_identity_broker_custody_plan.py`: **46 passed**.
+- New suite plus `test_linux_protected_verify_integration.py`: **69 passed,
+  28 skipped**. The standalone new-suite rerun overlaps and is not additive.
+- Existing `test_linux_identity_broker_verify_server.py`,
+  `test_identity_broker_state_runtime.py`, `test_identity_broker_verify_client.py`,
+  `test_identity_broker_protocol.py`, `test_linux_broker_socket_prototype.py`:
+  **399 passed, 50 skipped**.
+- Disjoint total: **468 passed, 78 skipped**. All Linux skips are **NOT VERIFIED**.
+- Ruff `check --no-cache` on the new module/test, two-file in-memory `compile`
+  and `git diff --check` passed. Pytest used `-B -p pytest_asyncio.plugin
+  -p no:cacheprovider -q`, `APP_ENV=testing`, `PYTHONDONTWRITEBYTECODE=1`,
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; no tools were installed or fetched.
+
+Next exact-source Linux gate: run the new custody suite and all six named broker
+suites with those pytest options against disposable fixtures. Specifically the
+unchanged protected-verify integration suite must execute **51 cases with zero
+skips**; this Windows run executes only 23 of them. The new 46-case suite must
+also pass on Linux. Privileged-only tests in the other suites require a separately
+authorized disposable root environment and their explicit opt-in; nonroot skips
+do not satisfy them. Then separately approve the root installer/attestor design
+and real PID1/dedicated-account acceptance described in the package README.
+No Latitude installation, production probe or client cutover is authorized.
+
 **Status:** reviewed candidate for the next implementation slice, 2026-10-09. This is a
 design/proposed rollout contract, **not** authorization to install a privileged
 service, modify credentials, restore databases, change host permissions, deploy,
