@@ -7,6 +7,7 @@ import { receiveAmbientContext, resetAmbientContext } from '../quietAtlas/ambien
 import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
 import { lights, setLightsFromList, applyLightUpdate, optimisticLightPatch } from './lights.js'
+import { lightCommandTracker } from './lightCommandResults.js'
 import { sonos } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
@@ -30,6 +31,8 @@ let pendingOverride = null  // expected manual_override value from server
 
 export function initStores() {
   resetAmbientContext()
+  lightCommandTracker.reset()
+  deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
   // Initial REST fetches — best-effort, errors swallowed so the UI still mounts
   // if the backend is warming up.
   apiGet('/api/lights')
@@ -77,6 +80,10 @@ export function initStores() {
           break
         case 'connection_status':
           deviceStatus.set(data)
+          lightCommandTracker.setCapability(data?.light_command_results === true)
+          break
+        case 'light_command_result':
+          lightCommandTracker.receive(data)
           break
         case 'mode_update':
           // Direction-aware lock: during the post-click window, accept the
@@ -137,12 +144,20 @@ export function initStores() {
           break
       }
     },
-    (isConnected) => { resetAmbientContext(); connected.set(isConnected) }
+    (isConnected) => {
+      resetAmbientContext()
+      connected.set(isConnected)
+      if (!isConnected) {
+        lightCommandTracker.disconnect()
+        deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
+      }
+    }
   )
   socket.connect()
 
   return () => {
     resetAmbientContext()
+    lightCommandTracker.reset()
     socket?.close()
     socket = null
     stopWeatherPolling()
@@ -152,13 +167,22 @@ export function initStores() {
 // ---------- Action helpers (parity with HubContext actions) ----------
 
 /**
- * Set a single light's state. Optimistic update runs immediately, then the
- * command is sent over the WebSocket.
+ * Send one fixture command. Legacy clients retain optimistic updates;
+ * redesigned Home controls track explicit server results without pretending
+ * an outbound WebSocket frame is an acknowledged device change.
  * @param {string} lightId
  * @param {Record<string, unknown>} state
+ * @param {{ optimistic?: boolean }} [options]
  */
-export function setLight(lightId, state) {
+export function setLight(lightId, state, options = {}) {
+  if (options.optimistic === false) {
+    lightCommandTracker.submit(lightId, state, (data) =>
+      socket?.send('light_command', data) === true,
+    )
+    return
+  }
   socket?.send('light_command', { light_id: lightId, ...state })
+  // Original Apartment controls retain their existing optimistic behavior.
   optimisticLightPatch(lightId, /** @type {any} */ (state))
 }
 

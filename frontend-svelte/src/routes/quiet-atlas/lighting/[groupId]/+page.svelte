@@ -178,7 +178,7 @@
         <button type="button" class="refresh-button" on:click={refresh}>Refresh report</button>
 
         <div class="navigation-options">
-          <a class="legacy-action" href="/#apartment-controls">
+          <a class="legacy-action" href="/classic#apartment-controls">
             <span><strong>Adjust lights now</strong><small>Open existing functional HomeHub controls</small></span>
             <span aria-hidden="true">↗</span>
           </a>

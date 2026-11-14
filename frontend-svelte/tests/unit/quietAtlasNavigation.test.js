@@ -15,7 +15,8 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shouldUseQuietAtlasShell('/quiet-atlas', new URLSearchParams())).toBe(true)
     expect(shouldUseQuietAtlasShell('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(shouldUseQuietAtlasShell('/settings', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
-    expect(shouldUseQuietAtlasShell('/', new URLSearchParams())).toBe(false)
+    expect(shouldUseQuietAtlasShell('/', new URLSearchParams())).toBe(true)
+    expect(shouldUseQuietAtlasShell('/classic', new URLSearchParams())).toBe(false)
     expect(shouldUseQuietAtlasShell('/gameday', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
     expect(shouldUseQuietAtlasShell('/gameday/prototype', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
     expect(shouldUseQuietAtlasShell('/guest/wifi', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
@@ -24,7 +25,7 @@ describe('Quiet Atlas shared shell navigation', () => {
   it('keeps global API error toasts off isolated review surfaces', () => {
     expect(shouldShowGlobalErrorToast('/quiet-atlas/control', new URLSearchParams())).toBe(false)
     expect(shouldShowGlobalErrorToast('/quiet-atlas', new URLSearchParams())).toBe(false)
-    expect(shouldShowGlobalErrorToast('/quiet-atlas/home', new URLSearchParams())).toBe(false)
+    expect(shouldShowGlobalErrorToast('/quiet-atlas/home', new URLSearchParams())).toBe(true)
     expect(shouldShowGlobalErrorToast('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(shouldShowGlobalErrorToast('/analytics', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(shouldShowGlobalErrorToast('/settings', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
@@ -35,7 +36,7 @@ describe('Quiet Atlas shared shell navigation', () => {
 
   it('labels only known read-only reviews as previews and keeps functional warnings visible', () => {
     for (const route of [
-      '/quiet-atlas', '/quiet-atlas/home', '/quiet-atlas/control',
+      '/quiet-atlas', '/quiet-atlas/control',
       '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
     ]) {
       expect(isQuietAtlasReadOnlyPreview(route)).toBe(true)
@@ -47,7 +48,7 @@ describe('Quiet Atlas shared shell navigation', () => {
     }
     expect(shellSource).toContain('readOnlyPreview = isQuietAtlasReadOnlyPreview($page.url.pathname)')
     expect(shellSource).toContain("'Read-only design preview' : 'Existing HomeHub tools · changes possible'")
-    expect(shellSource).toContain("'Read-only preview' : 'Functional HomeHub tools'")
+    expect(shellSource).toContain("'Read-only preview' : 'HomeHub controls'")
   })
 
   it('keeps More a real modal across mobile and desktop without locking scrolling after close', () => {
@@ -64,17 +65,18 @@ describe('Quiet Atlas shared shell navigation', () => {
   })
 
   it('connects preview Home, Control, groups, and scene navigation without changing legacy URLs', () => {
-    expect(shellSource).toContain("id: 'home', label: 'Home', href: '/quiet-atlas/home'")
+    expect(shellSource).toContain("id: 'home', label: 'Home', href: '/'")
     expect(shellSource).toContain("id: 'control', label: 'Control', href: '/quiet-atlas/control'")
     expect(shellSource).toContain("id: 'music', label: 'Music', href: '/quiet-atlas/music'")
-    expect(shellSource.match(/href="\/quiet-atlas\/home"/g)).toHaveLength(2)
+    expect(shellSource.match(/href="\/"/g)).toHaveLength(2)
     expect(shellSource).toContain('if (previousRoute !== null && route !== previousRoute && moreOpen) closeMore(false)')
     expect(shellSource).toContain('return unsubscribe')
     expect(homeSource).toContain('class="browse-link" href="/quiet-atlas/control">Control · precision workspace')
-    expect(homeSource).toContain('class="browse-link" href="/quiet-atlas/control">Open Control review')
+    expect(homeSource).toContain('class="browse-link" href="/quiet-atlas/control">Browse Control')
     expect(homeSource).not.toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(homeSource.match(/href="\/quiet-atlas"/g)).toHaveLength(1) // legacy permalink only
     expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
+    expect(activeQuietAtlasSection('/')).toBe('home')
     expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
     expect(activeQuietAtlasSection('/quiet-atlas')).toBe('control')
   })
@@ -87,6 +89,7 @@ describe('Quiet Atlas shared shell navigation', () => {
 
   it('keeps current and future nav destinations mapped to existing routes', () => {
     expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
+    expect(activeQuietAtlasSection('/')).toBe('home')
     expect(activeQuietAtlasSection('/quiet-atlas')).toBe('control')
     expect(activeQuietAtlasSection('/quiet-atlas', '#control')).toBe('control')
     expect(activeQuietAtlasSection('/quiet-atlas/home', '#control')).toBe('home')
@@ -102,7 +105,7 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(activeQuietAtlasSection('/settings')).toBe('more')
     expect(activeQuietAtlasSection('/quiet-atlas/settings')).toBe('more')
     expect(MORE_DESTINATIONS.map(({ href }) => href)).toEqual([
-      '/quiet-atlas/settings', '/journal', '/personality', '/', '/gameday', '/guest',
+      '/quiet-atlas/settings', '/journal', '/personality', '/classic', '/gameday', '/guest',
     ])
     expect(MORE_DESTINATIONS.filter((item) => item.shell).map((item) => item.href)).toEqual([
       '/journal', '/personality',

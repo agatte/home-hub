@@ -25,7 +25,7 @@ describe('Quiet Atlas phone-first Home composition', () => {
     expect(home).toContain('{contextDisplay.house}')
     expect(home).toContain('{contextDisplay.activity}')
     expect(home).toContain('A recent REST response is not proof of sensor freshness or room location.')
-    expect(home).toContain('Design preview only — no light changes.')
+    expect(home).toContain('Expand a room to control its actual fixtures in place.')
     expect(home).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
   })
 
@@ -48,9 +48,9 @@ describe('Quiet Atlas phone-first Home composition', () => {
     expect(home).toContain('.phone-room {display:flex;align-items:center;gap:15px;min-height:76px;box-sizing:border-box;')
     expect(home).toContain('.phone-scenes {min-height:64px;')
     expect(home).toContain('.phone-functional-handoff {min-height:50px;')
-    expect(home).toContain('href="/#apartment-controls"')
+    expect(home).toContain('href="#phone-lighting-title"')
     expect(home).toContain('Adjust lights now')
-    expect(home).toContain('href="/"')
+    expect(home).toContain('href="/classic"')
     expect(home).toContain('Apartment Canvas (#192)')
   })
 

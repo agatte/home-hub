@@ -117,7 +117,9 @@ export class HubSocket {
   send(type, data) {
     if (this._ws?.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({ type, data }))
+      return true
     }
+    return false
   }
 
   close() {

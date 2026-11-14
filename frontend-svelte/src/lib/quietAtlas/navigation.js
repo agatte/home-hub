@@ -64,8 +64,8 @@ export const MORE_DESTINATIONS = [
   {
     id: 'apartment',
     label: 'Apartment and household tools',
-    description: 'The current Home page keeps the Apartment widget, plants, bar, Guest Wi-Fi, routines, and ambient controls.',
-    href: '/',
+    description: 'Original Apartment dashboard, plants, bar, Guest Wi-Fi, routines, and ambient controls.',
+    href: '/classic',
     shell: false,
   },
   {
@@ -87,7 +87,7 @@ export const MORE_DESTINATIONS = [
 // Only explicitly enumerated, read-only review routes may suppress global error toasts.
 // Future functional routes fail open to the normal error display.
 const READ_ONLY_PREVIEW_PATHS = new Set([
-  '/quiet-atlas', '/quiet-atlas/home', '/quiet-atlas/control',
+  '/quiet-atlas', '/quiet-atlas/control',
   '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
   '/quiet-atlas/music/artist-review',
 ])
@@ -99,6 +99,8 @@ export function isQuietAtlasReadOnlyPreview(pathname) {
 }
 
 export function shouldUseQuietAtlasShell(pathname, searchParams) {
+  if (pathname === '/') return true // Default Home + kiosk now share the redesigned shell.
+  if (pathname === '/classic') return false // Always preserve original chrome.
   if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) return true
   if (pathname === '/gameday' || pathname.startsWith('/gameday/') ||
       pathname === '/guest' || pathname.startsWith('/guest/')) return false
@@ -129,6 +131,7 @@ export function withQuietAtlasShell(href) {
 // must not highlight the Control destination in the shared preview shell.
 /** @param {URLSearchParams | null} [searchParams] */
 export function activeQuietAtlasSection(pathname, _hash = '', searchParams = null) {
+  if (pathname === '/') return 'home'
   if (pathname.startsWith('/quiet-atlas/lighting/')) return lightingDetailOrigin(searchParams)
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/insights') return 'insights'
