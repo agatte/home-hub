@@ -2,6 +2,7 @@
 Philips Hue bridge service — wraps phue2 for light control.
 """
 import asyncio
+from collections.abc import Mapping
 from concurrent.futures import Future
 from threading import Event
 import logging
@@ -321,6 +322,32 @@ class HueService:
             if light["light_id"] == light_id:
                 return light
         return None
+
+    async def audit_fixture_identity(
+        self, enrolled: Mapping[str, str] | None,
+    ) -> dict[str, str]:
+        """Read-only internal audit of pre-enrolled numeric/uniqueid bindings.
+
+        This is NOT a write preflight, automatic enrollment or trust decision.
+        There is deliberately no endpoint, startup call, settings exposure or
+        actuator integration. The raw get_api() response stays inside this
+        method and the comparator returns only status enums for L1-L6.
+        Bridge transport identity/freshness and physical fixture provenance
+        remain separate, unverified gates.
+        """
+        from backend.services.hue_fixture_identity import (
+            audit_hue_v1_fixture_bindings,
+        )
+
+        if not self._connected or self._bridge is None:
+            return audit_hue_v1_fixture_bindings(enrolled, None)
+        try:
+            raw_api = await self._safe_call(self._bridge.get_api)
+        except Exception:
+            # A failed bridge read cannot serve as proof that an enrolled
+            # bulb is still attached; never fall back to cached names/IDs.
+            return audit_hue_v1_fixture_bindings(enrolled, None)
+        return audit_hue_v1_fixture_bindings(enrolled, raw_api)
 
     async def set_light(self, light_id: str, state: dict[str, Any]) -> bool:
         """

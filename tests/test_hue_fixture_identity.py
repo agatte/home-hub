@@ -1,9 +1,12 @@
 """Offline Hue v1 fixture identity audit: all samples synthetic, no I/O."""
 from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from backend.services.hue_fixture_identity import audit_hue_v1_fixture_bindings
+from backend.services.hue_service import HueService
 from backend.services.light_state_calculator import ALL_LIGHT_IDS
 
 
@@ -129,3 +132,73 @@ def test_partial_enrollment_never_marks_unenrolled_lights_matched():
     result = audit_hue_v1_fixture_bindings({"2": "synthetic-unique-2"}, api())
     assert result["2"] == "matched"
     assert all(result[light_id] == "unenrolled" for light_id in ALL_LIGHT_IDS if light_id != "2")
+
+
+def offline_hue_service(raw_snapshot, *, connected=True, bridge_error=None):
+    """Normal HueService/circuit-breaker, simulated thread-only get_api."""
+    service = HueService("offline.invalid", "synthetic-no-secret")
+    service._connected = connected
+    method = Mock(side_effect=bridge_error) if bridge_error else Mock(return_value=raw_snapshot)
+    service._bridge = SimpleNamespace(get_api=method)
+    return service, method
+
+
+@pytest.mark.asyncio
+async def test_hue_service_internal_read_only_audit_keeps_raw_uniqueids_private():
+    service, get_api = offline_hue_service(api())
+    approved = enrolled()
+    result = await service.audit_fixture_identity(approved)
+    assert result == dict.fromkeys(ALL_LIGHT_IDS, "matched")
+    get_api.assert_called_once_with()
+    assert service.known_light_ids == set()
+    assert service._inflight_until == {}
+    assert service._transition_settle_until == {}
+    assert all(identifier not in repr(result) for identifier in approved.values())
+    public = await service.get_all_lights()
+    assert public and len(public) == 6
+    assert all("uniqueid" not in row for row in public)
+    assert all("name" not in result[light_id] for light_id in ALL_LIGHT_IDS)
+
+
+@pytest.mark.asyncio
+async def test_hue_service_detects_reindexed_bulb_from_fresh_raw_read():
+    snapshot = api()
+    snapshot["lights"]["2"]["uniqueid"], snapshot["lights"]["5"]["uniqueid"] = (
+        snapshot["lights"]["5"]["uniqueid"], snapshot["lights"]["2"]["uniqueid"],
+    )
+    service, get_api = offline_hue_service(snapshot)
+    result = await service.audit_fixture_identity(enrolled())
+    assert result["2"] == result["5"] == "reindexed"
+    get_api.assert_called_once()
+    assert service._inflight_until == {}
+
+
+@pytest.mark.asyncio
+async def test_disconnected_hue_audit_fails_without_touching_bridge():
+    service, get_api = offline_hue_service(api(), connected=False)
+    assert await service.audit_fixture_identity(enrolled()) == dict.fromkeys(
+        ALL_LIGHT_IDS, "inventory_unavailable",
+    )
+    get_api.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_hue_inventory_read_never_uses_stale_cached_state():
+    service, get_api = offline_hue_service(
+        api(), bridge_error=ConnectionError("synthetic disconnect"),
+    )
+    service._last_states = {"2": {"light_id": "2", "reachable": True}}
+    assert await service.audit_fixture_identity(enrolled()) == dict.fromkeys(
+        ALL_LIGHT_IDS, "inventory_unavailable",
+    )
+    get_api.assert_called_once()
+    assert service._last_states == {"2": {"light_id": "2", "reachable": True}}
+
+
+@pytest.mark.asyncio
+async def test_audit_never_auto_enrolls_when_no_private_mapping_is_supplied():
+    service, get_api = offline_hue_service(api())
+    assert await service.audit_fixture_identity(None) == dict.fromkeys(
+        ALL_LIGHT_IDS, "unenrolled",
+    )
+    get_api.assert_called_once()

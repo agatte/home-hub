@@ -46,6 +46,18 @@ current bridge certificate identity nor records freshness or physical
 control. There are no real enrolled IDs in the repository; test fixtures
 are deliberately synthetic.
 
+The existing `HueService.audit_fixture_identity(enrolled)` method now
+provides a **read-only, internal-only** adapter. It obtains raw v1 inventory
+through the current circuit-breaker-protected bridge reader, evaluates the
+comparator without persisting or returning `uniqueid` values, and returns
+`inventory_unavailable` if the bridge is offline or the read fails. It does
+not fall back to cached public light rows, issue a write, add a route, update
+an enrollment, or bind into the WS/REST guard. Synthetic service tests exercise
+actual `HueService` with an offline fake bridge, including reindexing,
+disconnection, missing enrollment, stale state and no public identifier leak.
+The method must **not** be wired into any authorization path before the
+operator enrollment, bridge trust, freshness and independent review gates.
+
 ## Actual release gates — not satisfied by this PR
 
 1. **Authenticated provenance:** establish a reviewed source for raw Hue/v1
@@ -71,7 +83,6 @@ are deliberately synthetic.
    before/after readings and actual ownership takeovers, then obtain owner
    acceptance of the original #461/#157 goal. Preserve `/classic` fallback.
 
-**Current implementation status:** structural comparator + synthetic tests
-only. **Current production state:** unchanged and not verified here.
+**Current implementation status:** structural comparator, internal read-only HueService adapter and synthetic tests only; no actuation wiring. **Current production state:** unchanged and not verified here.
 Neither this document nor any passing offline test is physical identity
 verification or security approval.
