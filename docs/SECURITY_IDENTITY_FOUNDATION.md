@@ -473,7 +473,7 @@ actions. `pc_agent/sleep_watcher.py` polls HTTP, not this WS display lane.
 `frontend-svelte/src/lib/ws.js` still uses same-origin new WebSocket(url):
 pre-accept denial never triggers onopen, so it retains disconnected/unavailable
 UX. No Authorization-in-browser workaround, JS credential or URL token was
-added. Native WS clients remain unmigrated and cannot authenticate yet.
+added. Native WS client source migration is described below; operational authentication remains unconfigured.
 
 ### Commands, receipts and actuator limits
 
@@ -772,3 +772,38 @@ freshness observer, backup exclusions and deployment floor, distinct admin
 principal, approved issuance/recovery/proxy/TLS/client rollout and #293/#461
 L1-L6/kiosk/iPhone acceptance remain open. Windows static tests and the supplied
 Latitude parent snapshot or separate primitive probes do not satisfy them.
+
+
+### November 14: Windows native WS consumer source migration (#287/#293/#461)
+
+`backend/services/pc_agent/native_ws_credentials.py` reads only Windows Generic
+Credential targets `HomeHub/identity/windows_desktop/ws` (brightness) and
+`HomeHub/identity/desktop_notifier/ws` (Notifier). The fixed profile is selected
+by each consumer, never by a WS event. Blob contract is exactly 152 bytes of
+UTF-16LE: the 76-character opaque native bearer, without a terminator. There is
+no credential creation, mutation, enumeration, file/env/argv fallback or cache.
+Each reconnect reads anew and frees the CredReadW allocation with CredFree.
+These targets separate accidental profile selection, not same-login OS access.
+
+Without a credential (including non-Windows), existing unauthenticated WS behavior
+is preserved. A present malformed credential or plaintext WS endpoint refuses
+the connection attempt. Bearers are sent only as Authorization on WSS, with
+standard websocket TLS certificate/hostname validation. The server URL is trusted
+operator configuration; never supply it from notification/event data. URL userinfo,
+queries and fragments are refused. Handshake logging is suppressed and connection
+failures report static status without raw URLs, headers or exception tracebacks.
+Notification and mode parsers and stop/backoff behavior remain unchanged.
+
+This is source-only readiness, not operational auth. Real OS-managed per-profile
+credential issuance/delivery, approved WSS endpoints and certificate trust,
+packaged Notifier rebuild, host rollout and authenticated compatibility acceptance
+remain separate authorized gates. Current plaintext defaults remain unchanged;
+provisioning credentials before WSS configuration intentionally prevents reconnect.
+No real credential store, network, device or host lifecycle action was exercised.
+
+Offline validation for this migration: 304 tests passed across
+`test_native_ws_credentials`, `test_monitor_brightness`,
+`test_ws_authenticated_boundary` and `test_ws_native_projection` using the
+Sandbox Python with APP_ENV=testing and pytest plugin autoload disabled.
+Targeted Ruff and `git diff --check` passed. Credential API ownership and both
+worker loops use synthetic mocks; no real Credential Manager reads occur.
