@@ -323,3 +323,121 @@ six disjoint suites; Ruff without cache, five-file in-memory compilation and
 `git diff --check` passed. Exact suite counts, changed paths and current source
 fingerprints are recorded in the P2/P3 follow-up in
 [the recovery decision](../../docs/SECURITY_RECOVERY_DECISION_287.md).
+
+
+### November 14 inactive system-manager source contract (#287 / #461)
+
+Local source-only milestone: `unit_contract.py` and the two
+`systemd/homehub-identity.{socket,service}.in` fragments specify one proposed
+verify-only socket and a dedicated nonroot service. These are **DO-NOT-INSTALL**
+review inputs, not installable unit filenames. The service has no `ExecStart` and
+neither fragment has `[Install]`. There is no installer, command generator,
+account creation, enable flag, runtime entrypoint or activation authorization.
+Do not rename/copy the socket fragment into a unit search path: a socket unit can
+bind a listener independently of whether its service can execute. No host unit,
+`deployment/` artifact, root action or live listener was created by this work.
+
+`validate_sources()` checks the fixed filenames, plain input types, unique
+sections/directives, exact schema and exact source text (LF/CRLF equivalent).
+Unknown keys, extra comments, resets, repeated `ListenStream`, alternate paths,
+exec/environment/credential directives, `[Install]` and drop-ins all fail.
+`validate_supplied_files()` reads only its own two fixed sibling source files;
+symlink/reparse ancestors/files, hard links and extra directory entries fail.
+This read-only lint is not a race-safe filesystem attestor. Mutable Python source
+or monkeypatches are outside the authority boundary. A consistent report always
+has `runtime_authorized == False`; it cannot satisfy `RootCustodyProof`, whose
+shipped implementation remains unconditional denial. No runtime source changed.
+
+Proposed systemd v255 contract, **not systemd-verified here**:
+
+- The separate **system** manager owns `homehub-identity.socket` and
+  `homehub-identity.service`; the existing production user `home-hub.service`
+  cannot supply this authority. `Accept=no` proposes a single stream listener at
+  `/run/homehub-identity/verify.sock`, explicitly selects
+  `Service=homehub-identity.service`, and names the inherited descriptor
+  `FileDescriptorName=verify`. The service's `Sockets=homehub-identity.socket`
+  names that socket unit; it is not a pathname or an activation ordering proof.
+  A future trusted launcher must require exactly one descriptor, matching
+  `LISTEN_PID`, `LISTEN_FDS=1`, `LISTEN_FDNAMES=verify`, correct AF_UNIX/listening
+  state and path/FD identity, before clearing activation environment and making
+  its owned descriptor noninheritable. By-name selection alone is not trust.
+  The older fixture parser's optional admin support is not authorized by this
+  contract: no admin socket or issuer is supplied.
+- `SocketUser=root`, `SocketGroup=homehub-backend`, `SocketMode=0660` apply to the
+  pathname; they do not prove creator credentials or the listener FD's metadata.
+  `DirectoryMode=0755` proposes a mode for automatically created parent directories,
+  not their ownership, existing directory repair, ACLs or continuous protection.
+  Independently enforced root provisioning/tmpfiles must precreate and attest
+  `/run` and both listener/lock parents before any socket start. Proposed layout
+  (documentation only, no tmpfiles install file): `/run` root:root without group
+  or world write; `/run/homehub-identity` and `/run/homehub-identity-lock`
+  root:root 0755; existing `verify.lock` root:homehub-identity 0660, single link,
+  never recreated by the broker. Backend membership must never permit parent
+  replacement. No `RuntimeDirectory` delegates these directories to the service.
+  `RemoveOnStop=no` avoids proposing stop-time unlink as recovery; stale socket
+  handling and safe replacement still need a separately reviewed root lifecycle.
+- Fixed `User=homehub-identity` and `Group=homehub-identity` require distinct
+  nonzero UID/GID from root and homehub-backend. No DynamicUser or backend/root
+  supplementary membership is allowed. Empty `SupplementaryGroups=` is not proof
+  that NSS/account supplementary groups are absent; independently attest actual
+  account membership AND process credentials against the existing service check.
+  Empty capability sets, NoNewPrivileges, strict system/home protection, private
+  devices/tmp/mounts, namespace restrictions and AF_UNIX-only address creation
+  are proposed defense in depth. They neither authenticate inherited FDs nor
+  enforce verify-only protocol on their own. AF_UNIX remains permitted.
+- Writable exceptions are limited to the two existing sealed state directories
+  and the precreated singleton lock file. Key/policy/package paths stay read-only.
+  Private mounts and writable bind exceptions require real OS acceptance against
+  the service's no-follow path walks, mount custody, SQLite sidecars, lock inode
+  and directory fsync. No supplementary shell, debug execution, OnFailure action,
+  network listener or journal output is proposed. Standard streams are null.
+  Revisit operational diagnostics through separate privacy/security review.
+  No environment or credential injection directive is allowed; this does not
+  prove the system manager, NSS or the eventual executable has no ambient
+  environment. A root-sealed launcher must independently sanitize its environment
+  and dependencies, without accepting application/environment enablement flags.
+
+Open root/OS acceptance gates (none waived by exact source lint):
+
+1. Independently review the authoritative v255 directive semantics and effective
+   system-manager configuration, vendor fragments, drop-ins, default dependencies,
+   ordering and inherited descriptor behavior on the intended host. No network or
+   native systemd verification was authorized in this task; this is a blocker to
+   installability, not a claimed validated unit. `[Install]` absence prevents no
+   manual start; source-only filenames and the missing service command are the
+   present packaging boundary, not a privilege mechanism.
+2. Supply a separately approved root-sealed executable/interpreter/loader/library
+   and dependency closure, trusted launch/stop handling, root-only attestor and
+   account/provisioner package. Never execute the checkout/venv. Independently
+   enforce sealed state/key/SQLite and sidecar custody, singleton lifetime,
+   namespace/mount/ACL/MAC continuity, backup exclusions and root-controlled
+   startup/deploy/rollback floor outside replayable broker storage.
+3. Prove actual Linux creator PID/UID/GID, path inode and descriptor identity.
+   PID1 reexec may preserve descriptors while a restart/rebind may replace the
+   socket inode. Neither PID=1 nor root ownership alone authenticates continuity;
+   do not substitute the later service acceptor's credentials, blindly repin,
+   tolerate churn or assume socket inode equals the pathname inode. On changed
+   binding/custody, deny before request bytes and require independently attested
+   fresh composition. Reexec/restart/mount transition acceptance remains open.
+4. Separately authorize high-risk integration and each root/provisioner/host action.
+   Then establish real issuer/delivery, independent monotonic floor and freshness,
+   crash durability, TLS/native/kiosk/iPhone and #293/#461 L1-L6 physical acceptance.
+   Draft #533 remains unmerged, unprovisioned and unsafe to activate for current
+   `/ws` clients. No bridge/client/lighting/UI/runtime behavior changed here.
+
+Evidence is local and uncommitted in
+`C:/Work/home-hub-project/worktrees/identity-287-broker-session-20261114`, based on
+local `01824867a796a3386205dccdad7839c1ef9d1a46`. The owner's reported remote
+#533 head `947753055e3b6eb6348a2be91de74cc2cfb84dfb` and previous green CI were
+not rechecked: network/publication were explicitly prohibited. Earlier dated
+status/fingerprints above remain historical; this append does not publish them.
+
+
+Validation for this local source-only milestone: new contract suite **204 passed**;
+combined contract/custody/protected-integration suites **279 passed, 28 Linux-only
+skips** on Windows with existing venv Python `-B`, APP_ENV=testing,
+PYTHONDONTWRITEBYTECODE=1, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1,
+`-p pytest_asyncio.plugin -p no:cacheprovider`. Ruff `check --no-cache`, in-memory
+compile of both new Python files and `git diff --check` passed. The ten existing
+file contents (README original byte prefix) and Git index were preserved. No
+native Linux/systemd acceptance, network, publication or activation was performed.
