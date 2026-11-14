@@ -288,3 +288,45 @@ Open activation gates: choose and prove anchor atomicity/durability on owned
 hardware; define operator recovery custody and code-integrity enforcement;
 review broker account/IPC isolation and complete grant inventory. No live
 provisioning or irreversible hardware writes are authorized by this design.
+
+## Offline WebSocket manual-command operation matrix (#293 / #461; NOT LIVE)
+
+The existing `backend/identity_policy.py` inventory now proposes two exact,
+**inbound** operations: `WS /ws:light_command` and
+`WS /ws:sonos_command`. The pure `ws_command_operation` selector maps
+only precisely spelled current message kinds to these IDs; malformed,
+nested, unknown or alternate names return no operation. There is no URL
+prefix matching, dynamic role, generic wildcard or caller-chosen source.
+
+The fixed profile matrix grants these commands only to the **owner_browser**
+principal on server-bound `browser` lane and **kiosk** principal on
+server-bound `display` lane. Windows Supervisor (including its six shared
+credential lanes), Desktop Notifier, MCP, Latitude, guest gateway, Alexa,
+Shortcuts and local operator have **no** WebSocket light or Sonos command
+grant. The original `WS /ws:mode_update` subscription grants remain
+unchanged. The independent reviewed-grant snapshot is updated deliberately.
+
+Synthetic tests of `IdentityStore.authorize` exercise approved owner/kiosk
+lanes, wrong lanes, foreign source assertions, known non-owner profiles,
+unknown operation names, revocation and expiry. The server adapter in
+future #293 must derive operation and lane from **authenticated** principal
+and owned code, not `source`/device/lane values in a JSON frame or
+headers. Identity authorizes client intent; it never replaces Hue
+LightingAuthority, scene/ScreenSync/transit/manual ownership, Sonos audio
+ownership, source freshness or physical evidence.
+
+**Not implemented or authorized here:** This offline inventory is NOT
+imported by `backend/main.py:/ws`. No WebSocket auth, session cookie,
+Origin/Host enforcement, native-client credential provisioning, initial
+snapshot projection, broadcast filtering, revocation of connected sockets,
+rate/resource budgets or production rollout is performed. The current
+anonymous WebSocket is **still unsafe**. The final #293 implementation
+requires reviewed pre-accept verification and filtered outbound streams,
+plus separate owner/kiosk/iPhone and native client compatibility trials.
+There is no token in browser source code or URL, no new endpoint, and no
+live credential change.
+
+This addition only prepares the command authorization seam needed by
+the guarded lighting controls in #461/#530. It must not be merged or
+activated as a security fix on its own; #287, #293 and #284 remain open
+until their respective full original acceptance criteria are met.
