@@ -1133,3 +1133,61 @@ RootCustodyProof continues unconditional Denied. No Latitude/root provisioning,
 credentials, production restart/deployment, /ws activation or physical acceptance
 is supplied. #287/#293 remain prerequisites to #461 real kiosk/iPhone redesigned
 default Home and individually guarded inline Hue L1-L6 acceptance.
+
+### November 14 read-only backend cutover inventory (source only)
+
+`scripts/homehub_backend_cutover_audit.py` inventories fixed Linux surfaces without
+backend imports, policy contents, credentials, lifecycle operations or network
+clients. It reads PID1 identity, selected system/user manager properties, effective
+unit fragment/drop-in metadata and alias counts, exact external floor/sealed
+package/runtime and checkout ancestry, and sanitized IPv4/IPv6 port 8000/8002
+listener scope. The fixed production checkout is `/home/anthony/home-hub`;
+`homehub-backend.service` is a proposed protected backend name, not an installed
+production fact. Missing/different layout or inaccessible SSH user bus remains
+UNKNOWN and blocks; caller-selected roots and arbitrary commands are unavailable.
+Only exact CRLF-normalized fingerprints of the known checkout service/deploy/
+Return Home/run/tunnel sources identify known bypasses. Changed sources remain
+UNKNOWN, never safe. No hashes, source contents, raw ss lines, ExecStart strings,
+manager errors or arbitrary property values are returned. Policy is metadata-only.
+
+All results retain `read_only: true`, `runtime_authorized: false`, `status: BLOCKED`
+and a nonzero CLI exit. Inspection does not establish socket creator identity,
+execution/loader closure, authenticated floor freshness, dedicated principals,
+ACL/MAC/mount custody, linger/other-user alias retirement, manual alternate
+listeners or complete client topology. Metadata and manager reads are snapshots,
+not atomic attestation against hostile concurrent replacement. Only the current
+user manager is queried; its absence is UNKNOWN, not proof of retirement.
+
+For a future separately authorized operator review on Latitude, the reviewed
+source invocation is `python3 -I -S -B scripts/homehub_backend_cutover_audit.py --json`.
+This is not a request to run it now, installation evidence or root authorization.
+No actual production inspection occurred: the approved SSH client is unavailable
+in Sandbox. Production roots/accounts/groups and legacy retirement remain
+unverified. Next gate is owner-authorized read-only installed inventory followed
+by independently reviewed OS launch-floor/socket enforcement across boot,
+restart, deploy, rollback and Return Home. No client enrollment, legacy retirement,
+security merge, deployment, /ws activation or #461 kiosk/iPhone Home and guarded
+L1-L6 acceptance is supplied.
+
+Evidence is local and uncommitted in `identity-287-broker-session-20261114`,
+base HEAD `01824867a796a3386205dccdad7839c1ef9d1a46`. Owner-reported draft #533
+head `269ff2057699442b6ec2b38a203211e2e62ec971` and five green jobs were not
+queried or reverified (network prohibited). Prior working changes/index are
+preserved. Fake-only tests exercise strict unknowns, user/system failures,
+source fingerprint changes, metadata refusal, IPv4/IPv6 and permanent denial.
+
+Final local inventory validation: **385 passed, 16 skipped** across
+`test_backend_cutover_audit.py` (45 fake-only cases), release-floor, custody-plan,
+unit-contract and Linux OS-preflight suites. The 16 skips are Linux-only OS tests,
+not production evidence. Ruff `--no-cache`, in-memory AST/compile for the new
+script/tests and all three existing VM harness children, and `git diff --check`
+passed. Tests used the existing main `.venv`, bytecode disabled and pytest cache
+provider disabled. No workflow was added or modified by this task.
+
+Final inventory scope additionally includes grounded guest gateway port **8003**
+(`deployment/home-hub-guest-gateway.service`) and its exact normalized source
+fingerprint. Effective ExecStart/ExecStartPre are classified only for a fixed
+checkout reference; their strings are never returned and absence of that reference
+is UNKNOWN. Sealed package/floor modes must be 0444 and runtime 0555; matching
+metadata never grants runtime authority. Source fingerprints cover only fixed
+public source files, not policy, keys or any secrets.
