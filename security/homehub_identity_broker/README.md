@@ -1,5 +1,57 @@
 # HomeHub identity broker source (inactive)
 
+## November 14 rollback floor and legacy startup closure (source only)
+
+`release_floor.evaluate()` checks strict fixed-schema synthetic release/floor
+records: unsigned 64-bit epoch/generation (never bool/string/float), exact full
+Git SHA and SHA-256 artifact/provenance bindings, fixed sealed package/path and
+dedicated identity, and complete launch-surface inventory. The stored floor must
+equal a fresh independent expected floor; the candidate must equal the exact
+independently approved release, meet its minimum epoch and use its generation.
+SHA values are identities, never sortable versions. The provenance digest is
+only a proposed binding to a future authenticated signed inventory. Python
+injection does not authenticate a signature, signer, floor or expected release.
+Even matching fixtures retain unconditional external-trust and OS-enforcement
+gates, `status="BLOCKED"` and `runtime_authorized=False`. There is no trust-provider
+argument, override, installer, launcher, file reader or runtime consumer.
+
+`audit_entrypoints()` accepts only text snapshots keyed by the three literal repo
+paths `deployment/home-hub.service`, `scripts/deploy.sh` and
+`scripts/homehub-hostctl.sh`. It pins their complete LF-normalized SHA-256 source
+snapshots and emits fixed evidence labels with exact path and half-open Unicode
+character offsets in normalized text. Every recognized current bypass remains
+reported; rewritten/unknown/extra/missing source fails closed as uncertainty.
+These hashes identify the examined legacy source, **not approved releases**.
+Editing text to remove a match cannot establish a root gate. Tests read only
+these fixed repo paths; the auditor performs no filesystem access or commands.
+
+**Current source remains bypass present:** the user unit executes
+`%h/home-hub/venv/bin/python run.py`; deploy forward and rollback restart that
+user unit, failed health recovery resets to the previous SHA and may recopy user
+units, and Return Home enables the user core service. A root-owned floor file or
+new safe identity unit cannot intercept those existing mutable launch paths.
+The audit is deliberately BLOCKED on today's exact source. It does not inspect
+installed units/drop-ins, other users, linger, aliases or direct manual processes.
+`coverage()` enumerates boot/restart, deploy, rollback/failure recovery, Return
+Home, direct user restart, linger/alternate services, restored checkout and
+manual processes; every case still requires independent OS enforcement.
+
+Next integration design must separately specify an authenticated release signer
+and external floor owner/storage (outside the checkout/backend UID/app backups),
+fresh monotonic generation and atomic crash-safe advancement, sealed executable
+and transitive interpreter/loader/config dependencies, and an OS execution boundary
+that retires or intercepts **all** legacy user/service/manual launch authority.
+Every deploy and rollback target must be checked before any start; failed-health
+recovery below floor must remain stopped rather than fall back. Prove this on a
+separately authorized disposable OS with effective units/drop-ins/alternate users,
+linger, reboot, direct restart and restored checkout, including interruption and
+rollback attempts. Merely masking one user unit or changing these three repo files
+cannot prove manual/alternate execution exclusion. No runnable root composition
+is provided; `RootCustodyProof.check` remains always denied. Independent review,
+OS acceptance, high-risk integration and all host/deploy actions need their
+separate gates. Unprovisioned default-deny `/ws`, issuer/enrollment, root custody
+and #461 kiosk/iPhone/guarded L1-L6 physical acceptance remain open.
+
 ## Offline custody install plan (November 14, 2026; NO INSTALL)
 
 `custody_plan.py` supplies a versioned, fixed manifest and pure injected-evidence

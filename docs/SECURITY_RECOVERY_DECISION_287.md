@@ -1,5 +1,54 @@
 # #287 recovery architecture decision — proposed, NOT LIVE
 
+## November 14 rollback-floor / legacy-startup diagnostic milestone (local only)
+
+The source-only `release_floor.py` and `test_identity_broker_release_floor.py`
+add an executable negative contract rather than a runtime floor: strict unsigned
+epoch/generation, exact approved artifact/commit/provenance and sealed identity
+bindings, stale-floor/downgrade denial, and complete launch-surface enumeration.
+All injected expected policy remains unauthenticated; all results are BLOCKED
+and never authorize privileged startup. No signature verifier or root trust
+provider is fabricated. See the [package contract and next integration design](../security/homehub_identity_broker/README.md#november-14-rollback-floor-and-legacy-startup-closure-source-only).
+
+The pure snapshot auditor pins the exact three canonical source files and locates
+the current mutable user ExecStart, both deploy/rollback restart calls, health
+failure recovery/reset, user unit recopy and Return Home core enable chain.
+Tests lock **bypass present on current source**; changing command shape or adding
+unknown paths denies as uncertainty. No source edit, signed/reviewed label or
+floor file closes installed launch authority. Boot/restart, forward deploy,
+rollback and failed recovery, Return Home, direct user restart, linger/alternate
+users, restored older checkout and manual processes each retain an OS gate.
+Installed units/drop-ins/aliases and actual host execution were not inspected.
+
+The next exact system-integration plan must bind externally authenticated floor
+and signed release inventory to a root-controlled crash-safe generation, sealed
+dependency closure and an OS boundary that retires/intercepts legacy launch
+authority, including manual and alternate user execution. Validate every listed
+start/recovery case on a separately authorized disposable OS before proposing
+host installation. A below-floor rollback must leave startup denied even after
+health failure. Application Python, an added identity service or root-owned file
+alone cannot enforce this property. RootCustodyProof remains unconditional Denied.
+
+Evidence is uncommitted in the named `identity-287-broker-session-20261114`
+worktree at older local HEAD `01824867a796a3386205dccdad7839c1ef9d1a46`;
+the initial 15-path state and clean index are preserved. Owner-supplied draft
+#533 head `e7c7448356168dfdb5ee6f8e5ee4dcdbda959e4e` and its Ubuntu-green
+results were not independently rechecked (network prohibited). This milestone
+does not publish source or claim CI/live acceptance. Unprovisioned default-deny
+`/ws`, absent root custody/enrollment and original #461 physical acceptance still
+block deployment. No commit/push/merge/deploy, service/device/host action,
+credential operation or cleanup is authorized or performed.
+
+Local validation after independent read-only review: floor/custody/unit-contract
+suites **330 passed, 0 skipped** on Windows, using the existing main venv Python
+`-B`, APP_ENV=testing, PYTHONDONTWRITEBYTECODE=1,
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, `--noconftest -p pytest_asyncio.plugin
+-p no:cacheprovider`. Ruff `check --no-cache`, AST parse/in-memory compile of both
+new Python files and `git diff --check` passed. Review found no blocking security
+issue; its coverage recommendations were implemented with per-case source labels,
+explicit missing host obligations and an independent ten-case regression list.
+These are local pure-source results, not new Ubuntu CI or OS enforcement evidence.
+
 ## November 14, 2026: offline packaging/custody preflight candidate
 
 Local source only in `identity-287-broker-session-20261114`, base `01824867`;
