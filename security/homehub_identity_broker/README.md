@@ -596,3 +596,76 @@ alone neither authenticates descriptor creator PID/UID/GID nor enforces launch
 version. Manager death releases this test's socket. No actual host state was
 inspected. Issuer/freshness/TLS, #287/#293 and #461 kiosk/iPhone Home plus guarded
 L1-L6 acceptance remain open; unprovisioned /ws still blocks activation.
+### November 14 disposable root floor and user-namespace PID1 harness (source only)
+
+`tests/test_disposable_root_pid1_floor.py` is TEST-ONLY/DO-NOT-INSTALL,
+default-off, and never imported by backend. Opt-in requires disposable Linux root
+and `HOMEHUB_DISPOSABLE_ROOT_PID1_TESTS=1`; that flag grants no runtime authority.
+The harness creates only temporary root:root policy (0700 directory/0400 files)
+and sealed mock executables (0555). An actual UID/GID 65534 child with empty groups
+must fail floor/artifact writes. A fixed root-run test guard checks strict integer
+minimum epoch, fresh synthetic generation and exact approved SHA-256, then runs
+only a fixed copied /usr/bin/id after dropping privileges. Negative cases include
+old and matching-but-below-floor approvals, stale floor/generation, spoofed digest,
+boolean epoch, missing policy, writable/untrusted artifact, links and tamper.
+Startup/rollback/Return Home surface labels exercise one synthetic guard; real
+installed entrypoints are NOT invoked or secured. The fresh-floor oracle, root
+test runner and local loader/library closure remain assumptions, not authenticated
+production trust. Malicious concurrent root and crash/backup durability are open.
+
+The separate `unshare -Urmpf` experiment requires actual namespace PID 1/EUID 0,
+two child restarts and 24 EADDRINUSE competitor results (loopback/wildcard, plain
+and reuse options) while retaining an ephemeral loopback socket. No port 8000,
+wildcard listener, systemctl or existing service is used. Waits/session cleanup
+are bounded. Namespace preflight unavailability may skip only that opted-in case;
+mechanism failures after a successful probe fail. This is NOT genuine systemd
+PID1, host-root or supplementary-identity proof; alternate ports remain open.
+
+Windows focused checks: **365 passed, 233 skipped**; new suite **1 passed,
+182 privileged skips**. Ruff without cache, child/nested compilation and Git diff
+whitespace checks pass. New privileged Linux cases remain UNEXECUTED here.
+Evidence is local/uncommitted in identity-287-broker-session-20261114 at local
+HEAD `01824867a796a3386205dccdad7839c1ef9d1a46`; prior dirty work is preserved.
+No network/publication, production wiring, host/device/credential or live action
+occurred. RootCustodyProof still denies; #287/#293/#461 and /ws gates remain open.
+
+After separately authorized exact-source transfer, run in disposable Linux root:
+`HOMEHUB_DISPOSABLE_ROOT_PID1_TESTS=1 APP_ENV=testing PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -B -m pytest -p pytest_asyncio.plugin -p no:cacheprovider tests/test_disposable_root_pid1_floor.py -q`.
+All 183 new cases must pass for full harness acceptance; a namespace skip leaves
+PID1 unverified. Next real OS gate is a disposable VM with genuine systemd PID1,
+root-owned service/start floor, complete IPv4/IPv6 client topology and legacy
+unit/drop-in/alias/linger retirement across boot/deploy/rollback/Return Home.
+Mutable user ExecStart, deploy reset/restart and hostctl enable/start remain
+bypasses. Production client issuance, deployment and kiosk/iPhone guarded L1-L6
+acceptance are not supplied by these tests.
+
+### November 14 exact-byte disposable Linux root execution (post-review correction)
+
+Independent Sol High Read task `05f22414403b4abc966d216ebd843ba0`
+identified two P2 test-custody problems: the environment-selected temporary
+ancestor was unchecked, and every namespace probe failure was treated as a
+skip. The source now requires fixed root:root / 0755 and /tmp 01777, creates
+the root-owned disposable fixture directly beneath /tmp, pins and rechecks
+held O_PATH no-follow directory/file name/inode/metadata bindings before the
+approved test executable runs, and skips only recognized unshare namespace
+unavailability errors. This is still not a mount/ABA or malicious-root proof.
+
+After these corrections, the exact test file with Git blob
+`cbe6e849455437657d75f27e34fe20a123a1151f` and SHA-256
+`82b86d0d598019f85ca81bab7aeafb192eb2df465ccf1f1bfd6c525880339d37`
+ran under root in an isolated disposable Linux container:
+**183 passed, 0 skipped, 6.54s** using
+`HOMEHUB_DISPOSABLE_ROOT_PID1_TESTS=1`. This includes actual kernel DAC
+write denials from UID/GID 65534, fixed root-owned mock-release digest/epoch/
+generation admission and rejection, approved mock execution after UID drop,
+and a true user-namespace PID 1 with 24 separate-process IPv4 bind denials
+across two inherited-FD child restarts. The container's actual PID1 is
+supervisord; the nested PID1 is Python, **NOT systemd**. No production
+service manager, client enrollment, real host account or device was touched.
+
+These tests demonstrate separate bounded Linux mechanisms, not a composition
+that closes the existing user-managed HomeHub startup/deploy/rollback/Return
+Home paths. Independent review of the post-fix source and current-head GitHub
+CI remain publication gates. Genuine systemd PID1 + OS-enforced trusted binary
+closure, monotonic floor, installed unit/drop-in/alias audit and staged
+kiosk/iPhone/Hue physical acceptance are still unverified.
