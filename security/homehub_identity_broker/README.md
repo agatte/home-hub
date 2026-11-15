@@ -669,3 +669,35 @@ Home paths. Independent review of the post-fix source and current-head GitHub
 CI remain publication gates. Genuine systemd PID1 + OS-enforced trusted binary
 closure, monotonic floor, installed unit/drop-in/alias audit and staged
 kiosk/iPhone/Hue physical acceptance are still unverified.
+
+### November 14 genuine systemd disposable VM gate (source pending CI)
+
+`scripts/ci_disposable_systemd_pid1.py` is TEST-ONLY/DO-NOT-INSTALL and has
+not run here. The isolated `systemd-disposable` job is limited to the same-repo
+owner draft PR branch on a full Ubuntu 24.04 GitHub-hosted VM, with read-only
+contents permission and checkout credential persistence disabled. Missing genuine
+systemd PID1 fails; no privileged skip or namespace substitute counts as success.
+Only unique runtime test units and synthetic policy under `/run` are created.
+The manager reserves a kernel-selected IPv4 loopback port (never 8000); a root
+pre-start guard checks sealed synthetic floor/approval/candidate and server digest,
+then systemd starts a UID/GID 65534 inherited-fd server with no other groups.
+Negative starts/restarts require guard exit 23, no running main PID, retained
+socket and six separate-process loopback/wildcard bind denials; approved recovery
+must answer through fd 3. Cleanup targets only exact created units/files.
+
+Local validation is static only: main/embedded Python AST/compile, Ruff no-cache,
+YAML parse/job sanity and diff whitespace checks. Hosted execution and independent
+Sol High READ review remain pending. Existing workflow jobs and production source
+are unchanged. This is local uncommitted evidence at worktree
+`identity-287-broker-session-20261114`, local HEAD `01824867`; no publication or
+remote CI verification occurred in this task.
+
+Environment guards are test accident prevention, not production attestation.
+Synthetic generation is not independent monotonic OS trust; interpreter/loader
+closure, hostile root/mount races, IPv6/all-client socket topology, installed
+units/drop-ins/aliases/linger and production boot/deploy/rollback/Return Home
+integration remain open. Alternate ports/manual launches remain possible.
+RootCustodyProof continues unconditional Denied. No Latitude/root provisioning,
+credentials, production restart/deployment, /ws activation or physical acceptance
+is supplied. #287/#293 remain prerequisites to #461 real kiosk/iPhone redesigned
+default Home and individually guarded inline Hue L1-L6 acceptance.
