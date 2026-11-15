@@ -138,25 +138,40 @@ async def test_v2_normal_ack_and_source_guard(operation):
     (ack(on=False), True), ([], False), (ack(on=True), False),
 ])
 async def test_route_only_marks_manual_after_accepted_ack(payload, accepted):
+    """The real HueService dispatch and shared lease fence own REST writes.
+
+    A negative Hue transport ACK is uncertain, not a blanket retryable 500.
+    """
     from backend.api.routes.lights import set_light
     from backend.api.schemas.lights import LightState
+    from tests.test_ws_manual_light_guard import Engine
+
     service = v1_service(payload)
-    service.get_light = AsyncMock(return_value={"on": True})
-    automation = SimpleNamespace(mark_light_manual=Mock(), persist_manual_light_ownership=AsyncMock())
+    engine = Engine()
+    service.set_transition_boundary(engine.lighting_transition_boundary)
+    service.get_light = AsyncMock(return_value={
+        "light_id": "1", "name": "Fake 1", "reachable": True, "on": True,
+    })
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        hue=service, automation=automation, event_logger=None)),
+        hue=service, automation=engine, event_logger=None)),
         headers={}, client=SimpleNamespace(host="offline"), scope={})
+
     if accepted:
-        assert (await set_light("1", LightState(on=False), request))["status"] == "ok"
-        automation.mark_light_manual.assert_called_once_with("1", {"on": False})
-        automation.persist_manual_light_ownership.assert_awaited_once()
+        assert (await set_light("1", LightState(on=False), request)) == {
+            "status": "ok", "light_id": "1",
+        }
+        assert engine.stamps == [("1", {"on": False})]
+        assert engine.persists == 1
     else:
         with pytest.raises(HTTPException) as error:
             await set_light("1", LightState(on=False), request)
-        assert error.value.status_code == 500
-        automation.mark_light_manual.assert_not_called()
-        automation.persist_manual_light_ownership.assert_not_awaited()
-
+        assert error.value.status_code == 409
+        assert "uncertain" in error.value.detail
+        assert engine.stamps == []
+        assert engine.persists == 0
+    service._bridge.request.assert_called_once_with(
+        "PUT", "/api/offline/lights/1/state", {"on": False},
+    )
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["scene", "effect"])

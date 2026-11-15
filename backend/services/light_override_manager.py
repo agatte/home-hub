@@ -93,6 +93,7 @@ class LightOverrideManager:
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
+        continuing = light_id in self._st.manual_light_overrides
         self._notify_authority([light_id])
         self._st.manual_light_overrides[light_id] = self._clock.utc_now().astimezone(TZ)
         if target is not None:
@@ -102,7 +103,16 @@ class LightOverrideManager:
                 if key in {"on", "bri", "hue", "sat", "ct"}
                 and value is not None
             }
-            base = self._st.last_applied_per_light.get(light_id, {})
+            # The automation cache is evicted after each manual write. Continue
+            # from the held manual target while its stamp still owns this light.
+            base = dict(self._st.last_applied_per_light.get(light_id, {}))
+            if continuing:
+                base = dict(self._st.manual_light_targets.get(light_id, base))
+            if "ct" in normalized:
+                base.pop("hue", None)
+                base.pop("sat", None)
+            elif "hue" in normalized or "sat" in normalized:
+                base.pop("ct", None)
             self._st.manual_light_targets[light_id] = {**base, **normalized}
         logger.info(f"Light {light_id} marked as manually overridden")
 

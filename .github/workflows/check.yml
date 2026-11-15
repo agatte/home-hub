@@ -111,3 +111,32 @@ jobs:
       # Playwright e2e tests require a live backend + frontend; not run in
       # CI yet. Run locally with `npm run test:e2e` after starting the dev
       # server, or against a deployed instance via PLAYWRIGHT_BASE_URL.
+
+  systemd-disposable:
+    name: systemd-disposable
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'agatte/home-hub' &&
+      github.event.pull_request.head.repo.full_name == 'agatte/home-hub' &&
+      github.event.pull_request.head.ref == 'work/461-integrated-release-candidate-20261114' &&
+      github.event.pull_request.draft == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test genuine systemd PID1 on disposable VM only
+        run: >-
+          sudo -n /usr/bin/env
+          HOMEHUB_DISPOSABLE_SYSTEMD_PID1=1
+          GITHUB_ACTIONS=true
+          GITHUB_REPOSITORY=agatte/home-hub
+          GITHUB_EVENT_NAME=pull_request
+          GITHUB_HEAD_REF=work/461-integrated-release-candidate-20261114
+          RUNNER_ENVIRONMENT=github-hosted
+          GITHUB_RUN_ID=${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT=${{ github.run_attempt }}
+          /usr/bin/python3 -I -S scripts/ci_disposable_systemd_pid1.py

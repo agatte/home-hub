@@ -1,0 +1,15 @@
+# DO-NOT-INSTALL: source-only proposal; no runtime authorization.
+
+[Unit]
+Description=INACTIVE HomeHub verify socket proposal
+
+[Socket]
+ListenStream=/run/homehub-identity/verify.sock
+Service=homehub-identity.service
+FileDescriptorName=verify
+SocketUser=root
+SocketGroup=homehub-backend
+SocketMode=0660
+DirectoryMode=0755
+Accept=no
+RemoveOnStop=no

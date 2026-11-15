@@ -37,7 +37,6 @@ from backend.services.gameday_service import (
     _parse_espn_datetime,
     _play_event_payload,
 )
-from backend.services.websocket_manager import WebSocketManager
 from backend.api.routes.gameday import (
     get_state as route_get_state,
     test_event as route_test_event,
@@ -1613,9 +1612,11 @@ class TestStateTransitions:
             async def send_text(self, payload: str) -> None:
                 self.sent.append(payload)
 
-        manager = WebSocketManager()
+        from types import SimpleNamespace
+        from tests.support.ws_runtime import configure_runtime
         socket = _Socket()
-        manager._connections.add(socket)
+        manager = configure_runtime(SimpleNamespace(), socket)
+        assert await manager._boundary.admit(socket)
         svc = _make_service(ws=manager)
         play = PlayEvent(
             timestamp=datetime(2026, 9, 13, 17, 5, tzinfo=timezone.utc),

@@ -1,7 +1,7 @@
-"""Inactive, bounded policy inventory. No route imports or enforcement.
+"""Bounded fixed policy inventory; /ws source runtime enforces exact operations.
 
 Operation identifiers describe exact actions, never URL prefixes. Lane selection
-must be performed by a future server adapter, not a payload/header source field.
+belongs to owned server adapters, never a payload/header source field.
 """
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -15,6 +15,21 @@ class Profile:
 
 STATUS = "GET /api/automation/status"
 WS = "WS /ws:mode_update"
+WS_LIGHT_COMMAND = "WS /ws:light_command"
+WS_SONOS_COMMAND = "WS /ws:sonos_command"
+
+# The #293 boundary selects these exact operations and principal-bound lanes.
+# No caller-supplied source or lane can confer a grant. HTTP adoption is separate.
+WS_COMMAND_OPERATIONS = MappingProxyType({
+    "light_command": WS_LIGHT_COMMAND,
+    "sonos_command": WS_SONOS_COMMAND,
+})
+
+
+def ws_command_operation(message_type: object) -> str | None:
+    """Map an exact server-validated inbound type; unknown types deny."""
+    return WS_COMMAND_OPERATIONS.get(message_type) if type(message_type) is str else None
+
 OVERRIDE = "POST /api/automation/override"
 GEOFENCE = "POST /api/presence/geofence"
 HEALTH = "POST /api/automation/agent-health"
@@ -34,8 +49,10 @@ def _profile(source, *grants):
 # Deliberately partial inventory: omitted actions (including guest actions) deny.
 # Six desktop lanes share ONE principal/credential, not six credentials.
 PROFILES = MappingProxyType({
-    "owner_browser": _profile("owner", (STATUS, "browser"), (OVERRIDE, "browser"), (WS, "browser")),
-    "kiosk": _profile("kiosk", (STATUS, "display"), (WS, "display")),
+    "owner_browser": _profile("owner", (STATUS, "browser"), (OVERRIDE, "browser"),
+        (WS, "browser"), (WS_LIGHT_COMMAND, "browser"), (WS_SONOS_COMMAND, "browser")),
+    "kiosk": _profile("kiosk", (STATUS, "display"), (WS, "display"),
+        (WS_LIGHT_COMMAND, "display"), (WS_SONOS_COMMAND, "display")),
     "windows_desktop": _profile("desktop", (ACTIVITY, "activity"), (AUDIO, "audio"),
         (SCREEN, "screen"), (FACE, "camera"), (LUX, "camera"),
         (CAMERA, "display"), (WS, "display"), (WS, "sleep"),

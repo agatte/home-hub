@@ -78,6 +78,7 @@ import webbrowser
 import websockets
 import websockets.sync.client
 
+from backend.services.pc_agent.native_ws_credentials import connection_options
 from backend.services.pc_agent.windows_singleton import WindowsPidBreadcrumbLock
 
 # ---------------------------------------------------------------------------
@@ -586,21 +587,22 @@ class WsWorker(threading.Thread):
         backoff = RECONNECT_INITIAL_S
         while not self._stop.is_set():
             try:
-                logger.info("Connecting to %s", self._url)
+                logger.info("Connecting to configured WS endpoint")
                 # close_timeout caps how long a clean shutdown waits on the
                 # server's ack — desktop teardown shouldn't hang on it.
                 with websockets.sync.client.connect(
                     self._url, close_timeout=2.0,
+                    **connection_options("desktop_notifier", self._url),
                 ) as ws:
                     logger.info("WS connected")
                     backoff = RECONNECT_INITIAL_S
                     self._recv_loop(ws)
-            except (OSError, websockets.exceptions.WebSocketException) as e:
+            except (OSError, websockets.exceptions.WebSocketException):
                 logger.warning(
-                    "WS disconnect: %s (reconnecting in %.1fs)", e, backoff,
+                    "WS disconnected (reconnecting in %.1fs)", backoff,
                 )
             except Exception:
-                logger.exception("WS worker unexpected error")
+                logger.warning("WS connection unavailable")
             finally:
                 if self._stop.is_set():
                     return
@@ -687,7 +689,7 @@ class TrayApp:
         self._stop = threading.Event()
         self._worker = WsWorker(server_url, self._bus, self._stop)
         self._worker.start()
-        logger.info("TrayApp ready — server=%s", server_url)
+        logger.info("TrayApp ready")
 
     def _build_menu(self) -> QMenu:
         menu = QMenu()

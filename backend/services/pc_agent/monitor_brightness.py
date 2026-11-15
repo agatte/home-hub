@@ -55,6 +55,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from backend.services.pc_agent.native_ws_credentials import connection_options
+
 try:
     import screen_brightness_control as sbc  # type: ignore[import-untyped]
 
@@ -1019,18 +1021,18 @@ class WsListener(threading.Thread):
         backoff = WS_RECONNECT_INITIAL_S
         while not self._stop.is_set():
             try:
-                logger.info("Connecting to %s", self._url)
+                logger.info("Connecting to configured WS endpoint")
                 with websockets.sync.client.connect(  # type: ignore[union-attr]
                     self._url,
                     close_timeout=2.0,
+                    **connection_options("windows_desktop", self._url),
                 ) as ws:
                     logger.info("WS connected")
                     backoff = WS_RECONNECT_INITIAL_S
                     self._recv_loop(ws)
-            except Exception as e:
+            except Exception:
                 logger.warning(
-                    "WS disconnect: %s (reconnecting in %.1fs)",
-                    e,
+                    "WS disconnected (reconnecting in %.1fs)",
                     backoff,
                 )
             finally:
@@ -1262,11 +1264,7 @@ def run_agent(
     listener = WsListener(ws_url, shared, reconciler, lux, _stop)
     listener.start()
 
-    logger.info(
-        "Monitor brightness agent started — server=%s ws=%s",
-        server_url,
-        ws_url,
-    )
+    logger.info("Monitor brightness agent started")
 
     from backend.services.pc_agent.content_brightness_shadow import ShadowObserver
     shadow_observer = ShadowObserver()

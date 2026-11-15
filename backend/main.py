@@ -8,18 +8,16 @@ Startup / shutdown logic lives in ``backend.bootstrap`` — this module
 focuses on app construction, middleware, and routing only.
 """
 import ipaddress
-import json
 import logging
 import re
 from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import TypeAdapter, ValidationError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -77,9 +75,9 @@ from backend.schemas.ws import (
     LightCommandData,
     SonosCommand,
     SonosCommandData,
-    WSCommand,
 )
 from backend.services.hue_service import HueService
+from backend.services.ws_manual_light_guard import dispatch_manual_light
 from backend.services.sonos_service import SonosService
 from backend.services.tracing import (
     coerce_inbound_id,
@@ -89,11 +87,6 @@ from backend.services.tracing import (
 from backend.services.websocket_manager import WebSocketManager
 
 app_logger = logging.getLogger("home_hub.main")
-
-# Pre-built adapter for the discriminated WS-command union — caching the
-# TypeAdapter avoids rebuilding validation machinery on every frame.
-_WS_COMMAND_ADAPTER: TypeAdapter[WSCommand] = TypeAdapter(WSCommand)
-
 
 # --- Per-connection WebSocket rate limit -------------------------------------
 #
@@ -432,180 +425,122 @@ if FRONTEND_DIST.exists():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    """
-    WebSocket endpoint for real-time state sync.
-
-    Clients receive light_update, sonos_update, connection_status,
-    mode_update events. Clients can send light_command, sonos_command messages.
-    """
-    ws_manager: WebSocketManager = websocket.app.state.ws_manager
-
-    # Connection-scoped correlation ID — frames belong to one ongoing
-    # session, so a single ID per connection is the right granularity.
-    # The client gets it via connection_status so it can echo it on
-    # support tickets; logs across this connection share the tag.
-    rid = new_request_id()
-    rid_token = request_id_var.set(rid)
-
-    # Per-connection rate-limit bucket (see _ws_rate_limit_check).
-    ws_bucket: deque[float] = deque()
-
-    await ws_manager.connect(websocket)
-
-    # Send initial connection status
-    hue = websocket.app.state.hue
-    sonos = websocket.app.state.sonos
-    automation = websocket.app.state.automation
-    await websocket.send_text(json.dumps({
-        "type": "connection_status",
-        "data": {
-            "hue": hue.connected,
-            "sonos": sonos.connected,
-            "build_id": websocket.app.state.build_id,
-            "request_id": rid,
-        },
-    }))
-
-    # Send current automation mode
-    await websocket.send_text(json.dumps({
-        "type": "mode_update",
-        "data": {
-            "mode": automation.current_mode,
-            "source": automation.mode_source,
-            "manual_override": automation.manual_override,
-            "time_period": automation.get_time_period(),
-            # Fresh source-qualified context on each websocket connection.
-            "house_state": automation.house_state,
-            "activity": automation.activity,
-        },
-    }))
-
-    # Send current ambient sound state
-    ambient = getattr(websocket.app.state, "ambient_sound", None)
-    if ambient:
-        await websocket.send_text(json.dumps({
-            "type": "ambient_update",
-            "data": ambient.get_state(),
-        }))
-
-    # Send current presence state
-    presence = getattr(websocket.app.state, "presence", None)
-    if presence:
-        await websocket.send_text(json.dumps({
-            "type": "presence_update",
-            "data": presence.get_status(),
-        }))
-
+    """One authenticated runtime; missing startup prerequisites deny pre-accept."""
+    manager = getattr(websocket.app.state, "ws_manager", None)
+    if type(manager) is not WebSocketManager:
+        await websocket.close(code=1008)
+        return
+    rid_token = request_id_var.set(new_request_id())
     try:
-        while True:
-            raw = await websocket.receive_text()
-
-            # Rate-limit BEFORE parsing — a flood of garbage JSON shouldn't
-            # cost us the validator allocations either.
-            if not _ws_rate_limit_check(ws_bucket):
-                try:
-                    await websocket.send_text(json.dumps({
-                        "type": "rate_limit",
-                        "data": {
-                            "max": _WS_RATE_LIMIT_MAX,
-                            "window_s": _WS_RATE_LIMIT_WINDOW,
-                        },
-                    }))
-                except Exception:
-                    pass
-                continue
-
-            try:
-                message = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                app_logger.warning("Malformed WebSocket JSON, ignoring")
-                continue
-
-            try:
-                command = _WS_COMMAND_ADAPTER.validate_python(message)
-            except ValidationError as e:
-                # include_context=False drops `ctx['error']` which holds a
-                # ValueError that json.dumps can't serialize.
-                details = e.errors(include_url=False, include_context=False)
-                app_logger.warning("WebSocket validation failed: %s", details)
-                try:
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "data": {"reason": "validation", "details": details},
-                    }))
-                except Exception:
-                    pass
-                continue
-
-            if isinstance(command, LightCommand):
-                await _handle_light_command(websocket.app, command.data, ws_manager)
-            elif isinstance(command, SonosCommand):
-                await _handle_sonos_command(websocket.app, command.data)
-
-    except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
-    except Exception:
-        app_logger.error("WebSocket command failed")
-        ws_manager.disconnect(websocket)
+        await manager.serve(websocket, lambda identity: _ws_initial_events(
+            websocket.app, identity, request_id_var.get()))
     finally:
         request_id_var.reset(rid_token)
 
 
+def _ws_initial_events(app, identity, request_id):
+    """Observed memory snapshots only, evaluated AFTER successful admission.
+
+    No bridge reads, raw fusion/presence state, or caller-selected subscriptions.
+    Every returned event still passes fresh authorization and field projection.
+    """
+    state = app.state
+    automation = state.automation
+    events = []
+    if identity.profile in {"owner_browser", "kiosk"}:
+        events.append(("connection_status", {
+            "hue": state.hue.connected, "sonos": state.sonos.connected,
+            "build_id": state.build_id, "request_id": request_id,
+            "light_command_results": state.ws_manager.light_command_results,
+        }))
+    if identity.profile in {"owner_browser", "kiosk", "windows_desktop"}:
+        events.append(("mode_update", {
+            "mode": automation.current_mode, "source": automation.mode_source,
+            "manual_override": bool(automation.manual_override),
+            "time_period": automation.get_time_period(),
+            "house_state": automation.house_state, "activity": automation.activity,
+        }))
+    if identity.profile in {"owner_browser", "kiosk"}:
+        ambient = getattr(state, "ambient_sound", None)
+        if ambient:
+            events.append(("ambient_update", ambient.get_state()))
+    return events
+
+
+async def _dispatch_authenticated_ws_command(app, identity, command):
+    """Only the boundary calls this after exact command-operation authorization.
+
+    Returned events are PRIVATE to the originating socket, reauthorized and
+    projected by the boundary. ACK is bridge transport plus durable ownership,
+    never physical confirmation. Reconciliation requests a fenced client read.
+    """
+    if isinstance(command, LightCommand):
+        status = await _handle_light_command(app, command.data, app.state.ws_manager)
+        result = {"command_id": command.data.command_id,
+                  "light_id": command.data.light_id, "status": status}
+        events = [("light_command_result", result)]
+        if status != "acknowledged":
+            events.append(("light_command_reconciliation", {
+                "command_id": command.data.command_id, "light_id": command.data.light_id,
+            }))
+        return events
+    if isinstance(command, SonosCommand):
+        if getattr(app.state, "audio_ownership", None) is None:
+            return [("error", {"reason": "unavailable"})]
+        await _handle_sonos_command(app, command.data)
+    return ()
+
+
 async def _handle_light_command(
     app, data: LightCommandData, ws_manager: WebSocketManager,
-) -> None:
+) -> str:
     """Process a validated light control command from a WebSocket client."""
+    # The WebSocket client provides a target, never an authority claim.
+    # Reuse the engine's serialized final-write boundary and owner generations.
     hue: HueService = app.state.hue
-    if not hue.connected:
-        return
-
+    automation = getattr(app.state, "automation", None)
     light_id = data.light_id
+    state = data.model_dump(exclude={"light_id", "command_id"}, exclude_none=True)
+    result = await dispatch_manual_light(automation, hue, light_id, state)
+    if result.status != "acknowledged":
+        app_logger.info("WebSocket manual light write not acknowledged: %s", result.status)
+        return result.status
 
-    # Build the bridge payload from only the fields the client actually set.
-    state = data.model_dump(exclude={"light_id"}, exclude_none=True)
-    if not state:
-        return
-
-    # Capture full before-state for event logging (bri, hue, sat, ct)
-    before = await hue.get_light(light_id) if any(
+    # This is a bridge transport ACK, not physical readback.
+    before = result.before if any(
         k in state for k in ("bri", "hue", "sat", "ct")
     ) else None
-
-    success = await hue.set_light(light_id, state)
-    if success is not True:
-        return
-
-    # Mark this light as manually overridden so automation skips it
-    automation = getattr(app.state, "automation", None)
-    if automation:
-        automation.mark_light_manual(str(light_id), state)
-        await automation.persist_manual_light_ownership()
 
     # No post-write broadcast: the bridge is mid-transition right now and a
     # fresh get_light read returns an intermediate value that the slider
     # would snap to on drag-release. The polling loop already broadcasts
-    # state and honors the in-flight window (hue_service.poll_state_loop),
-    # and the frontend optimistically patched the local store before this
-    # command was sent.
+    # state and honors the in-flight window (hue_service.poll_state_loop).
+    # The shared Svelte store now retains observations, not command targets.
 
     # Log the manual adjustment (covers bri/hue/sat/ct changes)
     event_logger = getattr(app.state, "event_logger", None)
     if event_logger and before is not None:
         mode = automation.current_mode if automation else None
-        await event_logger.log_light_adjustment(
-            light_id=str(light_id),
-            light_name=before.get("name"),
-            bri_before=before.get("bri") if "bri" in state else None,
-            bri_after=state.get("bri"),
-            hue_before=before.get("hue") if "hue" in state else None,
-            hue_after=state.get("hue"),
-            sat_before=before.get("sat") if "sat" in state else None,
-            sat_after=state.get("sat"),
-            ct_before=before.get("ct") if "ct" in state else None,
-            ct_after=state.get("ct"),
-            mode_at_time=mode,
-            trigger="ws",
-        )
+        try:
+            await event_logger.log_light_adjustment(
+                light_id=str(light_id),
+                light_name=before.get("name"),
+                bri_before=before.get("bri") if "bri" in state else None,
+                bri_after=state.get("bri"),
+                hue_before=before.get("hue") if "hue" in state else None,
+                hue_after=state.get("hue"),
+                sat_before=before.get("sat") if "sat" in state else None,
+                sat_after=state.get("sat"),
+                ct_before=before.get("ct") if "ct" in state else None,
+                ct_after=state.get("ct"),
+                mode_at_time=mode,
+                trigger="ws",
+            )
+        except Exception:
+            # Analytics must not turn an acknowledged Hue command into a
+            # misleading missing receipt (and a possible user retry).
+            app_logger.warning("Manual light event logging unavailable")
+    return "acknowledged"
 
 
 async def _handle_sonos_command(app, data: SonosCommandData) -> None:

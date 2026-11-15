@@ -1,12 +1,21 @@
 <script>
   import HueAppHold from './HueAppHold.svelte'
-  import { setLight } from '$lib/stores/init.js'
+  import { onDestroy } from 'svelte'
+  import { setLight, subscribeLightControl } from '$lib/stores/init.js'
+  import { lightCommandResults } from '$lib/stores/lightCommandResults.js'
   import { hueToHsl, ctToColor } from '$lib/utils/lightColor.js'
 
   import { LIGHT_CT_PRESETS } from '$lib/theme.js'
 
   /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, ct?: number, colormode?: string, reachable: boolean }} */
   export let light
+
+  // New Home room panels may render only state reported by the HomeHub store.
+  // Both views keep shared fixture values observational and preview locally until release.
+  export let optimisticStore = true
+
+  $: commandStatus = optimisticStore ? null : ($lightCommandResults[light.light_id]?.status ?? null)
+  $: commandPending = commandStatus === 'pending'
 
   /** Additional light ids that should mirror every command sent from this
    *  card. Used to fuse the kitchen pair (L3+L4) into a single Kitchen card —
@@ -24,9 +33,62 @@
 
   /** @param {string} id @param {Record<string, unknown>} state */
   function fanout(id, state) {
-    setLight(id, state)
-    for (const linked of linkedIds) setLight(linked, state)
+    if (!optimisticStore && commandPending) return
+    // Track the full range of local brightness intent, including intermediate
+    // targets from reversed key inputs. Bridge transition readings within this
+    // range must not erase a queued series of user commands.
+    if (typeof state.bri === 'number') {
+      const baseline = light.bri ?? state.bri
+      briIntentMin = Math.min(briIntentMin ?? baseline, baseline, state.bri)
+      briIntentMax = Math.max(briIntentMax ?? baseline, baseline, state.bri)
+    }
+    controlTarget = { ...controlTarget, ...state }
+    if (controlTimer) clearTimeout(controlTimer)
+    controlTimer = setTimeout(() => { controlTarget = {}; clearBriIntent(); cancelGesture() }, 10000)
+    setLight(id, state, { optimistic: optimisticStore })
+    for (const linked of linkedIds) setLight(linked, state, { optimistic: optimisticStore })
   }
+
+  // Composition target is local input intent, never shared physical state.
+  /** @type {{ on?: boolean, bri?: number }} */
+  let controlTarget = {}
+  /** @type {number | null} */
+  let briIntentMin = null
+  /** @type {number | null} */
+  let briIntentMax = null
+  /** Drop local brightness intent without changing the observed bulb state. */
+  function clearBriIntent() {
+    delete controlTarget.bri
+    briIntentMin = null
+    briIntentMax = null
+  }
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let controlTimer = null
+  const unsubscribeControl = subscribeLightControl((id, kind, observed) => {
+    if (id != null && id !== light.light_id && !linkedIds.includes(id)) return
+    if (kind === 'reset') {
+      controlTarget = {}
+      clearBriIntent()
+      if (controlTimer) clearTimeout(controlTimer)
+      cancelGesture()
+    } else if (id === light.light_id && kind === 'observation' && observed) {
+      if (observed.on === controlTarget.on) delete controlTarget.on
+      if (typeof controlTarget.bri === 'number' && typeof observed.bri === 'number') {
+        const reached = observed.bri === controlTarget.bri
+        // No owner provenance is exposed here. An observation outside every
+        // brightness value in this in-flight series contradicts its trajectory;
+        // rebase rather than reuse a stale target. In-range transitions are
+        // not evidence of a handoff and must not disrupt rapid key input.
+        const contradicted = briIntentMin !== null && briIntentMax !== null
+          && (observed.bri < briIntentMin || observed.bri > briIntentMax)
+        if (reached || contradicted) {
+          clearBriIntent()
+          if (contradicted) cancelGesture()
+        }
+      }
+    }
+  })
+  onDestroy(() => { unsubscribeControl(); if (controlTimer) clearTimeout(controlTimer); cancelGesture() })
 
   const COLOR_PRESETS = [
     { name: 'Warm',     hue: 8000,  sat: 140 },
@@ -41,59 +103,17 @@
   let presetTab = 'color' // 'color' | 'temp'
   let showPresets = false
 
-  // Leading + trailing throttle: cap mid-drag updates to one per THROTTLE_MS.
-  // Flush on drag end so the final value always lands even if it arrived
-  // mid-throttle-window. Mid-drag commands ride a short transitiontime
-  // (~100ms) so the bridge follows the slider tightly without a long fade —
-  // without that, each new command interrupts the previous 0.4s transition
-  // mid-flight and the bulb visibly bounces between targets. The flush call
-  // deliberately omits transitiontime so the final landing gets phue2's
-  // default 0.4s smooth fade.
-  const THROTTLE_MS = 250
-  const MID_DRAG_TRANSITION = 1  // 100ms — snappy mid-drag follow
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let throttleTimer = null
-  /** @type {Record<string, unknown> | null} */
-  let pendingState = null
-  let lastSentAt = 0
-
-  /** @param {Record<string, unknown>} state */
-  function throttledUpdate(state) {
-    const now = Date.now()
-    const elapsed = now - lastSentAt
-    const payload = { ...state, transitiontime: MID_DRAG_TRANSITION }
-    if (elapsed >= THROTTLE_MS) {
-      lastSentAt = now
-      pendingState = null
-      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
-      fanout(light.light_id, payload)
-    } else {
-      pendingState = payload
-      if (!throttleTimer) {
-        throttleTimer = setTimeout(() => {
-          throttleTimer = null
-          if (pendingState) {
-            lastSentAt = Date.now()
-            const s = pendingState
-            pendingState = null
-            fanout(light.light_id, s)
-          }
-        }, THROTTLE_MS - elapsed)
-      }
-    }
+  // Preview locally: a paired Classic card must stay below the authenticated
+  // socket frame cap and send only one final intent per independent fixture.
+  /** @param {number} bri @param {boolean} powerOn */
+  function flushBrightness(bri, powerOn) {
+    fanout(light.light_id, { ...(powerOn ? { on: true } : {}), bri })
   }
 
-  /** Flush any pending update on drag end so the bulb lands on the
-   *  finger-up value. No transitiontime here — phue2's 0.4s default
-   *  gives a smooth landing. */
-  function flushBrightness(bri) {
-    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
-    pendingState = null
-    lastSentAt = Date.now()
-    fanout(light.light_id, { bri })
+  function togglePower() {
+    cancelGesture()
+    fanout(light.light_id, { on: !(controlTarget.on ?? light.on) })
   }
-
-  function togglePower() { fanout(light.light_id, { on: !light.on }) }
   function setColor(hue, sat) {
     fanout(light.light_id, { hue, sat })
     showPresets = false
@@ -113,6 +133,7 @@
 
   /** @type {HTMLButtonElement | undefined} */
   let cardEl
+  let dragPowerOn = false
   let dragging = false
   /** @type {number | null} */
   let activePointerId = null
@@ -136,13 +157,18 @@
 
   /** @param {PointerEvent} e */
   function onPointerDown(e) {
-    if (!light.reachable) return
+    if (!light.reachable || commandPending) return
     if (!cardEl) return
     // Touch / pen: stop the page from scrolling while we drag.
     if (e.pointerType !== 'mouse') e.preventDefault()
+    cancelGesture()
     cardEl.setPointerCapture(e.pointerId)
     activePointerId = e.pointerId
     dragging = true
+    // Both an observed Off bulb and a pending Off click require the final
+    // brightness gesture to carry on:true. An earlier pending On is not yet
+    // physical proof that an observed-off bulb has turned on.
+    dragPowerOn = !light.on || controlTarget.on === false
     didDrag = false
     dragStartX = e.clientX
     pendingBri = clampedBriFromX(e.clientX)
@@ -157,58 +183,76 @@
     const bri = clampedBriFromX(e.clientX)
     pendingBri = bri
     optimisticBri = bri
-    if (!light.on) {
-      // Drag-to-power-on: first move past threshold while off turns the
-      // light on at the dragged-to brightness. setLight's optimistic patch
-      // updates the store immediately so subsequent moves see light.on=true.
-      fanout(light.light_id, { on: true, bri, transitiontime: MID_DRAG_TRANSITION })
-      lastSentAt = Date.now()
-    } else {
-      throttledUpdate({ bri })
-    }
+    // Both Classic and inline Home preview locally until explicit release.
   }
 
   /** @param {PointerEvent} e */
   function onPointerEnd(e) {
     if (!dragging || e.pointerId !== activePointerId) return
-    try { cardEl?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    if (e.type === 'pointercancel' || e.type === 'lostpointercapture') { cancelGesture(); return }
+    finishBrightnessDrag()
+  }
+
+  function finishBrightnessDrag() {
+    if (!dragging) return
+    const pointerId = activePointerId
     const finalBri = pendingBri
     const wasDrag = didDrag
+    const powerOn = dragPowerOn
     dragging = false
     activePointerId = null
     didDrag = false
     pendingBri = null
+    try { pointerId !== null && cardEl?.releasePointerCapture(pointerId) } catch { /* ignore */ }
     if (wasDrag && finalBri != null) {
-      flushBrightness(finalBri)
+      flushBrightness(finalBri, powerOn)
     }
     // Clear optimistic after a tick so the store update has time to land.
     setTimeout(() => { optimisticBri = null }, 50)
   }
 
-  /** @param {KeyboardEvent} e */
-  function onKeydown(e) {
-    if (!light.reachable) return
-    let delta = 0
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') delta = 13      // ~5%
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') delta = -13
-    else if (e.key === 'Home') { setBri(1); return }
-    else if (e.key === 'End') { setBri(254); return }
-    else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); togglePower(); return }
-    else return
-    e.preventDefault()
-    const target = Math.max(1, Math.min(254, (light.bri ?? 1) + delta))
-    setBri(target)
+  function cancelGesture() {
+    keyboardBri = null
+    dragging = false
+    didDrag = false
+    activePointerId = null
+    pendingBri = null
+    optimisticBri = null
+    dragPowerOn = false
   }
 
-  /** @param {number} bri */
-  function setBri(bri) {
-    optimisticBri = bri
-    if (!light.on) {
-      fanout(light.light_id, { on: true, bri })
-    } else {
-      fanout(light.light_id, { bri })
+  /** @type {number | null} */
+  let keyboardBri = null
+  let keyboardPowerOn = false
+  const brightnessKeys = ['ArrowRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'Home', 'End']
+
+  /** @param {KeyboardEvent} e */
+  function onKeydown(e) {
+    if (!light.reachable || commandPending) return
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault()
+      if (!e.repeat) togglePower()
+      return
     }
-    setTimeout(() => { optimisticBri = null }, 100)
+    if (!brightnessKeys.includes(e.key) || dragging) return
+    e.preventDefault()
+    if (keyboardBri === null) keyboardPowerOn = !light.on || controlTarget.on === false
+    const base = keyboardBri ?? controlTarget.bri ?? light.bri ?? 1
+    const delta = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 13 : -13
+    keyboardBri = e.key === 'Home' ? 1 : e.key === 'End' ? 254
+      : Math.max(1, Math.min(254, base + delta))
+    optimisticBri = keyboardBri
+  }
+
+  /** @param {KeyboardEvent} e */
+  function onKeyup(e) {
+    if (!brightnessKeys.includes(e.key) || keyboardBri === null) return
+    e.preventDefault()
+    const bri = keyboardBri
+    const powerOn = keyboardPowerOn
+    keyboardBri = null
+    optimisticBri = null
+    if (light.reachable && !commandPending) flushBrightness(bri, powerOn)
   }
 
   // ---- Derived display values ------------------------------------------
@@ -216,7 +260,7 @@
   // Otherwise, mirror the store. `displayOn` is true if the light is on OR
   // we're actively dragging an off card up (preview the upcoming state).
   $: displayBri = optimisticBri ?? light.bri ?? 1
-  $: displayOn = light.on || (dragging && didDrag)
+  $: displayOn = light.on || (dragging && didDrag) || keyboardBri !== null
   $: fillPct = displayOn ? Math.round((displayBri / 254) * 100) : 0
   $: pctLabel = fillPct + '%'
 
@@ -263,10 +307,14 @@
     on:pointerdown={onPointerDown}
     on:pointermove={onPointerMove}
     on:pointerup={onPointerEnd}
+    on:change={finishBrightnessDrag}
     on:pointercancel={onPointerEnd}
+    on:lostpointercapture={onPointerEnd}
     on:keydown={onKeydown}
+    on:keyup={onKeyup}
+    on:blur={cancelGesture}
     aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
-    disabled={!light.reachable}
+    disabled={!light.reachable || commandPending}
   >
     <span class="chip-fill" aria-hidden="true"></span>
   </button>
@@ -278,7 +326,8 @@
       on:pointerdown|stopPropagation
       on:click|stopPropagation={() => { if (light.on) showPresets = !showPresets }}
       aria-label="Change color"
-      tabindex={light.on ? 0 : -1}
+      tabindex={light.on && !commandPending ? 0 : -1}
+      disabled={commandPending}
     ></button>
 
     <div class="chip-meta">
@@ -292,6 +341,7 @@
       on:pointerdown|stopPropagation
       on:click|stopPropagation={togglePower}
       aria-label={light.on ? 'Turn off' : 'Turn on'}
+      disabled={commandPending}
     >
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 2v6M18.36 6.64A9 9 0 1 1 5.64 6.64" stroke-linecap="round" />
@@ -303,7 +353,7 @@
     <span class="chip-unreachable">Offline</span>
   {/if}
 
-  {#if showPresets && light.on}
+  {#if showPresets && light.on && !commandPending}
     <div class="chip-presets">
       <div class="preset-tabs">
         <button class="preset-tab" class:active={presetTab === 'color'} on:click|stopPropagation={() => presetTab = 'color'}>Color</button>
@@ -338,6 +388,24 @@
       </div>
     </div>
   {/if}
+
+  {#if !optimisticStore && commandStatus}
+    <p class="chip-command-status" role="status" aria-live="polite">
+      {#if commandStatus === 'pending'}
+        Sending request to HomeHub…
+      {:else if commandStatus === 'acknowledged'}
+        Bridge acknowledged. Actual light state awaits a fresh report.
+      {:else if commandStatus === 'denied'}
+        Change blocked by lighting ownership or house state.
+      {:else if commandStatus === 'unavailable'}
+        Control unavailable; no command was sent.
+      {:else if commandStatus === 'invalid'}
+        Request rejected. No change was authorized.
+      {:else}
+        Result uncertain. Check the actual light before trying again.
+      {/if}
+    </p>
+  {/if}
 </div>
 
 {#if light.light_id === '6' && linkedIds.length === 0}
@@ -348,6 +416,7 @@
 <style>
   .light-card-owner { display: contents; }
   .light-card-owner.hold-pilot { display: block; min-width: 0; }
+  .chip-command-status { position:relative; z-index:2; margin:10px 0 0; font-size:12px; line-height:1.5; color:var(--text-muted); }
   .light-chip {
     position: relative;
     overflow: hidden;

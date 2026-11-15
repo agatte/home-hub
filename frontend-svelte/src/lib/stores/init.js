@@ -6,7 +6,10 @@
 import { receiveAmbientContext, resetAmbientContext } from '../quietAtlas/ambient.js'
 import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
-import { lights, setLightsFromList, applyLightUpdate, optimisticLightPatch } from './lights.js'
+import { setLightsFromList, applyLightUpdate } from './lights.js'
+import { createLightCommands } from './lightCommands.js'
+import { addError } from './errors.js'
+import { lightCommandTracker } from './lightCommandResults.js'
 import { sonos } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
@@ -20,6 +23,16 @@ import { startWeatherPolling, stopWeatherPolling } from './weather.js'
 
 /** @type {HubSocket | null} */
 let socket = null
+const lightCommands = createLightCommands({
+  send: (data) => socket?.send('light_command', data) ?? false,
+  read: (id) => apiGet(`/api/lights/${encodeURIComponent(id)}`),
+  apply: (light) => applyLightUpdate(light),
+  report: (id, status) => addError(
+    status === 'denied' || status === 'invalid' || status === 'unavailable'
+      ? `Light ${id}: command ${status}. Displaying observed state.`
+      : `Light ${id}: outcome uncertain. Inspect the bulb before retrying.`
+  ),
+})
 
 // Brief lock to prevent WebSocket mode_update from overwriting an optimistic
 // update before the server confirms. Cleared after 2s or when a matching
@@ -30,6 +43,8 @@ let pendingOverride = null  // expected manual_override value from server
 
 export function initStores() {
   resetAmbientContext()
+  lightCommandTracker.reset()
+  deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
   // Initial REST fetches — best-effort, errors swallowed so the UI still mounts
   // if the backend is warming up.
   apiGet('/api/lights')
@@ -70,13 +85,21 @@ export function initStores() {
       const { type, data } = /** @type {{ type: string, data: any }} */ (msg)
       switch (type) {
         case 'light_update':
-          applyLightUpdate(data)
+          lightCommands.observe(data)
+          break
+        case 'light_command_reconciliation':
+          lightCommands.reconciliation(data)
+          break
+        case 'light_command_result':
+          lightCommands.result(data)
+          lightCommandTracker.receive(data)
           break
         case 'sonos_update':
           sonos.set(data)
           break
         case 'connection_status':
           deviceStatus.set(data)
+          lightCommandTracker.setCapability(data?.light_command_results === true)
           break
         case 'mode_update':
           // Direction-aware lock: during the post-click window, accept the
@@ -137,12 +160,22 @@ export function initStores() {
           break
       }
     },
-    (isConnected) => { resetAmbientContext(); connected.set(isConnected) }
+    (isConnected) => {
+      lightCommands.connection(isConnected)
+      if (!isConnected) {
+        lightCommandTracker.disconnect()
+        deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
+      }
+      resetAmbientContext()
+      connected.set(isConnected)
+    }
   )
   socket.connect()
 
   return () => {
     resetAmbientContext()
+    lightCommandTracker.reset()
+    lightCommands.close()
     socket?.close()
     socket = null
     stopWeatherPolling()
@@ -152,15 +185,22 @@ export function initStores() {
 // ---------- Action helpers (parity with HubContext actions) ----------
 
 /**
- * Set a single light's state. Optimistic update runs immediately, then the
- * command is sent over the WebSocket.
+ * Send a single light command. Only observations update the shared store.
  * @param {string} lightId
  * @param {Record<string, unknown>} state
+ * @param {{ optimistic?: boolean }} [options]
  */
-export function setLight(lightId, state) {
-  socket?.send('light_command', { light_id: lightId, ...state })
-  optimisticLightPatch(lightId, /** @type {any} */ (state))
+export function setLight(lightId, state, options = {}) {
+  if (options.optimistic === false) {
+    lightCommandTracker.submit(lightId, state, (data) =>
+      lightCommands.set(lightId, state, data.command_id) !== false,
+    )
+    return
+  }
+  lightCommands.set(lightId, state)
 }
+
+export const subscribeLightControl = (listener) => lightCommands.subscribe(listener)
 
 /**
  * @param {string} action

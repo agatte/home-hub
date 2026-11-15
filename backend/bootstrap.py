@@ -106,7 +106,17 @@ async def lifespan(app: FastAPI):
     app_logger.info("Database initialized")
 
     # WebSocket manager
-    ws_manager = WebSocketManager()
+    # Only trusted application composition can supply this explicit seam.
+    # No broker/issuer is installed: ordinary startup closes /ws before accept.
+    from backend.main import _dispatch_authenticated_ws_command
+
+    async def dispatch_ws(identity, command):
+        return await _dispatch_authenticated_ws_command(app, identity, command)
+
+    ws_manager = WebSocketManager(
+        configuration=getattr(app.state, "ws_runtime_configuration", None),
+        dispatcher=dispatch_ws,
+    )
     app.state.ws_manager = ws_manager
 
     # Heartbeat registry — long-running tasks call .tick(name) once per
