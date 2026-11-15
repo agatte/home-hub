@@ -988,3 +988,43 @@ Local Windows validation: focused preflight/custody/unit-contract/protected
 integration suites **284 passed, 43 skipped**; the new suite contributes
 **3 passed, 15 explicitly native Linux skips**. Ruff without cache, in-memory
 compilation and `git diff --check` passed. No native Linux test was executed.
+
+## November 14 client-facing TCP custody mechanism (local source only)
+
+The package README's "disposable TCP reservation mechanism" entry records the
+new Linux loopback ephemeral kernel tests and inert standalone
+`security/homehub_identity_broker/home-hub-http.socket.in` contract. The original
+broker systemd inventory is untouched. Final Windows focused validation after the bounded wildcard correction:
+**364 passed, 51 skipped**, including new **1 passed/7 Linux skips**;
+Ruff, child-script AST and Git diff whitespace check all passed.
+Initial exact-source Linux kernel verification passed 5/5 before review. An
+independent Sol High Read review recommended the actual legacy IPv4 wildcard
+competitor regression; after correction, independent disposable Linux rerun
+passed **8/8**, and source hash matched Sandbox `6fecafd168d7c910c623e6f858dc59b43f8bfe70`.
+Final expanded 8-case exact-head GitHub Linux CI remains the next gate, zero
+new-suite skips required.
+
+Source evidence rejects an assumed loopback-only production address: `run.py`
+uses 0.0.0.0:8000, kiosk localhost, tunnel :8002 forwards to 127.0.0.1:8000.
+The fragment intentionally has no ListenStream pending actual LAN/iPhone/proxy,
+wildcard and IPv6 review. The tests prove no creator identity or root/PID1 state; IPv4 wildcard legacy
+bind rejection is exercised without binding a wildcard listener. Reservation
+persists while ANY holder keeps the socket open, and ends only after the final FD
+closes. A manager death alone does not guarantee closure if children retain FDs. Their intended narrow invariant
+is retained socket ownership excluding legacy binds throughout child restarts.
+
+Next OS gate is separately authorized root/system-manager custody of all authentic
+client-facing accept sockets, verified v255 ReusePort=no/defaults/drop-ins, and a
+separate trusted backend launch floor. Retire legacy user-unit/alias/linger/manual
+routes and enforce boot/restart/deploy/rollback/Return Home outside mutable source
+and backups. Existing user ExecStart, deploy reset/restart and hostctl start remain
+bypasses; neither an /etc floor file nor this fragment closes them. RootCustodyProof
+still always denies. #287/#293 security and #461 real usable kiosk/iPhone Home and
+individually guarded L1-L6 remain blocked; unprovisioned /ws forbids activation.
+
+Evidence is uncommitted in the named identity-287-broker-session-20261114 worktree,
+HEAD 01824867a796a3386205dccdad7839c1ef9d1a46. Owner-reported remote draft #533
+39755430e890b94a1f0573c6d7f0ee59c3513fff/green CI was not fetched or reverified.
+Only two new source files and append-only changes to these two owning documents
+were made. No network, publication, index change, host/device write, credentials,
+service activation, deployment or cleanup occurred.

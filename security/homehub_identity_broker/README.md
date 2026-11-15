@@ -541,3 +541,58 @@ Windows skips are not kernel acceptance. No backend, WebSocket, issuer, UI or
 lighting cutover is supplied. Real mobile Home/kiosk and guarded L1-L6 remain
 blocked on the previously documented provisioning and separately authorized
 root composition, security integration, deployment and physical acceptance.
+
+### November 14 disposable TCP reservation mechanism (local source only)
+
+`tests/test_linux_http_socket_reservation.py` adds seven native Linux cases:
+six separate-process legacy binds (IPv4 loopback or wildcard, each plain,
+SO_REUSEADDR or SO_REUSEPORT) must return EADDRINUSE before and after two
+inherited-FD child accept/exit cycles; the seventh proves a duplicate retains reservation after original FD
+closure and plain binding succeeds only after the final copy closes. The manager
+never relinquishes its descriptor during restart. Only AF_INET 127.0.0.1 port=0
+is requested; port 8000 is rejected before listening. All subprocess/socket waits
+are bounded. No connection to any existing service, root privilege or PID1 is
+required. Socket reuse defaults are checked before bind, with no reuse fallback
+or retry; missing Linux SO_REUSEPORT fails. Release uses a separate no-connection
+case to avoid confusing TIME_WAIT with listener custody. An unrelated ephemeral
+port race fails rather than weakening assertions. The IPv4 wildcard *competitor*
+is tested, but manager wildcard binding, IPv6 and alternate interfaces/routes
+remain explicitly unsupported, not implicitly secured.
+
+`home-hub-http.socket.in` beside this README is an inert standalone contract
+outside the broker's exact `systemd/` inventory. Its only active shape is [Socket],
+Accept=no, ReusePort=no, FreeBind=no: no ListenStream, service, ExecStart, caller
+arguments or Install. Source `run.py` binds 0.0.0.0:8000, kiosk uses localhost,
+and the tunnel proxy on :8002 forwards to 127.0.0.1:8000. Actual LAN/iPhone,
+proxy and IPv6 topology must be reviewed before choosing all client-facing binds.
+This fragment cannot be installed as a working listener. No prior inventory,
+release-floor contract or runtime admission changed; RootCustodyProof.check
+remains unconditional Denied.
+
+Independent final-byte disposable Linux execution passed **8/8** cases, and
+its test-file blob matched the Sandbox hash. Exact-current-head GitHub Ubuntu CI
+must rerun all eight without skips before claiming published technical
+verification. Windows is **1 passed, 7 Linux skips**; the six focused suites
+total **364 passed, 51 skipped**. Ruff
+without cache and AST parsing (including child scripts) pass. Independent source
+review corrected a short-read assumption. Initial checks found a UTF-8 BOM and
+nine exact-inventory failures; removing the new files' BOM and relocating the
+fragment resolved these without changing existing contracts. No Linux execution
+was available in this bounded Windows task, so kernel success is not claimed.
+
+Independent Sol High Read review found one material P3 coverage improvement:
+include the actual legacy 0.0.0.0 wildcard bind competitor. Added the three
+extra parameter combinations and reran native Linux and focused Windows suites;
+no other P0/P1/P2 or material P3 finding remained. The actual held listener stays
+127.0.0.1 and port=0, not a production bind.
+
+After those gates, separately authorize real root/PID1 system-manager reservation
+of every authentic client-facing socket across backend stop/restart, including
+v255 effective/default ReusePort=no, drop-ins and kernel bind-conflict checks.
+That needs a separate trusted backend launch floor outside mutable checkout,
+backups and user-manager control, plus legacy user units/aliases/linger/manual
+launch retirement and rollback/deploy/Return Home enforcement. Socket custody
+alone neither authenticates descriptor creator PID/UID/GID nor enforces launch
+version. Manager death releases this test's socket. No actual host state was
+inspected. Issuer/freshness/TLS, #287/#293 and #461 kiosk/iPhone Home plus guarded
+L1-L6 acceptance remain open; unprovisioned /ws still blocks activation.

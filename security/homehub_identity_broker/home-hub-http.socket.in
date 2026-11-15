@@ -1,0 +1,11 @@
+# DO-NOT-INSTALL: inert future ROOT/SYSTEM-manager socket contract, not a unit.
+# ListenStream unresolved: run.py binds 0.0.0.0:8000; kiosk uses localhost;
+# tunnel :8002 forwards to 127.0.0.1:8000. Review actual LAN/iPhone, wildcard,
+# IPv6 and proxy topology before selecting every authentic client-facing bind.
+# No listener, activation service, ExecStart, caller args or installation wiring.
+# v255 gate: verify effective ReusePort=no (including default), FreeBind=no,
+# drop-ins and actual kernel exclusivity; this text proves no installed state.
+[Socket]
+Accept=no
+ReusePort=no
+FreeBind=no
