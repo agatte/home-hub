@@ -16,6 +16,7 @@ Two surfaces:
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
+from starlette.responses import JSONResponse
 
 router = APIRouter()
 
@@ -24,6 +25,14 @@ router = APIRouter()
 async def ping() -> dict:
     """Tiny public liveness probe — fixed shape, no app state."""
     return {"ok": True}
+
+
+@router.get("/api/readiness")
+async def readiness(request: Request) -> JSONResponse:
+    """Fixed process-bootstrap bit only; does not report device or issuer health."""
+    ready = getattr(request.app.state, "bootstrap_ready", False) is True
+    return JSONResponse({"ready": ready}, status_code=200 if ready else 503,
+                        headers={"Cache-Control": "no-store"})
 
 # Predictors we surface in the /health ml block. Each tuple is
 # (state_attribute_name, display_name) — the attribute is the name on

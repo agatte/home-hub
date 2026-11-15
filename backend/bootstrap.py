@@ -96,6 +96,7 @@ def _compute_build_id() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle for the application."""
+    app.state.bootstrap_ready = False
     app_logger.info("Starting Home Hub...")
 
     app.state.build_id = _compute_build_id()
@@ -1580,7 +1581,12 @@ async def lifespan(app: FastAPI):
 
     app_logger.info("Home Hub is ready")
 
-    yield
+    app.state.bootstrap_ready = True
+    try:
+        yield
+    finally:
+        # Clear before shutdown I/O, including exceptional lifespan unwinding.
+        app.state.bootstrap_ready = False
 
     # Shutdown
     app_logger.info("Shutting down Home Hub...")
