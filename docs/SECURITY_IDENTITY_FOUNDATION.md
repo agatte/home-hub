@@ -1,5 +1,56 @@
 # Identity foundation for #287 — NOT LIVE
 
+## November 15 #461 readiness compatibility baseline — SOURCE ONLY / NOT DEPLOYED
+
+Primary owner #461 redesigned Home release, security dependency #293. This
+**separate additive Phase A branch** `work/461-readiness-baseline-20261115`
+was created from verified Sandbox `origin/master` commit
+`1f5d296e2c8f0504b8718ceedfaba89b1a961b8a`, not from the dirty
+default-deny REST/WS/Hue candidate. Source remains **UNCOMMITTED**.
+It adds `GET /api/readiness` with fixed JSON `{"ready":true}`/200
+after the foreground lifespan completes, otherwise
+`{"ready":false}`/503, with `Cache-Control: no-store`.
+A missing/non-boolean readiness bit fails closed; the marker is set false
+before startup awaits, true directly before entering lifespan yield and
+false in yield-finally before shutdown I/O. This is process-bootstrap
+readiness, **not** Hue/device health, issuer availability or a full
+physical startup/recovery observation.
+
+Phase A deliberately retains existing `/health` behavior, legacy deployment,
+backup and Return Home probes, original REST/WS behavior and all existing
+client compatibility. Its inactive `scripts/readiness_prerequisite.py`
+matches the protected Phase B candidate's strict probe and full-SHA
+committed-artifact admission contract. This helper has no caller, CLI,
+import-time actuation or fallback to `/health` or `/api/ping`.
+No runtime endpoint was contacted; no host, service, device, credential,
+database, package, commit, push, merge or deploy action was performed.
+
+Offline tests: `tests/test_readiness_phase_a.py` (3 passed, one
+Starlette/httpx deprecation warning) uses a synthetic FastAPI app without
+the HomeHub hardware-owning lifespan; verifies exact readiness wire bodies,
+statuses, original ping/health registrations, and AST startup/yield/finally
+marker order. `tests/test_readiness_prerequisite.py` (10 passed)
+independently exercises strict response and synthetic committed-artifact
+hash admission behavior. This is **not** a signature or authorization proof. Both exit 0 and `git diff --check` exit 0.
+This is **implemented plus locally tested in scope**, not real readiness
+operational validation or owner acceptance. No full CI/Bash/systemd/
+old-target-to-new-target synthetic deploy execution is claimed.
+
+**Required next gate:** independent security/lifecycle review of this small
+additive baseline; separate owner authorization for security/lifecycle
+integration and Latitude deployment through `scripts/deploy.sh`;
+after Phase A is genuinely deployed and verified, approve its exact SHA
+as a Phase B rollback baseline. Then and only then implement/prove
+strict readiness migration of deploy/rollback, backup restart and
+Return Home checks (with a separately authenticated lifecycle identity),
+followed by high-risk Phase B enforcement and real owner-witnessed
+dashboard/Hue acceptance. Current `1f5d296` lacks readiness and cannot
+be used as Phase B rollback. No anonymous diagnostics or private-LAN
+trust fallback is authorized. See the protected isolated candidate's
+`docs/SECURITY_IDENTITY_FOUNDATION.md` checkpoint and issue #461.
+
+---
+
 This first offline slice is **NOT ENFORCED**, not provisioned, and not imported
 by existing routes, startup, legacy `backend/api/auth.py`, or any client. It does
 not complete #287. No production credential or migration is supplied.
