@@ -1,13 +1,146 @@
-# #489 Vault storage relocation: Sandbox preparation
+# #489 Vault storage relocation: source-only milestones through merged PR #499
 
 Status on 2026-11-05: **SOURCE-ONLY COMPONENTS MERGED / NOT INSTALLED / NOT INSTALLABLE**.
 Owner: [#489](https://github.com/agatte/home-hub/issues/489).
 The offline release recipe ([PR #491](https://github.com/agatte/home-hub/pull/491)),
 offline evidence preflight ([PR #496](https://github.com/agatte/home-hub/pull/496)),
-and offline stage-plan reviewer ([PR #497](https://github.com/agatte/home-hub/pull/497))
+offline stage-plan reviewer ([PR #497](https://github.com/agatte/home-hub/pull/497)),
+and Sandbox-only synthetic stage rehearsal ([PR #499](https://github.com/agatte/home-hub/pull/499))
 are **merged on `master`**. Merging these source files did not install an
 updater, reconfigure a task, touch the Vault, or authorize a physical move.
 Earlier worktree/PR references below are historical preparation evidence.
+
+## Offline cutover evidence contract (2026-11-05, local source only)
+
+Owner remains #489. This next milestone is limited to
+`scripts/review_obsidian_relocation_cutover_evidence.py`, its portable unittest
+file, and this document, in isolated worktree
+`C:\Work\home-hub-project\worktrees\obsidian-host-preflight-contract-489-20261105`,
+base `461fc52179e08a512ea022b957910ae421ebaf0c`. The source-only
+candidate was committed and published for review as
+[draft PR #500](https://github.com/agatte/home-hub/pull/500).
+At this checkpoint it is not merged, installed or accepted on the host.
+No real-host evidence was collected; Codex made no network calls. The
+merged PR #499 status was independently checked against current GitHub `master`
+by the coordinating assistant on 2026-11-05.
+The Sandbox has no host Documents/Vault access. This module has no CLI, I/O,
+filesystem probe, packager, installer, mover, Scheduler access or Host Bridge use.
+The choice is organization with **zero storage savings**; code root
+`home-hub-project` stays in place. #486 deletion remains paused; the second wipe
+recovery is closed. Neither is reopened by this work.
+
+### Exact packet and independent comparison inputs
+
+`review_cutover_evidence(packet, *, reviewed_siblings, reviewed_bindings, now)`
+accepts in-memory JSON-shaped data; `now` is a supplied integer epoch second,
+not a clock read. All dictionaries have exact keys; missing and extra fields
+refuse. The source defines the complete schema and tests supply an explicitly
+fictional packet. These are observations to request in a future reviewed route,
+not instructions or authority to gather them now:
+
+| Field | Required data and comparison |
+| --- | --- |
+| `schema`, `old`, `new` | Integer 1; exact old `C:\Users\Anthony\Documents\HomeHub Knowledge Vault` and new `C:\Users\Anthony\Documents\HomeHub Vault Storage\HomeHub Knowledge Vault`. No case folding, alias resolution, normalization, alternate drive/root, project/worktree substitution or traversal. |
+| `captured_at`, `physical_confirmation`, `inventory_complete` | Integer collection time within 0–300 seconds of supplied `now`; literal true confirmations. This checks only consistency of supplied time and assertions, never actual freshness or physical attendance. |
+| `siblings` | Sorted exact names in the `.HomeHub Knowledge Vault-homehub-` namespace, at most 2,048 names of at most 180 characters; no duplicate/case aliases. Must equal the separately supplied, reviewed exact list. The limit is a schema bound, not a physical count. No invented list of historical names or automatic inference from dated counts. |
+| `records` | Exactly the whole Vault followed by every enumerated sibling, in that order, with exact absolute `path`, `classification`, literal `preserve=true`, `coverage=all_bytes_names_settings_personal_and_managed`, `before`, `after`. The whole Vault includes `.obsidian`, every personal note, hidden content and managed `HomeHub Source`; no managed-only preservation claim. |
+| Record observations | Exact `volume` (16 lowercase hex), `file_id` (32 lowercase hex), `filesystem=NTFS`, `reparse=false`, integer `hard_links=1`, `acl_sha256`, `acl_reviewed=true`, `recursive_plain_tree=true`, `content_sha256`, `seal_sha256`. All digests are 64 lowercase hex. Before/after observations must match; all roots have unique IDs and the same volume. Before/after here brackets collection, **not a move**. Content/seal digests cover each entire historical artifact, including standalone backups and receipt bytes; a declaration does not verify their contents. |
+| `parents` | Exact Documents and new storage-parent observation records with matching volume, distinct identity, NTFS, ACL and plain-tree assertions. A missing new parent fails this packet; its eventual creation is a separately approved write, never an implicit preflight action. |
+| `destination_absent`, `collisions` | Literal true and empty list. Future host review must establish absent Vault and absent exact targets for every sibling, including aliases and name collisions. |
+| `task`, `quiescence` | Exact task name `HomeHub Obsidian Mirror Refresh`, `state=Disabled`, `enabled=false`, integer zero running/pending instances; Obsidian closed, workers drained, empty locks and pending lists. Self-reported `Ready` is refused. A currently enabled healthy task may yield a blocked planning report; this never authorizes disabling it to obtain a passing packet. |
+| `bindings` | Exact `current` and `proposed` dictionaries matching separately supplied `reviewed_bindings`: EXE literal, StartIn literal, blank arguments, exact installed Python313 path, source commit/label, EXE/Python/manifest/pins/runtime/task-XML SHA-256 observations. StartIn is a literal 40-hex version directory under Anthony's local ObsidianMirror namespace; EXE is an explicit simple filename within that directory. Versions must differ. This restrictive contract refuses other layouts rather than adapting them; confirm the actual current layout during separately approved host design. Shape is not provenance or an approved release pin. |
+| `backup` | Two distinct independent snapshot IDs (64 lowercase hex), exact entire protected-path list and literal verified assertion. The future operator must independently prove snapshots, locations, recoverability and coverage of Vault/settings/notes/all historical siblings; two arbitrary hashes prove none of that. |
+| `rollback` | Exact old path and literal true fields retaining original bundle/task/snapshots, stopping on crash/drift, prohibiting auto-delete, and requiring attended review before restore. |
+
+Known classifications are Vault, complete backup, completed-stage, complete
+receipt and standalone backup, using the source's fixed classification strings.
+Complete transactions must have the **same 32-lowercase-hex token** across
+`backup-<token>`, `completed-stage-<token>` and `complete-<token>.json`;
+a lone `backup-<token>` can be separately classified as a standalone backup.
+Anything missing from a purported complete triple refuses. This is a literal
+name/shape check, not an authenticated receipt or content-integrity proof.
+Every unknown name, stage without completion, incomplete
+triple or uncertain record stays in the protected inventory and **blocks review**;
+never omit it to make the report pass. A separately reviewed resolution is
+required before an executable cutover plan can exist. Exact names for all
+standalone, incomplete and unknown artifacts must be captured even when a
+retention planner would not inspect them. The historical 136 entries are dated
+evidence, not a current expected count. No wildcard is an executable move or
+cleanup instruction.
+
+Output is always `readiness=OFFLINE_REVIEW_ONLY`; `packet_consistent` means only
+that these supplied fields agree. Refusals return the first deterministic reason
+in validation order. `host_preflight_authorized`, `host_stage_authorized`,
+`task_update_authorized`, `vault_move_authorized`, `authenticity_verified`,
+`freshness_verified`, `seal_integrity_verified`, and `physical_safety_verified`
+are always false. Even a fully fictional internally consistent packet can pass
+shape review. There is no approvability, move list or physical safety verdict.
+
+### Separately reviewed host route and attended operation
+
+1. Review/publish the source separately. Design and separately authorize an
+   exact, bounded real-host **read-only** inventory route. No such route is
+   implemented here. Use a host operator or separately reviewed narrowly typed
+   bridge capability, never generic host shell/path access or wider privileges.
+   Request metadata/digests rather than note contents or credentials. Inventory
+   exact old/new roots, every relevant ancestor (including redirected Documents),
+   all namespace siblings and every descendant in each protected tree. Record
+   NTFS volume serial and file IDs, reparse tags, all file hard-link counts,
+   owner/DACL/inheritance observations, full member/content hashes and managed
+   seal/receipt relationships; independently validate the seals. Include task
+   XML/action/EXE/StartIn/triggers/principal, runtime and publication pins,
+   pending/lock records, Obsidian and worker state, backup evidence and collection
+   interval. A read-only route must not stop processes, start tasks, create the
+   parent, stage files or repair any discovered condition.
+2. Independently review the authenticated inventory, exact sibling mapping,
+   recoverable independent backups, release pins and explicit rollback plan.
+   Resolve unknown/incomplete evidence without deletion. Approve host staging
+   separately using a future reviewed compatible procedure; preserve old bundle
+   and task definition. No installer is supplied by these offline milestones.
+3. Obtain explicit attended authorization for quiescence, task update, Obsidian
+   rebind and physical move. Disable future triggers and drain running/queued
+   workers with the operator's separately approved procedure; close Obsidian.
+   Recheck processes, active locks and pending markers. Any uncertainty stops;
+   do not remove stale-looking markers or treat Scheduler `Ready` as exclusivity.
+4. Immediately before each authorized write, revalidate exact identities, plain
+   ancestors/trees, ACLs, same volume, absent destinations, immutable pins and
+   full content seals under a separately reviewed concurrency strategy. Move the
+   whole Vault and every individually enumerated protected historical sibling
+   to the new parent, preserving names and content; no overwrites or deletions.
+   Keep a durable per-target progress record for an interrupted partial move.
+   This module does not supply that journal or implement the move sequence.
+5. While triggers remain disabled, compare complete postflight membership,
+   content hashes, managed seals, settings/personal notes, historical evidence,
+   identities and ACLs against preflight and independent snapshots. Only after
+   preservation passes, apply the explicitly approved exact task EXE/blank
+   arguments/StartIn and rebind Obsidian to the new Vault. Reconfirm its settings,
+   notes, links, source navigation and application-open behavior. Resume triggers
+   only under the approved plan after these gates; observe natural schedule and
+   sign-in behavior, no-change/offline behavior and subsequent full seals.
+6. On collision, lock, identity/ACL/content drift, task/rebind failure, crash or
+   ambiguous partial state: stop, retain disabled triggers, preserve both paths,
+   snapshots, task XML and progress evidence. Independently inventory actual
+   state before any retry. An attended, separately approved rollback must map
+   each exact moved artifact back without overwriting newer or unknown content,
+   restore the old pinned task/action and Obsidian binding, and verify full old
+   content before any resumption. If safe reversal cannot be proved, remain
+   stopped for operator review. Never auto-delete a partial target or backup.
+
+Pure JSON data is **not Win32 handle-bound concurrency protection**. Matching
+before/after hashes or repeated `lstat` calls cannot exclude ABA swaps or other
+writers between observations. No future host collector or mover should claim
+atomicity from this packet. The host-specific operator/concurrency route needs
+its own security review and authorization. This source-only milestone does not
+modify or run any real-host preflight probe, packager, task or filesystem mover.
+
+Local validation: installed Python 3.13 `-B -m unittest` discovery for the new
+test file and specified Ruff `check --no-cache` passed. Tests cover fictional
+non-authority, deterministic refusal and input preservation, missing/extra
+fields/siblings, path/case aliases, bounds, collisions, hash/seal drift, invalid
+identity/ACL/link/volume observations, active tasks/locks/pending work,
+unknown/incomplete artifacts, stale/future supplied times, missing physical
+confirmation and backup/rollback failures. No Windows-only runtime is imported.
+This is offline implementation proof only; no host health claim is made.
 
 ## Sandbox-only staging rehearsal (2026-11-05, source published for review)
 
