@@ -1,5 +1,7 @@
 # Persistent HomeHub Knowledge Vault — operating guide (#358)
 
+> **Current scoped status (2026-11-16):** Dated natural hourly GitHub → reviewed Markdown → Windows Vault delivery was accepted under [#399](https://github.com/agatte/home-hub/issues/399)/[#422](https://github.com/agatte/home-hub/issues/422) after the October 22 first delivery and October 31 seal/no-change checks. Those historical observations do **not** prove today's managed Vault SHA, file inventory, scheduled-task result, or this uncommitted #461 development work was mirrored. The real Windows Vault is not mapped into the protected Sandbox, and no current read-only host observation was made in this checkpoint. The source of truth remains reviewed GitHub `master` and owning issues; automatic scheduled refresh is the existing accepted path **after** publication/merge of canonical Markdown, not direct chat writes. No direct edit of `HomeHub Source`, manual scheduled-task invocation, refresh, configuration change, cleanup, or host access is authorized by this status note. The original historical checkpoints below are retained intentionally.
+
 **Status (2026-10-11):** The permanent real-PC Vault is installed and survived
 a normal Windows reboot with expected managed files, preferences, navigation,
 links and search confirmed by the operator. The prior guarded refresh to
