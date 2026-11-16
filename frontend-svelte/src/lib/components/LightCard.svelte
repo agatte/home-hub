@@ -1,12 +1,20 @@
 <script>
   import HueAppHold from './HueAppHold.svelte'
   import { setLight } from '$lib/stores/init.js'
+  import { lightCommandResults } from '$lib/stores/lightCommandResults.js'
   import { hueToHsl, ctToColor } from '$lib/utils/lightColor.js'
 
   import { LIGHT_CT_PRESETS } from '$lib/theme.js'
 
   /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, ct?: number, colormode?: string, reachable: boolean }} */
   export let light
+
+  // New Home room panels may render only state reported by the HomeHub store.
+  // The original Apartment card preserves its existing optimistic behavior.
+  export let optimisticStore = true
+
+  $: commandStatus = optimisticStore ? null : ($lightCommandResults[light.light_id]?.status ?? null)
+  $: commandPending = commandStatus === 'pending'
 
   /** Additional light ids that should mirror every command sent from this
    *  card. Used to fuse the kitchen pair (L3+L4) into a single Kitchen card —
@@ -24,8 +32,9 @@
 
   /** @param {string} id @param {Record<string, unknown>} state */
   function fanout(id, state) {
-    setLight(id, state)
-    for (const linked of linkedIds) setLight(linked, state)
+    if (!optimisticStore && commandPending) return
+    setLight(id, state, { optimistic: optimisticStore })
+    for (const linked of linkedIds) setLight(linked, state, { optimistic: optimisticStore })
   }
 
   const COLOR_PRESETS = [
@@ -90,7 +99,7 @@
     if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
     pendingState = null
     lastSentAt = Date.now()
-    fanout(light.light_id, { bri })
+    fanout(light.light_id, optimisticStore || light.on ? { bri } : { on: true, bri })
   }
 
   function togglePower() { fanout(light.light_id, { on: !light.on }) }
@@ -118,6 +127,7 @@
   let activePointerId = null
   let dragStartX = 0
   let didDrag = false
+  let dragPowerRequested = false
   /** @type {number | null} */
   let pendingBri = null
   /** @type {number | null} */
@@ -136,7 +146,7 @@
 
   /** @param {PointerEvent} e */
   function onPointerDown(e) {
-    if (!light.reachable) return
+    if (!light.reachable || commandPending) return
     if (!cardEl) return
     // Touch / pen: stop the page from scrolling while we drag.
     if (e.pointerType !== 'mouse') e.preventDefault()
@@ -144,6 +154,7 @@
     activePointerId = e.pointerId
     dragging = true
     didDrag = false
+    dragPowerRequested = false
     dragStartX = e.clientX
     pendingBri = clampedBriFromX(e.clientX)
     optimisticBri = pendingBri
@@ -157,10 +168,13 @@
     const bri = clampedBriFromX(e.clientX)
     pendingBri = bri
     optimisticBri = bri
-    if (!light.on) {
-      // Drag-to-power-on: first move past threshold while off turns the
-      // light on at the dragged-to brightness. setLight's optimistic patch
-      // updates the store immediately so subsequent moves see light.on=true.
+    // Redesigned Home only previews during dragging. One final explicit
+    // command on release avoids queuing Hue inventory reads every 250ms.
+    if (!optimisticStore) return
+    if (!light.on && !dragPowerRequested) {
+      // Even without optimistic store patches, issue only one power-on intent
+      // per drag; later moves use bounded brightness updates.
+      dragPowerRequested = true
       fanout(light.light_id, { on: true, bri, transitiontime: MID_DRAG_TRANSITION })
       lastSentAt = Date.now()
     } else {
@@ -185,9 +199,27 @@
     setTimeout(() => { optimisticBri = null }, 50)
   }
 
+  /** A canceled pointer gesture is not an explicit brightness commit.
+   *  On classic controls, earlier mid-drag sends cannot be undone, but
+   *  the trailing timer must not send another command after cancellation.
+   */
+  /** @param {PointerEvent} e */
+  function onPointerCancel(e) {
+    if (!dragging || e.pointerId !== activePointerId) return
+    try { cardEl?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
+    pendingState = null
+    pendingBri = null
+    activePointerId = null
+    dragging = false
+    didDrag = false
+    dragPowerRequested = false
+    optimisticBri = null
+  }
+
   /** @param {KeyboardEvent} e */
   function onKeydown(e) {
-    if (!light.reachable) return
+    if (!light.reachable || commandPending) return
     let delta = 0
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') delta = 13      // ~5%
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') delta = -13
@@ -263,10 +295,10 @@
     on:pointerdown={onPointerDown}
     on:pointermove={onPointerMove}
     on:pointerup={onPointerEnd}
-    on:pointercancel={onPointerEnd}
+    on:pointercancel={onPointerCancel}
     on:keydown={onKeydown}
     aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
-    disabled={!light.reachable}
+    disabled={!light.reachable || commandPending}
   >
     <span class="chip-fill" aria-hidden="true"></span>
   </button>
@@ -278,7 +310,8 @@
       on:pointerdown|stopPropagation
       on:click|stopPropagation={() => { if (light.on) showPresets = !showPresets }}
       aria-label="Change color"
-      tabindex={light.on ? 0 : -1}
+      tabindex={light.on && !commandPending ? 0 : -1}
+      disabled={commandPending}
     ></button>
 
     <div class="chip-meta">
@@ -292,6 +325,7 @@
       on:pointerdown|stopPropagation
       on:click|stopPropagation={togglePower}
       aria-label={light.on ? 'Turn off' : 'Turn on'}
+      disabled={commandPending}
     >
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 2v6M18.36 6.64A9 9 0 1 1 5.64 6.64" stroke-linecap="round" />
@@ -303,7 +337,7 @@
     <span class="chip-unreachable">Offline</span>
   {/if}
 
-  {#if showPresets && light.on}
+  {#if showPresets && light.on && !commandPending}
     <div class="chip-presets">
       <div class="preset-tabs">
         <button class="preset-tab" class:active={presetTab === 'color'} on:click|stopPropagation={() => presetTab = 'color'}>Color</button>
@@ -338,6 +372,24 @@
       </div>
     </div>
   {/if}
+
+  {#if !optimisticStore && commandStatus}
+    <p class="chip-command-status" role="status" aria-live="polite">
+      {#if commandStatus === 'pending'}
+        Sending request to HomeHub…
+      {:else if commandStatus === 'acknowledged'}
+        Bridge acknowledged. Actual light state awaits a fresh report.
+      {:else if commandStatus === 'denied'}
+        Change blocked by lighting ownership or house state.
+      {:else if commandStatus === 'unavailable'}
+        Control unavailable; no command was sent.
+      {:else if commandStatus === 'invalid'}
+        Request rejected. No change was authorized.
+      {:else}
+        Result uncertain. Check the actual light before trying again.
+      {/if}
+    </p>
+  {/if}
 </div>
 
 {#if light.light_id === '6' && linkedIds.length === 0}
@@ -348,6 +400,7 @@
 <style>
   .light-card-owner { display: contents; }
   .light-card-owner.hold-pilot { display: block; min-width: 0; }
+  .chip-command-status { position:relative; z-index:2; margin:10px 0 0; font-size:12px; line-height:1.5; color:var(--text-muted); }
   .light-chip {
     position: relative;
     overflow: hidden;
