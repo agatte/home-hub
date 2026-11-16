@@ -1,12 +1,17 @@
 """
 Hue light control endpoints.
 """
+import logging
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from backend.api._guards import _check_hue_available
 from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.lights import LightResponse, LightState
+from backend.services.light_state_calculator import ALL_LIGHT_IDS
+from backend.services.ws_manual_light_guard import dispatch_manual_light
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/lights", tags=["lights"])
 
 # Relative brightness step (multiplicative). Mirrors the guest endpoint —
@@ -89,40 +94,52 @@ async def _log_light_change(
 
 @router.put("/{light_id}", dependencies=[Depends(require_api_key)])
 async def set_light(light_id: str, state: LightState, request: Request) -> dict:
-    """
-    Set the state of a single light.
+    """Adjust one bulb under the same final-write authority as WebSocket.
 
-    Any combination of on, bri, hue, sat can be provided.
+    A transport acknowledgement does not establish physical readback.
     """
     hue = request.app.state.hue
     _check_hue_available(hue)
 
+    if light_id not in ALL_LIGHT_IDS:
+        raise HTTPException(status_code=404, detail="Unknown fixture")
     state_dict = state.model_dump(exclude_none=True)
     if not state_dict:
         raise HTTPException(status_code=400, detail="No state values provided")
+    if "ct" in state_dict and ("hue" in state_dict or "sat" in state_dict):
+        raise HTTPException(status_code=422, detail="CT and HSB cannot be mixed")
 
-    # Capture before-state for event logging
-    before = await hue.get_light(light_id)
-
-    success = await hue.set_light(light_id, state_dict)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to set light state")
-
-    # Mark this light as manually overridden so automation skips it
+    # The API caller cannot mint a lease or claim a stronger owner's light.
+    # This guard checks the shared serial boundary and final Hue worker fence,
+    # then stamps/persists manual ownership only after a bridge transport ACK.
     automation = getattr(request.app.state, "automation", None)
-    if automation:
-        automation.mark_light_manual(str(light_id), state_dict)
-        await automation.persist_manual_light_ownership()
+    result = await dispatch_manual_light(automation, hue, light_id, state_dict)
+    if result.status == "denied":
+        raise HTTPException(status_code=409, detail="Lighting owner or lifecycle conflict")
+    if result.status == "unavailable":
+        raise HTTPException(status_code=503, detail="Lighting control unavailable")
+    if result.status != "acknowledged":
+        # The bridge could have applied some or all of this request. Using a
+        # conflict response discourages generic 5xx retry middleware.
+        raise HTTPException(
+            status_code=409,
+            detail="Lighting outcome uncertain; inspect the bulb before retrying",
+        )
 
     # No post-write broadcast — the bridge is mid-transition and a fresh
     # read returns an intermediate value. Polling broadcasts after the
     # in-flight window (hue_service.poll_state_loop) and the frontend
     # optimistically patched its local store on the way in.
 
-    await _log_light_change(
-        request, light_id, before, state_dict,
-        trigger=source_from_request(request, fallback="rest"),
-    )
+    try:
+        await _log_light_change(
+            request, light_id, result.before, state_dict,
+            trigger=source_from_request(request, fallback="rest"),
+        )
+    except Exception:
+        # Analytics failure cannot turn an acknowledged bridge mutation into
+        # a misleading error that might invite another physical command.
+        logger.warning("REST light adjustment event log unavailable")
     return {"status": "ok", "light_id": light_id}
 
 
@@ -141,9 +158,9 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
     _check_hue_available(hue)
 
     automation = getattr(request.app.state, "automation", None)
-    mode_mult = 1.0
-    if automation:
-        mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
+    if automation is None:
+        raise HTTPException(status_code=503, detail="Lighting authority unavailable")
+    mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
     ceiling = max(1, min(254, int(254 * mode_mult)))
 
     sign = 1 if direction == "up" else -1
@@ -152,6 +169,9 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
 
     lights = await hue.get_all_lights()
     updated: list[dict] = []
+    blocked: list[str] = []
+    unavailable: list[str] = []
+    uncertain: list[str] = []
     for light in lights:
         if not light.get("on") or "bri" not in light:
             continue
@@ -160,54 +180,105 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
         new_bri = max(1, min(ceiling, current + sign * delta))
         if new_bri == current:
             continue
-        light_id = light["light_id"]
-        success = await hue.set_light(light_id, {"bri": new_bri})
-        if success is not True:
-            continue
-        if automation:
-            automation.mark_light_manual(str(light_id), {"bri": new_bri})
-            await automation.persist_manual_light_ownership()
-        updated.append({"id": light_id, "bri": new_bri})
-        # Per-light row in light_adjustments so Alexa "brighter"/"dimmer"
-        # is visible in the same place as dashboard slider drags.
-        await _log_light_change(
-            request, str(light_id), light, {"bri": new_bri}, trigger=trigger,
+        light_id = str(light["light_id"])
+        result = await dispatch_manual_light(
+            automation, hue, light_id, {"bri": new_bri},
         )
+        if result.status != "acknowledged":
+            if result.status == "denied":
+                blocked.append(light_id)
+            elif result.status == "unavailable":
+                unavailable.append(light_id)
+            else:
+                # An ambiguous bridge ACK could mean partial physical change.
+                # Never retry such a fixture automatically.
+                uncertain.append(light_id)
+            continue
+        updated.append({"id": light_id, "bri": new_bri})
+        try:
+            await _log_light_change(
+                request, light_id, result.before, {"bri": new_bri},
+                trigger=trigger,
+            )
+        except Exception:
+            logger.warning("REST brightness adjustment event log unavailable")
 
     return {
-        "status": "ok",
+        "status": "partial_failure" if blocked or unavailable or uncertain else "ok",
         "direction": direction,
         "updated": updated,
+        "blocked": blocked,
+        "unavailable": unavailable,
+        "uncertain": uncertain,
         "ceiling": ceiling,
     }
 
 
 @router.post("/all", dependencies=[Depends(require_api_key)])
 async def set_all_lights(state: LightState, request: Request) -> dict:
-    """Set the same state on all lights (used for scenes)."""
+    """Explicit group manual action; every fixture must keep its own owner.
+
+    No multi-light Hue dispatch or optimistic post-write broadcast: grouped
+    outcomes can be partial and never prove physical bulb completion.
+    """
     hue = request.app.state.hue
     _check_hue_available(hue)
 
     state_dict = state.model_dump(exclude_none=True)
     if not state_dict:
         raise HTTPException(status_code=400, detail="No state values provided")
+    if "ct" in state_dict and ("hue" in state_dict or "sat" in state_dict):
+        raise HTTPException(status_code=422, detail="CT and HSB cannot be mixed")
+    automation = getattr(request.app.state, "automation", None)
+    if automation is None:
+        raise HTTPException(status_code=503, detail="Lighting authority unavailable")
 
-    # Capture before-state for every light so we can log each individually
-    before_lights = {l["light_id"]: l for l in await hue.get_all_lights()}
-
-    success = await hue.set_all_lights(state_dict)
-
-    # Broadcast all light updates
-    ws_manager = request.app.state.ws_manager
     lights = await hue.get_all_lights()
+    if not lights:
+        raise HTTPException(status_code=503, detail="Lighting inventory unavailable")
+
+    updated: list[str] = []
+    blocked: list[str] = []
+    unavailable: list[str] = []
+    uncertain: list[str] = []
+    seen: set[str] = set()
     for light in lights:
-        await ws_manager.broadcast("light_update", light)
+        light_id = str(light.get("light_id", ""))
+        if light_id in seen:
+            continue
+        seen.add(light_id)
+        if light_id not in ALL_LIGHT_IDS:
+            # Never let newly discovered bridge fixtures join a bulk action
+            # without deliberate HomeHub fixture inventory authorization.
+            unavailable.append(light_id)
+            continue
+        result = await dispatch_manual_light(
+            automation, hue, light_id, state_dict,
+        )
+        if result.status != "acknowledged":
+            if result.status == "denied":
+                blocked.append(light_id)
+            elif result.status == "unavailable":
+                unavailable.append(light_id)
+            else:
+                uncertain.append(light_id)
+            continue
 
-    # Without per-light acknowledgements, a failed bulk write may be partial.
-    if success:
-        for lid, before in before_lights.items():
+        updated.append(light_id)
+        try:
             await _log_light_change(
-                request, lid, before, state_dict, trigger="all_lights"
+                request, light_id, result.before, state_dict,
+                trigger="all_lights",
             )
+        except Exception:
+            logger.warning("REST bulk light adjustment event log unavailable")
 
-    return {"status": "ok" if success else "partial_failure"}
+    # Explicit per-fixture status rather than a false all-or-nothing ACK.
+    # A partially applied action is never automatically retried/rolled back.
+    return {
+        "status": "partial_failure" if blocked or unavailable or uncertain else "ok",
+        "updated": updated,
+        "blocked": blocked,
+        "unavailable": unavailable,
+        "uncertain": uncertain,
+    }

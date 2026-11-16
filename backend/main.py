@@ -80,6 +80,7 @@ from backend.schemas.ws import (
     WSCommand,
 )
 from backend.services.hue_service import HueService
+from backend.services.ws_manual_light_guard import dispatch_manual_light
 from backend.services.sonos_service import SonosService
 from backend.services.tracing import (
     coerce_inbound_id,
@@ -463,6 +464,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "sonos": sonos.connected,
             "build_id": websocket.app.state.build_id,
             "request_id": rid,
+            # Explicit capability gate for new in-place room controls. Legacy
+            # clients need no command_id and remain backward compatible.
+            "light_command_results": True,
         },
     }))
 
@@ -533,12 +537,38 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "type": "error",
                         "data": {"reason": "validation", "details": details},
                     }))
+                    # New clients receive a result even when target validation
+                    # fails. Reflect only a tightly validated correlation key,
+                    # never unknown client payloads or claimed authority.
+                    command_data = message.get("data") if isinstance(message, dict) else None
+                    command_id = command_data.get("command_id") if isinstance(command_data, dict) else None
+                    if (
+                        isinstance(message, dict)
+                        and message.get("type") == "light_command"
+                        and type(command_id) is str
+                        and re.fullmatch(r"[A-Za-z0-9_-]{8,64}", command_id)
+                    ):
+                        await websocket.send_text(json.dumps({
+                            "type": "light_command_result",
+                            "data": {"command_id": command_id, "status": "invalid"},
+                        }))
                 except Exception:
                     pass
                 continue
 
             if isinstance(command, LightCommand):
-                await _handle_light_command(websocket.app, command.data, ws_manager)
+                status = await _handle_light_command(websocket.app, command.data, ws_manager)
+                # Only the originating client receives its correlated receipt.
+                # A bridge acknowledgement is not proof of physical completion.
+                if command.data.command_id is not None:
+                    await websocket.send_text(json.dumps({
+                        "type": "light_command_result",
+                        "data": {
+                            "command_id": command.data.command_id,
+                            "light_id": command.data.light_id,
+                            "status": status,
+                        },
+                    }))
             elif isinstance(command, SonosCommand):
                 await _handle_sonos_command(websocket.app, command.data)
 
@@ -553,33 +583,23 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 async def _handle_light_command(
     app, data: LightCommandData, ws_manager: WebSocketManager,
-) -> None:
+) -> str:
     """Process a validated light control command from a WebSocket client."""
+    # The WebSocket client provides a target, never an authority claim.
+    # Reuse the engine's serialized final-write boundary and owner generations.
     hue: HueService = app.state.hue
-    if not hue.connected:
-        return
-
+    automation = getattr(app.state, "automation", None)
     light_id = data.light_id
+    state = data.model_dump(exclude={"light_id", "command_id"}, exclude_none=True)
+    result = await dispatch_manual_light(automation, hue, light_id, state)
+    if result.status != "acknowledged":
+        app_logger.info("WebSocket manual light write not acknowledged: %s", result.status)
+        return result.status
 
-    # Build the bridge payload from only the fields the client actually set.
-    state = data.model_dump(exclude={"light_id"}, exclude_none=True)
-    if not state:
-        return
-
-    # Capture full before-state for event logging (bri, hue, sat, ct)
-    before = await hue.get_light(light_id) if any(
+    # This is a bridge transport ACK, not physical readback.
+    before = result.before if any(
         k in state for k in ("bri", "hue", "sat", "ct")
     ) else None
-
-    success = await hue.set_light(light_id, state)
-    if success is not True:
-        return
-
-    # Mark this light as manually overridden so automation skips it
-    automation = getattr(app.state, "automation", None)
-    if automation:
-        automation.mark_light_manual(str(light_id), state)
-        await automation.persist_manual_light_ownership()
 
     # No post-write broadcast: the bridge is mid-transition right now and a
     # fresh get_light read returns an intermediate value that the slider
@@ -592,20 +612,26 @@ async def _handle_light_command(
     event_logger = getattr(app.state, "event_logger", None)
     if event_logger and before is not None:
         mode = automation.current_mode if automation else None
-        await event_logger.log_light_adjustment(
-            light_id=str(light_id),
-            light_name=before.get("name"),
-            bri_before=before.get("bri") if "bri" in state else None,
-            bri_after=state.get("bri"),
-            hue_before=before.get("hue") if "hue" in state else None,
-            hue_after=state.get("hue"),
-            sat_before=before.get("sat") if "sat" in state else None,
-            sat_after=state.get("sat"),
-            ct_before=before.get("ct") if "ct" in state else None,
-            ct_after=state.get("ct"),
-            mode_at_time=mode,
-            trigger="ws",
-        )
+        try:
+            await event_logger.log_light_adjustment(
+                light_id=str(light_id),
+                light_name=before.get("name"),
+                bri_before=before.get("bri") if "bri" in state else None,
+                bri_after=state.get("bri"),
+                hue_before=before.get("hue") if "hue" in state else None,
+                hue_after=state.get("hue"),
+                sat_before=before.get("sat") if "sat" in state else None,
+                sat_after=state.get("sat"),
+                ct_before=before.get("ct") if "ct" in state else None,
+                ct_after=state.get("ct"),
+                mode_at_time=mode,
+                trigger="ws",
+            )
+        except Exception:
+            # Analytics must not turn an acknowledged Hue command into a
+            # misleading missing receipt (and a possible user retry).
+            app_logger.warning("Manual light event logging unavailable")
+    return "acknowledged"
 
 
 async def _handle_sonos_command(app, data: SonosCommandData) -> None:
