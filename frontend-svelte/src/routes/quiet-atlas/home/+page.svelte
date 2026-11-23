@@ -300,10 +300,8 @@
   </section>
 
   <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
-    <span>MORE</span>
-    <h2 id="phone-apartment-title">More from HomeHub</h2>
-    <p>Other household tools and the original dashboard.</p>
-    <a href="/classic">Open classic dashboard <span aria-hidden="true">↗</span></a>
+    <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
+    <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
   </section>
 
   <section class="apartment-stage" aria-labelledby="apartment-stage-title">
@@ -598,7 +596,7 @@
     .apartment-stage,.lighting-dock {display:none;}
     .foreword {margin:18px 0 16px;}
     .foreword h1 {font-size:clamp(30px,8vw,38px);line-height:1.12;}
-    .foreword .subhead {font-size:14px;line-height:1.45;}
+    .foreword .eyebrow,.foreword .subhead {display:none;}
     .phone-status {border:1px solid var(--line);border-radius:15px;background:linear-gradient(135deg,var(--stage),var(--deep));padding:12px 14px;margin-bottom:12px;}
     .phone-status-header {display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--gold);font-size:14px;font-weight:700;letter-spacing:.08em;}
     .phone-status-header strong {font-size:14px;letter-spacing:0;text-align:right;color:var(--muted);}
@@ -628,11 +626,9 @@
     .phone-scenes small {font-size:14px;color:var(--muted);line-height:1.4;}
     .phone-scenes>span:last-child {color:var(--gold);font-size:21px;}
     .phone-actions-head {margin-bottom:16px;}
-    .phone-apartment-entry {padding:21px 16px;margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:radial-gradient(ellipse at 95% -10%,var(--glow),transparent 70%),var(--deep);}
-    .phone-apartment-entry>span {font-size:14px;font-weight:700;color:var(--gold);letter-spacing:.13em;}
-    .phone-apartment-entry h2 {font-size:23px;font-weight:560;line-height:1.2;margin:10px 0;}
-    .phone-apartment-entry p {font-size:14px;line-height:1.6;color:var(--muted);margin-bottom:12px;}
-    .phone-apartment-entry a {min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--gold);font-size:14px;font-weight:650;border-top:1px solid var(--line);padding-top:11px;}
+    .phone-apartment-entry {padding:9px 2px 0;margin:9px 0 13px;border-top:1px solid var(--line);}
+    .phone-apartment-entry .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
+    .phone-apartment-entry a {min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:14px;font-weight:650;}
     /* Even secondary review controls must remain usable by touch. */
     .theme-toggle {min-height:44px;font-size:14px;padding:9px 12px;}
     .mobile-context select {min-height:44px;font-size:14px;}
