@@ -54,7 +54,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(cardSource).toContain('if (wasDrag && finalBri != null)')
     expect(cardSource).toContain('fanout(light.light_id, light.on ? { bri } : { on: true, bri })')
     expect(home).toContain('id="phone-lighting-title"')
-    expect(home).toContain('href="#lighting-title"')
+    expect(home).toContain('id="lighting-title"')
   })
 
   it('keeps room reveal inside Home with non-modal accessible navigation', () => {
