@@ -29,7 +29,7 @@ describe('#461 redesigned Home mode recovery', () => {
   })
 
   it('fails closed without connected house state and requires explicit confirmation from Away or Sleeping', () => {
-    expect(panel).toContain("$connected && KNOWN_HOUSE_STATES.includes($automation.house_state)")
+    expect(panel).toContain("$connected && KNOWN_HOUSE_STATES.includes($automation.house_state ?? '')")
     expect(panel).toContain("const sensitiveAction = $automation.house_state === 'sleeping' || $automation.house_state === 'away'")
     expect(panel).toContain('sensitiveAction && armedMode !== mode')
     expect(panel).toContain('armedMode = null')
