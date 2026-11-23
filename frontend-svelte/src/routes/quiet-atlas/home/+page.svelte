@@ -275,6 +275,28 @@
     {#if contextDisplay.status !== 'recent'}<p role="status">{contextDisplay.note}</p>{/if}
   </section>
 
+  <section class="apartment-stage" aria-labelledby="apartment-stage-title">
+    <div class="world">
+      <div class="world-topline">
+        <h2 id="apartment-stage-title">At a glance</h2>
+        <span class="source">{contextDisplay.status === 'recent' ? 'Updated recently' : 'Status unverified'}</span>
+      </div>
+      <div class="world-bottom">
+        <div class="readout">
+          <span>HOUSE STATE</span>
+          <strong>{contextDisplay.house}</strong>
+        </div>
+        <div class="readout">
+          <span>ACTIVITY</span>
+          <strong>{contextDisplay.activity}</strong>
+        </div>
+        {#if contextDisplay.status !== 'recent'}
+          <p class="world-note" role="status">{contextDisplay.note}</p>
+        {/if}
+      </div>
+    </div>
+  </section>
+
   <QuietAtlasHomeModeControls />
 
   <section class="phone-actions" aria-labelledby="phone-lighting-title">
@@ -302,28 +324,6 @@
   <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
     <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
     <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
-  </section>
-
-  <section class="apartment-stage" aria-labelledby="apartment-stage-title">
-    <div class="world">
-      <div class="world-topline">
-        <h2 id="apartment-stage-title">At a glance</h2>
-        <span class="source">{contextDisplay.status === 'recent' ? 'Updated recently' : 'Status unverified'}</span>
-      </div>
-      <div class="world-bottom">
-        <div class="readout">
-          <span>HOUSE STATE</span>
-          <strong>{contextDisplay.house}</strong>
-        </div>
-        <div class="readout">
-          <span>ACTIVITY</span>
-          <strong>{contextDisplay.activity}</strong>
-        </div>
-        {#if contextDisplay.status !== 'recent'}
-          <p class="world-note" role="status">{contextDisplay.note}</p>
-        {/if}
-      </div>
-    </div>
   </section>
 
   <section class="lighting-dock" aria-labelledby="lighting-title">
