@@ -492,7 +492,7 @@
   .disclaimer {flex:1;min-width:190px;}
   .theme-toggle {background:transparent;border:1px solid var(--line);border-radius:99px;color:var(--ink);padding:7px 14px;cursor:pointer;}
   .foreword {display:flex;align-items:end;justify-content:space-between;gap:16px;margin:24px 0 23px;}
-  .eyebrow,.world-kicker {font-size:14px;letter-spacing:.14em;font-weight:750;color:var(--gold);margin:0 0 9px;}
+  .eyebrow {font-size:14px;letter-spacing:.14em;font-weight:750;color:var(--gold);margin:0 0 9px;}
   h1,h2,p {margin-top:0;}
   h1 {font-size:clamp(29px,3.2vw,43px);font-weight:610;letter-spacing:-.045em;line-height:1.13;margin-bottom:7px;}
   .subhead {font-size:14px;color:var(--muted);margin:0;}
