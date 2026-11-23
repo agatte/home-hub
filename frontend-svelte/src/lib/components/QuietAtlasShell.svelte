@@ -157,7 +157,7 @@
         <span class="qa-brand-mark" aria-hidden="true">H</span>
         <span><strong>HomeHub</strong><small>Home &amp; Control</small></span>
       </a>
-      <span class="qa-preview-badge" class:functional={!readOnlyPreview}>{readOnlyPreview ? 'Read-only preview' : 'HomeHub controls'}</span>
+      <span class="qa-preview-badge" class:functional={!readOnlyPreview} class:home-controls={$page.url.pathname === '/' || $page.url.pathname === '/quiet-atlas/home'}>{readOnlyPreview ? 'Read-only preview' : 'HomeHub controls'}</span>
     </header>
 
     <div class="qa-shell-content">
@@ -405,6 +405,8 @@
     .qa-mobile-brand .qa-brand-mark { flex-basis: 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 19px; }
     .qa-mobile-brand strong { font-size: 14px; }
     .qa-mobile-brand small { font-size: 9px; }
+    /* OwnerUnlock already labels protected Home actions; avoid a competing pill beneath its button. */
+    .qa-preview-badge.home-controls { display:none; }
     .qa-shell-content { padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
     .qa-mobile-nav {
       position: fixed;
