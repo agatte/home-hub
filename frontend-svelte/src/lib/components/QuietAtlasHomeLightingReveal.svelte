@@ -10,9 +10,7 @@
   {#if open}
     <section class="shelf" aria-labelledby={`${id}-title`}>
       <div class="introduction">
-        <p class="eyebrow">ROOM LIGHTING</p>
         <h3 id={`${id}-title`}>{group.name}</h3>
-        <p class="explanation">Adjust individual lights right here, without leaving Home. These are the same functional controls available on the original Apartment page.</p>
       </div>
       <QuietAtlasRoomControls room={group.id} id={`${id}-fixtures`} />
     </section>
