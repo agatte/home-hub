@@ -2,6 +2,8 @@
   // #461 default Home: HomeHub status comes only from guarded REST. Lighting uses the existing WebSocket commands.
   import { onMount } from 'svelte'
   import { connected } from '$lib/stores/connection.js'
+  import { lights } from '$lib/stores/lights.js'
+  import { homeRoomLightSummary } from '$lib/quietAtlas/homeRoomLightSummary.js'
   import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
   import { CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import QuietAtlasHomeLightingReveal from '$lib/components/QuietAtlasHomeLightingReveal.svelte'
@@ -43,12 +45,17 @@
   let contextNowMs = 0
   $: contextDisplay = homeContextPresentation(contextSnapshot, contextNowMs)
 
+  // The tile IDs mirror the existing independently controlled L1–L6 room fixtures.
+  // Summaries are read-only; neither room expansion nor status changes lights.
   const groups = [
-    { id: 'living', name: 'Living', detail: '1 light', label: 'Browse Living lights' },
-    { id: 'bedroom', name: 'Bedroom', detail: '2 lights', label: 'Browse Bedroom lights' },
-    { id: 'kitchen', name: 'Kitchen', detail: '2 lights', label: 'Browse Kitchen lights' },
-    { id: 'plant', name: 'Plant', detail: '1 light', label: 'Browse Plant lighting' },
+    { id: 'living', name: 'Living', detail: '1 light', fixtures: ['1'] },
+    { id: 'bedroom', name: 'Bedroom', detail: '2 lights', fixtures: ['2', '5'] },
+    { id: 'kitchen', name: 'Kitchen', detail: '2 lights', fixtures: ['3', '4'] },
+    { id: 'plant', name: 'Plant', detail: '1 light', fixtures: ['6'] },
   ]
+  $: roomStatuses = Object.fromEntries(
+    groups.map((group) => [group.id, homeRoomLightSummary(group.fixtures, $lights, $connected)])
+  )
 
   const examples = {
     unavailable: {
@@ -297,19 +304,17 @@
     </div>
   </section>
 
-  <QuietAtlasHomeModeControls />
-
   <section class="phone-actions" aria-labelledby="phone-lighting-title">
     <div class="phone-actions-head">
-      <span class="eyebrow">YOUR LIGHTS</span>
-      <h2 id="phone-lighting-title">Lights</h2>
+      <span class="eyebrow">LIGHTING / YOUR ROOMS</span>
+      <h2 id="phone-lighting-title">Your rooms</h2>
       <p>Choose a room to adjust its lights.</p>
     </div>
     <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
       {#each groups as group (group.id)}
-        <button type="button" id={`phone-room-${group.id}`} class="phone-room" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+        <button type="button" id={`phone-room-${group.id}`} class="phone-room" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="phone-room-icon" aria-hidden="true"></span>
-          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail}</small></span>
+          <span class="phone-room-copy"><strong>{group.name}</strong><small>{roomStatuses[group.id].label}</small></span>
           <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
         </button>
         <QuietAtlasHomeLightingReveal id={`phone-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
@@ -321,24 +326,19 @@
     </a>
   </section>
 
-  <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
-    <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
-    <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
-  </section>
-
   <section class="lighting-dock" aria-labelledby="lighting-title">
     <div class="dock-head">
       <div>
-        <p class="eyebrow">THE EVERYDAY CONTROLS</p>
-        <h2 id="lighting-title">Lights</h2>
+        <p class="eyebrow">LIGHTING / YOUR ROOMS</p>
+        <h2 id="lighting-title">Your rooms</h2>
       </div>
       <a class="browse-link" href="/quiet-atlas/control">Browse Control <span aria-hidden="true">↗</span></a>
     </div>
     <div class="groups" role="group" aria-label="Browse lighting groups">
       {#each groups as group}
-        <button type="button" id={`dock-room-${group.id}`} class="group" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+        <button type="button" id={`dock-room-${group.id}`} class="group" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="group-mark" aria-hidden="true"></span>
-          <span class="group-copy"><strong>{group.name}</strong><small>{group.detail}</small></span>
+          <span class="group-copy"><strong>{group.name}</strong><small>{roomStatuses[group.id].label}</small></span>
           <span class="group-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
         </button>
       {/each}
@@ -350,6 +350,14 @@
       <span><strong>Scenes & presets</strong><small>View available scenes without changing the lights.</small></span>
       <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
     </div>
+  </section>
+
+  <!-- Lighting is the primary task on both phone and kiosk. -->
+  <QuietAtlasHomeModeControls />
+
+  <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
+    <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
+    <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
   </section>
 
   <QuietAtlasEnvironment />
@@ -649,6 +657,29 @@
   .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
   .group-copy small {white-space:normal;}
   .phone-room,.group {color:var(--ink);text-align:left;cursor:pointer;width:100%;font:inherit;}
+  /* Real reported fixture state drives the lighting cues, never sample presence. */
+  .group {position:relative;isolation:isolate;min-height:108px;border-radius:19px;overflow:hidden;padding:17px 18px;gap:14px;transition:border-color 160ms ease,transform 160ms ease;}
+  .group-copy {position:relative;z-index:1;gap:9px;}
+  .group-copy strong {font-size:17px;letter-spacing:-.025em;}
+  .group-copy small {font-size:13px;}
+  .group-mark {width:12px;height:12px;opacity:1;border-width:1.5px;}
+  .group-arrow {position:relative;z-index:1;font-size:21px;}
+  .phone-room {position:relative;isolation:isolate;overflow:hidden;min-height:112px;border-radius:19px;padding:15px;transition:border-color 160ms ease,transform 160ms ease;}
+  .phone-room-icon {display:block;position:absolute;right:15px;bottom:13px;width:29px;height:29px;border-radius:50%;border:1px solid var(--line);pointer-events:none;opacity:.6;background:radial-gradient(circle,rgba(237,207,160,.16) 0 3px,transparent 4px);}
+  .phone-room-copy {position:relative;z-index:1;align-self:end;gap:10px;}
+  .phone-room-copy strong {font-size:18px;letter-spacing:-.03em;font-weight:640;}
+  .phone-room-copy small {font-size:13px;}
+  .phone-room-arrow {position:relative;z-index:1;}
+  .phone-room[data-tone="on"],.group[data-tone="on"] {border-color:rgba(237,207,160,.34);background:radial-gradient(ellipse at 80% 94%,rgba(237,207,160,.16),transparent 66%),linear-gradient(130deg,var(--stage),var(--deep));}
+  .phone-room[data-tone="on"] .phone-room-icon {border-color:var(--gold);box-shadow:0 0 19px 4px rgba(237,207,160,.14);opacity:1;}
+  .group[data-tone="on"] .group-mark {background:var(--gold);border-color:var(--gold);box-shadow:0 0 17px 4px rgba(237,207,160,.20);}
+  .phone-room[data-tone="unknown"] .phone-room-copy small,.group[data-tone="unknown"] .group-copy small {color:var(--gold);}
+  .phone-room[data-tone="offline"] .phone-room-icon,.group[data-tone="offline"] .group-mark {opacity:.3;}
+  .phone-room:hover,.group:hover {border-color:rgba(237,207,160,.46);}
+  @media (hover:hover) and (prefers-reduced-motion:no-preference) {.phone-room:hover,.group:hover {transform:translateY(-2px);}}
+  @media (max-width:700px) {.phone-room {min-height:108px;}.group {min-height:72px;}}
+  @media (max-width:360px) {.phone-room {min-height:99px;padding:12px;}.phone-room-copy strong {font-size:16px;}}
+
   .phone-room[aria-expanded="true"],.group[aria-expanded="true"] {border-color:var(--gold);background:radial-gradient(ellipse at 15% 50%,var(--glow),transparent 75%),var(--stage);}
   @media (prefers-reduced-motion:reduce) {
     .home-review * {transition:none!important;animation:none!important;}
