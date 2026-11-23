@@ -12,6 +12,7 @@ import pytest
 from backend.services.hue_service import HueService
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.api.routes.lights import set_all_lights
+from backend.services.light_state_calculator import ALL_LIGHT_IDS
 from backend.api.schemas.lights import LightState
 from fastapi import HTTPException
 from tests.test_ws_manual_light_guard import Engine, Hue
@@ -82,9 +83,10 @@ async def test_route_logs_only_acknowledged_guarded_bulk_changes(results):
     reply, engine, hue, events = await _guarded_route(results)
     accepted = [str(i + 1) for i, result in enumerate(results) if result]
     uncertain = [str(i + 1) for i, result in enumerate(results) if not result]
+    missing = list(ALL_LIGHT_IDS[len(results):])
     assert reply == {
-        "status": "partial_failure" if uncertain else "ok",
-        "updated": accepted, "blocked": [], "unavailable": [],
+        "status": "partial_failure" if uncertain or missing else "ok",
+        "updated": accepted, "blocked": [], "unavailable": missing,
         "uncertain": uncertain,
     }
     assert hue.get_all_lights.await_count == 1
@@ -134,8 +136,25 @@ async def test_route_discovery_lost_after_successful_pre_read():
     )))
     assert await set_all_lights(LightState(bri=100), request) == {
         "status": "partial_failure", "updated": [], "blocked": [],
-        "unavailable": ["1"], "uncertain": [],
+        "unavailable": list(ALL_LIGHT_IDS), "uncertain": [],
     }
     assert hue.calls == []
     assert engine.stamps == []
     events.log_light_adjustment.assert_not_awaited()
+
+
+async def test_full_fixture_inventory_reports_ok_only_when_all_succeed():
+    reply, _, hue, _ = await _guarded_route([True] * len(ALL_LIGHT_IDS))
+    assert reply["status"] == "ok"
+    assert reply["updated"] == list(ALL_LIGHT_IDS)
+    assert reply["unavailable"] == []
+    assert hue.set_light.await_count == len(ALL_LIGHT_IDS)
+
+
+async def test_partial_inventory_reports_missing_configured_fixture_without_writing_it():
+    reply, _, hue, _ = await _guarded_route([True] * (len(ALL_LIGHT_IDS) - 1))
+    missing = ALL_LIGHT_IDS[-1]
+    assert reply["status"] == "partial_failure"
+    assert reply["unavailable"] == [missing]
+    assert missing not in reply["updated"]
+    assert all(args.args[0] != missing for args in hue.set_light.await_args_list)

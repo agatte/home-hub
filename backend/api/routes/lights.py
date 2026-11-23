@@ -273,6 +273,10 @@ async def set_all_lights(state: LightState, request: Request) -> dict:
         except Exception:
             logger.warning("REST bulk light adjustment event log unavailable")
 
+    # Bridge enumeration can omit a configured bulb. Never report bulk success
+    # when an authorized fixture was absent from the enumerated inventory.
+    unavailable.extend(light_id for light_id in ALL_LIGHT_IDS if light_id not in seen)
+
     # Explicit per-fixture status rather than a false all-or-nothing ACK.
     # A partially applied action is never automatically retried/rolled back.
     return {

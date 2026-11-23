@@ -245,7 +245,7 @@ def test_rest_all_lights_splits_guarded_outcomes_without_taking_strong_owner(sim
         "status": "partial_failure",
         "updated": ["3"],
         "blocked": ["2"],
-        "unavailable": [],
+        "unavailable": ["1", "4", "5", "6"],
         "uncertain": [],
     }
     assert simulated.hue.calls == [("3", {"on": False})]
@@ -261,7 +261,7 @@ def test_rest_all_lights_never_writes_unregistered_bridge_fixture(simulated):
     reply = simulated.client.post("/api/lights/all", json={"on": False})
     assert reply.status_code == 200, reply.text
     assert reply.json()["updated"] == ["2"]
-    assert reply.json()["unavailable"] == ["99"]
+    assert reply.json()["unavailable"] == ["99", "1", "3", "4", "5", "6"]
     assert simulated.hue.calls == [("2", {"on": False})]
 
 
