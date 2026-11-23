@@ -71,7 +71,7 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(shellSource.match(/href="\/"/g)).toHaveLength(2)
     expect(shellSource).toContain('if (previousRoute !== null && route !== previousRoute && moreOpen) closeMore(false)')
     expect(shellSource).toContain('return unsubscribe')
-    expect(homeSource).toContain('class="browse-link" href="/quiet-atlas/control">Control · precision workspace')
+    expect(homeSource).not.toContain('Control · precision workspace')
     expect(homeSource).toContain('class="browse-link" href="/quiet-atlas/control">Browse Control')
     expect(homeSource).not.toContain("href={lightingDetailHref(group.id, 'home')}")
     expect(homeSource.match(/href="\/quiet-atlas"/g)).toHaveLength(1) // legacy permalink only
