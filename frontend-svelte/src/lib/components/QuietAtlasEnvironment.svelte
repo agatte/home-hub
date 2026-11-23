@@ -107,8 +107,8 @@
 
 <section class="weather-band" aria-labelledby="weather-band-title" data-status={view.status}>
   <div class="weather-lead">
-    <p class="weather-kicker">02 / THE ENVIRONMENT</p>
-    <h2 id="weather-band-title">Outside, as reported.</h2>
+    <p class="weather-kicker">OUTSIDE</p>
+    <h2 id="weather-band-title">Weather</h2>
   </div>
   {#if view.status === 'recent' && view.report}
     <div class="weather-values" role="status">
@@ -121,23 +121,40 @@
   {:else}
     <p class="weather-unavailable" role="status">{view.message}</p>
   {/if}
-  <p class="weather-source">Source: HomeHub <code>GET /api/weather</code> (NWS-backed). Receipt is not station-observation freshness; cached conditions may be older. Not a live indoor comfort or lighting signal.</p>
+  <details class="weather-details">
+    <summary>Source &amp; freshness</summary>
+    <p class="weather-source">Source: HomeHub <code>GET /api/weather</code> (NWS-backed). Receipt is not station-observation freshness; cached conditions may be older. Not a live indoor comfort or lighting signal.</p>
+  </details>
 </section>
 
 <style>
-  .weather-band {display:grid;grid-template-columns:minmax(160px,.9fr) minmax(180px,1fr) minmax(230px,1.25fr);gap:clamp(12px,2vw,24px);align-items:center;margin-top:23px;padding:19px 0 21px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--ink);}
+  .weather-band {display:grid;grid-template-columns:minmax(110px,.65fr) minmax(150px,1.35fr) auto;gap:14px;align-items:center;margin-top:18px;padding:13px 2px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--ink);min-width:0;}
   .weather-lead {min-width:0;}
-  .weather-kicker {color:var(--gold);font-size:10px;letter-spacing:.14em;font-weight:750;margin:0 0 9px;}
-  h2 {font-size:clamp(20px,2vw,26px);letter-spacing:-.035em;font-weight:600;margin:0;}
-  .weather-values {display:flex;align-items:center;gap:18px;min-width:0;}
-  .temp {font:400 clamp(30px,3vw,43px)/1.08 Georgia,"Times New Roman",serif;white-space:nowrap;}
-  .weather-conditions {display:flex;flex-direction:column;gap:5px;min-width:0;}
+  .weather-kicker {color:var(--gold);font-size:11px;letter-spacing:.1em;font-weight:750;margin:0 0 4px;}
+  h2 {font-size:18px;letter-spacing:-.025em;font-weight:620;margin:0;}
+  .weather-values {display:flex;align-items:center;gap:14px;min-width:0;}
+  .temp {font-size:29px;font-weight:625;line-height:1.08;white-space:nowrap;}
+  .weather-conditions {display:flex;flex-direction:column;gap:3px;min-width:0;}
   .weather-conditions strong {font-size:13px;font-weight:600;overflow-wrap:anywhere;}
-  .weather-conditions span {color:var(--muted);font-size:11px;line-height:1.4;overflow-wrap:anywhere;}
-  .weather-unavailable {color:var(--muted);font-size:13px;line-height:1.5;margin:0;}
-  .weather-source {color:var(--muted);font-size:10px;line-height:1.55;margin:0;max-width:430px;}
+  .weather-conditions span {color:var(--muted);font-size:12px;line-height:1.35;overflow-wrap:anywhere;}
+  .weather-unavailable {color:var(--muted);font-size:13px;line-height:1.45;margin:0;}
+  .weather-details {font-size:12px;color:var(--muted);}
+  .weather-details summary {min-height:44px;display:flex;align-items:center;cursor:pointer;}
+  .weather-details[open] {grid-column:1/-1;}
+  .weather-details summary:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
+  .weather-source {color:var(--muted);font-size:12px;line-height:1.5;margin:8px 0 0;max-width:70ch;}
   code {font:inherit;color:var(--gold);overflow-wrap:anywhere;}
-  @media(max-width:1000px){.weather-band{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr)}.weather-source{grid-column:1/-1}}
-  @media(max-width:700px){.weather-band{margin-top:15px;padding:14px 1px;gap:10px;grid-template-columns:minmax(0,.9fr) minmax(0,1.25fr)}.weather-kicker{font-size:8px;margin-bottom:5px}h2{font-size:17px}.temp{font-size:27px}.weather-values{gap:10px}.weather-conditions strong{font-size:11px}.weather-conditions span{font-size:10px}.weather-source{font-size:9px;line-height:1.4}}
-  @media(max-width:360px){.weather-band{grid-template-columns:1fr}.weather-values{margin-top:2px}.weather-source{grid-column:1}}
+  @media(max-width:700px) {
+    .weather-band {grid-template-columns:minmax(70px,.6fr) minmax(0,1fr);gap:7px 12px;margin-top:10px;padding:12px 1px;}
+    .weather-kicker {font-size:10px;}
+    h2 {font-size:16px;}
+    .weather-values {gap:9px;}
+    .temp {font-size:26px;}
+    .weather-details {grid-column:1/-1;}
+    .weather-details summary {min-height:34px;font-size:12px;}
+    .weather-source {font-size:11px;}
+  }
+  @media(max-width:360px) {
+    .weather-band {grid-template-columns:minmax(65px,.55fr) minmax(0,1fr);}
+  }
 </style>
