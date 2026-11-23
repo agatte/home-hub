@@ -21,7 +21,7 @@
   let armedMode = null
   let feedback = ''
 
-  $: canChange = $connected && KNOWN_HOUSE_STATES.includes($automation.house_state)
+  $: canChange = $connected && KNOWN_HOUSE_STATES.includes($automation.house_state ?? '')
   $: reportedMode = $automation.house_state === 'sleeping'
     ? 'Sleeping'
     : $automation.house_state === 'away'
