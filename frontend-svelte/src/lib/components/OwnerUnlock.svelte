@@ -63,6 +63,9 @@
 <style>
   .owner-unlock { position: fixed; right: 1rem; top: 1rem; z-index: 100; padding: .5rem; border-radius: .5rem; background: #20252d; color: white; }
   form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding-top: .5rem; }
-  button, input { font: inherit; }
+  button, input { font: inherit; min-height: 44px; box-sizing: border-box; }
+  button { padding: .625rem .75rem; border-radius: .375rem; }
+  input { min-width: 0; flex: 1 1 12rem; padding: .5rem .625rem; }
+  button:focus-visible, input:focus-visible { outline: 2px solid white; outline-offset: 2px; }
   p { max-width: 24rem; }
 </style>

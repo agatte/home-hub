@@ -21,3 +21,8 @@ test('fake browser login clears input and reloads after success', async () => {
   assert.equal(reloads, 1)
   assert.doesNotMatch(source, /localStorage|sessionStorage|[?&]password=/)
 })
+
+test('owner unlock controls keep finger-sized hit targets and keyboard focus', () => {
+  assert.match(source, /button, input \{[^}]*min-height: 44px/)
+  assert.match(source, /button:focus-visible, input:focus-visible/)
+})
