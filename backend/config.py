@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     # App
     APP_ENV: str = "development"
+    HOME_HUB_SERVER_TLS_CERTFILE: Optional[str] = None
+    HOME_HUB_SERVER_TLS_KEYFILE: Optional[str] = None
+    HOME_HUB_SERVER_TLS_HOST: str = "127.0.0.1"
+    HOME_HUB_SERVER_TLS_PORT: int = 8443
     LOCAL_IP: str = "127.0.0.1"
     # Optional stable role for pc_agent activity reports: desktop or latitude.
     HOME_HUB_AGENT_DEVICE: Optional[str] = None
