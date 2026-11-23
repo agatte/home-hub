@@ -72,6 +72,6 @@ describe('Quiet Atlas read-only recent activity log', () => {
     expect(home).toContain('aria-labelledby="recent-log-title"')
     expect(home).toContain('max-width:700px')
     expect(home).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
-    expect(home).toContain('HOME AT A GLANCE')
+    expect(home).toContain('At a glance')
   })
 })
