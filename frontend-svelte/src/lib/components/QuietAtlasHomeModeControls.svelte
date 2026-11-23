@@ -123,12 +123,12 @@
 </section>
 
 <style>
-  .mode-controls {margin:18px 0 21px;padding:19px 21px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(120deg,var(--stage),var(--deep));color:var(--ink);min-width:0;}
+  .mode-controls {margin:13px 0 18px;padding:18px 20px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(120deg,var(--stage),var(--deep));color:var(--ink);min-width:0;}
   .mode-heading {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;}
   .eyebrow {margin:0 0 6px;color:var(--gold);font-size:11px;letter-spacing:.12em;font-weight:750;}
   h2 {margin:0;font-size:clamp(20px,2.5vw,26px);font-weight:600;letter-spacing:-.025em;}
   .reported-mode {display:flex;flex-direction:column;gap:4px;align-items:flex-end;text-align:right;min-width:0;}
-  .reported-mode strong {font-size:15px;}
+  .reported-mode strong {font-size:16px;}
   .reported-mode span {font-size:12px;color:var(--muted);overflow-wrap:anywhere;}
   .mode-note {color:var(--muted);font-size:13px;line-height:1.55;margin:6px 0 0;max-width:70ch;}
   .mode-help {margin-top:12px;color:var(--muted);font-size:13px;}
@@ -144,10 +144,10 @@
   button:focus-visible,select:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
   .mode-feedback {font-size:13px;line-height:1.5;margin:12px 0 0;color:var(--ink);}
   @media(max-width:700px) {
-    .mode-controls {margin:12px 0 16px;padding:16px 14px;}
-    .mode-heading {align-items:flex-start;}
-    .reported-mode {align-items:flex-start;text-align:left;}
-    .mode-actions {grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+    .mode-controls {margin:12px 0 14px;padding:13px 14px;}
+    .mode-heading {align-items:center;gap:8px;}
+    .reported-mode {align-items:flex-end;text-align:right;}
+    .mode-actions {grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:11px;gap:8px;}
     .auto-action {grid-column:1/-1;}
     .mode-select {grid-column:1;min-width:0;}
     .apply-action {grid-column:2;}
