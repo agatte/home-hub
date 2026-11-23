@@ -35,7 +35,7 @@ describe('#461 redesigned Home mode recovery', () => {
     expect(panel).toContain('armedMode = null')
     expect(panel).toContain('disabled={!canChange || pending}')
     expect(panel).toContain('disabled={!canChange || pending || !selectedMode}')
-    expect(panel).toContain('Mode result uncertain.')
+    expect(panel).toContain('Change unconfirmed.')
     expect(panel).not.toContain('window.confirm(')
   })
 
