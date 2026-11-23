@@ -18,7 +18,7 @@ describe('Quiet Atlas task-first route hierarchy (#157)', () => {
     expect(phone).toContain('href={CONTROL_SCENES_HREF}')
     expect(home).toContain('id="lighting-title"')
     expect(home).toContain('At a glance')
-    expect(home).toContain('Open classic dashboard')
+    expect(home).toContain('Classic dashboard')
     expect(control).toContain('href="/classic#apartment-controls"')
     expect(control).toContain('<QuietAtlasLightingExperience {routeIntent} />')
   })
