@@ -10,7 +10,9 @@ describe('Quiet Atlas phone-first Home composition', () => {
     expect(marker('class="phone-status"')).toBeGreaterThan(marker('<header class="foreword">'))
     expect(marker('class="phone-actions"')).toBeGreaterThan(marker('class="phone-status"'))
     expect(marker('class="phone-apartment-entry"')).toBeGreaterThan(marker('class="phone-actions"'))
-    expect(marker('class="apartment-stage"')).toBeGreaterThan(marker('class="phone-apartment-entry"'))
+    expect(marker('class="apartment-stage"')).toBeGreaterThan(marker('class="phone-status"'))
+    expect(marker('class="apartment-stage"')).toBeLessThan(marker('<QuietAtlasHomeModeControls />'))
+    expect(marker('<QuietAtlasHomeModeControls />')).toBeLessThan(marker('class="phone-actions"'))
     expect(home).toContain('.phone-status,.phone-actions,.phone-apartment-entry {display:none;}')
     expect(home).toContain('.phone-status,.phone-actions,.phone-apartment-entry {display:block;min-width:0;}')
     expect(home).toContain('.apartment-stage,.lighting-dock {display:none;}')
@@ -21,11 +23,11 @@ describe('Quiet Atlas phone-first Home composition', () => {
 
   it('presents source-qualified context and never claims sensor or bridge authority', () => {
     expect(home).toContain('aria-label="Reported HomeHub status"')
-    expect(home).toContain("contextDisplay.status === 'recent' ? 'Recent report' : 'Not verified'")
+    expect(home).toContain("contextDisplay.status === 'recent' ? 'Updated recently' : 'Unavailable'")
     expect(home).toContain('{contextDisplay.house}')
     expect(home).toContain('{contextDisplay.activity}')
-    expect(home).toContain('A recent REST response is not proof of sensor freshness or room location.')
-    expect(home).toContain('Expand a room to control its actual fixtures in place.')
+    expect(home).toContain('<p role="status">{contextDisplay.note}</p>')
+    expect(home).toContain('Choose a room to adjust its lights.')
     expect(home).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
   })
 
@@ -44,14 +46,17 @@ describe('Quiet Atlas phone-first Home composition', () => {
     for (const label of ['Living', 'Bedroom', 'Kitchen', 'Plant']) {
       expect(home).toContain("name: '" + label + "'")
     }
-    expect(home).toContain('.phone-rooms {display:grid;grid-template-columns:minmax(0,1fr);')
-    expect(home).toContain('.phone-room {display:flex;align-items:center;gap:15px;min-height:76px;box-sizing:border-box;')
+    expect(home).toContain('.phone-rooms {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));')
+    expect(home).toContain('.phone-room {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;min-height:88px;')
+    expect(home).toContain('.phone-rooms :global(.reveal) {grid-column:1 / -1;}')
+    expect(home.indexOf('class="phone-status"')).toBeLessThan(home.indexOf('<QuietAtlasHomeModeControls />'))
+    expect(home.indexOf('<QuietAtlasHomeModeControls />')).toBeLessThan(home.indexOf('class="phone-actions"'))
     expect(home).toContain('.phone-scenes {min-height:64px;')
-    expect(home).toContain('.phone-functional-handoff {min-height:50px;')
-    expect(home).toContain('href="#phone-lighting-title"')
-    expect(home).toContain('Adjust lights now')
+    expect(home).not.toContain('class="phone-functional-handoff"')
+    expect(home).toContain('id="phone-lighting-title"')
+    expect(home).toContain('<QuietAtlasHomeModeControls />')
     expect(home).toContain('href="/classic"')
-    expect(home).toContain('Apartment Canvas (#192)')
+    expect(home).toContain('Classic dashboard')
   })
 
   it('compiles in Svelte with zero warnings and leaves existing status lifecycle intact', () => {

@@ -46,9 +46,9 @@
 
 <div class="owner-unlock">
   {#if authenticated}
-    <button type="button" on:click={lock} disabled={busy}>Lock owner controls</button>
+    <button type="button" on:click={lock} disabled={busy} aria-label="Lock owner controls"><span class="full-label">Lock owner controls</span><span class="compact-label" aria-hidden="true">Lock</span></button>
   {:else}
-    <button type="button" on:click={() => open = !open} aria-expanded={open} aria-controls="owner-login">Unlock owner controls</button>
+    <button type="button" on:click={() => open = !open} aria-expanded={open} aria-controls="owner-login" aria-label="Unlock owner controls"><span class="full-label">Unlock owner controls</span><span class="compact-label" aria-hidden="true">Unlock</span></button>
     {#if open}
       <form id="owner-login" on:submit|preventDefault={unlock}>
         <label for="owner-password">Owner passphrase</label>
@@ -68,4 +68,15 @@
   input { min-width: 0; flex: 1 1 12rem; padding: .5rem .625rem; }
   button:focus-visible, input:focus-visible { outline: 2px solid white; outline-offset: 2px; }
   p { max-width: 24rem; }
+  .compact-label { display:none; }
+  @media (max-width:760px) {
+    /* Keep the owner gate reachable without covering HomeHub's phone header. */
+    .owner-unlock {right:10px;top:11px;padding:0;max-width:calc(100vw - 20px);border:1px solid rgba(190,215,188,.2);box-shadow:0 6px 20px rgba(0,0,0,.2);}
+    .owner-unlock > button {min-height:44px;padding:8px 12px;font-size:12px;font-weight:650;}
+    .full-label {display:none;}
+    .compact-label {display:inline;}
+    .owner-unlock:has(form) {width:min(330px,calc(100vw - 20px));padding:12px;box-sizing:border-box;}
+    form {flex-direction:column;align-items:stretch;gap:9px;}
+    input {width:100%;min-width:0;flex-basis:auto;}
+  }
 </style>

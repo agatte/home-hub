@@ -15,10 +15,10 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain('let reviewExamples = false')
     expect(homeRoute).toContain("{#if contextDisplay.status === 'recent'}")
     expect(homeRoute).toContain('Current context not verified')
-    expect(homeRoute).toContain('RECENT REST REPORT')
-    expect(homeRoute).toContain('REST response is not sensor freshness or room-location evidence')
+    expect(homeRoute).toContain('UPDATED RECENTLY')
+    expect(homeRoute).toContain('HomeHub status is a report, not a live room sensor reading.')
     expect(homeRoute).toContain('aria-pressed={reviewExamples}')
-    expect(homeRoute).toContain('SPATIAL PLACEHOLDER · NOT A FLOOR PLAN')
+    expect(homeRoute).toContain('At a glance')
   })
 
   it('keeps lighting groups and scene browsing discoverable', () => {
@@ -32,8 +32,8 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain('href={CONTROL_SCENES_HREF}')
     expect(homeRoute).toContain('href="/quiet-atlas"') // explicit legacy preview permalink
     expect(homeRoute).toContain('Browse scenes')
-    expect(homeRoute).toContain('L2 · L5')
-    expect(homeRoute).toContain('L3 · L4')
+    expect(homeRoute).toContain("detail: '2 lights'")
+    expect(reveal).toContain('QuietAtlasRoomControls')
   })
 
   it('reveals real existing room controls in place, not a fabricated second writer', () => {
@@ -54,7 +54,7 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
 
   it('keeps Apartment separate and introduces no light/scene writer', () => {
     expect(homeRoute).toContain('href="/classic"')
-    expect(homeRoute).toContain('Apartment Canvas (#192)')
+    expect(homeRoute).toContain('Classic dashboard')
     expect(homeRoute).not.toMatch(/\b(apiPost|setLight|activateScene|setScene|hueWrite)\s*\(/)
     expect(homeRoute).toContain("fetch('/api/automation/status'")
   })

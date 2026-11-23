@@ -59,7 +59,7 @@ describe('Quiet Atlas read-only recent activity log', () => {
     expect(recentActivityTime(at)).toBe(new Date(at).toLocaleString(undefined, {
       month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
     }))
-    expect(home).toContain("Dates and times use this device's timezone")
+    expect(home).toContain("Times use this device’s timezone")
   })
 
   it('uses a bounded read-only event endpoint on the separate Home review', () => {
@@ -67,11 +67,11 @@ describe('Quiet Atlas read-only recent activity log', () => {
     expect(home).toContain('signal: requestController.signal')
     expect(home).toContain('cache: \'no-store\'')
     expect(home).toContain('Recent recorded activities')
-    expect(home).toContain('Event history, not confirmation of a person')
+    expect(home).toContain('These are recorded events, not confirmation of who is home')
     expect(home).toContain('invalidateRecentActivity(activityLog)')
     expect(home).toContain('aria-labelledby="recent-log-title"')
     expect(home).toContain('max-width:700px')
     expect(home).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
-    expect(home).toContain('SPATIAL PLACEHOLDER · NOT A FLOOR PLAN')
+    expect(home).toContain('At a glance')
   })
 })

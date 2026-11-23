@@ -54,17 +54,17 @@
       const outcome = await setManualMode(mode)
       if (outcome === 'acknowledged') {
         feedback = mode === 'auto'
-          ? 'Return to Auto acknowledged. Manual light holds were requested to clear; check HomeHub’s reported mode and actual lights.'
-          : 'Mode request acknowledged. Check HomeHub’s reported mode and actual lights.'
+          ? 'Auto requested. Check the reported mode and lights.'
+          : 'Mode requested. Check the reported mode and lights.'
       } else if (outcome === 'denied') {
-        feedback = 'Mode change denied. Unlock owner controls before changing modes.'
+        feedback = 'Couldn’t change the mode. Unlock owner controls and try again.'
       } else if (outcome === 'busy') {
         feedback = 'Another mode change is pending.'
       } else {
-        feedback = 'Mode result uncertain. Check the reported state before another action.'
+        feedback = 'Change unconfirmed. Check the current mode before trying again.'
       }
     } catch {
-      feedback = 'Mode result uncertain. Check the reported state before another action.'
+      feedback = 'Change unconfirmed. Check the current mode before trying again.'
     } finally {
       pending = false
     }
@@ -74,8 +74,8 @@
 <section class="mode-controls" aria-labelledby="home-modes-heading">
   <div class="mode-heading">
     <div>
-      <p class="eyebrow">MODE &amp; AUTOMATION</p>
-      <h2 id="home-modes-heading">Set the atmosphere</h2>
+      <p class="eyebrow">LIGHTING MODES</p>
+      <h2 id="home-modes-heading">Modes</h2>
     </div>
     <div class="reported-mode">
       <strong>{reportedMode}</strong>
@@ -83,11 +83,6 @@
     </div>
   </div>
 
-  <p class="mode-note">
-    Adjusting an individual light temporarily protects its brightness from automation.
-    Return to Auto releases manual light holds and resumes HomeHub's detected mode.
-    Choosing a mode applies that mode instead.
-  </p>
 
   <div class="mode-actions">
     <button
@@ -101,7 +96,7 @@
     <label class="mode-select" for="home-mode-choice">
       <span>Choose mode</span>
       <select id="home-mode-choice" bind:value={selectedMode} disabled={!canChange || pending} on:change={changeSelection}>
-        <option value="" disabled>Select an activity</option>
+        <option value="" disabled>Select mode</option>
         {#each MODES as mode (mode.id)}
           <option value={mode.id}>{mode.label}</option>
         {/each}
@@ -115,6 +110,11 @@
     >{pending ? 'Applying…' : 'Apply mode'}</button>
   </div>
 
+  <details class="mode-help">
+    <summary>How modes work</summary>
+    <p class="mode-note">Adjusting a light pauses automatic changes to that light. Return to Auto requests that HomeHub clear manual holds and choose the mode again.</p>
+  </details>
+
   {#if !canChange}
     <p class="mode-feedback" role="status">Mode changes unavailable until HomeHub reports a connected house state.</p>
   {:else if feedback}
@@ -123,14 +123,16 @@
 </section>
 
 <style>
-  .mode-controls {margin:18px 0 21px;padding:19px 21px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(120deg,var(--stage),var(--deep));color:var(--ink);min-width:0;}
+  .mode-controls {margin:13px 0 18px;padding:18px 20px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(120deg,var(--stage),var(--deep));color:var(--ink);min-width:0;}
   .mode-heading {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;}
   .eyebrow {margin:0 0 6px;color:var(--gold);font-size:11px;letter-spacing:.12em;font-weight:750;}
   h2 {margin:0;font-size:clamp(20px,2.5vw,26px);font-weight:600;letter-spacing:-.025em;}
   .reported-mode {display:flex;flex-direction:column;gap:4px;align-items:flex-end;text-align:right;min-width:0;}
-  .reported-mode strong {font-size:15px;}
+  .reported-mode strong {font-size:16px;}
   .reported-mode span {font-size:12px;color:var(--muted);overflow-wrap:anywhere;}
-  .mode-note {color:var(--muted);font-size:13px;line-height:1.55;margin:12px 0 16px;max-width:70ch;}
+  .mode-note {color:var(--muted);font-size:13px;line-height:1.55;margin:6px 0 0;max-width:70ch;}
+  .mode-help {margin-top:12px;color:var(--muted);font-size:13px;}
+  .mode-help summary {min-height:44px;display:flex;align-items:center;cursor:pointer;}
   .mode-actions {display:grid;grid-template-columns:minmax(130px,1fr) minmax(170px,1.35fr) minmax(120px,.85fr);gap:10px;align-items:end;}
   button,select {font:inherit;min-height:48px;border-radius:9px;box-sizing:border-box;}
   button {padding:10px 14px;cursor:pointer;font-weight:650;}
@@ -142,16 +144,14 @@
   button:focus-visible,select:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
   .mode-feedback {font-size:13px;line-height:1.5;margin:12px 0 0;color:var(--ink);}
   @media(max-width:700px) {
-    .mode-controls {margin:12px 0 16px;padding:16px 14px;}
-    .mode-heading {align-items:flex-start;}
-    .reported-mode {align-items:flex-start;text-align:left;}
-    .mode-actions {grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+    .mode-controls {margin:12px 0 14px;padding:13px 14px;}
+    .mode-heading {align-items:center;gap:8px;}
+    .reported-mode {align-items:flex-end;text-align:right;}
+    .mode-actions {grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:11px;gap:8px;}
     .auto-action {grid-column:1/-1;}
     .mode-select {grid-column:1;min-width:0;}
+    .mode-select select {font-size:13px;padding-inline:8px;}
+    .apply-action {padding-inline:7px;font-size:13px;}
     .apply-action {grid-column:2;}
-  }
-  @media(max-width:360px) {
-    .mode-actions {grid-template-columns:minmax(0,1fr);}
-    .auto-action,.mode-select,.apply-action {grid-column:1;}
   }
 </style>

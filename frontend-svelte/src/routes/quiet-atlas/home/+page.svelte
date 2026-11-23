@@ -44,10 +44,10 @@
   $: contextDisplay = homeContextPresentation(contextSnapshot, contextNowMs)
 
   const groups = [
-    { id: 'living', name: 'Living', detail: 'L1', label: 'Browse Living lights' },
-    { id: 'bedroom', name: 'Bedroom', detail: 'L2 · L5', label: 'Browse Bedroom lights' },
-    { id: 'kitchen', name: 'Kitchen', detail: 'L3 · L4', label: 'Browse Kitchen lights' },
-    { id: 'plant', name: 'Plant', detail: 'L6', label: 'Browse Plant lighting' },
+    { id: 'living', name: 'Living', detail: '1 light', label: 'Browse Living lights' },
+    { id: 'bedroom', name: 'Bedroom', detail: '2 lights', label: 'Browse Bedroom lights' },
+    { id: 'kitchen', name: 'Kitchen', detail: '2 lights', label: 'Browse Kitchen lights' },
+    { id: 'plant', name: 'Plant', detail: '1 light', label: 'Browse Plant lighting' },
   ]
 
   const examples = {
@@ -253,67 +253,33 @@
 <main class:daylight class="home-review" aria-label="HomeHub Home">
   <header class="foreword">
     <div>
-      <p class="eyebrow">HOME / OVERVIEW</p>
+      <p class="eyebrow">YOUR HOME</p>
       <h1><span class="desktop-home-heading">Home</span><span class="mobile-home-heading">Home</span></h1>
-      <p class="subhead">Reported context and quick access to your lights.</p>
+      <p class="subhead">Lights, modes, and what’s happening at home.</p>
     </div>
     <a class="apartment-link" href="/classic" aria-label="Open original Apartment and household tools">
       <span class="icon-dot" aria-hidden="true"></span>
-      Apartment & household tools <span aria-hidden="true">↗</span>
+      More tools <span aria-hidden="true">↗</span>
     </a>
   </header>
 
-  <QuietAtlasHomeModeControls />
-
   <section class="phone-status" aria-label="Reported HomeHub status">
     <div class="phone-status-header">
-      <span>HomeHub report</span>
-      <strong class:unverified={contextDisplay.status !== 'recent'}>{contextDisplay.status === 'recent' ? 'Recent report' : 'Not verified'}</strong>
+      <span>Home status</span>
+      <strong class:unverified={contextDisplay.status !== 'recent'}>{contextDisplay.status === 'recent' ? 'Updated recently' : 'Unavailable'}</strong>
     </div>
     <div class="phone-status-grid">
       <div><span>HOUSE STATE</span><strong>{contextDisplay.house}</strong></div>
       <div><span>ACTIVITY</span><strong>{contextDisplay.activity}</strong></div>
     </div>
-    <p>{contextDisplay.note}. A recent REST response is not proof of sensor freshness or room location.</p>
-  </section>
-
-  <section class="phone-actions" aria-labelledby="phone-lighting-title">
-    <a class="phone-functional-handoff" href="#phone-lighting-title">Adjust lights now <span aria-hidden="true">↗</span></a>
-    <div class="phone-actions-head">
-      <span class="eyebrow">Working lighting controls</span>
-      <h2 id="phone-lighting-title">Browse lighting</h2>
-      <p>Expand a room to control its actual fixtures in place. Scenes and presets remain a separate browsing surface.</p>
-    </div>
-    <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
-      {#each groups as group (group.id)}
-        <button type="button" id={`phone-room-${group.id}`} class="phone-room" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
-          <span class="phone-room-icon" aria-hidden="true"></span>
-          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail} · Adjust individual lights</small></span>
-          <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
-        </button>
-        <QuietAtlasHomeLightingReveal id={`phone-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
-      {/each}
-    </div>
-    <a class="browse-link" href="/quiet-atlas/control">Control · precision workspace ↗</a>
-    <a class="phone-scenes" href={CONTROL_SCENES_HREF}>
-      <span><strong>Scenes &amp; presets</strong><small>Browse available names · no activation</small></span>
-      <span aria-hidden="true">↗</span>
-    </a>
-  </section>
-
-  <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
-    <span>THE APARTMENT / 02</span>
-    <h2 id="phone-apartment-title">Your place, beyond the controls.</h2>
-    <p>The detailed Apartment Canvas is being developed separately. Keep the current Apartment and household tools available while the physical view is refined.</p>
-    <a href="/classic">Open original Apartment &amp; household tools <span aria-hidden="true">↗</span></a>
+    {#if contextDisplay.status !== 'recent'}<p role="status">{contextDisplay.note}</p>{/if}
   </section>
 
   <section class="apartment-stage" aria-labelledby="apartment-stage-title">
     <div class="world">
-      <div class="ambient-orb" aria-hidden="true"></div>
       <div class="world-topline">
-        <span>01 / THE APARTMENT</span>
-        <span class="source">SPATIAL PLACEHOLDER · NOT A FLOOR PLAN</span>
+        <h2 id="apartment-stage-title">At a glance</h2>
+        <span class="source">{contextDisplay.status === 'recent' ? 'Updated recently' : 'Status unverified'}</span>
       </div>
       <div class="world-bottom">
         <div class="readout">
@@ -324,15 +290,112 @@
           <span>ACTIVITY</span>
           <strong>{contextDisplay.activity}</strong>
         </div>
-        <div class="world-note">{contextDisplay.note}</div>
-      </div>
-      <a class="working-lighting-link" href="#lighting-title">Adjust lights now <span aria-hidden="true">↗</span></a>
-      <div class="world-message">
-        <p class="world-kicker">Spatial study</p>
-        <h2 id="apartment-stage-title">Apartment preview</h2>
-        <p>Actual apartment geometry and its cinematic view will come from the separate, evidence-checked Apartment Canvas (#192).</p>
+        {#if contextDisplay.status !== 'recent'}
+          <p class="world-note" role="status">{contextDisplay.note}</p>
+        {/if}
       </div>
     </div>
+  </section>
+
+  <QuietAtlasHomeModeControls />
+
+  <section class="phone-actions" aria-labelledby="phone-lighting-title">
+    <div class="phone-actions-head">
+      <span class="eyebrow">YOUR LIGHTS</span>
+      <h2 id="phone-lighting-title">Lights</h2>
+      <p>Choose a room to adjust its lights.</p>
+    </div>
+    <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
+      {#each groups as group (group.id)}
+        <button type="button" id={`phone-room-${group.id}`} class="phone-room" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+          <span class="phone-room-icon" aria-hidden="true"></span>
+          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail}</small></span>
+          <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
+        </button>
+        <QuietAtlasHomeLightingReveal id={`phone-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
+      {/each}
+    </div>
+    <a class="phone-scenes" href={CONTROL_SCENES_HREF}>
+      <span><strong>Scenes &amp; presets</strong><small>Explore available scenes</small></span>
+      <span aria-hidden="true">↗</span>
+    </a>
+  </section>
+
+  <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
+    <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
+    <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
+  </section>
+
+  <section class="lighting-dock" aria-labelledby="lighting-title">
+    <div class="dock-head">
+      <div>
+        <p class="eyebrow">THE EVERYDAY CONTROLS</p>
+        <h2 id="lighting-title">Lights</h2>
+      </div>
+      <a class="browse-link" href="/quiet-atlas/control">Browse Control <span aria-hidden="true">↗</span></a>
+    </div>
+    <div class="groups" role="group" aria-label="Browse lighting groups">
+      {#each groups as group}
+        <button type="button" id={`dock-room-${group.id}`} class="group" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+          <span class="group-mark" aria-hidden="true"></span>
+          <span class="group-copy"><strong>{group.name}</strong><small>{group.detail}</small></span>
+          <span class="group-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
+        </button>
+      {/each}
+    </div>
+    {#each groups as group (group.id)}
+      <QuietAtlasHomeLightingReveal id={`dock-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
+    {/each}
+    <div class="scene-line">
+      <span><strong>Scenes & presets</strong><small>View available scenes without changing the lights.</small></span>
+      <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
+    </div>
+  </section>
+
+  <QuietAtlasEnvironment />
+
+  <section class="recent-log" aria-labelledby="recent-log-title">
+    <div class="recent-log-head">
+      <div>
+        <p class="eyebrow">RECORDED / RECENT</p>
+        <h2 id="recent-log-title">Recent activity</h2>
+      </div>
+      <span>Last 24 hours</span>
+    </div>
+    {#if recentActivity.status === 'recent'}
+      <ol class="recent-log-events" aria-label="Recent recorded activities">
+        {#each recentActivity.items as entry (entry.key)}
+          <li>
+            <strong>{entry.label}</strong>
+            <time datetime={new Date(entry.timestamp).toISOString()}>{recentActivityTime(entry.timestamp)}</time>
+          </li>
+        {/each}
+      </ol>
+    {:else}
+      <p class="recent-log-status" role="status">{recentActivity.message}</p>
+    {/if}
+    <details class="activity-details">
+      <summary>About this activity</summary>
+      <p class="recent-log-note">These are recorded events, not confirmation of who is home. Times use this device’s timezone.
+        <a href="/quiet-atlas/insights">View Insights ↗</a>
+      </p>
+    </details>
+  </section>
+
+
+  <details class="preview-options">
+    <summary>Appearance &amp; details</summary>
+  <div class="preview-ribbon">
+    <span class="brand">QUIET ATLAS <span class="multiply">×</span> DAYLIGHT</span>
+    <span class="disclaimer">HomeHub reports context; example states are illustrative and do not change devices.</span>
+    <button
+      class="theme-toggle"
+      type="button"
+      on:click={() => (daylight = !daylight)}
+      aria-label={daylight ? 'Use night preview' : 'Use day preview'}
+      aria-pressed={daylight}
+    >{daylight ? 'Night view' : 'Day view'}</button>
+  </div>
     <aside class="context-rail" aria-label="Source-qualified HomeHub context">
       {#if reviewExamples}
         <p class="rail-head">DESIGN EXAMPLES <span aria-hidden="true">—</span></p>
@@ -347,78 +410,23 @@
           <option value="attention">Manual ownership</option>
         </select>
       {:else}
-        <p class="rail-head">HOMEHUB CONTEXT <span aria-hidden="true">—</span></p>
+        <p class="rail-head">STATUS DETAILS <span aria-hidden="true">—</span></p>
         {#if contextDisplay.status === 'recent'}
-          <p class="rail-title">HomeHub reports {contextDisplay.house}</p>
-          <p class="rail-description">Reported Activity: {contextDisplay.activity}</p>
-          <p class="rail-kind">RECENT REST REPORT</p>
+          <p class="rail-title">House state: {contextDisplay.house}</p>
+          <p class="rail-description">Activity: {contextDisplay.activity}</p>
+          <p class="rail-kind">UPDATED RECENTLY</p>
         {:else}
           <p class="rail-title">Current context not verified</p>
           <p class="rail-description">{contextDisplay.note}</p>
           <p class="rail-kind">NO RECENT VERIFIED REPORT</p>
         {/if}
-        <p class="rail-provenance">A REST response is not sensor freshness or room-location evidence.</p>
+        <p class="rail-provenance">HomeHub status is a report, not a live room sensor reading.</p>
       {/if}
       <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
         {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
       </button>
       <a class="rail-footer" href="/quiet-atlas/insights">View Insights <span aria-hidden="true">↗</span></a>
     </aside>
-  </section>
-
-  <section class="lighting-dock" aria-labelledby="lighting-title">
-    <div class="dock-head">
-      <div>
-        <p class="eyebrow">THE EVERYDAY CONTROLS</p>
-        <h2 id="lighting-title">Browse lighting</h2>
-      </div>
-      <a class="browse-link" href="/quiet-atlas/control">Browse Control <span aria-hidden="true">↗</span></a>
-    </div>
-    <div class="groups" role="group" aria-label="Browse lighting groups">
-      {#each groups as group}
-        <button type="button" id={`dock-room-${group.id}`} class="group" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
-          <span class="group-mark" aria-hidden="true"></span>
-          <span class="group-copy"><strong>{group.name}</strong><small>{group.detail} · Atmosphere</small></span>
-          <span class="group-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
-        </button>
-      {/each}
-    </div>
-    {#each groups as group (group.id)}
-      <QuietAtlasHomeLightingReveal id={`dock-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
-    {/each}
-    <div class="scene-line">
-      <span><strong>Scenes & presets</strong><small>Browse names from the existing read-only lighting review; no sample scenes are activated.</small></span>
-      <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
-    </div>
-  </section>
-
-  <QuietAtlasEnvironment />
-
-  <section class="recent-log" aria-labelledby="recent-log-title">
-    <div class="recent-log-head">
-      <div>
-        <p class="eyebrow">RECORDED / RECENT</p>
-        <h2 id="recent-log-title">What HomeHub logged.</h2>
-      </div>
-      <span>Last 24 hours · read-only</span>
-    </div>
-    {#if recentActivity.status === 'recent'}
-      <ol class="recent-log-events" aria-label="Recent recorded activities">
-        {#each recentActivity.items as entry (entry.key)}
-          <li>
-            <strong>{entry.label}</strong>
-            <time datetime={new Date(entry.timestamp).toISOString()}>{recentActivityTime(entry.timestamp)}</time>
-          </li>
-        {/each}
-      </ol>
-    {:else}
-      <p class="recent-log-status" role="status">{recentActivity.message}</p>
-    {/if}
-    <p class="recent-log-note">Event history, not confirmation of a person's presence, room, or current House State. Dates and times use this device's timezone.
-      <a href="/quiet-atlas/insights">View Insights ↗</a>
-    </p>
-  </section>
-
   <section class="mobile-context" aria-label="HomeHub context and review">
     {#if reviewExamples}
       <span class="mobile-context-kind">DESIGN EXAMPLE · {example.kind}</span>
@@ -443,26 +451,12 @@
     </button>
     <a href="/quiet-atlas/insights">Open Insights ↗</a>
   </section>
-
-  <details class="preview-options">
-    <summary>Preview appearance and source notes</summary>
-  <div class="preview-ribbon">
-    <span class="brand">QUIET ATLAS <span class="multiply">×</span> DAYLIGHT</span>
-    <span class="disclaimer">HomeHub reports context; example states are illustrative and do not change devices.</span>
-    <button
-      class="theme-toggle"
-      type="button"
-      on:click={() => (daylight = !daylight)}
-      aria-label={daylight ? 'Use night preview' : 'Use day preview'}
-      aria-pressed={daylight}
-    >{daylight ? 'Night view' : 'Day view'}</button>
-  </div>
-  </details>
-
   <footer class="review-footer">
-    <span>Light controls send HomeHub commands when adjusted. Browsing scenes does not activate them.</span>
+    <span>Changing lights sends requests to HomeHub. Scene browsing does not activate them.</span>
     <a href="/quiet-atlas">Back to lighting preview</a>
   </footer>
+  </details>
+
 </main>
 
 <style>
@@ -496,25 +490,22 @@
   .disclaimer {flex:1;min-width:190px;}
   .theme-toggle {background:transparent;border:1px solid var(--line);border-radius:99px;color:var(--ink);padding:7px 14px;cursor:pointer;}
   .foreword {display:flex;align-items:end;justify-content:space-between;gap:16px;margin:24px 0 23px;}
-  .eyebrow,.world-kicker {font-size:14px;letter-spacing:.14em;font-weight:750;color:var(--gold);margin:0 0 9px;}
+  .eyebrow {font-size:14px;letter-spacing:.14em;font-weight:750;color:var(--gold);margin:0 0 9px;}
   h1,h2,p {margin-top:0;}
   h1 {font-size:clamp(29px,3.2vw,43px);font-weight:610;letter-spacing:-.045em;line-height:1.13;margin-bottom:7px;}
   .subhead {font-size:14px;color:var(--muted);margin:0;}
   .apartment-link {display:inline-flex;align-items:center;gap:10px;border:1px solid var(--line);padding:12px 16px;border-radius:100px;font-size:14px;white-space:nowrap;min-height:44px;}
   .icon-dot {width:8px;height:8px;border:1px solid var(--gold);transform:rotate(45deg);}
-  .apartment-stage {display:grid;grid-template-columns:minmax(0,1fr) minmax(235px,280px);border:1px solid var(--line);border-radius:19px;overflow:hidden;min-height:300px;}
-  .world {position:relative;min-width:0;overflow:hidden;background:radial-gradient(ellipse at 47% 45%,var(--glow),transparent 53%),linear-gradient(130deg,var(--stage),var(--deep));padding:22px 27px;display:flex;flex-direction:column;justify-content:space-between;isolation:isolate;}
-  .ambient-orb {position:absolute;width:390px;height:390px;right:4%;top:-19%;z-index:-1;border-radius:50%;background:radial-gradient(circle at 45% 46%,rgba(237,207,160,.15),rgba(98,151,115,.07) 42%,transparent 69%);filter:blur(8px);pointer-events:none;}
-  .world-topline {display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;letter-spacing:.1em;}
-  .world-topline .source {font-size:14px;text-align:right;}
-  .world-message {max-width:540px;margin:18px 0;}
-  .world-message h2 {font-size:24px;line-height:1.13;font-weight:570;letter-spacing:-.04em;margin:0 0 13px;}
-  .world-message>p:last-child {color:var(--muted);font-size:14px;line-height:1.6;max-width:430px;margin:0;}
-  .world-bottom {display:flex;align-items:end;gap:21px;flex-wrap:wrap;}
-  .readout {display:flex;flex-direction:column;gap:7px;min-width:124px;}
-  .readout span {font-size:14px;letter-spacing:.13em;color:var(--muted);}
-  .readout strong {font-size:28px;font-weight:600;}
-  .world-note {font-size:14px;color:var(--muted);margin-left:auto;max-width:210px;line-height:1.4;}
+  .apartment-stage {border:1px solid var(--line);border-radius:17px;overflow:hidden;margin:14px 0 23px;}
+  .world {min-width:0;background:radial-gradient(ellipse at 93% -5%,var(--glow),transparent 52%),linear-gradient(118deg,var(--stage),var(--deep));padding:19px 24px;display:grid;gap:15px;}
+  .world-topline {display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .world-topline h2 {margin:0;font-size:17px;font-weight:650;letter-spacing:-.015em;}
+  .world-topline .source {font-size:12px;color:var(--muted);text-align:right;}
+  .world-bottom {display:flex;align-items:center;gap:28px;flex-wrap:wrap;}
+  .readout {display:flex;flex-direction:column;gap:4px;min-width:135px;}
+  .readout span {font-size:11px;letter-spacing:.08em;color:var(--muted);}
+  .readout strong {font-size:22px;font-weight:625;line-height:1.15;}
+  .world-note {font-size:13px;color:var(--muted);margin:0;max-width:360px;line-height:1.4;}
   .context-rail {border-left:1px solid var(--line);background:color-mix(in srgb,var(--stage) 80%,var(--bg));padding:25px 22px 20px;display:flex;flex-direction:column;}
   .rail-head {font-size:14px;letter-spacing:.14em;color:var(--gold);font-weight:750;display:flex;justify-content:space-between;}
   .rail-title {font-size:20px;font-weight:600;letter-spacing:-.025em;line-height:1.2;margin:12px 0 10px;}
@@ -525,7 +516,7 @@
   .review-toggle {display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin-top:12px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:transparent;color:var(--gold);text-align:center;cursor:pointer;font-size:14px;}
   .context-rail select {padding:9px;background:var(--deep);border:1px solid var(--line);border-radius:7px;color:var(--ink);width:100%;min-height:44px;}
   .rail-footer {display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:14px;margin-top:18px;font-size:14px;}
-  .lighting-dock {margin-top:25px;}
+  .lighting-dock {margin-top:16px;}
   .dock-head {display:flex;align-items:end;justify-content:space-between;gap:14px;margin-bottom:14px;}
   .dock-head h2 {font-size:23px;letter-spacing:-.035em;margin:0;font-weight:600;}
   .browse-link {font-size:14px;color:var(--gold);padding:9px 0;}
@@ -557,8 +548,6 @@
   .review-footer {display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;font-size:14px;color:var(--muted);margin-top:23px;}
   .review-footer a {text-decoration:underline;}
   @media (max-width:960px) {
-    .apartment-stage {grid-template-columns:minmax(0,1fr) 210px;}
-    .world-note {max-width:100%;}
     .group {padding:10px;gap:7px;}
     .group-copy small {font-size:14px;}
   }
@@ -578,19 +567,6 @@
     h1 {font-size:29px;margin-bottom:4px;}
     .subhead {font-size:14px;}
     .apartment-link {display:none;}
-    .apartment-stage {display:block;min-height:0;border-radius:14px;}
-    .world {min-height:237px;padding:13px 15px 15px;}
-    .world-topline {font-size:14px;}
-    .world-topline .source {font-size:8px;max-width:136px;}
-    .ambient-orb {width:250px;height:250px;top:-10%;}
-    .world-message {margin:18px 0 17px;}
-    .world-message h2 {font-size:25px;max-width:340px;margin-bottom:8px;}
-    .world-message>p:last-child {font-size:14px;line-height:1.45;max-width:310px;}
-    .world-bottom {gap:18px;}
-    .readout {min-width:0;flex:1;gap:4px;}
-    .readout span {font-size:8px;}
-    .readout strong {font-size:14px;}
-    .world-note {flex-basis:100%;margin-left:0;font-size:14px;line-height:1.25;}
     .context-rail {display:none;}
     .lighting-dock {margin-top:14px;}
     .dock-head {margin-bottom:9px;}
@@ -620,39 +596,39 @@
     .apartment-stage,.lighting-dock {display:none;}
     .foreword {margin:18px 0 16px;}
     .foreword h1 {font-size:clamp(30px,8vw,38px);line-height:1.12;}
-    .foreword .subhead {font-size:14px;line-height:1.45;}
-    .phone-status {border:1px solid var(--line);border-radius:16px;background:linear-gradient(135deg,var(--stage),var(--deep));padding:15px;margin-bottom:20px;}
+    .foreword .eyebrow,.foreword .subhead {display:none;}
+    .phone-status {border:1px solid var(--line);border-radius:15px;background:linear-gradient(135deg,var(--stage),var(--deep));padding:12px 14px;margin-bottom:12px;}
     .phone-status-header {display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--gold);font-size:14px;font-weight:700;letter-spacing:.08em;}
     .phone-status-header strong {font-size:14px;letter-spacing:0;text-align:right;color:var(--muted);}
     .phone-status-header .unverified {color:var(--gold);}
-    .phone-status-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:15px 0 11px;}
+    .phone-status-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:10px 0 0;}
     .phone-status-grid>div {min-width:0;display:flex;flex-direction:column;gap:6px;}
     .phone-status-grid>div+div {border-left:1px solid var(--line);padding-left:14px;}
     .phone-status-grid span {font-size:14px;letter-spacing:.09em;color:var(--muted);}
     .phone-status-grid strong {font-size:18px;line-height:1.25;font-weight:650;overflow-wrap:anywhere;}
-    .phone-status p {font-size:14px;color:var(--muted);line-height:1.55;margin:0;}
-    .phone-actions {margin-bottom:20px;}
-    .phone-actions-head .eyebrow {font-size:14px;margin:0 0 8px;}
-    .phone-actions-head h2 {font-size:27px;font-weight:590;line-height:1.12;margin:0 0 8px;}
-    .phone-actions-head p {font-size:14px;color:var(--muted);line-height:1.55;margin:0 0 14px;}
-    .phone-rooms {display:grid;grid-template-columns:minmax(0,1fr);gap:9px;}
-    .phone-room {display:flex;align-items:center;gap:15px;min-height:76px;box-sizing:border-box;min-width:0;padding:10px 15px;border-radius:14px;border:1px solid var(--line);background:linear-gradient(115deg,var(--stage),var(--deep));}
-    .phone-room-icon {width:16px;height:16px;flex:0 0 16px;border:2px solid var(--gold);border-radius:5px;transform:rotate(45deg);}
-    .phone-room-copy {display:flex;flex-direction:column;gap:5px;min-width:0;flex:1;}
-    .phone-room-copy strong {font-size:16px;font-weight:640;line-height:1.15;}
+    .phone-status p {font-size:13px;color:var(--muted);line-height:1.45;margin:10px 0 0;}
+    .phone-actions {margin-bottom:16px;}
+    .phone-actions-head .eyebrow {font-size:11px;margin:0 0 5px;}
+    .phone-actions-head h2 {font-size:25px;font-weight:620;line-height:1.12;margin:0 0 6px;}
+    .phone-actions-head p {font-size:13px;color:var(--muted);line-height:1.45;margin:0 0 12px;}
+    .phone-rooms {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;}
+    .phone-rooms :global(.reveal) {grid-column:1 / -1;}
+    .phone-room {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;min-height:88px;box-sizing:border-box;min-width:0;padding:13px;border-radius:15px;border:1px solid var(--line);background:linear-gradient(130deg,var(--stage),var(--deep));}
+    .phone-room:active {background:radial-gradient(ellipse at 50% 15%,var(--glow),transparent 100%),var(--stage);}
+    .phone-room-icon {display:none;}
+    .phone-room-copy {display:flex;flex-direction:column;gap:7px;min-width:0;}
+    .phone-room-copy strong {font-size:16px;font-weight:650;line-height:1.15;overflow-wrap:normal;}
     .phone-room-copy small {font-size:14px;line-height:1.35;color:var(--muted);white-space:normal;}
-    .phone-room-arrow {color:var(--gold);font-size:21px;flex:0 0 auto;}
+    .phone-room-arrow {color:var(--gold);font-size:21px;align-self:start;line-height:1;}
     .phone-scenes {min-height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:13px;margin-top:11px;padding:11px 15px;border:1px solid var(--line);border-radius:14px;background:rgba(210,183,136,.07);}
     .phone-scenes>span:first-child {display:flex;flex-direction:column;gap:5px;min-width:0;}
     .phone-scenes strong {font-size:16px;font-weight:640;}
     .phone-scenes small {font-size:14px;color:var(--muted);line-height:1.4;}
     .phone-scenes>span:last-child {color:var(--gold);font-size:21px;}
-    .phone-functional-handoff {min-height:50px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);color:var(--gold);font-size:14px;font-weight:650;}
-    .phone-apartment-entry {padding:21px 16px;margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:radial-gradient(ellipse at 95% -10%,var(--glow),transparent 70%),var(--deep);}
-    .phone-apartment-entry>span {font-size:14px;font-weight:700;color:var(--gold);letter-spacing:.13em;}
-    .phone-apartment-entry h2 {font-size:23px;font-weight:560;line-height:1.2;margin:10px 0;}
-    .phone-apartment-entry p {font-size:14px;line-height:1.6;color:var(--muted);margin-bottom:12px;}
-    .phone-apartment-entry a {min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--gold);font-size:14px;font-weight:650;border-top:1px solid var(--line);padding-top:11px;}
+    .phone-actions-head {margin-bottom:16px;}
+    .phone-apartment-entry {padding:9px 2px 0;margin:9px 0 13px;border-top:1px solid var(--line);}
+    .phone-apartment-entry .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
+    .phone-apartment-entry a {min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:14px;font-weight:650;}
     /* Even secondary review controls must remain usable by touch. */
     .theme-toggle {min-height:44px;font-size:14px;padding:9px 12px;}
     .mobile-context select {min-height:44px;font-size:14px;}
@@ -662,17 +638,13 @@
   }
   @media (max-width:360px) {
     .foreword {margin:9px 0 8px;}
-    .world-message {margin:10px 0;}
-    .world-message h2 {font-size:22px;margin-bottom:6px;}
-    .world {min-height:194px;padding:10px 13px 11px;}
-    .world-bottom {gap:8px;}
-    .world-note {line-height:1.2;}
+    .phone-room {min-height:82px;padding:11px;}
+    .phone-room-copy strong {font-size:15px;}
     .lighting-dock {margin-top:9px;}
     .browse-link {max-width:90px;text-align:right;}
     .group-arrow {display:none;}
     .scene-line small {max-width:165px;}
   }
-  .working-lighting-link,.phone-functional-handoff {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;box-sizing:border-box;padding:12px 18px;margin:16px 0;border:1px solid var(--gold);border-radius:12px;background:var(--ink);color:var(--bg);font-size:15px;font-weight:650;}
   .home-review {min-width:0;overflow-wrap:anywhere;}
   .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
   .group-copy small {white-space:normal;}
@@ -682,7 +654,12 @@
     .home-review * {transition:none!important;animation:none!important;}
   }
 
-  .preview-options { margin-top:24px; padding-top:12px; border-top:1px solid rgba(210,225,207,.15); }
+  .preview-options { margin-top:24px; padding-top:12px; border-top:1px solid var(--line); }
+  .activity-details {margin-top:12px;color:var(--muted);font-size:14px;}
+  .activity-details summary {min-height:44px;display:flex;align-items:center;cursor:pointer;}
+  .preview-options .context-rail {display:flex;border:1px solid var(--line);border-radius:14px;margin-top:16px;}
+  .preview-options .mobile-context {display:none;}
+  @media(max-width:700px) {.preview-options .context-rail {display:none;}.preview-options .mobile-context {display:flex;}}
   .preview-options summary { min-height:44px; display:inline-flex; align-items:center; cursor:pointer; color:#bccbbf; font-size:14px; }
   .preview-options summary:focus-visible { outline:3px solid #d5e7bd; outline-offset:3px; }
   .preview-options .preview-ribbon { margin-top:12px; }

@@ -26,11 +26,7 @@
 </script>
 
 <section class="room-control" aria-labelledby={`${id}-heading`}>
-  <div class="heading-row">
-    <h4 id={`${id}-heading`}>Live {roomLabel} lighting</h4>
-    <span class:online={$connected} class="connection">{ $connected ? 'Hub connected' : 'Hub disconnected' }</span>
-  </div>
-  <p class="provenance">HomeHub-reported values only. A control sends a request, not a confirmed result: if a stronger lighting owner is active, the server may deny the change. Room expansion itself never changes a light.</p>
+  <h4 id={`${id}-heading`} class="sr-only">Individual {roomLabel} lights</h4>
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
   {:else if $deviceStatus.light_command_results !== true}
@@ -41,7 +37,7 @@
     <div class="fixture-grid">
       {#each fixtureIds as lightId (lightId)}
         <div class="fixture" aria-label={`Light L${lightId}`}>
-          <div class="fixture-heading"><strong>L{lightId}</strong><span>{ $lights[lightId]?.name ?? 'No current reading' }</span></div>
+          <div class="fixture-heading"><span class="fixture-id">L{lightId}</span></div>
           {#if $lights[lightId] && $lights[lightId].reachable === true}
             <LightCard light={$lights[lightId]} optimisticStore={false} />
           {:else}
@@ -51,24 +47,38 @@
       {/each}
     </div>
   {/if}
-  <p class="footnote">Bedroom and Kitchen fixtures are individually addressable. Guarded WebSocket receipts report server decisions, never physical completion. Server-side ownership changes and kiosk/iPhone acceptance require their own reviewed release.</p>
-  <a href="/classic#apartment-controls">Original Apartment controls</a>
+  <details class="control-details">
+    <summary>About these controls</summary>
+    <p class="provenance">Each slider requests a change to one light. HomeHub can refuse it when another mode or effect is in control. Opening a room does not change any lights.</p>
+    <p class="footnote">A successful request does not guarantee the physical light changed. Check the light itself when needed.</p>
+    <a href="/classic#apartment-controls">Classic light controls</a>
+  </details>
 </section>
 
 <style>
-  .room-control { grid-column:1 / -1; min-width:0; border-top:1px solid var(--line);padding-top:16px; }
-  .heading-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; }
-  h4 { font-size:19px; line-height:1.3; font-weight:650; margin:0; }
-  .connection { font-size:12px; color:var(--muted); }
-  .connection.online { color:var(--gold); }
+  .room-control {grid-column:1 / -1;min-width:0;}
+  .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
   .provenance,.footnote { font-size:13px;line-height:1.6;color:var(--muted);max-width:70ch; }
-  .fixture-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:18px;min-width:0;margin:18px 0; }
-  .fixture { min-width:0;padding:14px;border:1px solid var(--line);border-radius:12px; }
-  .fixture-heading { display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px;margin-bottom:12px; }
-  .fixture-heading span { color:var(--muted); }
+  .fixture-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;min-width:0;margin:12px 0 16px;}
+  .fixture {min-width:0;padding:0;border:0;}
+  .fixture-heading {display:flex;align-items:center;min-height:25px;margin:0 0 5px;}
+  .fixture-id {display:inline-flex;align-items:center;font-size:11px;font-weight:750;letter-spacing:.1em;color:var(--gold);}
   .warning { font-size:14px; line-height:1.5; padding:14px; border:1px solid var(--line);border-radius:8px; }
+  .control-details {margin-top:10px;color:var(--muted);font-size:13px;}
+  .control-details summary {display:flex;align-items:center;min-height:44px;cursor:pointer;}
   a {display:inline-flex;align-items:center;min-height:44px;font-size:14px;color:var(--gold);text-decoration:underline;text-underline-offset:4px; }
   a:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
   :global(.room-control .light-card-owner) {min-width:0;max-width:100%;}
-  @media(max-width:700px) {.fixture-grid {grid-template-columns:minmax(0,1fr);} .fixture{padding:12px;}}
+  /* Keep LightCard's guarded behavior; make its surface read as a Home control rather than a Classic card. */
+  :global(.room-control .light-chip) {min-height:82px;border-radius:17px;border:1px solid var(--line);padding:17px;background:linear-gradient(120deg,rgba(235,218,177,.06),rgba(255,255,255,.015));}
+  :global(.room-control .light-chip.light-on) {border-color:rgba(237,207,160,.3);}
+  :global(.room-control .chip-name) {font-family:inherit;font-size:16px;font-weight:650;color:var(--ink);}
+  :global(.room-control .chip-pct) {font-size:13px;color:var(--muted);}
+  :global(.room-control .chip-power) {width:44px;height:44px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.06);color:var(--ink);}
+  :global(.room-control .chip-power.power-on) {color:var(--gold);background:rgba(237,207,160,.12);}
+  :global(.room-control .chip-command-status) {font-size:13px;color:var(--muted);}
+  @media(max-width:700px) {
+    :global(.room-control .light-chip) {min-height:78px;padding:13px;}
+  }
+  @media(max-width:700px) {.fixture-grid {grid-template-columns:minmax(0,1fr);}}
 </style>
