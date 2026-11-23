@@ -44,8 +44,11 @@ describe('Quiet Atlas phone-first Home composition', () => {
     for (const label of ['Living', 'Bedroom', 'Kitchen', 'Plant']) {
       expect(home).toContain("name: '" + label + "'")
     }
-    expect(home).toContain('.phone-rooms {display:grid;grid-template-columns:minmax(0,1fr);')
-    expect(home).toContain('.phone-room {display:flex;align-items:center;gap:15px;min-height:76px;box-sizing:border-box;')
+    expect(home).toContain('.phone-rooms {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));')
+    expect(home).toContain('.phone-room {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;min-height:88px;')
+    expect(home).toContain('.phone-rooms :global(.reveal) {grid-column:1 / -1;}')
+    expect(home.indexOf('class="phone-status"')).toBeLessThan(home.indexOf('<QuietAtlasHomeModeControls />'))
+    expect(home.indexOf('<QuietAtlasHomeModeControls />')).toBeLessThan(home.indexOf('class="phone-actions"'))
     expect(home).toContain('.phone-scenes {min-height:64px;')
     expect(home).not.toContain('class="phone-functional-handoff"')
     expect(home).toContain('id="phone-lighting-title"')
