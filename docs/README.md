@@ -42,6 +42,7 @@ Use this page as the entry point for repository documentation.
 ## Architecture and design
 
 - [`DASHBOARD_REDESIGN_VISION.md`](DASHBOARD_REDESIGN_VISION.md) — active Dashboard redesign vision: living apartment canvas, contextual hierarchy, semantic motion, Analytics/inference-machine language, mobile/desktop composition, and explicit rejected precedents
+- [`HOMEHUB_ACCESS_AND_REDESIGN_HANDOFF_2026_11_23.md`](HOMEHUB_ACCESS_AND_REDESIGN_HANDOFF_2026_11_23.md) — verified Nov 23 operational handoff: ports 8000/8443, kiosk, mDNS versus Pi-hole hostname limitations, owner device login persistence, live #541/#542 rollout evidence, and current #461 redesign resume point (dated evidence, not product policy)
 - [`GAMING_EXPERIENCE_SPEC.md`](GAMING_EXPERIENCE_SPEC.md) — schedule-aware, game-specific Gaming presentation, fixture roles, bounded telemetry effects, and calibration policy
 - [`CONFIDENCE_FUSION.md`](CONFIDENCE_FUSION.md) — multi-source confidence and activity fusion
 - [`AI_SEMANTIC_LAYER.md`](AI_SEMANTIC_LAYER.md) - provider-neutral research architecture for grounded analysis, structured interpretation, shadow semantic tasks, and bounded natural-language actions
