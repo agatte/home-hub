@@ -109,7 +109,7 @@ describe('Quiet Atlas read-only HomeHub context source', () => {
     expect(route).toContain('homeContextPresentation(contextSnapshot, contextNowMs)')
     expect(route).toContain('Illustrative context examples')
     expect(route).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
-    expect(route).toContain('HOME AT A GLANCE')
+    expect(route).toContain('At a glance')
     expect(route).toContain('prefers-reduced-motion:reduce')
   })
 })
