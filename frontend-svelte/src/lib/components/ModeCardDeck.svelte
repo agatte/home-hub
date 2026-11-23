@@ -35,14 +35,43 @@
 
   /** @type {string | null} */
   let pressedId = null
+  /** @type {string | null} */
+  let allOffFeedback = null
+  let modeFeedback = null
+  let allOffPending = false
 
   async function handleClick(card) {
+    if (card.isAction && allOffPending) return
     pressedId = card.id
     setTimeout(() => { pressedId = null }, 400)
     if (card.isAction) {
-      await apiPost('/api/lights/all', { on: false })
+      allOffPending = true
+      allOffFeedback = 'Sending All Off request to HomeHub…'
+      try {
+        // The backend may complete a subset and cannot undo a sent Hue frame.
+        // Never suggest retrying on a timeout, partial result or missing reply.
+        const outcome = await apiPost('/api/lights/all', { on: false }, { timeout: 20000 })
+        if (outcome?.status === 'ok') {
+          allOffFeedback = 'HomeHub acknowledged All Off. Verify the reported light states.'
+        } else if (outcome?.status === 'partial_failure') {
+          const blocked = Array.isArray(outcome.blocked) ? outcome.blocked.length : 0
+          const unavailable = Array.isArray(outcome.unavailable) ? outcome.unavailable.length : 0
+          const uncertain = Array.isArray(outcome.uncertain) ? outcome.uncertain.length : 0
+          allOffFeedback = `All Off only partly applied: ${blocked} protected, ${unavailable} unavailable, ${uncertain} uncertain. Check the actual lights before taking another action.`
+        } else {
+          allOffFeedback = 'All Off result not confirmed. Check the lights before trying again.'
+        }
+      } catch {
+        allOffFeedback = 'All Off result uncertain. Check the actual lights before trying again.'
+      } finally {
+        allOffPending = false
+      }
     } else {
-      await setManualMode(card.id)
+      modeFeedback = null
+      const outcome = await setManualMode(card.id)
+      if (outcome === 'denied') modeFeedback = 'Mode change denied. Unlock owner controls to change modes.'
+      else if (outcome === 'uncertain') modeFeedback = 'Mode change not confirmed. Check HomeHub’s reported mode before another action.'
+      else if (outcome === 'busy') modeFeedback = 'Another mode change is still pending.'
     }
   }
 </script>
@@ -64,6 +93,7 @@
         on:click={() => handleClick(card)}
         aria-label={card.isAction ? 'Turn all lights off' : `${card.label} mode`}
         aria-pressed={activeMap[card.id]}
+        disabled={card.isAction && allOffPending}
       >
         <div class="card-inner">
           <div class="card-front">
@@ -83,6 +113,12 @@
       </button>
     {/each}
   </div>
+  {#if allOffFeedback}
+    <p class="all-off-feedback" role="status" aria-live="polite">{allOffFeedback}</p>
+  {/if}
+  {#if modeFeedback}
+    <p class="all-off-feedback" role="status" aria-live="polite">{modeFeedback}</p>
+  {/if}
 </div>
 
 <style>
@@ -95,6 +131,13 @@
     display: flex;
     gap: 12px;
     justify-content: center;
+  }
+  .all-off-feedback {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: center;
+    color: var(--text-muted);
   }
 
   /* --- Card button --- */

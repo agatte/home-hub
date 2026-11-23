@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     # App
     APP_ENV: str = "development"
+    HOME_HUB_SERVER_TLS_CERTFILE: Optional[str] = None
+    HOME_HUB_SERVER_TLS_KEYFILE: Optional[str] = None
+    HOME_HUB_SERVER_TLS_HOST: str = "127.0.0.1"
+    HOME_HUB_SERVER_TLS_PORT: int = 8443
     LOCAL_IP: str = "127.0.0.1"
     # Optional stable role for pc_agent activity reports: desktop or latitude.
     HOME_HUB_AGENT_DEVICE: Optional[str] = None
@@ -108,6 +112,8 @@ class Settings(BaseSettings):
     # matching X-API-Key; localhost, configured TRUSTED_LAN_IPS, and private
     # addresses use require_api_key()'s ordinary bypass. See backend/api/auth.py.
     HOME_HUB_API_KEY: Optional[str] = None
+    HOME_HUB_OWNER_PASSWORD_VERIFIER: Optional[str] = None
+    HOME_HUB_OWNER_ALLOWED_ORIGINS: str = ""
     # Comma-separated additional IPs that bypass X-API-Key. Private/LAN
     # addresses are already covered by require_api_key()'s ordinary bypass.
     TRUSTED_LAN_IPS: str = ""

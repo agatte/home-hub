@@ -197,6 +197,34 @@ async def require_api_key_strict(
             )
 
 
+async def require_explicit_api_key(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_skill_token: Optional[str] = Header(default=None, alias="X-Skill-Token"),
+) -> None:
+    """Require an explicit key, including on loopback and private networks."""
+    expected = settings.HOME_HUB_API_KEY
+    if not expected or not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if request.headers.get(TUNNEL_ORIGIN_HEADER, "").strip().lower() == TUNNEL_ORIGIN_VALUE:
+        skill = settings.HOME_HUB_SKILL_TOKEN
+        if not skill or not x_skill_token or not hmac.compare_digest(x_skill_token, skill):
+            raise HTTPException(status_code=401, detail="Invalid or missing skill token")
+
+
+async def require_owner_or_explicit_key(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_skill_token: Optional[str] = Header(default=None, alias="X-Skill-Token"),
+) -> None:
+    from backend.api.owner_session import valid_session
+
+    is_tunnel = request.headers.get(TUNNEL_ORIGIN_HEADER, "").strip().lower() == TUNNEL_ORIGIN_VALUE
+    if not is_tunnel and valid_session(request):
+        return
+    await require_explicit_api_key(request, x_api_key, x_skill_token)
+
+
 def source_from_request(request: Request, fallback: str) -> str:
     """Extract the X-Source header for telemetry, with a route-specific fallback.
 

@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_owner_or_explicit_key
 
 logger = logging.getLogger("home_hub.ambient_api")
 
@@ -64,42 +64,42 @@ async def list_sounds(request: Request) -> dict:
     return {"status": "ok", "sounds": sounds}
 
 
-@router.post("/play", dependencies=[Depends(require_api_key)])
+@router.post("/play", dependencies=[Depends(require_owner_or_explicit_key)])
 async def play_sound(body: AmbientPlayRequest, request: Request) -> dict:
     """Start playing a specific ambient sound."""
     service = request.app.state.ambient_sound
     return await service.play(body.filename)
 
 
-@router.post("/pause", dependencies=[Depends(require_api_key)])
+@router.post("/pause", dependencies=[Depends(require_owner_or_explicit_key)])
 async def pause_sound(request: Request) -> dict:
     """Pause current ambient sound."""
     service = request.app.state.ambient_sound
     return await service.pause(learn=True)
 
 
-@router.post("/resume", dependencies=[Depends(require_api_key)])
+@router.post("/resume", dependencies=[Depends(require_owner_or_explicit_key)])
 async def resume_sound(request: Request) -> dict:
     """Resume paused ambient sound."""
     service = request.app.state.ambient_sound
     return await service.resume()
 
 
-@router.post("/stop", dependencies=[Depends(require_api_key)])
+@router.post("/stop", dependencies=[Depends(require_owner_or_explicit_key)])
 async def stop_sound(request: Request) -> dict:
     """Stop and clear ambient sound."""
     service = request.app.state.ambient_sound
     return await service.stop(learn=True)
 
 
-@router.post("/volume", dependencies=[Depends(require_api_key)])
+@router.post("/volume", dependencies=[Depends(require_owner_or_explicit_key)])
 async def set_volume(body: AmbientVolumeRequest, request: Request) -> dict:
     """Set ambient volume (0.0-1.0)."""
     service = request.app.state.ambient_sound
     return await service.set_volume(body.volume)
 
 
-@router.post("/config", dependencies=[Depends(require_api_key)])
+@router.post("/config", dependencies=[Depends(require_owner_or_explicit_key)])
 async def update_config(body: AmbientConfigUpdate, request: Request) -> dict:
     """Update ambient config (mode mappings, weather-reactive, Sonos)."""
     service = request.app.state.ambient_sound

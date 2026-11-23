@@ -1,8 +1,7 @@
 """
 Tests for WebSocket protocol — connection, messages, malformed input handling.
 
-Note: TestClient runs the real lifespan. Tests verify protocol behavior
-and the JSON safety guard we added.
+Tests use a fake app without service lifespan or devices.
 """
 import json
 
@@ -10,16 +9,29 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.websockets import WebSocketDisconnect
 
-from backend.main import app, websocket_endpoint
+from backend.main import websocket_endpoint
 
 
 @pytest.fixture(scope="module")
 def client():
-    """Shared TestClient — lifespan runs once for the module."""
-    with TestClient(app, raise_server_exceptions=False) as c:
+    """Use the real endpoint with a fake app, without service lifespan."""
+    fake_app = FastAPI()
+    async def connect(socket):
+        await socket.accept()
+    fake_app.state.ws_manager = SimpleNamespace(connect=connect, disconnect=Mock())
+    fake_app.state.hue = SimpleNamespace(connected=False)
+    fake_app.state.sonos = SimpleNamespace(connected=False)
+    fake_app.state.build_id = "test"
+    fake_app.state.automation = SimpleNamespace(
+        current_mode="idle", mode_source="test", manual_override=None,
+        house_state="home", activity="general", get_time_period=lambda: "day",
+    )
+    fake_app.add_api_websocket_route("/ws", websocket_endpoint)
+    with TestClient(fake_app, raise_server_exceptions=False) as c:
         yield c
 
 
@@ -159,7 +171,7 @@ class TestWebSocketValidation:
             }))
             msg = _next_of_type(ws, {"error"})
             assert msg["type"] == "error"
-            assert msg["data"]["reason"] == "validation"
+            assert msg["data"]["reason"] == "unauthorized"
 
     def test_light_id_int_is_coerced_to_str(self, client):
         """Other backend code paths emit int light ids; accept and normalize."""
@@ -188,7 +200,7 @@ class TestWebSocketValidation:
                 "data": {"action": "volume"},
             }))
             msg = _next_of_type(ws, {"error"})
-            assert msg["data"]["reason"] == "validation"
+            assert msg["data"]["reason"] == "unauthorized"
 
     def test_sonos_bogus_action_rejected(self, client):
         with client.websocket_connect("/ws") as ws:
@@ -199,7 +211,7 @@ class TestWebSocketValidation:
                 "data": {"action": "bogus"},
             }))
             msg = _next_of_type(ws, {"error"})
-            assert msg["data"]["reason"] == "validation"
+            assert msg["data"]["reason"] == "unauthorized"
 
     def test_extra_field_rejected(self, client):
         """extra='forbid' catches typos and stray fields from a buggy client."""
@@ -211,7 +223,7 @@ class TestWebSocketValidation:
                 "data": {"light_id": "1", "bri": 100, "wat": "x"},
             }))
             msg = _next_of_type(ws, {"error"})
-            assert msg["data"]["reason"] == "validation"
+            assert msg["data"]["reason"] == "unauthorized"
 
     def test_light_command_without_state_fields_rejected(self, client):
         with client.websocket_connect("/ws") as ws:
@@ -222,4 +234,4 @@ class TestWebSocketValidation:
                 "data": {"light_id": "1"},
             }))
             msg = _next_of_type(ws, {"error"})
-            assert msg["data"]["reason"] == "validation"
+            assert msg["data"]["reason"] == "unauthorized"

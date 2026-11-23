@@ -6,7 +6,8 @@
 import { receiveAmbientContext, resetAmbientContext } from '../quietAtlas/ambient.js'
 import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
-import { lights, setLightsFromList, applyLightUpdate, optimisticLightPatch } from './lights.js'
+import { lights, setLightsFromList, applyLightUpdate } from './lights.js'
+import { lightCommandTracker } from './lightCommandResults.js'
 import { sonos } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
@@ -21,15 +22,16 @@ import { startWeatherPolling, stopWeatherPolling } from './weather.js'
 /** @type {HubSocket | null} */
 let socket = null
 
-// Brief lock to prevent WebSocket mode_update from overwriting an optimistic
-// update before the server confirms. Cleared after 2s or when a matching
-// server confirmation arrives.
-let modeUpdateLockUntil = 0
-/** @type {boolean | null} */
-let pendingOverride = null  // expected manual_override value from server
+// The server is the sole source of displayed mode authority. A single-flight
+// manual request prevents out-of-order user writes; a version check prevents a
+// delayed REST snapshot from overwriting a newer WebSocket mode update.
+let modeRequestPending = false
+let modeUpdateEpoch = 0
 
 export function initStores() {
   resetAmbientContext()
+  lightCommandTracker.reset()
+  deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
   // Initial REST fetches — best-effort, errors swallowed so the UI still mounts
   // if the backend is warming up.
   apiGet('/api/lights')
@@ -48,9 +50,13 @@ export function initStores() {
     .then((data) => camera.set(/** @type {any} */ (data)))
     .catch(() => {})
 
+  const initialModeEpoch = modeUpdateEpoch
   apiGet('/api/automation/status')
     .then((data) => {
-      automation.set(automationStateFromStatus(/** @type {any} */ (data)))
+      if (modeUpdateEpoch === initialModeEpoch && data) {
+        modeUpdateEpoch += 1
+        automation.set(automationStateFromStatus(/** @type {any} */ (data)))
+      }
     })
     .catch(() => {})
 
@@ -77,18 +83,15 @@ export function initStores() {
           break
         case 'connection_status':
           deviceStatus.set(data)
+          lightCommandTracker.setCapability(data?.light_command_results === true)
+          break
+        case 'light_command_result':
+          lightCommandTracker.receive(data)
           break
         case 'mode_update':
-          // Direction-aware lock: during the post-click window, accept the
-          // server's confirmation (manual_override matches what the user
-          // just chose) and discard contradicting messages as stale.
-          if (Date.now() < modeUpdateLockUntil && pendingOverride !== null) {
-            if (data.manual_override !== pendingOverride) {
-              break
-            }
-            modeUpdateLockUntil = 0
-            pendingOverride = null
-          }
+          // Never suppress physical/automation owner updates to protect a
+          // speculative client choice. A newer live update wins over REST.
+          modeUpdateEpoch += 1
           receiveAmbientContext(data)
           automation.update((prev) => mergeAutomationUpdate(prev, data))
           break
@@ -137,12 +140,20 @@ export function initStores() {
           break
       }
     },
-    (isConnected) => { resetAmbientContext(); connected.set(isConnected) }
+    (isConnected) => {
+      resetAmbientContext()
+      connected.set(isConnected)
+      if (!isConnected) {
+        lightCommandTracker.disconnect()
+        deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
+      }
+    }
   )
   socket.connect()
 
   return () => {
     resetAmbientContext()
+    lightCommandTracker.reset()
     socket?.close()
     socket = null
     stopWeatherPolling()
@@ -152,14 +163,15 @@ export function initStores() {
 // ---------- Action helpers (parity with HubContext actions) ----------
 
 /**
- * Set a single light's state. Optimistic update runs immediately, then the
- * command is sent over the WebSocket.
+ * Send one guarded fixture command without predicting device state.
  * @param {string} lightId
  * @param {Record<string, unknown>} state
+ * @param {{ optimistic?: boolean }} [options]
  */
-export function setLight(lightId, state) {
-  socket?.send('light_command', { light_id: lightId, ...state })
-  optimisticLightPatch(lightId, /** @type {any} */ (state))
+export function setLight(lightId, state, options = {}) {
+  lightCommandTracker.submit(lightId, state, (data) =>
+    socket?.send('light_command', data) === true,
+  )
 }
 
 /**
@@ -169,10 +181,11 @@ export function setLight(lightId, state) {
 export function sonosCommand(action, params = {}) {
   if (action === 'volume' && typeof params.volume === 'number') {
     const volume = Math.max(0, Math.min(100, Math.round(params.volume)))
-    sonos.update((prev) => ({ ...prev, volume }))
     params = { ...params, volume }
   }
-  socket?.send('sonos_command', { action, ...params })
+  // A sent WS frame is not Sonos ACK. Only an actual sonos_update may change
+  // the reported volume or playback state, including after session expiry.
+  return socket?.send('sonos_command', { action, ...params }) === true
 }
 
 /** @param {string} sceneId */
@@ -190,23 +203,28 @@ export async function speakText(text, volume) {
 
 /** @param {string} mode */
 export async function setManualMode(mode) {
-  const wantOverride = mode !== 'auto'
-  // Arm the direction-aware lock — only contradicting WS messages get
-  // discarded; the server's confirmation passes through and replaces the
-  // optimistic state with real values (notably the detected mode after Auto).
-  pendingOverride = wantOverride
-  modeUpdateLockUntil = Date.now() + 2000
-  automation.update((prev) => ({
-    ...prev,
-    mode: wantOverride ? mode : prev.mode,
-    manual_override: wantOverride,
-  }))
+  if (modeRequestPending) return 'busy'
+  modeRequestPending = true
   try {
-    await apiPost('/api/automation/override', { mode })
+    const outcome = await apiPost('/api/automation/override', { mode })
+    if (outcome?.status !== 'ok') return 'uncertain'
+    // A successful HTTP response acknowledges server handling, not the
+    // displayed effective mode. Re-read authority; discard a delayed snapshot
+    // if a newer live mode_update arrived while this fetch was pending.
+    const observedEpoch = modeUpdateEpoch
+    try {
+      const state = await apiGet('/api/automation/status')
+      if (state && modeUpdateEpoch === observedEpoch) {
+        modeUpdateEpoch += 1
+        automation.set(automationStateFromStatus(state))
+      }
+    } catch { /* Keep last reported state; live WebSocket remains authority. */ }
+    return 'acknowledged'
   } catch (e) {
-    modeUpdateLockUntil = 0
-    pendingOverride = null
-    console.error('Mode override failed:', e)
+    console.error('Mode override not confirmed:', e)
+    return /failed: 40[13]\b/.test(e instanceof Error ? e.message : String(e)) ? 'denied' : 'uncertain'
+  } finally {
+    modeRequestPending = false
   }
 }
 

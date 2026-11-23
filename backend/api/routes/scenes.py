@@ -16,7 +16,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.api._guards import _check_hue_available
-from backend.api.auth import require_api_key, source_from_request
+from backend.api.auth import require_owner_or_explicit_key, source_from_request
 from backend.api.schemas.lights import CustomSceneCreate
 from backend.database import async_session
 
@@ -549,7 +549,7 @@ async def _log_scene_activation(
         )
 
 
-@router.post("/{scene_id}/activate", dependencies=[Depends(require_api_key)])
+@router.post("/{scene_id}/activate", dependencies=[Depends(require_owner_or_explicit_key)])
 async def activate_scene(scene_id: str, request: Request) -> dict:
     return await _activate_scene(scene_id, request)
 
@@ -768,7 +768,7 @@ async def _activate_scene(
 # ------------------------------------------------------------------
 
 
-@router.post("/custom", dependencies=[Depends(require_api_key)])
+@router.post("/custom", dependencies=[Depends(require_owner_or_explicit_key)])
 async def create_custom_scene(body: CustomSceneCreate, request: Request) -> dict:
     """Create a new custom scene."""
     from sqlalchemy import text
@@ -815,7 +815,7 @@ async def list_custom_scenes(request: Request) -> dict:
     return {"scenes": scenes}
 
 
-@router.put("/custom/{scene_id}", dependencies=[Depends(require_api_key)])
+@router.put("/custom/{scene_id}", dependencies=[Depends(require_owner_or_explicit_key)])
 async def update_custom_scene(
     scene_id: int, body: CustomSceneCreate, request: Request
 ) -> dict:
@@ -843,7 +843,7 @@ async def update_custom_scene(
     return {"status": "ok", "id": scene_id}
 
 
-@router.delete("/custom/{scene_id}", dependencies=[Depends(require_api_key)])
+@router.delete("/custom/{scene_id}", dependencies=[Depends(require_owner_or_explicit_key)])
 async def delete_custom_scene(scene_id: int, request: Request) -> dict:
     """Delete a custom scene."""
     from sqlalchemy import text
@@ -875,7 +875,7 @@ async def list_effects(request: Request) -> dict:
     return {"effects": effects, "available": True}
 
 
-@router.post("/effects/{effect_name}", dependencies=[Depends(require_api_key)])
+@router.post("/effects/{effect_name}", dependencies=[Depends(require_owner_or_explicit_key)])
 async def activate_effect(effect_name: str, request: Request) -> dict:
     """
     Activate a dynamic effect on all lights.
@@ -923,7 +923,7 @@ async def activate_effect(effect_name: str, request: Request) -> dict:
     return {"status": "ok" if success else "partial_failure", "effect": effect_name}
 
 
-@router.post("/effects/{effect_name}/light/{light_id}", dependencies=[Depends(require_api_key)])
+@router.post("/effects/{effect_name}/light/{light_id}", dependencies=[Depends(require_owner_or_explicit_key)])
 async def activate_effect_on_light(
     effect_name: str, light_id: str, request: Request
 ) -> dict:
@@ -1057,7 +1057,7 @@ async def close_scene_trials() -> None:
             await _cancel_trial_task(trial)
 
 
-@router.post("/try/cancel", dependencies=[Depends(require_api_key)])
+@router.post("/try/cancel", dependencies=[Depends(require_owner_or_explicit_key)])
 async def cancel_try(request: Request) -> dict:
     """Cancel the timer; restore only while the trial still owns authority."""
     async with _try_control_lock:
@@ -1076,7 +1076,7 @@ async def cancel_try(request: Request) -> dict:
         return {"status": "reverted" if reverted else "discarded"}
 
 
-@router.post("/{scene_id}/try", dependencies=[Depends(require_api_key)])
+@router.post("/{scene_id}/try", dependencies=[Depends(require_owner_or_explicit_key)])
 async def try_scene(scene_id: str, request: Request) -> dict:
     """Snapshot and establish one trial inside the serialized scene operation."""
     hue = request.app.state.hue

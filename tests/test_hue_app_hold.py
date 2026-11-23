@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from backend.api.auth import require_owner_or_explicit_key
 from backend.api.routes.lights import router
 from backend.config import settings
 from backend.services.automation_engine import AutomationEngine
@@ -30,10 +31,26 @@ def engine(mock_hue, mock_hue_v2, mock_ws, monkeypatch):
 def client(engine):
     app = FastAPI()
     app.include_router(router)
+    # These tests exercise hold semantics as a simulated authorized owner.
+    # Real routes still require an owner session or explicit API key.
+    app.dependency_overrides[require_owner_or_explicit_key] = lambda: None
     app.state.hue = engine._hue
     app.state.automation = engine
     with TestClient(app) as client:
         yield client
+
+
+def test_hue_app_hold_anonymous_requests_denied(engine):
+    """Unmodified owner auth rejects anonymous mutations in the fake app."""
+    app = FastAPI()
+    app.include_router(router)
+    app.state.hue = engine._hue
+    app.state.automation = engine
+    with TestClient(app) as anonymous:
+        assert anonymous.post("/api/lights/6/hue-app-hold").status_code == 401
+        assert anonymous.request("DELETE", "/api/lights/6/hue-app-hold", json={"stamp": "fake"}).status_code == 401
+    assert "6" not in engine.manual_light_overrides
+    engine._hue.set_light.assert_not_called()
 
 
 def test_off_fixture_claim_release_and_scoped_dedup(client, engine):
@@ -193,6 +210,8 @@ async def test_claim_waits_for_inflight_boundary_and_revokes_old_lease(engine):
 
 @pytest.mark.parametrize("verb", ["post", "delete"])
 def test_auth(client, engine, monkeypatch, verb):
+    # Use real auth here, not the fake owner dependency override.
+    client.app.dependency_overrides.pop(require_owner_or_explicit_key)
     monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "test-only-key")
     monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "test-only-skill")
     response = getattr(client, verb)("/api/lights/6/hue-app-hold",
@@ -203,6 +222,8 @@ def test_auth(client, engine, monkeypatch, verb):
 
 
 def test_authenticated_external_claim_release(client, monkeypatch):
+    # Exercise real two-header tunnel authorization.
+    client.app.dependency_overrides.pop(require_owner_or_explicit_key)
     monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "test-only-key")
     monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "test-only-skill")
     headers = {"X-Tunnel-Origin": "cloudflare", "X-API-Key": "test-only-key",
