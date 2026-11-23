@@ -20,6 +20,10 @@ COOKIE = "homehub_owner"
 TTL = 8 * 60 * 60
 _sessions: dict[str, float] = {}
 _attempts: deque[float] = deque()
+# Serialize secure household-state sends against logout. A send that started
+# before logout may finish, but no WSS state frame starts after logout returns.
+# The deployment uses one worker and one ASGI event loop for both listeners.
+_wss_read_lock = asyncio.Lock()
 
 
 def valid_context(conn) -> bool:
@@ -55,6 +59,24 @@ def valid_session(conn) -> bool:
         _sessions.pop(token, None)
         return False
     return True
+
+
+async def send_state_if_authorized(conn, payload: str) -> bool:
+    """Send WSS household state only while its session cannot be revoked.
+
+    Existing plain WS clients keep their historical read path. Logout acquires
+    the same lock before removing an owner session, so completion of logout is
+    a send/revocation ordering barrier, not an attempt to recall in-flight
+    transport frames.
+    """
+    if getattr(conn, "scope", {}).get("scheme") != "wss":
+        await conn.send_text(payload)
+        return True
+    async with _wss_read_lock:
+        if not valid_session(conn):
+            return False
+        await conn.send_text(payload)
+        return True
 
 
 def _verify(password: str, encoded: str) -> bool:
@@ -110,7 +132,8 @@ async def status(request: Request, response: Response):
 async def logout(request: Request, response: Response):
     if not valid_context(request):
         raise HTTPException(403, "Invalid origin or transport")
-    _sessions.pop(request.cookies.get(COOKIE, ""), None)
+    async with _wss_read_lock:
+        _sessions.pop(request.cookies.get(COOKIE, ""), None)
     response.delete_cookie(COOKIE, path="/", httponly=True, samesite="strict", secure=request.url.scheme == "https")
     response.headers["Cache-Control"] = "no-store"
     return {"authenticated": False}

@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from fastapi import WebSocket
 
+from backend.api.owner_session import send_state_if_authorized
+
 logger = logging.getLogger("home_hub.websocket")
 
 # Per-client send timeout. A stalled client (mobile on bad wifi, paused tab)
@@ -51,9 +53,21 @@ class WebSocketManager:
         targets = list(self._connections)
 
         async def _send_one(ws: WebSocket) -> Optional[WebSocket]:
+            # A WSS send must serialize with session revocation: checking
+            # outside wait_for would race logout while the task is scheduled.
+            # Plain WS keeps its existing native/kiosk read behavior.
             try:
-                await asyncio.wait_for(ws.send_text(payload), timeout=SEND_TIMEOUT_SECONDS)
-                return None
+                allowed = await asyncio.wait_for(
+                    send_state_if_authorized(ws, payload),
+                    timeout=SEND_TIMEOUT_SECONDS,
+                )
+                if allowed:
+                    return None
+                try:
+                    await ws.close(code=1008)
+                except Exception:
+                    pass
+                return ws
             except Exception:
                 return ws
 
