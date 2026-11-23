@@ -50,15 +50,19 @@ export class HubSocket {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${window.location.host}/ws`
 
+    // Invalidate the prior socket capability before a replacement can send.
+    this._onConnectionChange(false)
     const ws = new WebSocket(url)
     this._ws = ws
 
     ws.onopen = () => {
+      if (this._ws !== ws || this._closed) return
       this._onConnectionChange(true)
       this._reconnectDelay = INITIAL_RECONNECT_DELAY
     }
 
     ws.onmessage = (event) => {
+      if (this._ws !== ws || this._closed) return
       try {
         const message = JSON.parse(event.data)
         if (message?.type === 'connection_status') {
@@ -80,6 +84,7 @@ export class HubSocket {
     }
 
     ws.onclose = () => {
+      if (this._ws !== ws) return
       this._onConnectionChange(false)
       this._ws = null
       if (this._closed) return
@@ -117,7 +122,9 @@ export class HubSocket {
   send(type, data) {
     if (this._ws?.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({ type, data }))
+      return true
     }
+    return false
   }
 
   close() {

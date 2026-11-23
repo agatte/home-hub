@@ -1,0 +1,23 @@
+﻿import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import vm from 'node:vm'
+
+const source = fs.readFileSync(new URL('../../src/lib/components/OwnerUnlock.svelte', import.meta.url), 'utf8')
+const script = source.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/import \{ onMount \} from 'svelte'/, '')
+test('fake browser login clears input and reloads after success', async () => {
+  let payload, clearedAtSend, reloads = 0
+  const context = vm.createContext({ onMount: () => {}, fetch: async (url, options) => {
+    assert.equal(url, '/api/owner/session')
+    payload = JSON.parse(options.body)
+    clearedAtSend = vm.runInContext('password', context)
+    return { ok: true }
+  }, window: { location: { reload: () => reloads++ } } })
+  vm.runInContext(script, context)
+  vm.runInContext("password = 'fake passphrase'", context)
+  await vm.runInContext('unlock()', context)
+  assert.deepEqual(payload, { password: 'fake passphrase' })
+  assert.equal(clearedAtSend, '')
+  assert.equal(reloads, 1)
+  assert.doesNotMatch(source, /localStorage|sessionStorage|[?&]password=/)
+})

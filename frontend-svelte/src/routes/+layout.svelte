@@ -7,6 +7,7 @@
   import { connectionLost } from '$lib/stores/connection.js'
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
   import { initAmbientAudio } from '$lib/ambientAudio.js'
+  import OwnerUnlock from '$lib/components/OwnerUnlock.svelte'
   import ModeBackground from '$lib/components/ModeBackground.svelte'
   import ModeOverlay from '$lib/components/ModeOverlay.svelte'
   import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
@@ -149,6 +150,10 @@
     <div class="idle-hint">Tap anywhere to wake</div>
   {/if}
 </div>
+
+{#if $page.url.pathname === "/" || $page.url.pathname === "/classic" || $page.url.pathname.startsWith("/quiet-atlas/")}
+  <OwnerUnlock />
+{/if}
 
 {#if ambientVisible}
   <QuietAtlasAmbient />

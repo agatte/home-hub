@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_owner_or_explicit_key
 from backend.database import async_session
 from backend.models import AppSetting
 
@@ -86,7 +86,7 @@ async def list_routines(request: Request) -> dict:
     return {"routines": tasks}
 
 
-@router.post("/morning/test", dependencies=[Depends(require_api_key)])
+@router.post("/morning/test", dependencies=[Depends(require_owner_or_explicit_key)])
 async def test_morning_routine(request: Request) -> dict:
     """Trigger the morning routine immediately for testing."""
     morning = getattr(request.app.state, "morning_routine", None)
@@ -103,7 +103,7 @@ async def test_morning_routine(request: Request) -> dict:
     }
 
 
-@router.put("/morning/config", dependencies=[Depends(require_api_key)])
+@router.put("/morning/config", dependencies=[Depends(require_owner_or_explicit_key)])
 async def update_morning_config(config: RoutineConfig, request: Request) -> dict:
     """Update morning routine schedule and settings."""
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -142,7 +142,7 @@ async def update_morning_config(config: RoutineConfig, request: Request) -> dict
     return {"status": "ok", "config": config.model_dump()}
 
 
-@router.post("/morning/toggle", dependencies=[Depends(require_api_key)])
+@router.post("/morning/toggle", dependencies=[Depends(require_owner_or_explicit_key)])
 async def toggle_morning_routine(request: Request) -> dict:
     """Toggle the morning routine on/off."""
     scheduler = getattr(request.app.state, "scheduler", None)

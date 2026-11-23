@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.auth import TRUSTED_LOCAL, require_api_key
+from backend.api.auth import TRUSTED_LOCAL, require_api_key, require_owner_or_explicit_key
 from backend.config import settings
 from backend.main import app
 
@@ -281,10 +281,9 @@ class TestTrustedLanIpsParsing:
 class TestSmokeWiring:
     """End-to-end: representative writes per router actually run the dep.
 
-    The TestClient connects from 127.0.0.1, which always bypasses. To
-    exercise the rejection path we override the dependency with a stub
-    that simulates a non-trusted host. This proves both that (a) the
-    decorator is wired and (b) the dependency hook is reachable.
+    The legacy dependency still permits its documented LAN paths, but
+    release-relevant owner writes must reject unauthenticated localhost.
+    Separate dependency-override cases prove the guarded route is wired.
     """
 
     def _stub_reject(self):
@@ -293,31 +292,29 @@ class TestSmokeWiring:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
         return _reject
 
-    def test_localhost_writes_succeed_unauthenticated(self, client):
-        # Sanity: TestClient is on 127.0.0.1, no override → bypass kicks in,
-        # the write may 200 / 400 / 500 depending on backend state, but it
-        # must NOT 401. (Some endpoints validate body before they touch
-        # state; we just need to confirm auth doesn't reject us.)
+    def test_localhost_owner_write_requires_identity(self, client):
+        # The redesigned Home must not inherit the old private-IP or loopback
+        # bypass for an actual Mode/Auto write. This call must never actuate.
         resp = client.post("/api/automation/override", json={"mode": "relax"})
-        assert resp.status_code != 401, resp.text
+        assert resp.status_code == 401, resp.text
 
     def test_override_dependency_rejects_when_overridden(self, client):
-        # Force-override require_api_key to always reject. Now the same
-        # write endpoint should 401 — proving the decorator is wired.
-        app.dependency_overrides[require_api_key] = self._stub_reject()
+        # Force-override the owner dependency to always reject. Now the same
+        # write endpoint should return 401, proving the decorator is wired.
+        app.dependency_overrides[require_owner_or_explicit_key] = self._stub_reject()
         try:
             resp = client.post("/api/automation/override", json={"mode": "relax"})
             assert resp.status_code == 401
         finally:
-            app.dependency_overrides.pop(require_api_key, None)
+            app.dependency_overrides.pop(require_owner_or_explicit_key, None)
 
     def test_lights_set_rejects_when_overridden(self, client):
-        app.dependency_overrides[require_api_key] = self._stub_reject()
+        app.dependency_overrides[require_owner_or_explicit_key] = self._stub_reject()
         try:
             resp = client.put("/api/lights/1", json={"on": True})
             assert resp.status_code == 401
         finally:
-            app.dependency_overrides.pop(require_api_key, None)
+            app.dependency_overrides.pop(require_owner_or_explicit_key, None)
 
     def test_sonos_play_rejects_when_overridden(self, client):
         app.dependency_overrides[require_api_key] = self._stub_reject()
@@ -328,12 +325,12 @@ class TestSmokeWiring:
             app.dependency_overrides.pop(require_api_key, None)
 
     def test_scene_activate_rejects_when_overridden(self, client):
-        app.dependency_overrides[require_api_key] = self._stub_reject()
+        app.dependency_overrides[require_owner_or_explicit_key] = self._stub_reject()
         try:
             resp = client.post("/api/scenes/some-scene/activate")
             assert resp.status_code == 401
         finally:
-            app.dependency_overrides.pop(require_api_key, None)
+            app.dependency_overrides.pop(require_owner_or_explicit_key, None)
 
     def test_sleep_evidence_ingest_rejects_when_auth_dependency_rejects(self, client):
         app.dependency_overrides[require_api_key] = self._stub_reject()

@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     # matching X-API-Key; localhost, configured TRUSTED_LAN_IPS, and private
     # addresses use require_api_key()'s ordinary bypass. See backend/api/auth.py.
     HOME_HUB_API_KEY: Optional[str] = None
+    HOME_HUB_OWNER_PASSWORD_VERIFIER: Optional[str] = None
+    HOME_HUB_OWNER_ALLOWED_ORIGINS: str = ""
     # Comma-separated additional IPs that bypass X-API-Key. Private/LAN
     # addresses are already covered by require_api_key()'s ordinary bypass.
     TRUSTED_LAN_IPS: str = ""

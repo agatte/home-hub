@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from backend.api.auth import require_api_key, source_from_request
+from backend.api.auth import require_api_key, require_owner_or_explicit_key, source_from_request
 from backend.config import settings
 from backend.rate_limit import limiter
 
@@ -578,7 +578,7 @@ async def get_dnd_status(request: Request) -> dict:
     return engine.dnd_status()
 
 
-@router.post("/dnd", dependencies=[Depends(require_api_key)])
+@router.post("/dnd", dependencies=[Depends(require_owner_or_explicit_key)])
 @limiter.limit("10/minute")
 async def enable_dnd_route(req: DNDRequest, request: Request) -> dict:
     """Activate Do Not Disturb for the given duration (default 2h)."""
@@ -592,7 +592,7 @@ async def enable_dnd_route(req: DNDRequest, request: Request) -> dict:
     return {"status": "ok", **state}
 
 
-@router.delete("/dnd", dependencies=[Depends(require_api_key)])
+@router.delete("/dnd", dependencies=[Depends(require_owner_or_explicit_key)])
 @limiter.limit("10/minute")
 async def clear_dnd_route(request: Request) -> dict:
     """Clear Do Not Disturb immediately."""
@@ -678,7 +678,7 @@ async def get_living_room_context_history(
     }
 
 
-@router.post("/override", dependencies=[Depends(require_api_key)])
+@router.post("/override", dependencies=[Depends(require_owner_or_explicit_key)])
 @limiter.limit("10/minute")
 async def set_override(override: ManualOverride, request: Request) -> dict:
     """

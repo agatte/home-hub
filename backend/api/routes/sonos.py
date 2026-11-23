@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.api._guards import _check_sonos_available
-from backend.api.auth import require_api_key, source_from_request
+from backend.api.auth import require_api_key, require_owner_or_explicit_key, source_from_request
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 from backend.rate_limit import limiter
 from backend.services.audio_ownership import (
@@ -282,7 +282,7 @@ async def adjust_sonos_volume(direction: str, request: Request) -> dict:
     }
 
 
-@router.post("/tts", dependencies=[Depends(require_api_key)])
+@router.post("/tts", dependencies=[Depends(require_owner_or_explicit_key)])
 @limiter.limit("10/minute")
 async def speak_text(body: TTSRequest, request: Request) -> dict:
     """
@@ -329,7 +329,7 @@ async def get_favorites(request: Request) -> dict:
     return {"favorites": favorites}
 
 
-@router.post("/favorites/refresh", dependencies=[Depends(require_api_key)])
+@router.post("/favorites/refresh", dependencies=[Depends(require_owner_or_explicit_key)])
 async def refresh_favorites(request: Request) -> dict:
     """Clear the favorites cache so the next fetch picks up new additions."""
     sonos = request.app.state.sonos
@@ -340,7 +340,7 @@ async def refresh_favorites(request: Request) -> dict:
     return {"status": "ok", "favorites": favorites}
 
 
-@router.post("/favorites/{title}/play", dependencies=[Depends(require_api_key)])
+@router.post("/favorites/{title}/play", dependencies=[Depends(require_owner_or_explicit_key)])
 async def play_favorite(title: str, request: Request) -> dict:
     """Play a Sonos favorite by title."""
     sonos = request.app.state.sonos
