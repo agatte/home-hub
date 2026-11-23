@@ -180,7 +180,7 @@ async def test_anonymous_and_expired_sonos_denied(monkeypatch, expiry):
     manager = SimpleNamespace(connect=AsyncMock(), disconnect=Mock())
     sonos = SimpleNamespace(connected=True, pause=AsyncMock())
     state = SimpleNamespace(ws_manager=manager, hue=SimpleNamespace(connected=True), sonos=sonos, build_id='fake', automation=SimpleNamespace(current_mode='idle', mode_source='test', manual_override=None, house_state='home', activity='general', get_time_period=lambda: 'day'))
-    socket = SimpleNamespace(app=SimpleNamespace(state=state), headers={'origin': 'https://hub.example', 'host': 'hub.example'}, scope={'scheme': 'wss'}, cookies={owner.COOKIE: 'fake-token'}, client=SimpleNamespace(host='192.0.2.1'), send_text=AsyncMock(), receive_text=AsyncMock(side_effect=[json.dumps({'type': 'sonos_command', 'data': {'action': 'pause'}}), WebSocketDisconnect()]))
+    socket = SimpleNamespace(app=SimpleNamespace(state=state), headers={'origin': 'https://hub.example', 'host': 'hub.example'}, scope={'scheme': 'ws'}, cookies={owner.COOKIE: 'fake-token'}, client=SimpleNamespace(host='192.0.2.1'), send_text=AsyncMock(), receive_text=AsyncMock(side_effect=[json.dumps({'type': 'sonos_command', 'data': {'action': 'pause'}}), WebSocketDisconnect()]))
     await websocket_endpoint(socket)
     assert json.loads(socket.send_text.await_args_list[-1].args[0])['data']['reason'] == 'unauthorized'
     sonos.pause.assert_not_awaited()

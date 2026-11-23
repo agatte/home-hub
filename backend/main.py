@@ -7,6 +7,7 @@ and serves the React frontend.
 Startup / shutdown logic lives in ``backend.bootstrap`` — this module
 focuses on app construction, middleware, and routing only.
 """
+import asyncio
 import ipaddress
 import json
 import logging
@@ -87,8 +88,10 @@ from backend.services.tracing import (
     new_request_id,
     request_id_var,
 )
-from backend.api.owner_session import router as owner_router, valid_session
-from backend.services.websocket_manager import WebSocketManager
+from backend.api.owner_session import (
+    router as owner_router, send_state_if_authorized, valid_session,
+)
+from backend.services.websocket_manager import SEND_TIMEOUT_SECONDS, WebSocketManager
 
 app_logger = logging.getLogger("home_hub.main")
 
@@ -440,7 +443,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     Clients receive light_update, sonos_update, connection_status,
     mode_update events. Clients can send light_command, sonos_command messages.
+
+    The optional private-LAN WSS listener must not create a new anonymous
+    household-state read surface. Existing HTTP/WS client cohorts on :8000
+    retain their previous read behavior; actuator writes still require owner
+    authorization for every frame on either transport.
     """
+    if getattr(websocket, "scope", {}).get("scheme") == "wss" and not valid_session(websocket):
+        await websocket.close(code=1008)
+        return
+
     ws_manager: WebSocketManager = websocket.app.state.ws_manager
 
     # Connection-scoped correlation ID — frames belong to one ongoing
@@ -455,11 +467,31 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     await ws_manager.connect(websocket)
 
+    async def _send_snapshot(message: dict) -> bool:
+        """Serialize initial WSS state reads with logout (bounded send)."""
+        try:
+            allowed = await asyncio.wait_for(
+                send_state_if_authorized(websocket, json.dumps(message)),
+                timeout=SEND_TIMEOUT_SECONDS,
+            )
+            if allowed:
+                return True
+        except Exception:
+            pass
+        ws_manager.disconnect(websocket)
+        try:
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        # Early exit is before the normal receive-loop finally block.
+        request_id_var.reset(rid_token)
+        return False
+
     # Send initial connection status
     hue = websocket.app.state.hue
     sonos = websocket.app.state.sonos
     automation = websocket.app.state.automation
-    await websocket.send_text(json.dumps({
+    if not await _send_snapshot({
         "type": "connection_status",
         "data": {
             "hue": hue.connected,
@@ -469,10 +501,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             # No authenticated command writer is available in this fallback.
             "light_command_results": valid_session(websocket),
         },
-    }))
+    }):
+        return
 
     # Send current automation mode
-    await websocket.send_text(json.dumps({
+    if not await _send_snapshot({
         "type": "mode_update",
         "data": {
             "mode": automation.current_mode,
@@ -483,23 +516,26 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "house_state": automation.house_state,
             "activity": automation.activity,
         },
-    }))
+    }):
+        return
 
     # Send current ambient sound state
     ambient = getattr(websocket.app.state, "ambient_sound", None)
     if ambient:
-        await websocket.send_text(json.dumps({
+        if not await _send_snapshot({
             "type": "ambient_update",
             "data": ambient.get_state(),
-        }))
+        }):
+            return
 
     # Send current presence state
     presence = getattr(websocket.app.state, "presence", None)
     if presence:
-        await websocket.send_text(json.dumps({
+        if not await _send_snapshot({
             "type": "presence_update",
             "data": presence.get_status(),
-        }))
+        }):
+            return
 
     try:
         while True:
