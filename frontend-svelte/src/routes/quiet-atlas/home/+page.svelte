@@ -44,10 +44,10 @@
   $: contextDisplay = homeContextPresentation(contextSnapshot, contextNowMs)
 
   const groups = [
-    { id: 'living', name: 'Living', detail: 'L1', label: 'Browse Living lights' },
-    { id: 'bedroom', name: 'Bedroom', detail: 'L2 · L5', label: 'Browse Bedroom lights' },
-    { id: 'kitchen', name: 'Kitchen', detail: 'L3 · L4', label: 'Browse Kitchen lights' },
-    { id: 'plant', name: 'Plant', detail: 'L6', label: 'Browse Plant lighting' },
+    { id: 'living', name: 'Living', detail: '1 light', label: 'Browse Living lights' },
+    { id: 'bedroom', name: 'Bedroom', detail: '2 lights', label: 'Browse Bedroom lights' },
+    { id: 'kitchen', name: 'Kitchen', detail: '2 lights', label: 'Browse Kitchen lights' },
+    { id: 'plant', name: 'Plant', detail: '1 light', label: 'Browse Plant lighting' },
   ]
 
   const examples = {
@@ -253,13 +253,13 @@
 <main class:daylight class="home-review" aria-label="HomeHub Home">
   <header class="foreword">
     <div>
-      <p class="eyebrow">HOME / OVERVIEW</p>
+      <p class="eyebrow">YOUR HOME</p>
       <h1><span class="desktop-home-heading">Home</span><span class="mobile-home-heading">Home</span></h1>
-      <p class="subhead">Reported context and quick access to your lights.</p>
+      <p class="subhead">Lights, modes, and what’s happening at home.</p>
     </div>
     <a class="apartment-link" href="/classic" aria-label="Open original Apartment and household tools">
       <span class="icon-dot" aria-hidden="true"></span>
-      Apartment & household tools <span aria-hidden="true">↗</span>
+      More tools <span aria-hidden="true">↗</span>
     </a>
   </header>
 
@@ -267,53 +267,51 @@
 
   <section class="phone-status" aria-label="Reported HomeHub status">
     <div class="phone-status-header">
-      <span>HomeHub report</span>
-      <strong class:unverified={contextDisplay.status !== 'recent'}>{contextDisplay.status === 'recent' ? 'Recent report' : 'Not verified'}</strong>
+      <span>Home status</span>
+      <strong class:unverified={contextDisplay.status !== 'recent'}>{contextDisplay.status === 'recent' ? 'Updated recently' : 'Unavailable'}</strong>
     </div>
     <div class="phone-status-grid">
       <div><span>HOUSE STATE</span><strong>{contextDisplay.house}</strong></div>
       <div><span>ACTIVITY</span><strong>{contextDisplay.activity}</strong></div>
     </div>
-    <p>{contextDisplay.note}. A recent REST response is not proof of sensor freshness or room location.</p>
+    {#if contextDisplay.status !== 'recent'}<p role="status">{contextDisplay.note}</p>{/if}
   </section>
 
   <section class="phone-actions" aria-labelledby="phone-lighting-title">
-    <a class="phone-functional-handoff" href="#phone-lighting-title">Adjust lights now <span aria-hidden="true">↗</span></a>
     <div class="phone-actions-head">
-      <span class="eyebrow">Working lighting controls</span>
-      <h2 id="phone-lighting-title">Browse lighting</h2>
-      <p>Expand a room to control its actual fixtures in place. Scenes and presets remain a separate browsing surface.</p>
+      <span class="eyebrow">YOUR LIGHTS</span>
+      <h2 id="phone-lighting-title">Lights</h2>
+      <p>Choose a room to adjust its lights.</p>
     </div>
     <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
       {#each groups as group (group.id)}
         <button type="button" id={`phone-room-${group.id}`} class="phone-room" aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="phone-room-icon" aria-hidden="true"></span>
-          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail} · Adjust individual lights</small></span>
+          <span class="phone-room-copy"><strong>{group.name}</strong><small>{group.detail}</small></span>
           <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
         </button>
         <QuietAtlasHomeLightingReveal id={`phone-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
       {/each}
     </div>
-    <a class="browse-link" href="/quiet-atlas/control">Control · precision workspace ↗</a>
     <a class="phone-scenes" href={CONTROL_SCENES_HREF}>
-      <span><strong>Scenes &amp; presets</strong><small>Browse available names · no activation</small></span>
+      <span><strong>Scenes &amp; presets</strong><small>Explore available scenes</small></span>
       <span aria-hidden="true">↗</span>
     </a>
   </section>
 
   <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
-    <span>THE APARTMENT / 02</span>
-    <h2 id="phone-apartment-title">Your place, beyond the controls.</h2>
-    <p>The detailed Apartment Canvas is being developed separately. Keep the current Apartment and household tools available while the physical view is refined.</p>
-    <a href="/classic">Open original Apartment &amp; household tools <span aria-hidden="true">↗</span></a>
+    <span>MORE</span>
+    <h2 id="phone-apartment-title">More from HomeHub</h2>
+    <p>Other household tools and the original dashboard.</p>
+    <a href="/classic">Open classic dashboard <span aria-hidden="true">↗</span></a>
   </section>
 
   <section class="apartment-stage" aria-labelledby="apartment-stage-title">
     <div class="world">
       <div class="ambient-orb" aria-hidden="true"></div>
       <div class="world-topline">
-        <span>01 / THE APARTMENT</span>
-        <span class="source">SPATIAL PLACEHOLDER · NOT A FLOOR PLAN</span>
+        <span>HOME AT A GLANCE</span>
+        <span class="source">HOMEHUB STATUS</span>
       </div>
       <div class="world-bottom">
         <div class="readout">
@@ -328,49 +326,18 @@
       </div>
       <a class="working-lighting-link" href="#lighting-title">Adjust lights now <span aria-hidden="true">↗</span></a>
       <div class="world-message">
-        <p class="world-kicker">Spatial study</p>
-        <h2 id="apartment-stage-title">Apartment preview</h2>
-        <p>Actual apartment geometry and its cinematic view will come from the separate, evidence-checked Apartment Canvas (#192).</p>
+        <p class="world-kicker">YOUR SPACE</p>
+        <h2 id="apartment-stage-title">Home at a glance</h2>
+        <p>Check your current home status, or adjust lights below.</p>
       </div>
     </div>
-    <aside class="context-rail" aria-label="Source-qualified HomeHub context">
-      {#if reviewExamples}
-        <p class="rail-head">DESIGN EXAMPLES <span aria-hidden="true">—</span></p>
-        <p class="rail-title">{example.title}</p>
-        <p class="rail-description">{example.description}</p>
-        <p class="rail-kind">{example.kind}</p>
-        <label class="sample-label" for="sample-state">Illustrative context examples</label>
-        <select id="sample-state" bind:value={sampleState}>
-          <option value="unavailable">Unavailable</option>
-          <option value="stale">Stale light reading</option>
-          <option value="empty">Empty history</option>
-          <option value="attention">Manual ownership</option>
-        </select>
-      {:else}
-        <p class="rail-head">HOMEHUB CONTEXT <span aria-hidden="true">—</span></p>
-        {#if contextDisplay.status === 'recent'}
-          <p class="rail-title">HomeHub reports {contextDisplay.house}</p>
-          <p class="rail-description">Reported Activity: {contextDisplay.activity}</p>
-          <p class="rail-kind">RECENT REST REPORT</p>
-        {:else}
-          <p class="rail-title">Current context not verified</p>
-          <p class="rail-description">{contextDisplay.note}</p>
-          <p class="rail-kind">NO RECENT VERIFIED REPORT</p>
-        {/if}
-        <p class="rail-provenance">A REST response is not sensor freshness or room-location evidence.</p>
-      {/if}
-      <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
-        {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
-      </button>
-      <a class="rail-footer" href="/quiet-atlas/insights">View Insights <span aria-hidden="true">↗</span></a>
-    </aside>
   </section>
 
   <section class="lighting-dock" aria-labelledby="lighting-title">
     <div class="dock-head">
       <div>
         <p class="eyebrow">THE EVERYDAY CONTROLS</p>
-        <h2 id="lighting-title">Browse lighting</h2>
+        <h2 id="lighting-title">Lights</h2>
       </div>
       <a class="browse-link" href="/quiet-atlas/control">Browse Control <span aria-hidden="true">↗</span></a>
     </div>
@@ -387,7 +354,7 @@
       <QuietAtlasHomeLightingReveal id={`dock-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
     {/each}
     <div class="scene-line">
-      <span><strong>Scenes & presets</strong><small>Browse names from the existing read-only lighting review; no sample scenes are activated.</small></span>
+      <span><strong>Scenes & presets</strong><small>View available scenes without changing the lights.</small></span>
       <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
     </div>
   </section>
@@ -398,9 +365,9 @@
     <div class="recent-log-head">
       <div>
         <p class="eyebrow">RECORDED / RECENT</p>
-        <h2 id="recent-log-title">What HomeHub logged.</h2>
+        <h2 id="recent-log-title">Recent activity</h2>
       </div>
-      <span>Last 24 hours · read-only</span>
+      <span>Last 24 hours</span>
     </div>
     {#if recentActivity.status === 'recent'}
       <ol class="recent-log-events" aria-label="Recent recorded activities">
@@ -414,11 +381,59 @@
     {:else}
       <p class="recent-log-status" role="status">{recentActivity.message}</p>
     {/if}
-    <p class="recent-log-note">Event history, not confirmation of a person's presence, room, or current House State. Dates and times use this device's timezone.
-      <a href="/quiet-atlas/insights">View Insights ↗</a>
-    </p>
+    <details class="activity-details">
+      <summary>About this activity</summary>
+      <p class="recent-log-note">These are recorded events, not confirmation of who is home. Times use this device’s timezone.
+        <a href="/quiet-atlas/insights">View Insights ↗</a>
+      </p>
+    </details>
   </section>
 
+
+  <details class="preview-options">
+    <summary>Appearance &amp; details</summary>
+  <div class="preview-ribbon">
+    <span class="brand">QUIET ATLAS <span class="multiply">×</span> DAYLIGHT</span>
+    <span class="disclaimer">HomeHub reports context; example states are illustrative and do not change devices.</span>
+    <button
+      class="theme-toggle"
+      type="button"
+      on:click={() => (daylight = !daylight)}
+      aria-label={daylight ? 'Use night preview' : 'Use day preview'}
+      aria-pressed={daylight}
+    >{daylight ? 'Night view' : 'Day view'}</button>
+  </div>
+    <aside class="context-rail" aria-label="Source-qualified HomeHub context">
+      {#if reviewExamples}
+        <p class="rail-head">DESIGN EXAMPLES <span aria-hidden="true">—</span></p>
+        <p class="rail-title">{example.title}</p>
+        <p class="rail-description">{example.description}</p>
+        <p class="rail-kind">{example.kind}</p>
+        <label class="sample-label" for="sample-state">Illustrative context examples</label>
+        <select id="sample-state" bind:value={sampleState}>
+          <option value="unavailable">Unavailable</option>
+          <option value="stale">Stale light reading</option>
+          <option value="empty">Empty history</option>
+          <option value="attention">Manual ownership</option>
+        </select>
+      {:else}
+        <p class="rail-head">STATUS DETAILS <span aria-hidden="true">—</span></p>
+        {#if contextDisplay.status === 'recent'}
+          <p class="rail-title">House state: {contextDisplay.house}</p>
+          <p class="rail-description">Activity: {contextDisplay.activity}</p>
+          <p class="rail-kind">UPDATED RECENTLY</p>
+        {:else}
+          <p class="rail-title">Current context not verified</p>
+          <p class="rail-description">{contextDisplay.note}</p>
+          <p class="rail-kind">NO RECENT VERIFIED REPORT</p>
+        {/if}
+        <p class="rail-provenance">HomeHub status is a report, not a live room sensor reading.</p>
+      {/if}
+      <button class="review-toggle" type="button" aria-pressed={reviewExamples} on:click={() => (reviewExamples = !reviewExamples)}>
+        {reviewExamples ? 'Return to HomeHub report' : 'Review illustrative states'}
+      </button>
+      <a class="rail-footer" href="/quiet-atlas/insights">View Insights <span aria-hidden="true">↗</span></a>
+    </aside>
   <section class="mobile-context" aria-label="HomeHub context and review">
     {#if reviewExamples}
       <span class="mobile-context-kind">DESIGN EXAMPLE · {example.kind}</span>
@@ -443,26 +458,12 @@
     </button>
     <a href="/quiet-atlas/insights">Open Insights ↗</a>
   </section>
-
-  <details class="preview-options">
-    <summary>Preview appearance and source notes</summary>
-  <div class="preview-ribbon">
-    <span class="brand">QUIET ATLAS <span class="multiply">×</span> DAYLIGHT</span>
-    <span class="disclaimer">HomeHub reports context; example states are illustrative and do not change devices.</span>
-    <button
-      class="theme-toggle"
-      type="button"
-      on:click={() => (daylight = !daylight)}
-      aria-label={daylight ? 'Use night preview' : 'Use day preview'}
-      aria-pressed={daylight}
-    >{daylight ? 'Night view' : 'Day view'}</button>
-  </div>
-  </details>
-
   <footer class="review-footer">
-    <span>Light controls send HomeHub commands when adjusted. Browsing scenes does not activate them.</span>
+    <span>Changing lights sends requests to HomeHub. Scene browsing does not activate them.</span>
     <a href="/quiet-atlas">Back to lighting preview</a>
   </footer>
+  </details>
+
 </main>
 
 <style>
@@ -502,7 +503,7 @@
   .subhead {font-size:14px;color:var(--muted);margin:0;}
   .apartment-link {display:inline-flex;align-items:center;gap:10px;border:1px solid var(--line);padding:12px 16px;border-radius:100px;font-size:14px;white-space:nowrap;min-height:44px;}
   .icon-dot {width:8px;height:8px;border:1px solid var(--gold);transform:rotate(45deg);}
-  .apartment-stage {display:grid;grid-template-columns:minmax(0,1fr) minmax(235px,280px);border:1px solid var(--line);border-radius:19px;overflow:hidden;min-height:300px;}
+  .apartment-stage {display:block;border:1px solid var(--line);border-radius:19px;overflow:hidden;min-height:300px;}
   .world {position:relative;min-width:0;overflow:hidden;background:radial-gradient(ellipse at 47% 45%,var(--glow),transparent 53%),linear-gradient(130deg,var(--stage),var(--deep));padding:22px 27px;display:flex;flex-direction:column;justify-content:space-between;isolation:isolate;}
   .ambient-orb {position:absolute;width:390px;height:390px;right:4%;top:-19%;z-index:-1;border-radius:50%;background:radial-gradient(circle at 45% 46%,rgba(237,207,160,.15),rgba(98,151,115,.07) 42%,transparent 69%);filter:blur(8px);pointer-events:none;}
   .world-topline {display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;letter-spacing:.1em;}
@@ -647,7 +648,7 @@
     .phone-scenes strong {font-size:16px;font-weight:640;}
     .phone-scenes small {font-size:14px;color:var(--muted);line-height:1.4;}
     .phone-scenes>span:last-child {color:var(--gold);font-size:21px;}
-    .phone-functional-handoff {min-height:50px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);color:var(--gold);font-size:14px;font-weight:650;}
+    .phone-actions-head {margin-bottom:16px;}
     .phone-apartment-entry {padding:21px 16px;margin-bottom:18px;border:1px solid var(--line);border-radius:16px;background:radial-gradient(ellipse at 95% -10%,var(--glow),transparent 70%),var(--deep);}
     .phone-apartment-entry>span {font-size:14px;font-weight:700;color:var(--gold);letter-spacing:.13em;}
     .phone-apartment-entry h2 {font-size:23px;font-weight:560;line-height:1.2;margin:10px 0;}
@@ -672,7 +673,7 @@
     .group-arrow {display:none;}
     .scene-line small {max-width:165px;}
   }
-  .working-lighting-link,.phone-functional-handoff {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;box-sizing:border-box;padding:12px 18px;margin:16px 0;border:1px solid var(--gold);border-radius:12px;background:var(--ink);color:var(--bg);font-size:15px;font-weight:650;}
+  .working-lighting-link {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;box-sizing:border-box;padding:12px 18px;margin:16px 0;border:1px solid var(--gold);border-radius:12px;background:var(--ink);color:var(--bg);font-size:15px;font-weight:650;}
   .home-review {min-width:0;overflow-wrap:anywhere;}
   .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
   .group-copy small {white-space:normal;}
@@ -682,7 +683,12 @@
     .home-review * {transition:none!important;animation:none!important;}
   }
 
-  .preview-options { margin-top:24px; padding-top:12px; border-top:1px solid rgba(210,225,207,.15); }
+  .preview-options { margin-top:24px; padding-top:12px; border-top:1px solid var(--line); }
+  .activity-details {margin-top:12px;color:var(--muted);font-size:14px;}
+  .activity-details summary {min-height:44px;display:flex;align-items:center;cursor:pointer;}
+  .preview-options .context-rail {display:flex;border:1px solid var(--line);border-radius:14px;margin-top:16px;}
+  .preview-options .mobile-context {display:none;}
+  @media(max-width:700px) {.preview-options .context-rail {display:none;}.preview-options .mobile-context {display:flex;}}
   .preview-options summary { min-height:44px; display:inline-flex; align-items:center; cursor:pointer; color:#bccbbf; font-size:14px; }
   .preview-options summary:focus-visible { outline:3px solid #d5e7bd; outline-offset:3px; }
   .preview-options .preview-ribbon { margin-top:12px; }
