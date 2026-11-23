@@ -5,6 +5,7 @@
   import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
   import { CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import QuietAtlasHomeLightingReveal from '$lib/components/QuietAtlasHomeLightingReveal.svelte'
+  import QuietAtlasHomeModeControls from '$lib/components/QuietAtlasHomeModeControls.svelte'
   let selectedRoom = null
   function toggleRoom(id) {
     selectedRoom = selectedRoom === id ? null : id
@@ -261,6 +262,8 @@
       Apartment & household tools <span aria-hidden="true">↗</span>
     </a>
   </header>
+
+  <QuietAtlasHomeModeControls />
 
   <section class="phone-status" aria-label="Reported HomeHub status">
     <div class="phone-status-header">
