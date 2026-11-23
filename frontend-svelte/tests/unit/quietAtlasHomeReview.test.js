@@ -54,7 +54,7 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
 
   it('keeps Apartment separate and introduces no light/scene writer', () => {
     expect(homeRoute).toContain('href="/classic"')
-    expect(homeRoute).toContain('More from HomeHub')
+    expect(homeRoute).toContain('Classic dashboard')
     expect(homeRoute).not.toMatch(/\b(apiPost|setLight|activateScene|setScene|hueWrite)\s*\(/)
     expect(homeRoute).toContain("fetch('/api/automation/status'")
   })
