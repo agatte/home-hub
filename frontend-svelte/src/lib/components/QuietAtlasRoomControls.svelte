@@ -27,10 +27,9 @@
 
 <section class="room-control" aria-labelledby={`${id}-heading`}>
   <div class="heading-row">
-    <h4 id={`${id}-heading`}>Live {roomLabel} lighting</h4>
+    <h4 id={`${id}-heading`}>{roomLabel} lights</h4>
     <span class:online={$connected} class="connection">{ $connected ? 'Hub connected' : 'Hub disconnected' }</span>
   </div>
-  <p class="provenance">HomeHub-reported values only. A control sends a request, not a confirmed result: if a stronger lighting owner is active, the server may deny the change. Room expansion itself never changes a light.</p>
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
   {:else if $deviceStatus.light_command_results !== true}
@@ -51,8 +50,12 @@
       {/each}
     </div>
   {/if}
-  <p class="footnote">Bedroom and Kitchen fixtures are individually addressable. Guarded WebSocket receipts report server decisions, never physical completion. Server-side ownership changes and kiosk/iPhone acceptance require their own reviewed release.</p>
-  <a href="/classic#apartment-controls">Original Apartment controls</a>
+  <details class="control-details">
+    <summary>About these controls</summary>
+    <p class="provenance">Each slider requests a change to one light. HomeHub can refuse it when another mode or effect is in control. Opening a room does not change any lights.</p>
+    <p class="footnote">A successful request does not guarantee the physical light changed. Check the light itself when needed.</p>
+    <a href="/classic#apartment-controls">Classic light controls</a>
+  </details>
 </section>
 
 <style>
@@ -67,6 +70,8 @@
   .fixture-heading { display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px;margin-bottom:12px; }
   .fixture-heading span { color:var(--muted); }
   .warning { font-size:14px; line-height:1.5; padding:14px; border:1px solid var(--line);border-radius:8px; }
+  .control-details {margin-top:10px;color:var(--muted);font-size:13px;}
+  .control-details summary {display:flex;align-items:center;min-height:44px;cursor:pointer;}
   a {display:inline-flex;align-items:center;min-height:44px;font-size:14px;color:var(--gold);text-decoration:underline;text-underline-offset:4px; }
   a:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
   :global(.room-control .light-card-owner) {min-width:0;max-width:100%;}
