@@ -53,7 +53,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(cardSource).toContain('// Preview only; pointer release sends the guarded request.')
     expect(cardSource).toContain('if (wasDrag && finalBri != null)')
     expect(cardSource).toContain('fanout(light.light_id, light.on ? { bri } : { on: true, bri })')
-    expect(home).toContain('href="#phone-lighting-title"')
+    expect(home).toContain('id="phone-lighting-title"')
     expect(home).toContain('href="#lighting-title"')
   })
 
