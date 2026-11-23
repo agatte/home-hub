@@ -135,50 +135,81 @@ def test_listener_guards(startup, host, port, env):
 def test_real_dual_listener_lifecycle(tmp_path, monkeypatch):
     import asyncio
     import base64
-    import datetime
     import hashlib
-    import ipaddress
+    import shutil
     import socket
     import ssl
+    import subprocess
     from contextlib import asynccontextmanager
 
     import httpx
     import uvicorn
     import websockets
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
     from fastapi import WebSocket
     from fastapi.websockets import WebSocketDisconnect
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = datetime.datetime.now(datetime.timezone.utc)
-    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-            .public_key(key.public_key()).serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(days=1))
-            .not_valid_after(now + datetime.timedelta(days=1))
-            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
-            .sign(key, hashes.SHA256()))
     cert_path, key_path = tmp_path / "cert.pem", tmp_path / "key.pem"
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                           serialization.NoEncryption()))
+    openssl = shutil.which("openssl")
+    if openssl:
+        # GitHub's Ubuntu test image has OpenSSL but does not install the
+        # optional Python cryptography package. Exercise real disposable
+        # HTTPS/WSS sockets without adding a production/test dependency.
+        subprocess.run(
+            [openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256",
+             "-days", "1", "-subj", "/CN=localhost",
+             "-addext", "subjectAltName=IP:127.0.0.1",
+             "-keyout", str(key_path), "-out", str(cert_path)],
+            check=True, capture_output=True,
+        )
+        unencrypted_key = key_path.read_bytes()
+        encrypted_path = tmp_path / "encrypted.pem"
+        subprocess.run(
+            [openssl, "pkey", "-in", str(key_path), "-aes256",
+             "-passout", "pass:synthetic-password", "-out", str(encrypted_path)],
+            check=True, capture_output=True,
+        )
+        encrypted_key = encrypted_path.read_bytes()
+    else:
+        # Preserve the existing Windows/Sandbox fixture when openssl is not
+        # available on PATH. Both branches create only temporary test keys.
+        import datetime
+        import ipaddress
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1))
+                .not_valid_after(now + datetime.timedelta(days=1))
+                .add_extension(x509.SubjectAlternativeName(
+                    [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
+                .sign(key, hashes.SHA256()))
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        unencrypted_key = key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption())
+        encrypted_key = key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.BestAvailableEncryption(b"synthetic-password"))
+        key_path.write_bytes(unencrypted_key)
     monkeypatch.setattr(run, "settings", SimpleNamespace(
         APP_ENV="production", HOME_HUB_SERVER_TLS_CERTFILE=str(cert_path),
         HOME_HUB_SERVER_TLS_KEYFILE=str(key_path), HOME_HUB_SERVER_TLS_HOST="127.0.0.1",
         HOME_HUB_SERVER_TLS_PORT=8443))
     assert isinstance(run._tls_context(), ssl.SSLContext)
-    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                           serialization.BestAvailableEncryption(b"synthetic-password")))
+    key_path.write_bytes(encrypted_key)
     with pytest.raises(ValueError, match="invalid or unreadable"):
         run._tls_context()
     key_path.write_bytes(b"malformed")
     with pytest.raises(ValueError, match="invalid or unreadable"):
         run._tls_context()
-    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                           serialization.NoEncryption()))
+    key_path.write_bytes(unencrypted_key)
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(cert_path, key_path)
     client_tls = ssl.create_default_context(cafile=str(cert_path))
