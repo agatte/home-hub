@@ -18,7 +18,7 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain('UPDATED RECENTLY')
     expect(homeRoute).toContain('HomeHub status is a report, not a live room sensor reading.')
     expect(homeRoute).toContain('aria-pressed={reviewExamples}')
-    expect(homeRoute).toContain('HOME AT A GLANCE')
+    expect(homeRoute).toContain('At a glance')
   })
 
   it('keeps lighting groups and scene browsing discoverable', () => {
