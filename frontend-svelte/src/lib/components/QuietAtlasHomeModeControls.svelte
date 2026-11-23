@@ -96,7 +96,7 @@
     <label class="mode-select" for="home-mode-choice">
       <span>Choose mode</span>
       <select id="home-mode-choice" bind:value={selectedMode} disabled={!canChange || pending} on:change={changeSelection}>
-        <option value="" disabled>Select an activity</option>
+        <option value="" disabled>Select mode</option>
         {#each MODES as mode (mode.id)}
           <option value={mode.id}>{mode.label}</option>
         {/each}
@@ -150,10 +150,8 @@
     .mode-actions {grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:11px;gap:8px;}
     .auto-action {grid-column:1/-1;}
     .mode-select {grid-column:1;min-width:0;}
+    .mode-select select {font-size:13px;padding-inline:8px;}
+    .apply-action {padding-inline:7px;font-size:13px;}
     .apply-action {grid-column:2;}
-  }
-  @media(max-width:360px) {
-    .mode-actions {grid-template-columns:minmax(0,1fr);}
-    .auto-action,.mode-select,.apply-action {grid-column:1;}
   }
 </style>
