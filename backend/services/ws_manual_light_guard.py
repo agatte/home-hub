@@ -166,6 +166,14 @@ async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any
                 return ManualLightDispatch("uncertain")
             if not permitted(stamped_lease):
                 return ManualLightDispatch("uncertain")
+            # Prompt the existing poller to read actual state after the
+            # transition. A display refresh is not part of command authority.
+            request_readback = getattr(hue, "request_manual_readback", None)
+            if callable(request_readback):
+                try:
+                    request_readback(light_id)
+                except Exception:
+                    logger.warning("Unable to schedule manual light readback")
             return ManualLightDispatch("acknowledged", before=before)
 
     # settle_lighting_io shields and drains the entire transaction on browser
