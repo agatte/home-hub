@@ -273,6 +273,68 @@ class HueV2Service:
     # Dynamic effects
     # ------------------------------------------------------------------
 
+    async def observe_no_effects(self, expected_light_ids: set[str]) -> bool:
+        """Require fresh, complete, explicitly static CLIP v2 light evidence.
+
+        Do not infer no_effect from missing fields, failed reads, stale maps,
+        or a partially returned inventory. This method never writes to Hue.
+        """
+        expected = set(expected_light_ids)
+        mapping = self._v1_to_v2.copy()
+        if (
+            not self._connected or self._client is None or not expected
+            or expected != set(mapping)
+            or len(set(mapping.values())) != len(mapping)
+            or not all(mapping.values())
+        ):
+            return False
+        try:
+            response = await self._client.get("/light", timeout=5.0)
+            response.raise_for_status()
+            payload = response.json()
+            if (
+                not isinstance(payload, dict) or payload.get("errors") != []
+                or not isinstance(payload.get("data"), list)
+            ):
+                return False
+            observed: set[str] = set()
+            for row in payload["data"]:
+                if not isinstance(row, dict) or row.get("type") != "light":
+                    return False
+                ref = row.get("id_v1")
+                if not isinstance(ref, str) or not ref.startswith("/lights/"):
+                    return False
+                light_id = ref.removeprefix("/lights/")
+                if (
+                    light_id not in expected or light_id in observed
+                    or row.get("id") != mapping[light_id]
+                    or row.get("mode") != "normal"
+                    or not isinstance(row.get("dynamics"), dict)
+                    or row["dynamics"].get("status") != "none"
+                ):
+                    return False
+                statuses = []
+                if "effects" in row:
+                    effects = row["effects"]
+                    if not isinstance(effects, dict):
+                        return False
+                    statuses.append(effects.get("status"))
+                if "effects_v2" in row:
+                    effects_v2 = row["effects_v2"]
+                    if not isinstance(effects_v2, dict) or not isinstance(effects_v2.get("status"), dict):
+                        return False
+                    statuses.append(effects_v2["status"].get("effect"))
+                if not statuses or any(status != "no_effect" for status in statuses):
+                    return False
+                observed.add(light_id)
+            return (
+                self._connected and mapping == self._v1_to_v2
+                and observed == expected
+            )
+        except Exception:
+            logger.info("Hue effect startup observation unavailable")
+            return False
+
     async def set_effect(self, v1_light_id: str, effect: str) -> bool:
         """
         Apply a dynamic effect to a single light.
