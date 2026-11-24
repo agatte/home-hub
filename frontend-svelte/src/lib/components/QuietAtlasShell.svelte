@@ -31,7 +31,7 @@
     settings: 'Automation and integrations.',
     journal: 'History and nightly summaries.',
     personality: 'Mood and learning preferences.',
-    apartment: 'Apartment widget and household tools.',
+    apartment: 'Plants, bar, routines, guests and apartment tools.',
     gameday: 'Stadium experience.',
     guest: 'Visitor Wi-Fi and tools.',
   }
@@ -233,7 +233,7 @@
       {#if rootRuntimeTargets($page.url.pathname).general}
         <OwnerUnlock />
       {/if}
-      <p class="qa-more-note">Apartment opens the current Home tools. The measured physical canvas is a separate, future page.</p>
+      <p class="qa-more-note">Household keeps everyday apartment tools together. The measured physical canvas is a separate, future page.</p>
     </section>
   {/if}
 </div>

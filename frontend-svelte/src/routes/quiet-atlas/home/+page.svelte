@@ -326,7 +326,7 @@
       <h1><span class="desktop-home-heading">Home</span><span class="mobile-home-heading">Home</span></h1>
       <p class="subhead">Lights, modes, and what’s happening at home.</p>
     </div>
-    <a class="apartment-link" href="/classic" aria-label="Open original Apartment and household tools">
+    <a class="apartment-link" href="/quiet-atlas/household" aria-label="Open household tools">
       <span class="icon-dot" aria-hidden="true"></span>
       More tools <span aria-hidden="true">↗</span>
     </a>
@@ -419,7 +419,7 @@
 
   <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
     <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
-    <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
+    <a href="/quiet-atlas/household">Household tools <span aria-hidden="true">↗</span></a>
   </section>
 
   <QuietAtlasEnvironment />
@@ -524,7 +524,6 @@
   </section>
   <footer class="review-footer">
     <span>Changing lights sends requests to HomeHub. Scene browsing does not activate them.</span>
-    <a href="/quiet-atlas">Back to lighting preview</a>
   </footer>
   </details>
 
@@ -617,7 +616,6 @@
   .recent-log-note a{color:var(--gold);text-decoration:underline;margin-left:10px;}
   .mobile-context {display:none;}
   .review-footer {display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;font-size:14px;color:var(--muted);margin-top:23px;}
-  .review-footer a {text-decoration:underline;}
   @media (max-width:960px) {
     .group {padding:10px;gap:7px;}
     .group-copy small {font-size:14px;}
@@ -714,7 +712,7 @@
     .group-arrow {display:none;}
   }
   .home-review {min-width:0;overflow-wrap:anywhere;}
-  .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
+  .rail-footer,.browse-link,.scene-line a {min-height:44px;display:inline-flex;align-items:center;}
   .group-copy small {white-space:normal;}
   .phone-room,.group {color:var(--ink);text-align:left;cursor:pointer;width:100%;font:inherit;}
   /* Real reported fixture state drives the lighting cues, never sample presence. */

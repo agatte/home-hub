@@ -19,7 +19,7 @@ test('root uses redesigned Home with fully preserved classic dashboard', () => {
   assert.equal(shouldUseQuietAtlasShell('/classic', new URLSearchParams('shell=quiet-atlas')), false)
   assert.equal(activeQuietAtlasSection('/'), 'home')
   assert.equal(shouldShowGlobalErrorToast('/', new URLSearchParams()), true)
-  assert.equal(MORE_DESTINATIONS.find(x => x.id === 'apartment').href, '/classic')
+  assert.equal(MORE_DESTINATIONS.find(x => x.id === 'apartment').href, '/quiet-atlas/household')
 })
 
 test('in-flow reveal controls L1–L6 individually, not fake preview values', () => {
@@ -38,7 +38,8 @@ test('in-flow reveal controls L1–L6 individually, not fake preview values', ()
   assert.match(controls, /reachable === true/)
   assert.match(home, /href="#phone-lighting-title"/)
   assert.match(home, /href="#lighting-title"/)
-  assert.match(home, /href="\/classic"/)
+  assert.ok(home.includes('href="/quiet-atlas/household"'))
+  assert.ok(!home.includes('href="/classic"'))
 })
 
 test('kiosk default URL needs no startup change and fallback is alive', () => {

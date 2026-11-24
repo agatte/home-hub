@@ -64,7 +64,7 @@ describe('phone-native More navigation sheet (#461)', () => {
     expect(shell).toContain('{#each destinations.slice(group.start, group.end) as destination (destination.id)}')
     expect(shell).toContain('<small>{MORE_COPY[destination.id]}</small>')
     expect(shell).toContain('Preferences, history, and other experiences.')
-    expect(shell).toContain('Apartment opens the current Home tools. The measured physical canvas is a separate, future page.')
+    expect(shell).toContain('Household keeps everyday apartment tools together. The measured physical canvas is a separate, future page.')
     expect(shell).toContain('.qa-more-group h3 { margin: 0 0 10px; color: inherit; font-size: 14px;')
     expect(shell).toContain('color: #b1c0b3; font-size: 14px;')
     expect(shell).toContain('color: #9eafa1; font-size: 14px;')

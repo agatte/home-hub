@@ -30,7 +30,7 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute.match(/aria-expanded=\{selectedRoom === group.id\}/g)).toHaveLength(2)
     expect(homeRoute.match(/<QuietAtlasHomeLightingReveal /g)).toHaveLength(2)
     expect(homeRoute).toContain('href={CONTROL_SCENES_HREF}')
-    expect(homeRoute).toContain('href="/quiet-atlas"') // explicit legacy preview permalink
+    expect(homeRoute).not.toContain('href="/quiet-atlas"') // obsolete preview link removed
     expect(homeRoute).toContain('Browse scenes')
     expect(homeRoute).toContain("detail: '2 lights'")
     expect(reveal).toContain('QuietAtlasRoomControls')
@@ -53,8 +53,8 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
   })
 
   it('keeps Apartment separate and introduces no light/scene writer', () => {
-    expect(homeRoute).toContain('href="/classic"')
-    expect(homeRoute).toContain('Classic dashboard')
+    expect(homeRoute).toContain('href="/quiet-atlas/household"')
+    expect(homeRoute).not.toContain('href="/classic"')
     expect(homeRoute).not.toMatch(/\b(apiPost|setLight|activateScene|setScene|hueWrite)\s*\(/)
     expect(homeRoute).toContain("fetch('/api/automation/status'")
   })

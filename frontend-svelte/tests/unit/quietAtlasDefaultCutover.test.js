@@ -19,7 +19,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(shouldUseQuietAtlasShell('/', new URLSearchParams())).toBe(true)
     expect(shouldUseQuietAtlasShell('/classic', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
     expect(activeQuietAtlasSection('/')).toBe('home')
-    expect(MORE_DESTINATIONS.find(x => x.id === 'apartment')?.href).toBe('/classic')
+    expect(MORE_DESTINATIONS.find(x => x.id === 'apartment')?.href).toBe('/quiet-atlas/household')
     expect(shell).toContain("{ id: 'home', label: 'Home', href: '/'")
     expect(shouldShowGlobalErrorToast('/', new URLSearchParams())).toBe(true)
   })
