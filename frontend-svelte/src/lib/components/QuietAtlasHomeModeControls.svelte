@@ -1,4 +1,5 @@
 <script>
+  import { modeTone } from '$lib/quietAtlas/widgetTone.js'
   import { connected } from '$lib/stores/connection.js'
   import { automation, automationSourceLabel } from '$lib/stores/automation.js'
   import { setManualMode } from '$lib/stores/init.js'
@@ -71,7 +72,7 @@
   }
 </script>
 
-<section class="mode-controls" aria-labelledby="home-modes-heading">
+<section class="mode-controls" data-palette={modeTone(reportedMode, canChange)} aria-labelledby="home-modes-heading">
   <div class="mode-heading">
     <div class="mode-current">
       <h2 id="home-modes-heading">Modes</h2>
@@ -120,6 +121,7 @@
 
 <style>
   .mode-controls {margin:16px 0 18px;padding:16px 18px 4px;border:1px solid var(--line);border-radius:var(--hh-radius-panel,20px);background:radial-gradient(ellipse at 92% 0%,rgba(220,185,131,.10),transparent 65%),var(--hh-card-background,linear-gradient(130deg,var(--stage),var(--deep)));color:var(--ink);min-width:0;}
+  .mode-controls[data-palette]:not([data-palette="neutral"]) {background:var(--hh-expressive);color:#faf8f5;border-color:rgba(238,241,245,.24);--ink:#faf8f5;--muted:#e5e7eb;--gold:#f5e4c8;--deep:#19221e;--line:rgba(238,241,245,.21);}
   .mode-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;}
   .mode-current {min-width:0;}
   h2 {margin:0 0 6px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.015em;}
