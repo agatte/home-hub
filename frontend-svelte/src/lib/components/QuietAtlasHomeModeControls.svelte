@@ -158,13 +158,18 @@
   .reported-mode span,.mode-caption {font-size:12px;color:var(--muted);overflow-wrap:anywhere;}
   .mode-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 8px;}
   .mode-tile {position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-width:0;min-height:76px;padding:4px 0;border:0;border-radius:12px;color:var(--ink);background:transparent;cursor:pointer;font:inherit;}
-  .mode-icon {position:relative;box-sizing:border-box;display:grid;place-items:center;width:48px;height:48px;border:1px solid var(--line);border-radius:50%;background:var(--hh-control);color:var(--muted);}
+  .mode-icon {position:relative;box-sizing:border-box;display:grid;place-items:center;width:48px;height:48px;border:1px solid color-mix(in srgb,var(--event-accent,var(--gold)) 26%,var(--line));border-radius:50%;background:var(--hh-control);background:radial-gradient(circle at 35% 24%,color-mix(in srgb,var(--event-from,var(--hh-control)) 48%,var(--hh-control)),var(--hh-control) 84%);color:var(--event-accent,var(--muted));}
   .mode-label {font-size:12px;font-weight:600;line-height:1.2;overflow-wrap:anywhere;text-align:center;}
-  .mode-tile:hover:not(:disabled) .mode-icon {background:var(--hh-control-hover);border-color:var(--gold);color:var(--ink);}
-  .mode-tile.active .mode-icon {background:var(--hh-expressive,var(--hh-control));border:2px solid var(--event-accent,var(--gold));color:#faf8f5;}
-  .mode-tile.active .mode-label {font-weight:750;color:var(--ink);}
-  .mode-tile.auto-tile .mode-icon {color:var(--gold);}
-  .mode-tile.auto-tile.active .mode-icon {background:var(--hh-control-hover);border:2px solid var(--gold);color:var(--gold);}
+   .mode-tile:hover:not(:disabled) .mode-icon {background:var(--hh-control-hover);border-color:var(--event-accent,var(--gold));color:var(--event-accent,var(--ink));}
+  .mode-tile.active .mode-icon {background:var(--hh-expressive,var(--hh-control));border:2px solid var(--event-accent,var(--gold));color:#faf8f5;box-shadow:0 0 14px color-mix(in srgb,var(--event-accent,var(--gold)) 24%,transparent);}
+   .mode-tile.active .mode-label {font-weight:750;color:var(--ink);}
+  /* Auto has the shared champagne accent, not a second activity palette. */
+  .mode-tile.auto-tile .mode-icon {background:var(--hh-control);background:radial-gradient(circle at 35% 24%,color-mix(in srgb,var(--gold) 15%,var(--hh-control)),var(--hh-control) 84%);border-color:color-mix(in srgb,var(--gold) 32%,var(--line));color:var(--gold);}
+  .mode-tile:disabled:not(.active) .mode-icon {box-shadow:none;}
+  .mode-tile.auto-tile.active .mode-icon {background:var(--hh-control-hover);border:2px solid var(--gold);color:var(--gold);box-shadow:0 0 14px color-mix(in srgb,var(--gold) 24%,transparent);}
+  /* The existing Daylight preview needs dark foregrounds on pale surfaces. */
+  :global(.home-review.daylight) .mode-tile:not(.active) .mode-icon {color:var(--event-to,var(--ink));}
+  :global(.home-review.daylight) .mode-tile.auto-tile .mode-icon {color:var(--gold);}
   .mode-tile.armed .mode-icon {outline:2px dashed var(--gold);outline-offset:3px;}
   .mode-indicator {position:absolute;top:1px;right:calc(50% - 27px);display:grid;place-items:center;width:15px;height:15px;border:2px solid var(--hh-canvas,var(--deep));box-sizing:content-box;border-radius:50%;background:var(--gold);color:var(--deep);font-size:9px;line-height:1;}
   .confirmation {display:grid;gap:10px;padding:12px;margin-top:12px;border:1px solid var(--gold);border-radius:var(--hh-radius-control);background:var(--deep);}
