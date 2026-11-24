@@ -110,10 +110,10 @@
 </section>
 
 <style>
-  .quiet-atlas { color: #eaeae4; font-family: system-ui, -apple-system, sans-serif; width: 100%; max-width: 100%; }
+  .quiet-atlas { color: var(--hh-ink, #f1eee7); font-family: var(--hh-font, system-ui); width: 100%; max-width: 100%; }
   .mobile-presets-shortcut { display:none; }
   #control { scroll-margin-top: 20px; }
-  .context { background: radial-gradient(ellipse at 88% 10%, rgba(130,157,110,.17), transparent 54%), #101b18; border: 1px solid #304238; border-radius: 24px; padding: 26px 24px; }
+  .context { background: radial-gradient(ellipse at 88% 10%, rgba(173,146,101,.13), transparent 54%), var(--hh-panel-deep, #141c19); border: 1px solid var(--hh-line, #425449); border-radius: 24px; padding: 26px 24px; }
   .eyebrow { color: #9fb3a1; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
   h1, h2, p { margin: 0; }
   h1 { font-family: Georgia, serif; font-weight: 400; font-size: clamp(34px, 7vw, 54px); line-height: 1.1; margin-top: 14px; }
@@ -127,7 +127,7 @@
   .groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   button { cursor: pointer; font: inherit; }
   button:focus-visible { outline: 3px solid #d2ebbe; outline-offset: 3px; }
-  .group { min-width: 0; min-height: 111px; border: 1px solid #425449; border-radius: 18px; padding: 18px; color: #f0f2e9; text-align: left; background: linear-gradient(135deg, #1a2a23, #15221c); display: flex; flex-direction: column; justify-content: space-between; transition: border-color .15s ease, background .15s ease; }
+  .group { min-width: 0; min-height: 111px; border: 1px solid #425449; border-radius: 18px; padding: 18px; color: #f0f2e9; text-align: left; background: var(--hh-card-background, linear-gradient(145deg,#1c2522,#141c19)); display: flex; flex-direction: column; justify-content: space-between; transition: border-color .15s ease, background .15s ease; }
   .group:hover { border-color: #9dbb9d; }
   .group-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
   .group-name { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
@@ -137,9 +137,9 @@
   .status-dot { height: 6px; width: 6px; border-radius: 100%; background: currentColor; }
   .count { color: #afc2b7; }
   .presets-heading { margin-top: 30px; }
-  .browse { background: transparent; color: #c9e2c0; border: none; text-decoration: underline; padding: 10px 0; min-height: 44px; font-size: 13px; }
+  .browse { background: transparent; color: var(--hh-accent, #e4c99e); border: none; text-decoration: underline; padding: 10px 0; min-height: 44px; font-size: 13px; }
   .scene-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .scene { color: #edece4; text-align: left; background: #243127; border: 1px solid #425449; border-radius: 14px; min-height: 76px; padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; justify-content: space-between; }
+  .scene { color: #edece4; text-align: left; background: var(--hh-card-background, #1c2522); border: 1px solid var(--hh-line, #425449); border-radius: var(--hh-radius-card, 14px); min-height: 76px; padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; justify-content: space-between; }
   .scene-kind { font-size: 11px; color: #e1e2dd; }
   .empty { border: 1px dashed #526057; border-radius: 12px; color: #bac9ba; font-size: 13px; padding: 18px; }
   @media(min-width: 900px) { .groups { grid-template-columns: repeat(4, minmax(0, 1fr)); } .scene-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
@@ -161,7 +161,7 @@
   @media(max-width:700px) {
     .quiet-atlas { min-width:0; }
     .context { padding:14px 15px; border-radius:16px; }
-    .mobile-presets-shortcut { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:64px; text-align:left; padding:12px 16px; margin:14px 0 3px; border:1px solid #6a775d; border-radius:14px; background:#233127; color:#efe5c9; }
+    .mobile-presets-shortcut { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:64px; text-align:left; padding:12px 16px; margin:14px 0 3px; border:1px solid #6a775d; border-radius:14px; background:var(--hh-card-background,#1c2522); color:var(--hh-accent,#e4c99e); }
     .mobile-presets-shortcut>span:first-child { display:flex; flex-direction:column; gap:5px; min-width:0; }
     .mobile-presets-shortcut strong { font-size:16px; }
     .mobile-presets-shortcut small { color:#d1cfb8; font-size:12px; }
