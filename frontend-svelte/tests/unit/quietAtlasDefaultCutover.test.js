@@ -24,7 +24,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(shouldShowGlobalErrorToast('/', new URLSearchParams())).toBe(true)
   })
 
-  it('uses existing LightCard/WS controls for each actual fixture, without paired fanout', () => {
+  it('uses existing LightCard/WS controls for each actual fixture, with only the explicit kitchen pair linked', () => {
     expect(reveal).toContain('<QuietAtlasRoomControls room={group.id}')
     expect(reveal).not.toContain('Preview glow')
     expect(reveal).not.toContain('Preview on')
@@ -33,7 +33,9 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
       expect(controls).toContain(mapping)
     }
     expect(controls).toContain('<LightCard light={$lights[lightId]} optimisticStore={false} />')
-    expect(controls).not.toContain('linkedIds=')
+    expect(controls.match(/linkedIds=/g)).toHaveLength(1)
+    expect(controls).toContain("light={$lights['3']} linkedIds={['4']}")
+    expect(controls).toContain('writeAllowed={linkedCanWrite}')
     expect(controls).not.toContain('<LightGrid')
     expect(controls).not.toContain('fetch(')
     expect(controls).not.toContain('apiPut(')
