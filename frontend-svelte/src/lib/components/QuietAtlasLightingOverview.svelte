@@ -5,6 +5,7 @@
 
   /** @type {Array<Record<string, any>>} */
   export let sceneList = []
+  export let functional = false
   /** @type {ReturnType<import('$lib/quietAtlas/lightingModel.js').buildLightingOverview>} */
   export let groups = []
   /** @type {'disconnected'|'unverified'|'recent-read'|'stale-read'} */
@@ -46,12 +47,12 @@
     {:else if snapshotStatus === 'stale-read'}
       <p class="connection-warning" role="status">Lighting read is stale. Previously received values may have changed. Individual fixture freshness is unknown.</p>
     {:else}
-      <p class="snapshot-note" role="status">Light snapshot received recently. Individual fixture freshness is unverified; controls remain disabled.</p>
+      <p class="snapshot-note" role="status">Light snapshot received recently. Individual fixture freshness is unverified.{#if !functional} Controls remain disabled.{/if}</p>
     {/if}
   </div>
 
   <button type="button" class="mobile-presets-shortcut" on:click={onBrowseScenes}>
-    <span><strong>Browse presets</strong><small>Review scenes · no activation</small></span>
+    <span><strong>Browse presets</strong><small>{functional ? 'Choose and apply a scene' : 'Review scenes · no activation'}</small></span>
     <span aria-hidden="true">↗</span>
   </button>
 
