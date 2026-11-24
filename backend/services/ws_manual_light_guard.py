@@ -63,6 +63,7 @@ async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any
     never stamp ownership. Ambiguous Hue results are never retried.
     """
     if not _valid_request(light_id, state):
+        logger.info("Manual light guard denied: reason=invalid_request")
         return ManualLightDispatch("denied")
     if engine is None or hue is None:
         return ManualLightDispatch("unavailable")
@@ -79,13 +80,16 @@ async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any
 
     def permitted(candidate_lease) -> bool:
         try:
-            return bool(
-                hue.connected
-                and engine.house_state in _AWAKE_HOUSE_STATES
-                and engine.validate_lighting_lease(candidate_lease, allow_manual=True)
-            )
-        except Exception:
+            if not hue.connected:
+                logger.info("Manual light guard denied: fixture=%s reason=bridge_disconnected", light_id)
+                return False
+            if engine.house_state not in _AWAKE_HOUSE_STATES:
+                logger.info("Manual light guard denied: fixture=%s reason=house_state_%s", light_id, engine.house_state)
+                return False
+            return bool(engine.validate_lighting_lease(candidate_lease, allow_manual=True))
+        except Exception as exc:
             # Missing/uncertain owner or lifecycle evidence must fail closed.
+            logger.info("Manual light guard denied: fixture=%s reason=validator_error_%s", light_id, type(exc).__name__)
             return False
 
     def allowed() -> bool:
