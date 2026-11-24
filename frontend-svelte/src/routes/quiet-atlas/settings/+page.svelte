@@ -100,14 +100,14 @@
 
 <style>
   .mobile-group-toggle {display:none}
-  .settings-review {min-width:0;overflow-wrap:anywhere;--ink:#e8eee4;--muted:#a6b9aa;--line:rgba(198,222,199,.16);--gold:#dec69a;color:var(--ink);background:radial-gradient(ellipse at 80% -8%,rgba(143,157,103,.14),transparent 47%),#101b15;min-height:100%;padding:clamp(22px,3vw,42px) clamp(17px,4vw,56px) 56px;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  .settings-review {min-width:0;overflow-wrap:anywhere;--ink:var(--hh-ink,#f1eee7);--muted:var(--hh-muted,#bec8c0);--line:var(--hh-line,rgba(229,233,220,.17));--gold:var(--hh-accent,#e4c99e);color:var(--ink);background:var(--hh-page-background,#121917);min-height:100%;padding:clamp(22px,3vw,42px) clamp(17px,4vw,56px) 56px;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
   .settings-review * {box-sizing:border-box}
   .settings-review a {color:inherit;text-decoration:none}
   .settings-review a:focus-visible {outline:3px solid #d5e7bd;outline-offset:3px}
   .hero {display:flex;flex-direction:column;align-items:flex-start;gap:16px;padding:8px 0 28px;border-bottom:1px solid var(--line)}
   h1 {font:400 clamp(34px,5vw,48px)/1.12 Georgia,serif;margin:0;letter-spacing:-.03em}
   .intro {margin:0;color:var(--muted);max-width:560px;font-size:14px;line-height:1.8}
-  .settings-review .all-settings {display:inline-flex;align-items:center;gap:20px;min-height:52px;padding:12px 18px;border:1px solid #9ab49a;border-radius:12px;background:#e6ebdf;color:#17261c;font-size:15px;font-weight:650}
+  .settings-review .all-settings {display:inline-flex;align-items:center;gap:20px;min-height:52px;padding:12px 18px;border:1px solid #9ab49a;border-radius:12px;background:var(--hh-accent,#e4c99e);color:#19201b;font-size:15px;font-weight:650}
   .groups {max-width:1330px}
   .group {display:grid;grid-template-columns:minmax(180px,.65fr) minmax(0,1.35fr);gap:clamp(25px,5vw,75px);padding:clamp(27px,4vw,48px) 0;border-bottom:1px solid var(--line)}
   .section-lead {padding-top:4px}
@@ -133,7 +133,7 @@
     .group {display:block;padding:15px 0 14px;min-width:0}
     .section-lead {padding:0}
     .section-lead>h2,.section-lead>p {display:none}
-    .mobile-group-toggle {display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:76px;margin-top:7px;padding:12px 14px;background:linear-gradient(110deg,rgba(143,164,117,.12),rgba(103,130,98,.05));border:1px solid var(--line);border-radius:14px;text-align:left;color:var(--ink);font:inherit;cursor:pointer}
+    .mobile-group-toggle {display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:76px;margin-top:7px;padding:12px 14px;background:var(--hh-card-background,#1c2522);border:1px solid var(--line);border-radius:14px;text-align:left;color:var(--ink);font:inherit;cursor:pointer}
     .mobile-group-copy {display:flex;flex-direction:column;gap:5px;min-width:0}
     .mobile-group-copy strong {font-size:16px;font-weight:650;line-height:1.25}
     .mobile-group-copy small {font-size:14px;color:var(--muted);line-height:1.45}
