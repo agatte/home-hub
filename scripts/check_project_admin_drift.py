@@ -35,7 +35,6 @@ KNOWLEDGE_DOCS = (
     "docs/PROJECT_ADMIN_HUB.md",
     "docs/EXECUTION_MAP.md",
     "docs/KNOWLEDGE_WORKFLOW.md",
-    "docs/DEVELOPMENT_JOURNAL.md",
 )
 INLINE_LINK = re.compile(r"(?<!!)\[[^\]\n]+\]\((<[^>\n]+>|[^)\n]+)\)")
 # Explicit single-source declarations, not NLP interpretation of dated prose.
@@ -428,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check_knowledge_status:
             drift.extend(check_knowledge_status_claims(args.root, issues))
         if args.check_journal:
+            drift.extend(check_knowledge_links(args.root, ("docs/DEVELOPMENT_JOURNAL.md",)))
             journal = (args.root / "docs" / "DEVELOPMENT_JOURNAL.md").read_text(encoding="utf-8")
             journal_drift, journal_notices = check_development_journal(
                 journal, issues, args.as_of, args.max_age_days
