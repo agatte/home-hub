@@ -6,6 +6,8 @@
     Settings, BookOpen, Brain, Building2, Trophy, Users,
   } from 'lucide-svelte'
   import { connected } from '$lib/stores/connection.js'
+  import OwnerUnlock from './OwnerUnlock.svelte'
+  import { rootRuntimeTargets } from '$lib/quietAtlas/runtimeRoutePolicy431.js'
   import { MORE_DESTINATIONS, activeQuietAtlasSection, isQuietAtlasReadOnlyPreview, withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
 
   const NAV_ITEMS = [
@@ -88,7 +90,7 @@
       return
     }
     if (event.key !== 'Tab' || !panel) return
-    const focusable = [...panel.querySelectorAll('button:not(:disabled), a[href]')]
+    const focusable = [...panel.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled)')]
       .filter((element) => element instanceof HTMLElement)
     if (!focusable.length) {
       event.preventDefault()
@@ -227,6 +229,9 @@
           </div>
         </section>
       {/each}
+      {#if rootRuntimeTargets($page.url.pathname).general}
+        <OwnerUnlock />
+      {/if}
       <p class="qa-more-note">Apartment opens the current Home tools. The measured physical canvas is a separate, future page.</p>
     </section>
   {/if}
