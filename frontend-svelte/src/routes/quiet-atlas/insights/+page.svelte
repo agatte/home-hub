@@ -206,10 +206,10 @@
 
 <style>
   .insights-review {
-    --ink: #e8ece3; --muted: #a6b9aa; --line: rgba(201,218,200,.17);
-    --gold: #e8cda0; --deep: #101b15;
+    --ink: var(--hh-ink,#f1eee7); --muted: var(--hh-muted,#bec8c0); --line: var(--hh-line,rgba(229,233,220,.17));
+    --gold: var(--hh-accent,#e4c99e); --deep: var(--hh-canvas,#121917);
     min-height: 100%; padding: clamp(18px,3vw,36px) clamp(16px,4vw,52px) 48px;
-    color: var(--ink); background: radial-gradient(ellipse at 84% 0%,rgba(90,128,91,.17),transparent 43%),var(--deep);
+    color: var(--ink); background: var(--hh-page-background,var(--deep));
     font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   }
   .insights-hero {max-width:850px;padding:8px 0 28px;}
@@ -232,7 +232,7 @@
   .event strong {font-size:18px;font-weight:550;color:var(--ink);}
   .event div span {font-size:14px;color:var(--muted);}
   .event time {font-size:14px;color:var(--gold);font-variant-numeric:tabular-nums;text-align:right;align-self:start;line-height:1.5;}
-  .event-fallback {min-height:165px;padding:24px;border:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:8px;background:rgba(178,207,175,.035);}
+  .event-fallback {min-height:165px;padding:24px;border:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:8px;background:var(--hh-card-background,#1c2522);border-radius:var(--hh-radius-card,14px);}
   .fallback-symbol {font-size:28px;color:var(--gold);}
   .event-fallback strong {font-size:17px;font-weight:550;}
   .event-fallback span:last-child {font-size:14px;line-height:1.6;color:var(--muted);}

@@ -83,7 +83,7 @@
 </main>
 
 <style>
-  .music-review { --ink:#e9eee6; --muted:#b0c0b0; --gold:#e0c89b; --line:rgba(200,222,199,.18); background:radial-gradient(ellipse at 80% 7%,rgba(134,151,107,.12),transparent 46%),#101b15; color:var(--ink); min-height:100%; padding:clamp(18px,3vw,42px) clamp(17px,4vw,56px) 54px; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .music-review { --ink:var(--hh-ink,#f1eee7); --muted:var(--hh-muted,#bec8c0); --gold:var(--hh-accent,#e4c99e); --line:var(--hh-line,rgba(229,233,220,.17)); background:var(--hh-page-background,#121917); color:var(--ink); min-height:100%; padding:clamp(18px,3vw,42px) clamp(17px,4vw,56px) 54px; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
   .music-review * { box-sizing:border-box; }
   .music-review a { color:inherit; text-decoration:none; }
   .music-review a:focus-visible { outline:3px solid #d5e7bd; outline-offset:4px; }
@@ -95,10 +95,10 @@
   h1 { font:550 clamp(41px,5.5vw,80px)/1.04 system-ui,-apple-system,"Segoe UI",sans-serif; letter-spacing:-.06em; max-width:790px; margin:22px 0 25px; }
   h1 em,h2 em { font-family:Georgia,"Times New Roman",serif; font-weight:400; letter-spacing:-.045em; }
   .summary { max-width:535px; color:var(--muted); font-size:14px; line-height:1.82; margin:0 0 28px; }
-  .primary-link { display:inline-flex; align-items:center; justify-content:space-between; gap:30px; min-height:50px; padding:11px 19px; border-radius:3px; background:#e2d1ac; color:#19271d !important; font-size:13px; font-weight:750; }
+  .primary-link { display:inline-flex; align-items:center; justify-content:space-between; gap:30px; min-height:50px; padding:11px 19px; border-radius:var(--hh-radius-control,10px); background:var(--hh-accent,#e4c99e); color:#19271d !important; font-size:13px; font-weight:750; }
   .primary-link:hover { background:#f0dfbc; }
   .action-note { max-width:465px; color:#9fb19f; font-size:11px; line-height:1.7; margin:14px 0 0; }
-  .composition { min-height:360px; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; overflow:hidden; isolation:isolate; background:radial-gradient(ellipse at 45% 42%,rgba(207,180,130,.13),transparent 55%),radial-gradient(ellipse at 65% 80%,rgba(71,116,100,.15),transparent 57%),linear-gradient(150deg,#1a2a20,#0c1512); border:1px solid rgba(200,222,199,.13); }
+  .composition { min-height:360px; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; overflow:hidden; isolation:isolate; background:radial-gradient(ellipse at 45% 42%,rgba(207,180,130,.13),transparent 55%),radial-gradient(ellipse at 65% 80%,rgba(71,116,100,.15),transparent 57%),linear-gradient(150deg,#1a2a20,#0c1512); border:1px solid var(--hh-line,rgba(229,233,220,.17)); border-radius:var(--hh-radius-panel,20px); }
   .composition:before,.composition:after { content:""; position:absolute; inset:20px; border:1px solid rgba(200,222,199,.07); pointer-events:none; }
   .composition:after { inset:35px; border-color:rgba(200,222,199,.035); }
   .disc { width:min(54%,270px); aspect-ratio:1; border-radius:50%; display:grid; place-items:center; background:repeating-radial-gradient(circle,rgba(234,213,172,.17) 0 1px,transparent 2px 8px),radial-gradient(circle at 42% 34%,#5b664d 0%,#2d4134 37%,#121f1a 75%); border:1px solid rgba(225,206,167,.55); box-shadow:0 16px 55px rgba(3,8,5,.55),inset 0 0 42px rgba(0,0,0,.3); }

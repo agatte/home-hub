@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte'
+  import '$lib/styles/homehub-surface.css'
   import { page } from '$app/stores'
   import {
     Home, Sliders, Music, BarChart3, MoreHorizontal, X, ArrowUpRight,
@@ -242,9 +243,9 @@
     display: grid;
     grid-template-columns: 232px minmax(0, 1fr);
     min-height: 100dvh;
-    color: #e9ece4;
-    background: radial-gradient(ellipse at 70% 0%, rgba(93,126,94,.10), transparent 45%), #0f1914;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--hh-ink);
+    background: var(--hh-page-background);
+    font-family: var(--hh-font);
   }
   .qa-sidebar {
     position: sticky;
@@ -255,7 +256,7 @@
     gap: 0;
     padding: 24px 16px 18px;
     border-right: 1px solid rgba(195,215,194,.12);
-    background: rgba(10,19,14,.88);
+    background: var(--hh-chrome);
     backdrop-filter: blur(18px);
   }
   .qa-brand, .qa-mobile-brand {
@@ -271,10 +272,10 @@
     flex: 0 0 38px;
     width: 38px;
     height: 38px;
-    border: 1px solid #6c8a70;
+    border: 1px solid var(--hh-line);
     border-radius: 13px;
-    color: #d7e5c9;
-    background: linear-gradient(145deg, #314a37, #17271d);
+    color: var(--hh-accent);
+    background: var(--hh-card-background);
     font-family: Georgia, serif;
     font-size: 22px;
   }
@@ -306,9 +307,9 @@
   }
   .qa-desktop-nav a:hover, .qa-desktop-nav button:hover { color: #f0f0e8; background: rgba(191,215,188,.06); }
   .qa-desktop-nav a.active, .qa-desktop-nav button.active {
-    color: #e8f0df;
-    border-color: rgba(166,194,160,.22);
-    background: linear-gradient(110deg, rgba(98,133,99,.22), rgba(44,68,49,.13));
+    color: var(--hh-accent);
+    border-color: var(--hh-line);
+    background: var(--hh-card-background);
   }
   .qa-nav-hint { margin-left: auto; color: #839988; font-size: 10px; }
   .qa-sidebar-footer {
@@ -348,11 +349,11 @@
     line-height: 1.1;
     cursor: pointer;
   }
-  .qa-mobile-nav a.active, .qa-mobile-nav button.active { color: #e5efd9; background: rgba(128,166,123,.14); border-color: rgba(166,194,160,.18); }
+  .qa-mobile-nav a.active, .qa-mobile-nav button.active { color: var(--hh-accent); background: var(--hh-control); border-color: var(--hh-line); }
   .qa-mobile-nav a:focus-visible, .qa-mobile-nav button:focus-visible,
   .qa-desktop-nav a:focus-visible, .qa-desktop-nav button:focus-visible,
   .qa-more-panel a:focus-visible, .qa-more-panel button:focus-visible,
-  .qa-brand:focus-visible, .qa-mobile-brand:focus-visible { outline: 3px solid #d5e7bd; outline-offset: 3px; }
+  .qa-brand:focus-visible, .qa-mobile-brand:focus-visible { outline: 3px solid var(--hh-focus); outline-offset: 3px; }
   /* Keep the page beneath the open More dialog stationary without mutable body styles. */
   :global(body:has(.qa-more-panel)) { overflow: hidden; }
   .qa-more-scrim { position: fixed; inset: 0; z-index: 600; border: 0; background: rgba(3,8,5,.72); backdrop-filter: blur(7px); }
@@ -368,8 +369,8 @@
     padding: 24px;
     border: 1px solid rgba(190,215,188,.2);
     border-radius: 24px;
-    color: #e9ece4;
-    --qa-more-surface: #142019;
+    color: var(--hh-ink);
+    --qa-more-surface: var(--hh-panel-deep);
     background: var(--qa-more-surface);
     box-shadow: 0 24px 80px rgba(0,0,0,.42);
   }
@@ -380,9 +381,9 @@
   .qa-close-more { display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; border: 1px solid rgba(190,215,188,.2); border-radius: 12px; color: #d5e3d2; background: rgba(190,215,188,.06); cursor: pointer; }
   .qa-more-intro { margin: 16px 0 20px; color: #b1c0b3; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
   .qa-more-list { display: flex; flex-direction: column; gap: 8px; }
-  .qa-more-link { display: grid; grid-template-columns: 40px minmax(0,1fr) 18px; align-items: center; gap: 12px; min-height: 64px; padding: 10px 11px; border: 1px solid rgba(190,215,188,.1); border-radius: 14px; color: inherit; background: rgba(190,215,188,.035); text-decoration: none; }
+  .qa-more-link { display: grid; grid-template-columns: 40px minmax(0,1fr) 18px; align-items: center; gap: 12px; min-height: 64px; padding: 10px 11px; border: 1px solid rgba(190,215,188,.1); border-radius: 14px; color: inherit; background: var(--hh-card-background); text-decoration: none; }
   .qa-more-link:hover { border-color: rgba(190,215,188,.28); background: rgba(190,215,188,.07); }
-  .qa-more-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: #c5d9bd; background: rgba(111,150,108,.16); }
+  .qa-more-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: var(--hh-accent); background: var(--hh-control-hover); }
   .qa-more-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .qa-more-copy strong { font-size: 15px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
   .qa-more-copy small { color: #9eafa1; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
@@ -403,7 +404,7 @@
       min-height: 66px;
       padding: 10px 16px;
       border-bottom: 1px solid rgba(195,215,194,.10);
-      background: rgba(13,23,17,.9);
+      background: var(--hh-chrome);
       backdrop-filter: blur(18px);
     }
     .qa-mobile-brand { gap: 9px; }
@@ -424,7 +425,7 @@
       gap: 2px;
       padding: 5px 8px calc(5px + env(safe-area-inset-bottom, 0px));
       border-top: 1px solid rgba(195,215,194,.13);
-      background: rgba(10,19,14,.93);
+      background: var(--hh-chrome);
       backdrop-filter: blur(22px) saturate(1.1);
     }
     .qa-more-panel {
