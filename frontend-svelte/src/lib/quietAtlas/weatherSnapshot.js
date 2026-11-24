@@ -1,5 +1,7 @@
 // Quiet Atlas #157: backend weather receipts are NOT proof of NWS observation freshness.
 // Do not let cached provider data, failed reads, or connectivity changes appear authoritative.
+import { weatherIconCode } from './widgetTone.js'
+
 export const WEATHER_REPORT_MAX_AGE_MS = 6 * 60 * 1000
 
 /** @param {unknown} input */
@@ -21,11 +23,12 @@ export function validateWeatherReport(input) {
     feelsLike: feels,
     description: data.description.trim(),
     city: data.city.trim(),
+    ...(weatherIconCode(data.icon) ? { icon: weatherIconCode(data.icon) } : {}),
   }
 }
 
 /** @returns {{connected:boolean,generation:number,requestId:number,pending:boolean,
- *   reported:{temp:number,feelsLike:number|null,description:string,city:string}|null,
+ *   reported:{temp:number,feelsLike:number|null,description:string,city:string,icon?:string|null}|null,
  *   receivedAt:number|null,failed:boolean}} */
 export function newWeatherSnapshot() {
   return { connected: false, generation: 0, requestId: 0, pending: false,

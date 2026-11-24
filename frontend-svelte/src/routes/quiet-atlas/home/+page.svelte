@@ -375,6 +375,7 @@
       <ol class="recent-log-events" aria-label="Recent recorded activities">
         {#each recentActivity.items as entry (entry.key)}
           <li data-tone={activityTone(entry.label)}>
+            <span class="activity-accent" aria-hidden="true"></span>
             <strong>{entry.label}</strong>
             <time datetime={new Date(entry.timestamp).toISOString()}>{recentActivityTime(entry.timestamp)}</time>
           </li>
@@ -546,16 +547,16 @@
   .recent-log-head h2{font-size:22px;font-weight:600;letter-spacing:-.03em;margin:0;}
   .recent-log-head>span{font-size:14px;color:var(--muted);}
   .recent-log-events{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;margin:16px 0 9px;padding:0;gap:var(--hh-gap,10px);}
-   .recent-log-events li{display:flex;flex-direction:column;justify-content:center;gap:6px;border:1px solid rgba(var(--activity-glow,169,181,171),.28);border-radius:var(--hh-radius-card,14px);background:radial-gradient(ellipse at 100% 0%,rgba(var(--activity-glow,169,181,171),.19),transparent 95%),var(--deep);padding:13px 12px;min-width:0;min-height:70px;}
-  .recent-log-events li[data-tone='focus']{--activity-glow:112,158,211;}
-  .recent-log-events li[data-tone='play']{--activity-glow:176,127,220;}
-  .recent-log-events li[data-tone='cinema']{--activity-glow:114,139,192;}
-  .recent-log-events li[data-tone='warm']{--activity-glow:228,157,95;}
-  .recent-log-events li[data-tone='calm']{--activity-glow:126,178,159;}
-  .recent-log-events li[data-tone='social']{--activity-glow:213,135,173;}
-  .recent-log-events li[data-tone='neutral']{--activity-glow:169,181,171;}
+    .recent-log-events li{--event-from:#344640;--event-to:#23302b;--event-accent:#b6c8bb;display:flex;flex-direction:column;justify-content:center;gap:6px;border:1px solid rgba(238,241,245,.19);border-radius:var(--hh-radius-card,14px);background:radial-gradient(ellipse at 100% 0%,rgba(255,255,255,.10),transparent 72%),linear-gradient(135deg,var(--event-from),var(--event-to));padding:14px 12px;min-width:0;min-height:83px;color:#faf8f5;}
+  .recent-log-events li[data-tone='focus']{--event-from:#35547c;--event-to:#23364d;--event-accent:#a3caff;}
+  .recent-log-events li[data-tone='play']{--event-from:#684881;--event-to:#372a51;--event-accent:#d4b5ff;}
+  .recent-log-events li[data-tone='cinema']{--event-from:#405071;--event-to:#232c47;--event-accent:#b4c4f8;}
+  .recent-log-events li[data-tone='warm']{--event-from:#794b32;--event-to:#482d2a;--event-accent:#ffca9b;}
+  .recent-log-events li[data-tone='calm']{--event-from:#31665e;--event-to:#21443f;--event-accent:#b3eee0;}
+  .recent-log-events li[data-tone='social']{--event-from:#824b65;--event-to:#492f43;--event-accent:#f7bbd5;}
+  .activity-accent{display:block;width:28px;height:4px;border-radius:3px;background:var(--event-accent);margin-bottom:3px;}
   .recent-log-events strong{font-size:15px;font-weight:650;line-height:1.3;}
-  .recent-log-events time{color:var(--muted);font-size:12px;line-height:1.5;}
+  .recent-log-events time{color:#e5e7eb;font-size:12px;line-height:1.5;}
   .recent-log-status{font-size:14px;margin:16px 0 9px;color:var(--muted);}
   .recent-log-note{font-size:14px;color:var(--muted);margin:10px 0 0;line-height:1.5;}
   .recent-log-note a{color:var(--gold);text-decoration:underline;margin-left:10px;}
