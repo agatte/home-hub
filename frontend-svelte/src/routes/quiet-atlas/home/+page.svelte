@@ -1,10 +1,11 @@
 <script>
   // #461 default Home: HomeHub status comes only from guarded REST. Lighting uses the existing WebSocket commands.
   import { onMount } from 'svelte'
-  import { activityTone } from '$lib/quietAtlas/widgetTone.js'
-  import { connected } from '$lib/stores/connection.js'
+  import { activityTone, houseTone } from '$lib/quietAtlas/widgetTone.js'
+  import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { lights } from '$lib/stores/lights.js'
-  import { homeRoomLightSummary } from '$lib/quietAtlas/homeRoomLightSummary.js'
+  import { homeRoomLightSummary, homeSnapshotRoomColor } from '$lib/quietAtlas/homeRoomLightSummary.js'
+  import { newReadOnlySnapshot, connectionChanged as lightConnectionChanged, invalidateLightRead, beginLightRead, acceptLightRead, failLightRead } from '$lib/quietAtlas/lightSnapshot.js'
   import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
   import { CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import QuietAtlasHomeLightingReveal from '$lib/components/QuietAtlasHomeLightingReveal.svelte'
@@ -44,6 +45,7 @@
   let sampleState = 'unavailable'
   let contextSnapshot = newHomeContextSnapshot()
   let contextNowMs = 0
+  let paletteSnapshot = newReadOnlySnapshot()
   $: contextDisplay = homeContextPresentation(contextSnapshot, contextNowMs)
 
   // The tile IDs mirror the existing independently controlled L1–L6 room fixtures.
@@ -57,6 +59,9 @@
   $: roomStatuses = Object.fromEntries(
     groups.map((group) => [group.id, homeRoomLightSummary(group.fixtures, $lights, $connected)])
   )
+
+  $: roomBackgrounds = Object.fromEntries(groups.map(group => [group.id, homeSnapshotRoomColor(group.fixtures, paletteSnapshot, contextNowMs, $lights, $connected && $deviceStatus.hue)]))
+  $: contextTone = contextDisplay.status === 'recent' ? houseTone(contextDisplay.house) : 'neutral'
 
   const examples = {
     unavailable: {
@@ -93,6 +98,47 @@
     let activityController = null
     let activityFailures = 0
     let nextActivityPollAt = 0
+    /** @type {AbortController | null} */
+    let paletteController = null
+    let nextPalettePollAt = 0
+    let paletteFailures = 0
+
+    function abortPaletteRead() {
+      paletteController?.abort()
+      paletteController = null
+    }
+
+    async function refreshRoomPalette() {
+      if (!mounted || !paletteSnapshot.connected || paletteSnapshot.pending || document.visibilityState !== 'visible') return
+      const next = beginLightRead(paletteSnapshot)
+      paletteSnapshot = next.state
+      if (!next.ticket) return
+      const ticket = next.ticket
+      const request = new AbortController()
+      paletteController = request
+      const timeout = window.setTimeout(() => request.abort(), 8000)
+      nextPalettePollAt = Date.now() + 15000
+      try {
+        const response = await fetch('/api/lights', { signal: request.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error('Room palette unavailable')
+        const rows = await response.json()
+        if (!mounted || paletteController !== request) return
+        const receivedAt = Date.now()
+        paletteSnapshot = acceptLightRead(paletteSnapshot, ticket, rows, receivedAt)
+        contextNowMs = receivedAt
+        paletteFailures = paletteSnapshot.receivedAt === receivedAt ? 0 : Math.min(3, paletteFailures + 1)
+      } catch {
+        if (!mounted || paletteController !== request) return
+        paletteSnapshot = failLightRead(paletteSnapshot, ticket)
+        paletteFailures = Math.min(3, paletteFailures + 1)
+      } finally {
+        window.clearTimeout(timeout)
+        if (paletteController === request) {
+          paletteController = null
+          if (paletteFailures) nextPalettePollAt = Date.now() + 15000 * 2 ** paletteFailures
+        }
+      }
+    }
 
     function abortRead() {
       controller?.abort()
@@ -190,6 +236,11 @@
       if (!mounted) return
       abortRead()
       abortActivityRead()
+      abortPaletteRead()
+      paletteSnapshot = lightConnectionChanged(paletteSnapshot, available)
+      paletteFailures = 0
+      nextPalettePollAt = 0
+      if (available && document.visibilityState === 'visible') void refreshRoomPalette()
       const activityWasConnected = activityLog.connected
       activityLog = recentActivityConnectionChanged(activityLog, available)
       activityNowMs = Date.now()
@@ -212,6 +263,12 @@
       if (!mounted) return
       abortRead()
       abortActivityRead()
+      abortPaletteRead()
+      paletteSnapshot = invalidateLightRead(paletteSnapshot)
+      if (document.visibilityState === 'visible' && paletteSnapshot.connected) {
+        nextPalettePollAt = 0
+        void refreshRoomPalette()
+      }
       activityLog = invalidateRecentActivity(activityLog)
       activityNowMs = Date.now()
       if (document.visibilityState === 'visible' && activityLog.connected) {
@@ -235,6 +292,8 @@
     const pollTimer = window.setInterval(() => {
       if (!contextSnapshot.pending && contextSnapshot.connected &&
           document.visibilityState === 'visible' && Date.now() >= nextPollAt) void refreshContext()
+      if (!paletteSnapshot.pending && paletteSnapshot.connected &&
+          document.visibilityState === 'visible' && Date.now() >= nextPalettePollAt) void refreshRoomPalette()
       if (!activityLog.pending && activityLog.connected &&
           document.visibilityState === 'visible' && Date.now() >= nextActivityPollAt) void refreshRecentActivity()
     }, 15000)
@@ -242,6 +301,8 @@
       mounted = false
       abortRead()
       abortActivityRead()
+      abortPaletteRead()
+      paletteSnapshot = invalidateLightRead(paletteSnapshot)
       activityLog = invalidateRecentActivity(activityLog)
       unsubscribe()
       document.removeEventListener('visibilitychange', visibilityChanged)
@@ -271,7 +332,7 @@
     </a>
   </header>
 
-  <section class="phone-status" aria-label="Reported HomeHub status">
+  <section class="phone-status" data-palette={contextTone} aria-label="Reported HomeHub status">
     <div class="phone-status-header">
       <span>Home status</span>
       <strong class:unverified={contextDisplay.status !== 'recent'}>{contextDisplay.status === 'recent' ? 'Updated recently' : 'Unavailable'}</strong>
@@ -283,7 +344,7 @@
     {#if contextDisplay.status !== 'recent'}<p role="status">{contextDisplay.note}</p>{/if}
   </section>
 
-  <section class="apartment-stage" aria-labelledby="apartment-stage-title">
+  <section class="apartment-stage" data-palette={contextTone} aria-labelledby="apartment-stage-title">
     <div class="world">
       <div class="world-topline">
         <h2 id="apartment-stage-title">At a glance</h2>
@@ -313,7 +374,7 @@
     </div>
     <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
       {#each groups as group (group.id)}
-        <button type="button" id={`phone-room-${group.id}`} class="phone-room" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls, last reported ${roomStatuses[group.id].label}`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+        <button type="button" id={`phone-room-${group.id}`} class="phone-room" data-tone={roomStatuses[group.id].tone} class:room-colored={!!roomBackgrounds[group.id]} style:--room-background={roomBackgrounds[group.id] || null} aria-label={`${group.name} lighting controls, last reported ${roomStatuses[group.id].label}`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="phone-room-icon" aria-hidden="true"></span>
           <span class="phone-room-copy"><strong>{group.name}</strong><small>{roomStatuses[group.id].label}</small></span>
           <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
@@ -337,7 +398,7 @@
     </div>
     <div class="groups" role="group" aria-label="Browse lighting groups">
       {#each groups as group}
-        <button type="button" id={`dock-room-${group.id}`} class="group" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls, last reported ${roomStatuses[group.id].label}`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+        <button type="button" id={`dock-room-${group.id}`} class="group" data-tone={roomStatuses[group.id].tone} class:room-colored={!!roomBackgrounds[group.id]} style:--room-background={roomBackgrounds[group.id] || null} aria-label={`${group.name} lighting controls, last reported ${roomStatuses[group.id].label}`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="group-mark" aria-hidden="true"></span>
           <span class="group-copy"><strong>{group.name}</strong><small>{roomStatuses[group.id].label}</small></span>
           <span class="group-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
@@ -374,7 +435,7 @@
     {#if recentActivity.status === 'recent'}
       <ol class="recent-log-events" aria-label="Recent recorded activities">
         {#each recentActivity.items as entry (entry.key)}
-          <li data-tone={activityTone(entry.label)}>
+          <li data-tone={activityTone(entry.label)} data-palette={activityTone(entry.label)}>
             <span class="activity-accent" aria-hidden="true"></span>
             <strong>{entry.label}</strong>
             <time datetime={new Date(entry.timestamp).toISOString()}>{recentActivityTime(entry.timestamp)}</time>
@@ -547,13 +608,7 @@
   .recent-log-head h2{font-size:22px;font-weight:600;letter-spacing:-.03em;margin:0;}
   .recent-log-head>span{font-size:14px;color:var(--muted);}
   .recent-log-events{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;margin:16px 0 9px;padding:0;gap:var(--hh-gap,10px);}
-    .recent-log-events li{--event-from:#344640;--event-to:#23302b;--event-accent:#b6c8bb;display:flex;flex-direction:column;justify-content:center;gap:6px;border:1px solid rgba(238,241,245,.19);border-radius:var(--hh-radius-card,14px);background:radial-gradient(ellipse at 100% 0%,rgba(255,255,255,.10),transparent 72%),linear-gradient(135deg,var(--event-from),var(--event-to));padding:14px 12px;min-width:0;min-height:83px;color:#faf8f5;}
-  .recent-log-events li[data-tone='focus']{--event-from:#35547c;--event-to:#23364d;--event-accent:#a3caff;}
-  .recent-log-events li[data-tone='play']{--event-from:#684881;--event-to:#372a51;--event-accent:#d4b5ff;}
-  .recent-log-events li[data-tone='cinema']{--event-from:#405071;--event-to:#232c47;--event-accent:#b4c4f8;}
-  .recent-log-events li[data-tone='warm']{--event-from:#794b32;--event-to:#482d2a;--event-accent:#ffca9b;}
-  .recent-log-events li[data-tone='calm']{--event-from:#31665e;--event-to:#21443f;--event-accent:#b3eee0;}
-  .recent-log-events li[data-tone='social']{--event-from:#824b65;--event-to:#492f43;--event-accent:#f7bbd5;}
+    .recent-log-events li{display:flex;flex-direction:column;justify-content:center;gap:6px;border:1px solid rgba(238,241,245,.19);border-radius:var(--hh-radius-card,14px);background:var(--hh-expressive,var(--hh-card-background));padding:14px 12px;min-width:0;min-height:83px;color:#faf8f5;}
   .activity-accent{display:block;width:28px;height:4px;border-radius:3px;background:var(--event-accent);margin-bottom:3px;}
   .recent-log-events strong{font-size:15px;font-weight:650;line-height:1.3;}
   .recent-log-events time{color:#e5e7eb;font-size:12px;line-height:1.5;}
@@ -676,6 +731,11 @@
   .phone-room-copy small {font-size:13px;}
   .phone-room-arrow {position:relative;z-index:1;}
   .phone-room[data-tone="on"],.group[data-tone="on"] {border-color:rgba(237,207,160,.34);background:radial-gradient(ellipse at 80% 94%,rgba(237,207,160,.16),transparent 66%),linear-gradient(130deg,var(--stage),var(--deep));}
+  .phone-room.room-colored,.group.room-colored,.phone-room.room-colored[aria-expanded="true"],.group.room-colored[aria-expanded="true"] {background:var(--room-background);color:#faf8f5;border-color:rgba(238,241,245,.28);}
+  .phone-room.room-colored .phone-room-copy small,.group.room-colored .group-copy small {color:#e5e7eb;}
+  .phone-room.room-colored .phone-room-arrow,.group.room-colored .group-arrow {color:#f3e4cb;}
+  .phone-status[data-palette]:not([data-palette="neutral"]),.apartment-stage[data-palette]:not([data-palette="neutral"]) .world {background:var(--hh-expressive);color:#faf8f5;}
+  .phone-status[data-palette]:not([data-palette="neutral"]) .phone-status-header,.phone-status[data-palette]:not([data-palette="neutral"]) .phone-status-grid span,.phone-status[data-palette]:not([data-palette="neutral"]) .phone-status-header strong,.apartment-stage[data-palette]:not([data-palette="neutral"]) .world .readout span,.apartment-stage[data-palette]:not([data-palette="neutral"]) .world .source {color:#f0e9e0;}
   .phone-room[data-tone="on"] .phone-room-icon {border-color:var(--gold);box-shadow:0 0 19px 4px rgba(237,207,160,.14);opacity:1;}
   .group[data-tone="on"] .group-mark {background:var(--gold);border-color:var(--gold);box-shadow:0 0 17px 4px rgba(237,207,160,.20);}
   .phone-room[data-tone="unknown"] .phone-room-copy small,.group[data-tone="unknown"] .group-copy small {color:var(--gold);}

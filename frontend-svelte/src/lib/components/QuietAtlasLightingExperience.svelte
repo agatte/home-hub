@@ -204,7 +204,7 @@
 
 <div class="qa-experience">
   {#if !functional}<div class="review-banner" role="note"><strong>Quiet Atlas · development review</strong> — This experimental route reads light and scene information but cannot turn on lights, change brightness, apply scenes, or alter automation.</div>{/if}
-  <QuietAtlasLightingOverview {functional} {groups} {snapshotStatus} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
+  <QuietAtlasLightingOverview {functional} {groups} {snapshotStatus} snapshotFixtures={snapshot.fixtures} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
     onOpenGroup={openGroup} onBrowseScenes={browseScenes} onOpenScene={openSpecificScene} />
 </div>
 {#if sceneBrowserOpen}

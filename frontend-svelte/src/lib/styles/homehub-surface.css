@@ -38,3 +38,17 @@
   --hh-chrome: rgba(245, 245, 236, .96);
   --hh-focus: #805f37;
 }
+
+/* Shared expressive palette. Apply only to explicit semantic display surfaces. */
+.qa-shell [data-palette] {--event-from:#344640;--event-to:#23302b;--event-accent:#b6c8bb;}
+.qa-shell [data-palette='focus'] {--event-from:#35547c;--event-to:#23364d;--event-accent:#a3caff;}
+.qa-shell [data-palette='play'] {--event-from:#684881;--event-to:#372a51;--event-accent:#d4b5ff;}
+.qa-shell [data-palette='cinema'] {--event-from:#405071;--event-to:#232c47;--event-accent:#b4c4f8;}
+.qa-shell [data-palette='warm'] {--event-from:#794b32;--event-to:#482d2a;--event-accent:#ffca9b;}
+.qa-shell [data-palette='calm'] {--event-from:#31665e;--event-to:#21443f;--event-accent:#b3eee0;}
+.qa-shell [data-palette='social'] {--event-from:#824b65;--event-to:#492f43;--event-accent:#f7bbd5;}
+.qa-shell [data-palette='home'] {--event-from:#74553a;--event-to:#3f332b;--event-accent:#f5d2a0;}
+.qa-shell [data-palette='dusk'] {--event-from:#764b54;--event-to:#493341;--event-accent:#ffc1a2;}
+.qa-shell [data-palette='sleep'] {--event-from:#314469;--event-to:#1c2947;--event-accent:#bdceff;}
+.qa-shell [data-palette='away'] {--event-from:#43505c;--event-to:#29343d;--event-accent:#c1cfdc;}
+.qa-shell [data-palette] {--hh-expressive:radial-gradient(ellipse at 100% 0%,rgba(255,255,255,.10),transparent 72%),linear-gradient(135deg,var(--event-from),var(--event-to));}
