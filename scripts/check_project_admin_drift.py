@@ -311,6 +311,76 @@ def check_current_gate_rows(execution_map: str, issues: dict[int, dict]) -> list
     return findings
 
 
+def check_development_journal(
+    markdown: str, issues: dict[int, dict], today: date, max_age_days: int = 30
+) -> tuple[list[str], list[str]]:
+    """Advisory checks of recent summaries only, never historical lesson prose.
+
+    Exact repeated paragraphs are review candidates, not semantic duplicates.
+    Later issue updates may be unrelated; never infer a stale decision from them.
+    """
+    drift: list[str] = []
+    notices: list[str] = []
+    sections = re.split(r"(?m)^## ", markdown)
+    recent = [s for s in sections if s.split("\n", 1)[0] == "Recent meaningful sessions"]
+    if len(recent) != 1:
+        return ["Journal: expected one Recent meaningful sessions section"], notices
+    entries = re.split(r"(?m)^### ", recent[0])[1:]
+    if not entries:
+        return ["Journal: no recent session entries"], notices
+    seen: set[tuple[date, str]] = set()
+    paragraphs: dict[str, int] = {}
+    for index, entry in enumerate(entries, 1):
+        where = f"Journal entry {index}"
+        heading, _, body = entry.partition("\n")
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}) — (.+)", heading)
+        if not match:
+            drift.append(f"{where}: expected dated session heading")
+            continue
+        try:
+            day = date.fromisoformat(match.group(1))
+        except ValueError:
+            drift.append(f"{where}: invalid date")
+            continue
+        key = (day, " ".join(match.group(2).split()).casefold())
+        if key in seen:
+            drift.append(f"{where}: repeated dated session heading")
+        seen.add(key)
+        age = (today - day).days
+        if age < 0:
+            drift.append(f"{where}: future date")
+        elif age > max_age_days:
+            notices.append(f"{where}: {age} days old; consider consolidation, retain unresolved gates")
+        if not re.search(r"(?m)^\*\*Next(?: at this dated checkpoint)?:\*\*\s+\S", body):
+            drift.append(f"{where}: missing explicit next step")
+        owners = sorted({int(n) for n in ISSUE_LINK.findall(body)})
+        if not owners:
+            drift.append(f"{where}: missing linked owning issue/evidence")
+        for number in owners:
+            issue = issues.get(number)
+            if issue is None:
+                notices.append(f"{where}: linked issue #{number} absent from supplied metadata")
+                continue
+            updated = issue.get("updated_at")
+            if isinstance(updated, str):
+                try:
+                    updated_day = date.fromisoformat(updated[:10])
+                except ValueError:
+                    continue
+                if updated_day > day:
+                    notices.append(f"{where}: issue #{number} updated after summary date; recheck")
+        for paragraph in re.split(r"\n\s*\n", body):
+            normalized = " ".join(paragraph.split()).casefold()
+            if not normalized:
+                continue
+            previous = paragraphs.get(normalized)
+            if previous is not None:
+                notices.append(f"{where}: exact repeated paragraph (entry {previous}); review")
+            else:
+                paragraphs[normalized] = index
+    return drift, notices
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -335,6 +405,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Check explicit current issue declarations in two bounded knowledge docs",
     )
+    parser.add_argument(
+        "--check-journal",
+        action="store_true",
+        help="Check recent journal structure and report possible consolidation candidates",
+    )
     args = parser.parse_args(argv)
 
     if args.max_age_days < 0:
@@ -351,6 +426,14 @@ def main(argv: list[str] | None = None) -> int:
             drift.extend(check_current_gate_rows(execution_map, issues))
         if args.check_knowledge_status:
             drift.extend(check_knowledge_status_claims(args.root, issues))
+        if args.check_journal:
+            drift.extend(check_knowledge_links(args.root, ("docs/DEVELOPMENT_JOURNAL.md",)))
+            journal = (args.root / "docs" / "DEVELOPMENT_JOURNAL.md").read_text(encoding="utf-8")
+            journal_drift, journal_notices = check_development_journal(
+                journal, issues, args.as_of, args.max_age_days
+            )
+            drift.extend(journal_drift)
+            notices.extend(journal_notices)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
