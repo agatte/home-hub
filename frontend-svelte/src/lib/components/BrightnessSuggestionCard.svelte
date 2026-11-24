@@ -7,7 +7,18 @@
   import { addError } from '$lib/stores/errors.js'
 
   let pending = false
-  let feedback = ''
+  /** @type {Array<{id:number,message:string,complete:boolean}>} */
+  let receipts = []
+  /** @type {Set<number>} */
+  let attempted = new Set()
+
+  /** @param {number} id @param {string} message @param {boolean} complete */
+  function recordReceipt(id, message, complete) {
+    const next = {id, message, complete}
+    receipts = receipts.some(row => row.id === id)
+      ? receipts.map(row => row.id === id ? next : row)
+      : [...receipts, next]
+  }
 
   /** @param {string} path */
   async function postSilently(path) {
@@ -23,19 +34,20 @@
   async function accept() {
     if (!$brightnessSuggestion || pending) return
     const id = $brightnessSuggestion.id
-    if (!Number.isSafeInteger(id) || id <= 0) return
+    if (!Number.isSafeInteger(id) || id <= 0 || attempted.has(id)) return
+    attempted = new Set([...attempted, id])
     pending = true
-    feedback = 'Saving brightness preference…'
+    recordReceipt(id, 'Saving brightness preference…', false)
     dismissBrightnessSuggestion()
     try {
       const result = await apiPost(`/api/rules/brightness-suggestion/accept/${id}`, undefined, { timeout: 20000 })
       const outcome = brightnessAcceptanceFeedback(result)
-      feedback = outcome.message
-      if (outcome.incomplete) addError(outcome.message)
+      recordReceipt(id, outcome.message, true)
+      if (outcome.incomplete) addError('Brightness suggestion #' + id + ': ' + outcome.message)
     } catch (error) {
-      feedback = /failed: 410\b/.test(error instanceof Error ? error.message : String(error))
+      recordReceipt(id, /failed: 410\b/.test(error instanceof Error ? error.message : String(error))
         ? 'Suggestion no longer pending. No retry sent.'
-        : 'Brightness acceptance unconfirmed. Check saved preferences and actual lights before another action.'
+        : 'Brightness acceptance unconfirmed. Check saved preferences and actual lights before another action.', true)
     } finally {
       pending = false
     }
@@ -127,7 +139,7 @@
       </div>
     </div>
     <div class="suggestion-actions">
-      <button class="suggestion-btn suggestion-btn-accept" on:click={accept} disabled={pending} aria-label="Apply automatically">
+      <button class="suggestion-btn suggestion-btn-accept" on:click={accept} disabled={pending || attempted.has($brightnessSuggestion.id)} aria-label="Apply automatically">
         <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="4,10 8,14 16,6" />
         </svg>
@@ -142,12 +154,12 @@
     </div>
   </section>
 {/if}
-{#if feedback}
-  <div class="brightness-feedback" role="status" aria-live="polite">
-    <span>{feedback}</span>
-    {#if !pending}<button type="button" class="suggestion-btn" on:click={() => feedback = ''}>Close</button>{/if}
+{#each receipts as receipt (receipt.id)}
+  <div class="brightness-feedback" role="status" aria-live="polite" aria-label={'Brightness suggestion #' + receipt.id}>
+    <span>Suggestion #{receipt.id}: {receipt.message}</span>
+    {#if receipt.complete}<button type="button" class="suggestion-btn" aria-label={'Close suggestion #' + receipt.id + ' result'} on:click={() => receipts = receipts.filter(row => row.id !== receipt.id)}>Close</button>{/if}
   </div>
-{/if}
+{/each}
 
 <style>
   .brightness-feedback {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px;color:var(--text-primary);font-size:13px;line-height:1.5;}
