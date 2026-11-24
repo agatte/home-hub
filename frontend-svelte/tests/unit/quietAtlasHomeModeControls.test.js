@@ -1,57 +1,69 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { compile } from 'svelte/compiler'
+import { render, fireEvent, cleanup } from '@testing-library/svelte'
+import { tick } from 'svelte'
 import home from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
 import panel from '../../src/lib/components/QuietAtlasHomeModeControls.svelte?raw'
+import ModeControls from '../../src/lib/components/QuietAtlasHomeModeControls.svelte'
 import classic from '../../src/routes/classic/+page.svelte?raw'
 import storeActions from '../../src/lib/stores/init.js?raw'
+import { connected } from '../../src/lib/stores/connection.js'
+import { automation, initialAutomationState } from '../../src/lib/stores/automation.js'
+import { setManualMode } from '../../src/lib/stores/init.js'
 
-describe('#461 redesigned Home mode recovery', () => {
-  it('restores mode controls to default Home without replacing the functional Classic fallback', () => {
-    expect(home).toContain("import QuietAtlasHomeModeControls from '$lib/components/QuietAtlasHomeModeControls.svelte'")
+vi.mock('../../src/lib/stores/init.js', () => ({ setManualMode: vi.fn(async () => 'acknowledged') }))
+const report = (house_state = 'home', mode = 'working', override_user_owned = false) =>
+  automation.set({ ...initialAutomationState, house_state, mode, override_user_owned })
+beforeEach(() => { vi.clearAllMocks(); connected.set(true); report() })
+afterEach(() => { cleanup(); connected.set(false); automation.set(initialAutomationState) })
+
+describe('#461 direct Home mode tiles', () => {
+  it('preserves the established authenticated writer and all modes', () => {
     expect(home).toContain('<QuietAtlasHomeModeControls />')
     expect(classic).toContain('<ModeCardDeck />')
-  })
-
-  it('offers Auto and every existing manual mode through the established authenticated endpoint', () => {
-    expect(panel).toContain("import { setManualMode } from '$lib/stores/init.js'")
-    expect(panel).toContain("requestMode('auto')")
     expect(panel).toContain('setManualMode(mode)')
-    for (const [mode, label] of [
-      ['relax', 'Relax'], ['working', 'Working'], ['watching', 'Watching'],
-      ['gaming', 'Gaming'], ['cooking', 'Cooking'], ['social', 'Party'],
-      ['sleeping', 'Sleep'],
-    ]) {
-      expect(panel).toContain("{ id: '" + mode + "', label: '" + label + "' }")
-    }
     expect(storeActions).toContain("apiPost('/api/automation/override', { mode })")
     expect(panel).not.toContain('setLight(')
     expect(panel).not.toContain('light_command')
+    expect(panel).not.toContain('<select')
+    expect(panel).not.toContain('<details')
+    expect(compile(panel, { filename:'QuietAtlasHomeModeControls.svelte',generate:'dom',css:'external' }).warnings).toEqual([])
   })
-
-  it('fails closed without connected house state and requires explicit confirmation from Away or Sleeping', () => {
-    expect(panel).toContain("$connected && KNOWN_HOUSE_STATES.includes($automation.house_state ?? '')")
-    expect(panel).toContain("const sensitiveAction = $automation.house_state === 'sleeping' || $automation.house_state === 'away'")
-    expect(panel).toContain('sensitiveAction && armedMode !== mode')
-    expect(panel).toContain('armedMode = null')
-    expect(panel).toContain('disabled={!canChange || pending}')
-    expect(panel).toContain('disabled={!canChange || pending || !selectedMode}')
-    expect(panel).toContain('Change unconfirmed.')
-    expect(panel).not.toContain('window.confirm(')
+  it('offers eight direct buttons, sends no action on mount and never marks an acknowledgement as a reported mode', async () => {
+    const view = render(ModeControls)
+    for (const label of ['Relax','Working','Watching','Gaming','Cooking','Party','Sleep','Return to Auto']) expect(view.getByRole('button',{name:label})).toBeTruthy()
+    expect(setManualMode).not.toHaveBeenCalled()
+    expect(view.getByRole('button',{name:'Return to Auto'}).getAttribute('aria-pressed')).toBe('true')
+    await fireEvent.click(view.getByRole('button',{name:'Gaming'}))
+    expect(setManualMode).toHaveBeenCalledOnce()
+    expect(setManualMode).toHaveBeenCalledWith('gaming')
+    expect(view.getByRole('button',{name:'Gaming'}).getAttribute('aria-pressed')).toBe('false')
+    report('home','gaming',true); await tick()
+    expect(view.getByRole('button',{name:'Gaming'}).getAttribute('aria-pressed')).toBe('true')
   })
-
-  it('keeps reported mode and Auto visible while disclosing manual choices', () => {
-    const picker = panel.indexOf('<details class="mode-picker">')
-    expect(picker).toBeGreaterThan(panel.indexOf('class="reported-mode"'))
-    expect(picker).toBeGreaterThan(panel.indexOf("requestMode('auto')"))
-    expect(panel).toContain('<summary>Change mode</summary>')
-    expect(panel.indexOf('id="home-mode-choice"')).toBeGreaterThan(picker)
-    expect(panel.indexOf('requestMode(selectedMode)')).toBeGreaterThan(picker)
-    expect(panel.indexOf('role="status" aria-live="polite"')).toBeGreaterThan(panel.indexOf('</details>'))
+  it.each(['away','sleeping'])('requires a separate explicit confirmation from %s; double tap is not enough', async state => {
+    report(state)
+    const view=render(ModeControls)
+    const auto=view.getByRole('button',{name:'Return to Auto'})
+    await fireEvent.click(auto); await fireEvent.click(auto)
+    expect(setManualMode).not.toHaveBeenCalled()
+    await fireEvent.click(view.getByRole('button',{name:'Confirm Auto'}))
+    expect(setManualMode).toHaveBeenCalledOnce()
+    expect(setManualMode).toHaveBeenCalledWith('auto')
   })
-
-  it('compiles without Svelte accessibility warnings', () => {
-    expect(compile(panel, {
-      filename: 'QuietAtlasHomeModeControls.svelte', generate: 'dom', css: 'external',
-    }).warnings).toEqual([])
+  it('requires deliberate Sleep confirmation and cancels on disconnect or house-state change', async () => {
+    const view=render(ModeControls)
+    await fireEvent.click(view.getByRole('button',{name:'Sleep'}))
+    expect(setManualMode).not.toHaveBeenCalled()
+    await fireEvent.click(view.getByRole('button',{name:'Cancel'}))
+    expect(view.queryByRole('button',{name:'Confirm Sleep'})).toBeNull()
+    await fireEvent.click(view.getByRole('button',{name:'Sleep'}))
+    report('away'); await tick()
+    expect(view.queryByRole('button',{name:'Confirm Sleep'})).toBeNull()
+    await fireEvent.click(view.getByRole('button',{name:'Gaming'}))
+    connected.set(false); await tick()
+    expect(view.queryByRole('button',{name:'Confirm Gaming'})).toBeNull()
+    expect(view.getByRole('button',{name:'Gaming'}).hasAttribute('disabled')).toBe(true)
+    expect(setManualMode).not.toHaveBeenCalled()
   })
 })
