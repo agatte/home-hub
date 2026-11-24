@@ -135,16 +135,14 @@
       {#if visible.length}
         <div class="scene-grid">
           {#each shown as scene (scene.key)}
-            <article class="scene" style:background={sceneCardBackground(scene.palette) || null}>
+            <article class="scene" style:background={sceneCardBackground(scene.palette) || null} class:colored={scene.palette.length > 0}>
+              {#if scene.palette.length}
+                <div class="palette" aria-hidden="true" style:background={`linear-gradient(110deg, ${[...scene.palette, ...(scene.palette.length === 1 ? scene.palette : [])].join(', ')})`}></div>
+              {/if}
               <div class="scene-heading">
                 <h3>{scene.name}</h3>
                 <p>{scene.source === 'preset' ? (scene.category || 'Curated') : scene.source === 'bridge' ? 'Hue bridge' : 'Custom scene'}</p>
               </div>
-              {#if scene.palette.length}
-                <div class="palette" aria-hidden="true">
-                  {#each scene.palette as color (color)}<span style:background={color}></span>{/each}
-                </div>
-              {/if}
               {#if scene.variants.length > 1}
                 <details class="variants">
                   <summary>{scene.variants.length} Hue versions</summary>
@@ -211,7 +209,11 @@
   .scene-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start;}
   .scene{display:flex;flex-direction:column;gap:8px;border:1px solid #536956;border-radius:14px;padding:12px;background:#213127;min-width:0;box-sizing:border-box;}
   .scene h3{font-size:15px;margin:0 0 4px;overflow-wrap:anywhere;}.scene p{font-size:12px;color:#d4dcd0;text-transform:capitalize;margin:0;}
-  .palette{display:flex;gap:3px;height:5px;overflow:hidden;border-radius:3px;}.palette span{flex:1;min-width:0;}
+  .palette{height:9px;border-radius:5px;opacity:.95;box-shadow:0 3px 14px rgba(0,0,0,.18);}
+  .scene.colored{border-color:rgba(235,235,235,.25);}
+  .scene .scene-review{background:rgba(12,15,19,.72);border-color:rgba(235,235,235,.32);color:#f1f1ee;}
+  .scene .scene-review:hover:not(:disabled){background:rgba(12,15,19,.88);border-color:rgba(235,235,235,.60);}
+  .scene.colored p{color:#e3e4e0;}
   .variants{min-width:0;}.variants summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:12px;color:#e6ece2;}.variants summary::before{content:'▸';margin-right:6px;}.variants[open] summary::before{content:'▾';}
   .variant{display:flex;justify-content:space-between;gap:4px;width:100%;margin-top:5px;overflow-wrap:anywhere;}
   .show-more{display:block;width:100%;margin-top:10px;min-height:44px;border:1px solid #719479;border-radius:10px;background:#253b2d;color:#ecf1e5;font:inherit;font-size:13px;cursor:pointer;}

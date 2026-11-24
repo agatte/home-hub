@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sceneCards, scenePalette, sceneCardBackground } from '../../src/lib/quietAtlas/sceneCards.js'
-import { ctToColor, hueToHsl } from '../../src/lib/utils/lightColor.js'
+import { sceneCards, scenePalette, sceneCardBackground, sceneTemperatureColor, sceneBackgroundForId } from '../../src/lib/quietAtlas/sceneCards.js'
 
 const preset = { id: 'deep_focus', display_name: 'Deep Focus', source: 'preset', category: 'functional', lights: {
   '1': { on: true, ct: 250 }, '2': { on: true, ct: 250 }, '3': { on: false, hue: 60000, sat: 254 },
@@ -10,11 +9,20 @@ const hue = (id, group_id) => ({ id, group_id, name: 'Ocean dawn', source: 'brid
 
 describe('Scene library presentation', () => {
   it('uses only valid, enabled saved fixture colors and removes repeats', () => {
-    expect(scenePalette(preset)).toEqual([ctToColor(250), hueToHsl(45000, 200, 220)])
-    expect(sceneCardBackground(scenePalette(preset))).toContain(ctToColor(250))
-    expect(sceneCardBackground(scenePalette(preset))).toContain(hueToHsl(45000, 200, 220))
+    expect(scenePalette(preset)).toEqual([sceneTemperatureColor(250), `hsl(${45000 / 65535 * 360}, ${200 / 254 * 100}%, 62%)`])
+    expect(sceneCardBackground(scenePalette(preset))).toContain(sceneTemperatureColor(250))
+    expect(sceneCardBackground(scenePalette(preset))).toContain(`hsl(${45000 / 65535 * 360}, ${200 / 254 * 100}%, 62%)`)
     expect(scenePalette(hue('scene-a', 'group-a'))).toEqual([])
     expect(sceneCardBackground([])).toBe('')
+  })
+  it('uses naturally warmer white temperatures and one shared shortcut gradient', () => {
+    const rgb = mirek => (sceneTemperatureColor(mirek).match(/\d+/g) ?? []).map(Number)
+    const cool = rgb(153), warm = rgb(500)
+    expect(warm[0]).toBeGreaterThanOrEqual(warm[1])
+    expect(warm[2]).toBeLessThan(cool[2])
+    expect(rgb(250)[1]).toBeGreaterThan(rgb(250)[2])
+    expect(sceneBackgroundForId([preset], preset.id)).toBe(sceneCardBackground(scenePalette(preset)))
+    expect(sceneBackgroundForId([preset], 'unknown')).toBe('')
   })
   it('groups Hue duplicate names but retains each independent target ID', () => {
     const cards = sceneCards([preset, hue('scene-a', 'group-a'), hue('scene-b', 'group-b')])

@@ -1,5 +1,17 @@
 import { filterScenes } from './lightingModel.js'
-import { ctToColor, hueToHsl } from '../utils/lightColor.js'
+
+
+/** Approximate saved white temperature as a display swatch, not a calibrated bulb measurement.
+ * @param {number} mirek
+ */
+export function sceneTemperatureColor(mirek) {
+  const t = 10000 / mirek // Kelvin / 100
+  const clamp = (n) => Math.round(Math.max(0, Math.min(255, n)))
+  const r = t <= 66 ? 255 : 329.698727446 * (t - 60) ** -0.1332047592
+  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * (t - 60) ** -0.0755148492
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307
+  return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b)})`
+}
 
 /** Saved colors only: no guesses for native Hue scenes without a manifest.
  * @param {any} raw
@@ -11,11 +23,11 @@ export function scenePalette(raw) {
   for (const state of Object.values(raw.lights)) {
     if (!state || state.on !== true) continue
     if (Number.isFinite(state.ct) && state.ct >= 153 && state.ct <= 500) {
-      colors.add(ctToColor(state.ct))
+      colors.add(sceneTemperatureColor(state.ct))
     } else if (Number.isFinite(state.hue) && state.hue >= 0 && state.hue <= 65535 &&
         Number.isFinite(state.sat) && state.sat >= 0 && state.sat <= 254) {
       // Display the declared hue rather than making very dim colors invisible.
-      colors.add(hueToHsl(state.hue, state.sat, 220))
+      colors.add(`hsl(${state.hue / 65535 * 360}, ${state.sat / 254 * 100}%, 62%)`)
     }
   }
   return [...colors].slice(0, 6)
@@ -54,5 +66,15 @@ export function sceneCards(input, filters = {}) {
 export function sceneCardBackground(palette) {
   if (!palette.length) return ''
   const colors = palette.length === 1 ? [palette[0], palette[0]] : palette
-  return 'linear-gradient(120deg, rgba(12,19,19,.78), rgba(12,19,19,.88)), linear-gradient(125deg, ' + colors.join(', ') + ')'
+  // Keep the lower controls on a dark base; let light bloom along the upper-right edge.
+  return 'linear-gradient(135deg, rgba(12,15,19,.76) 0%, rgba(12,15,19,.60) 48%, rgba(12,15,19,.72) 72%, rgba(12,15,19,.86) 100%), linear-gradient(115deg, ' + colors.join(', ') + ')'
+}
+
+/** Same saved-scene background for compact shortcuts and library cards.
+ * @param {unknown} input
+ * @param {string} id
+ */
+export function sceneBackgroundForId(input, id) {
+  const rows = Array.isArray(input) ? input : []
+  return sceneCardBackground(scenePalette(rows.find(row => row?.id === id)))
 }
