@@ -31,6 +31,25 @@ The ordered, live completion checklist is maintained in [#461](https://github.co
 
 Existing security, lighting authority, protected controls, scoped merge/deployment and real-device acceptance gates remain in force. This product decision grants no blanket approval for device writes or production changes.
 
+## Expressive, state-driven widget language — owner accepted 2026-11-24
+
+**DECIDED VISUAL DIRECTION:** A warm charcoal foundation, soft rounded surfaces, restrained warm-gold navigation and neutral controls. Color is a purposeful extension of the content: a small atmospheric preview rather than decoration. Owner accepted the stronger scene gradients (#553), cohesive shell (#554), and expressive weather/activity cards (#556). Shared tokens in `frontend-svelte/src/lib/styles/homehub-surface.css` are the implementation foundation.
+
+| Surface | Color direction / source |
+| --- | --- |
+| Saved scenes | Gradients from valid saved light colors; native Hue scenes without color metadata stay neutral. |
+| Weather | Reported HomeHub weather conditions and validated day/night icon: sunlit sky, midnight blue, cloud, rain, snow, storm and mist. Never imply station-observation freshness from response receipt. |
+| House State | Home: warm amber; Winding Down: sunset; Sleeping: midnight blue; Away: subdued slate. Separate from Activity and ownership; no inferred occupancy. |
+| Activity / current mode / recent history | Consistent sapphire Working, amethyst Gaming, indigo Watching, copper Cooking, jade Relax, rose Social; General neutral. Current mode ownership and recorded activity remain distinct. |
+| Room lighting | Use valid reported colors and brightness of reachable powered-on fixtures, including independent colors in the same room. Off, disconnected, incomplete or unsupported color data use neutral surfaces rather than fictional light. |
+| Music / Now Playing | Album-art-derived palette when real artwork is available; readable dark scrim and neutral transport controls. No fabricated track or art. |
+| Plant care | Botanical greens and earth tones; amber care-due cue grounded in actual schedule. Optional owner plant photos later. |
+| Home bar | Whiskey amber, burgundy and copper; actual drink-specific recipe accents where available. |
+| Routines | Sunrise, sunset and nighttime palettes based on configured schedule, not assumed execution. |
+| Settings / diagnostics | Mostly neutral; reserve semantic color for verified status, attention and actual failures. |
+
+Preserve readable text, explicit state labels, mobile target sizes and reduced motion. Unavailable or stale inputs must not continue to imply a current colored state. Palettes are presentation only, never inputs to automation, device actuation or authorization. Keep optional Daylight preview legible. Reuse the same palette across Home, Control and later functional surfaces; avoid repeating cosmetic-only migrations. Next bounded increment: Home house state, current mode and room lighting; thereafter functional Music, routines/household, settings and Insights, and eventual Classic retirement under #461.
+
 ## Design thesis
 
 HomeHub should feel like a **living instrument for the apartment**, not a collection of smart-home cards.
