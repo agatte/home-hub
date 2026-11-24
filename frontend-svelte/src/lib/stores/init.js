@@ -35,7 +35,64 @@ function resetSuggestions() {
   musicAutoPlayed.set(null)
 }
 
+// Restore only a fresh, still-pending record matching the reported context.
+// This read never grants command authority; all accept actions remain ID-scoped
+// and the server rechecks pending status (and brightness context).
+/** @param {any} result @param {{mode:string,time_period?:string}} context */
+function pendingSuggestionRows(result, context) {
+  const now = Date.now()
+  const rows = Array.isArray(result?.suggestions) ? result.suggestions.filter(row => {
+    const fired = Date.parse(row?.fired_at)
+    return row?.status === 'pending' && Number.isSafeInteger(row.id) && row.id > 0 &&
+      Number.isFinite(fired) && fired <= now && now - fired < 60 * 60 * 1000 &&
+      row.current_mode_at_fire === context.mode &&
+      Number.isInteger(row.confidence) && row.confidence >= 0 && row.confidence <= 100 &&
+      Number.isSafeInteger(row.sample_count) && row.sample_count > 0
+  }) : []
+  const mode = rows.find(row => row.kind === 'mode' &&
+    Number.isSafeInteger(row.rule_id) && row.rule_id > 0 &&
+    ['relax','working','watching','gaming','cooking','social'].includes(row.predicted_mode))
+  const brightness = rows.find(row => row.kind === 'brightness' &&
+    row.payload && typeof row.payload === 'object' &&
+    row.payload.mode === context.mode && typeof context.time_period === 'string' &&
+    row.payload.period === context.time_period)
+  return {
+    mode: mode ? {suggestion_id:mode.id,rule_id:mode.rule_id,predicted_mode:mode.predicted_mode,confidence:mode.confidence,sample_count:mode.sample_count,message:''} : null,
+    brightness: brightness ?? null,
+  }
+}
+
 export function initStores() {
+  let connectionEpoch = 0
+  let socketConnected = false
+  let restored = false
+  let modeEvents = 0
+  let brightnessEvents = 0
+  let liveContextKey = ''
+  let contextEpoch = 0
+
+  /** @param {any} data */
+  function restorePendingSuggestions(data) {
+    if (!socketConnected || !Object.hasOwn(data ?? {}, 'house_state') || typeof data.mode !== 'string') return
+    const key = JSON.stringify([data.house_state,data.mode,data.time_period])
+    if (liveContextKey !== key) { liveContextKey = key; contextEpoch += 1 }
+    if (restored || !['home','winding_down'].includes(data.house_state)) return
+    restored = true
+    const connection = connectionEpoch
+    const context = contextEpoch
+    // If this socket has already delivered an event of a kind, its event stream
+    // wins over a REST snapshot even if that event was a dismissal.
+    if (modeEvents > 0 && brightnessEvents > 0) return
+    apiGet('/api/rules/suggestions?status=pending&limit=20')
+      .then(result => {
+        if (!socketConnected || connectionEpoch !== connection || contextEpoch !== context) return
+        const rows = pendingSuggestionRows(result,data)
+        if (modeEvents === 0 && rows.mode) modeSuggestion.update(current => current ?? rows.mode)
+        if (brightnessEvents === 0 && rows.brightness) brightnessSuggestion.update(current => current ?? rows.brightness)
+      })
+      .catch(() => {})
+  }
+
   resetSuggestions()
   sonosLiveReport.set(null)
   resetAmbientContext()
@@ -104,6 +161,7 @@ export function initStores() {
           modeUpdateEpoch += 1
           receiveAmbientContext(data)
           automation.update((prev) => mergeAutomationUpdate(prev, data))
+          restorePendingSuggestions(data)
           break
         case 'dnd_update':
           automation.update((prev) => ({
@@ -122,16 +180,20 @@ export function initStores() {
           showMusicAutoPlayed(data)
           break
         case 'mode_suggestion':
+          modeEvents += 1
           showModeSuggestion(data)
           break
         case 'mode_suggestion_dismissed':
+          modeEvents += 1
           if (Number.isSafeInteger(data?.id)) modeSuggestion.update(current => current?.suggestion_id === data.id ? null : current)
           else if (data?.id == null) dismissModeSuggestion()
           break
         case 'brightness_suggestion':
+          brightnessEvents += 1
           showBrightnessSuggestion(data)
           break
         case 'brightness_suggestion_dismissed':
+          brightnessEvents += 1
           if (Number.isSafeInteger(data?.id)) brightnessSuggestion.update(current => current?.id === data.id ? null : current)
           else if (data?.id == null) dismissBrightnessSuggestion()
           break
@@ -153,6 +215,13 @@ export function initStores() {
       }
     },
     (isConnected) => {
+      connectionEpoch += 1
+      socketConnected = isConnected
+      restored = false
+      modeEvents = 0
+      brightnessEvents = 0
+      liveContextKey = ''
+      contextEpoch += 1
       resetSuggestions()
       sonosLiveReport.set(null)
       resetAmbientContext()
@@ -166,6 +235,8 @@ export function initStores() {
   socket.connect()
 
   return () => {
+    connectionEpoch += 1
+    socketConnected = false
     resetSuggestions()
     sonosLiveReport.set(null)
     resetAmbientContext()

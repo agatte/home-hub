@@ -9,14 +9,14 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 const store = value => ({ value, set(v) { this.value = v }, update(f) { this.value = f(this.value) } })
 function setup() {
   const automation = store({ mode: 'home', manual_override: false }), sonos = store({ volume: 20 })
-  const initial = deferred(), initialSonos = deferred(), posts = [], gets = [], sends = []
+  const initial = deferred(), initialSonos = deferred(), posts = [], gets = [], sends = [], pendingReads = []
   const sonosLiveReport = store(null)
   const modeSuggestion = store(null), brightnessSuggestion = store(null)
   let ws, sendOK = true
   class HubSocket { constructor(onMessage, onConnection) { ws = { onMessage, onConnection } } connect() {} close() {} send(type, data) { sends.push({ type, data }); return sendOK } }
   const noop = () => {}, dummy = store({})
   const ctx = { HubSocket, automation, sonos, sonosLiveReport, console: { error: noop, warn: noop },
-    apiGet: path => { if (path === '/api/sonos/status') return initialSonos.promise; if (path === '/api/automation/status') { const d = gets.length ? deferred() : initial; gets.push(d); return d.promise } return Promise.resolve({}) },
+    apiGet: path => { if (path === '/api/rules/suggestions?status=pending&limit=20') { const d=deferred(); pendingReads.push(d); return d.promise } if (path === '/api/sonos/status') return initialSonos.promise; if (path === '/api/automation/status') { const d = gets.length ? deferred() : initial; gets.push(d); return d.promise } return Promise.resolve({}) },
     apiPost: () => { const d = deferred(); posts.push(d); return d.promise }, apiDelete: noop,
     automationStateFromStatus: x => ({ mode: x.current_mode, manual_override: x.manual_override }),
     mergeAutomationUpdate: (prev, data) => ({ ...prev, ...data }),
@@ -25,8 +25,8 @@ function setup() {
     receiveAmbientContext: noop, resetAmbientContext: noop, modeSuggestion, brightnessSuggestion, showModeSuggestion: v => modeSuggestion.set(v), showBrightnessSuggestion: v => brightnessSuggestion.set(v), dismissModeSuggestion: () => modeSuggestion.set(null), dismissBrightnessSuggestion: () => brightnessSuggestion.set(null), dismissMusicSuggestion: noop, musicAutoPlayed: {set: noop}, setLightsFromList: noop, applyLightUpdate: noop,
     startWeatherPolling: noop, stopWeatherPolling: noop }
   const api = runInNewContext(`${source}\n;({initStores, setManualMode, sonosCommand})`, ctx)
-  api.initStores()
-  return { ...api, automation, sonos, sonosLiveReport, modeSuggestion, brightnessSuggestion, initialSonos, initial, posts, gets, sends, ws, setSendOK: v => { sendOK = v } }
+  const destroy=api.initStores()
+  return { ...api,destroy,pendingReads, automation, sonos, sonosLiveReport, modeSuggestion, brightnessSuggestion, initialSonos, initial, posts, gets, sends, ws, setSendOK: v => { sendOK = v } }
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -111,5 +111,63 @@ test('older brightness resolution cannot clear a newer suggestion', () => {
   h.ws.onMessage({type:'brightness_suggestion_dismissed',data:{id:17}})
   assert.equal(h.brightnessSuggestion.value.id,18)
   h.ws.onMessage({type:'brightness_suggestion_dismissed',data:{id:18}})
+  assert.equal(h.brightnessSuggestion.value,null)
+})
+
+const live = (h, mode='working', house_state='home') => h.ws.onMessage({type:'mode_update',data:{house_state,mode,time_period:'day'}})
+const pendingRows = () => ({suggestions:[
+  {id:71,kind:'mode',status:'pending',rule_id:4,predicted_mode:'gaming',current_mode_at_fire:'working',confidence:85,sample_count:9,fired_at:new Date().toISOString()},
+  {id:72,kind:'brightness',status:'pending',current_mode_at_fire:'working',confidence:70,sample_count:8,fired_at:new Date().toISOString(),payload:{mode:'working',period:'day',light_id:'1',suggested_bri:120}}
+]})
+
+test('fresh pending suggestions restore only after a live awake report; no action sent', async()=>{
+  const h=setup()
+  h.ws.onConnection(true)
+  assert.equal(h.pendingReads.length,0)
+  live(h,'working','sleeping')
+  assert.equal(h.pendingReads.length,0)
+  live(h)
+  assert.equal(h.pendingReads.length,1)
+  live(h)
+  assert.equal(h.pendingReads.length,1)
+  h.pendingReads[0].resolve(pendingRows());await tick()
+  assert.equal(h.modeSuggestion.value.suggestion_id,71)
+  assert.equal(h.brightnessSuggestion.value.id,72)
+  assert.equal(h.posts.length,0)
+})
+
+test('pending read never overwrites later events or resurrects dismissed cards', async()=>{
+  const h=setup()
+  h.ws.onConnection(true);live(h)
+  h.ws.onMessage({type:'mode_suggestion',data:{suggestion_id:90}})
+  h.ws.onMessage({type:'brightness_suggestion_dismissed',data:{id:72}})
+  h.pendingReads[0].resolve(pendingRows());await tick()
+  assert.equal(h.modeSuggestion.value.suggestion_id,90)
+  assert.equal(h.brightnessSuggestion.value,null)
+})
+
+test('connection, context and cleanup fence delayed pending reads', async()=>{
+  const h=setup()
+  h.ws.onConnection(true);live(h)
+  h.ws.onConnection(false);h.ws.onConnection(true);live(h)
+  h.pendingReads[0].resolve(pendingRows());await tick()
+  assert.equal(h.modeSuggestion.value,null)
+  live(h,'gaming')
+  h.pendingReads[1].resolve(pendingRows());await tick()
+  assert.equal(h.brightnessSuggestion.value,null)
+  h.ws.onConnection(false);h.ws.onConnection(true);live(h)
+  h.destroy()
+  h.pendingReads[2].resolve(pendingRows());await tick()
+  assert.equal(h.modeSuggestion.value,null)
+})
+
+test('expired or mismatched pending records are not restored', async()=>{
+  const h=setup()
+  h.ws.onConnection(true);live(h)
+  const rows=pendingRows()
+  rows.suggestions[0].fired_at=new Date(Date.now()-61*60*1000).toISOString()
+  rows.suggestions[1].payload.period='night'
+  h.pendingReads[0].resolve(rows);await tick()
+  assert.equal(h.modeSuggestion.value,null)
   assert.equal(h.brightnessSuggestion.value,null)
 })
