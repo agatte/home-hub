@@ -135,3 +135,15 @@ async def test_uncertain_mutation_does_not_enable_boot_shortcut():
     assert not await manager.reconcile(None, establish_safety=AsyncMock(return_value=False))
     assert not manager.authority_known
     hue._client.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_mapping_cannot_certify_unmapped_owner_fixtures():
+    hue = bridge([fixture(lid) for lid in sorted(IDS - {"6"})])
+    hue._v1_to_v2.pop("6")
+    manager = EffectManager(hue, transition_boundary=LightingTransitionBoundary(None))
+    safety = AsyncMock(return_value=False)
+    assert not await manager.reconcile(None, establish_safety=safety)
+    assert not manager.authority_known
+    hue._client.get.assert_not_called()
+    hue._client.put.assert_not_called()
