@@ -104,3 +104,12 @@ test('ID-specific dismissals preserve newer suggestions and reconnect invalidate
   h.ws.onConnection(true)
   assert.equal(h.modeSuggestion.value,null)
 })
+
+test('older brightness resolution cannot clear a newer suggestion', () => {
+  const h=setup()
+  h.ws.onMessage({type:'brightness_suggestion',data:{id:18}})
+  h.ws.onMessage({type:'brightness_suggestion_dismissed',data:{id:17}})
+  assert.equal(h.brightnessSuggestion.value.id,18)
+  h.ws.onMessage({type:'brightness_suggestion_dismissed',data:{id:18}})
+  assert.equal(h.brightnessSuggestion.value,null)
+})

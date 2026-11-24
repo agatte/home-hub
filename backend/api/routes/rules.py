@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.api.auth import require_api_key
+from backend.services.light_state_calculator import ALL_LIGHT_IDS
+from backend.services.ws_manual_light_guard import dispatch_manual_light
 
 logger = logging.getLogger("home_hub.rules")
 
@@ -30,47 +32,76 @@ class RuleUpdate(BaseModel):
 
 
 def _brightness_targets(payload: dict) -> dict[str, int]:
-    """Normalize old per-light and new room-level payloads to light targets."""
-    raw_targets = payload.get("light_targets")
-    if isinstance(raw_targets, dict) and raw_targets:
-        return {str(light_id): int(bri) for light_id, bri in raw_targets.items()}
-    if "light_id" in payload and "suggested_bri" in payload:
-        return {str(payload["light_id"]): int(payload["suggested_bri"])}
-    return {}
-
+    """Validate the entire suggestion before saving or dispatching any target."""
+    if not isinstance(payload, dict):
+        raise ValueError("invalid brightness payload")
+    raw = payload.get("light_targets")
+    if raw is None:
+        raw = {str(payload["light_id"]): payload["suggested_bri"]} if (
+            "light_id" in payload and "suggested_bri" in payload
+        ) else {}
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError("missing brightness targets")
+    if any(
+        type(light_id) is not str or light_id not in ALL_LIGHT_IDS
+        or type(bri) is not int or not 1 <= bri <= 254
+        for light_id, bri in raw.items()
+    ):
+        raise ValueError("invalid brightness target")
+    if any(not isinstance(payload.get(key), str) or not payload[key]
+           for key in ("mode", "period", "weather_class")):
+        raise ValueError("missing brightness context")
+    return dict(raw)
 
 
 async def _apply_brightness_targets_now(
     request: Request,
     targets: dict[str, int],
-) -> list[dict]:
+    context_valid,
+) -> dict:
+    """Reuse the manual writer, including its final lease and owner fences."""
     hue = getattr(request.app.state, "hue", None)
-    if hue is None or not targets:
-        return []
     automation = getattr(request.app.state, "automation", None)
     event_logger = getattr(request.app.state, "event_logger", None)
-    before_lights = {l["light_id"]: l for l in await hue.get_all_lights()}
     applied: list[dict] = []
+    blocked: list[str] = []
+    unavailable: list[str] = []
+    uncertain: list[str] = []
     for light_id, bri in targets.items():
-        state = {"bri": max(1, min(254, int(bri)))}
-        ok = await hue.set_light(light_id, state)
-        if not ok:
-            continue
-        if automation:
-            automation.mark_light_manual(str(light_id))
-            await automation.persist_manual_light_ownership()
-        applied.append({"light_id": light_id, "bri": state["bri"]})
-        if event_logger:
-            before = before_lights.get(light_id) or {}
-            await event_logger.log_light_adjustment(
-                light_id=str(light_id),
-                light_name=before.get("name"),
-                bri_before=before.get("bri"),
-                bri_after=state["bri"],
-                mode_at_time=automation.current_mode if automation else None,
-                trigger="brightness_suggestion_accept",
+        state = {"bri": bri}
+        try:
+            result = await dispatch_manual_light(
+                automation, hue, light_id, state, context_valid=context_valid,
             )
-    return applied
+        except Exception:
+            # An unexpected failure must not invite retry of a possibly sent write.
+            logger.exception("Brightness suggestion dispatch outcome unknown")
+            uncertain.append(light_id)
+            continue
+        if result.status != "acknowledged":
+            if result.status == "denied":
+                blocked.append(light_id)
+            elif result.status == "unavailable":
+                unavailable.append(light_id)
+            else:
+                uncertain.append(light_id)
+            continue
+        applied.append({"light_id": light_id, "bri": bri})
+        if event_logger:
+            before = result.before or {}
+            try:
+                await event_logger.log_light_adjustment(
+                    light_id=light_id,
+                    light_name=before.get("name"),
+                    bri_before=before.get("bri"),
+                    bri_after=bri,
+                    mode_at_time=automation.current_mode if automation else None,
+                    trigger="brightness_suggestion_accept",
+                )
+            except Exception:
+                logger.warning("Brightness suggestion event log unavailable")
+    return {"applied_now": applied, "blocked": blocked,
+            "unavailable": unavailable, "uncertain": uncertain}
 
 
 @router.get("/")
@@ -224,52 +255,65 @@ async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
     already-resolved between push and click — UI handles silently.
     """
     service = _get_service(request)
+    learner = getattr(request.app.state, "lighting_learner", None)
+    if learner is None:
+        raise HTTPException(status_code=503, detail="Lighting learner unavailable")
     remote = getattr(request.client, "host", None) or "unknown"
     resolved = await service.accept_brightness_suggestion(
         suggestion_id=sid, remote=remote,
     )
     if not resolved:
-        raise HTTPException(
-            status_code=410, detail="suggestion no longer pending",
-        )
-    if resolved.get("status") == "expired":
-        raise HTTPException(
-            status_code=410, detail="suggestion context no longer active",
-        )
+        raise HTTPException(status_code=410, detail="suggestion no longer pending")
+    if resolved.get("status") != "accepted":
+        raise HTTPException(status_code=410, detail="suggestion context no longer active")
 
-    learner = getattr(request.app.state, "lighting_learner", None)
     payload = resolved.get("payload", {})
-    targets = _brightness_targets(payload)
-    if learner and payload and targets:
-        try:
-            for light_id, bri in targets.items():
-                await learner.write_learned_pref(
-                    light_id=str(light_id),
-                    mode=payload["mode"],
-                    time_period=payload["period"],
-                    weather_class=payload["weather_class"],
-                    bri=int(bri),
-                    zone_at_time=payload.get("zone_at_time"),
-                )
-        except Exception as exc:
-            # Resolution row is already accepted; surface a 500 so the
-            # caller can retry but log enough context to diagnose.
-            raise HTTPException(
-                status_code=500,
-                detail=f"learner write failed: {exc}",
-            )
+    try:
+        targets = _brightness_targets(payload)
+    except (TypeError, ValueError):
+        # The suggestion has already been resolved. Do not retry or learn
+        # a partial invalid target list.
+        raise HTTPException(status_code=409, detail="Resolved suggestion has invalid targets; no lighting request sent") from None
 
-    applied_now = []
-    if targets:
+    saved: list[str] = []
+    preference_uncertain: list[str] = []
+    preference_not_attempted: list[str] = []
+    for light_id, bri in targets.items():
+        if preference_uncertain:
+            preference_not_attempted.append(light_id)
+            continue
         try:
-            applied_now = await _apply_brightness_targets_now(request, targets)
-        except Exception as exc:
-            logger.exception("brightness suggestion immediate apply failed")
-            raise HTTPException(
-                status_code=500,
-                detail=f"immediate apply failed: {exc}",
+            await learner.write_learned_pref(
+                light_id=light_id, mode=payload["mode"],
+                time_period=payload["period"], weather_class=payload["weather_class"],
+                bri=bri, zone_at_time=payload.get("zone_at_time"),
             )
-    return {"status": "ok", "applied": payload, "applied_now": applied_now}
+            saved.append(light_id)
+        except Exception:
+            # Persistence can fail after a partial disk/in-memory change.
+            # The resolved row is not retryable; stop and report uncertainty.
+            logger.exception("Brightness suggestion preference write uncertain")
+            preference_uncertain.append(light_id)
+
+    if preference_uncertain:
+        return {
+            "status": "partial_failure", "applied": payload, "applied_now": [],
+            "blocked": [], "unavailable": [], "uncertain": [],
+            "not_attempted": list(targets),
+            "preference_saved": saved, "preference_uncertain": preference_uncertain,
+            "preference_not_attempted": preference_not_attempted,
+        }
+
+    result = await _apply_brightness_targets_now(
+        request, targets, lambda: service.brightness_context_matches(payload),
+    )
+    partial = any(result[key] for key in ("blocked", "unavailable", "uncertain"))
+    return {
+        "status": "partial_failure" if partial else "ok",
+        "applied": payload, **result, "not_attempted": [],
+        "preference_saved": saved, "preference_uncertain": [],
+        "preference_not_attempted": [],
+    }
 
 
 @router.post(
