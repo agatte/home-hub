@@ -47,6 +47,12 @@ describe('Home parity actions',()=>{
     expect(apiPost).not.toHaveBeenCalled();expect(playFavorite).not.toHaveBeenCalled()
   })
   const lightSuggestion=(id=12)=>({id,kind:'brightness',confidence:80,sample_count:8,payload:{mode:'working',period:'day',weather_class:'clear',light_id:'1',suggested_bri:100,sample_count:8}})
+  it('hides malformed brightness suggestions rather than offering an invalid action',()=>{
+    brightnessSuggestion.set({...lightSuggestion(),payload:{...lightSuggestion().payload,light_targets:{'999':100}}})
+    const v=render(Suggestions)
+    expect(v.queryByRole('button',{name:'Save preference'})).toBeNull()
+    expect(apiPost).not.toHaveBeenCalled()
+  })
   it('requires guarded Hue capability for brightness acceptance',()=>{
     brightnessSuggestion.set(lightSuggestion())
     deviceStatus.set({hue:true,sonos:true,light_command_results:false})

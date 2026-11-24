@@ -1,5 +1,6 @@
 <script>
   import { apiPost } from '$lib/api.js'
+  import { validBrightnessSuggestion, validModeSuggestion } from '$lib/quietAtlas/suggestionValidation.js'
   import { brightnessAcceptanceFeedback } from '$lib/quietAtlas/brightnessAcceptanceFeedback.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { ambientContext } from '$lib/quietAtlas/ambient.js'
@@ -27,8 +28,8 @@
   }
   // Require house-state evidence received on the current connection.
   $: available = $connected && ['home','winding_down'].includes($ambientContext?.house_state ?? '')
-  $: mode = available && $modeSuggestion && Number.isSafeInteger($modeSuggestion.suggestion_id) && $modeSuggestion.suggestion_id > 0 && Object.hasOwn(MODES, $modeSuggestion.predicted_mode) ? $modeSuggestion : null
-  $: brightness = available && $brightnessSuggestion && Number.isSafeInteger($brightnessSuggestion.id) && $brightnessSuggestion.id > 0 && $brightnessSuggestion.payload ? $brightnessSuggestion : null
+  $: mode = available && $modeSuggestion && validModeSuggestion($modeSuggestion) ? $modeSuggestion : null
+  $: brightness = available && $brightnessSuggestion && validBrightnessSuggestion($brightnessSuggestion) ? $brightnessSuggestion : null
   $: canAcceptBrightness = available && $deviceStatus.hue === true && $deviceStatus.light_command_results === true
   $: music = available && $deviceStatus.sonos && $musicSuggestion && typeof $musicSuggestion.title === 'string' && $musicSuggestion.title.trim() ? $musicSuggestion : null
 
