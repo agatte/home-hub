@@ -32,7 +32,7 @@ describe('Quiet Atlas phone-first read-only Control browse (#461)', () => {
     expect(scenes).toContain('.filter((element) => element instanceof HTMLElement)')
     expect(scenes).toContain('element.getClientRects().length > 0')
     expect(scenes).toContain('.filters { display:none; }')
-    expect(scenes).toContain('.scene-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }')
+    expect(scenes).toContain('.scene-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }')
     expect(scenes).toContain('.scene-review { min-height:44px; width:100%;')
     expect(scenes).toContain('sceneCards(sceneList, { category, search })')
     expect(scenes).toContain('@media(max-width:350px){.scene-grid{grid-template-columns:minmax(0,1fr);}}')
