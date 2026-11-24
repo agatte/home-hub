@@ -20,7 +20,7 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
       expect(lightingDetailHref(id, 'home')).toBe('/quiet-atlas/lighting/' + id + '?from=home')
       expect(parse('group=' + id)).toBe('group:' + id) // old bookmarked links
       expect(isKnownLightingGroup(id)).toBe(true)
-      expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/' + id)).toBe(true)
+      expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/lighting/' + id)).toBe(false)
     }
     // Extra fixtures already appear as a read-only Control card; it must open.
     const other = buildLightingOverview({
@@ -85,6 +85,7 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(experience).not.toContain('<QuietAtlasGroupSheet')
     expect(detail).toContain('class="return-link" href={returnHref}')
     expect(detail).toContain('lightingDetailOrigin($page.url.searchParams)')
+    expect(detail).toContain('<QuietAtlasRoomControls room={roomId} id="detail-live" compact={true} />')
     expect(detail).toContain('<QuietAtlasGroupSheet inline={true} group={room}')
     const refreshCode = detail.slice(detail.indexOf('async function refresh()'), detail.indexOf('function onConnectionChanged('))
     expect(refreshCode).toContain('beginLightRead(snapshot)')

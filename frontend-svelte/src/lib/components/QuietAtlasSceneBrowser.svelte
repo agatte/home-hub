@@ -2,11 +2,15 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { filterScenes, normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
   import { reviewSceneDraft } from '$lib/quietAtlas/controlDraft.js'
+  import QuietAtlasSceneApply from './QuietAtlasSceneApply.svelte'
 
   export let sceneList = []
   export let loading = false
   export let error = ''
   export let connected = false
+  export let functional = false
+  export let onApplied = () => {}
+  let applying = false
   /** @type {string | null} */
   export let selectedSceneId = null
   export let onClose = () => {}
@@ -57,7 +61,7 @@
   onMount(() => {
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const selected = normalizeSceneList(sceneList).find((s) => s.id === selectedSceneId)
-    if (selected) { search = selected.name; category = 'all' }
+    if (selected) { search = selected.name; category = 'all'; if (functional) requestedReviewId = selected.id }
     closeButton?.focus()
   })
   onDestroy(() => { if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus() })
@@ -68,7 +72,7 @@
   <button class="scrim" aria-label="Close preset library" on:click={onClose} type="button"></button>
   <section bind:this={panel} class="browser" role="dialog" aria-modal="true" aria-label="Lighting preset library">
     <header><div><p class="eyebrow">LIGHTING · LIBRARY</p><h2>All presets</h2></div><button bind:this={closeButton} class="close" type="button" on:click={onClose} aria-label="Close preset library">✕</button></header>
-    <p class="copy">Browse scenes reported by HomeHub. This read-only preview cannot apply them.</p>
+    <p class="copy">{functional ? 'Choose a scene, then apply it to your lights.' : 'Browse scenes reported by HomeHub. This read-only preview cannot apply them.'}</p>
     {#if !connected}<p class="warning" role="status">HomeHub is disconnected. Previously fetched scenes may be stale.</p>{/if}
     <label for="qa-scene-search">Search scenes</label>
     <input id="qa-scene-search" class="search" type="search" bind:value={search} placeholder="Name of a scene" />
@@ -92,8 +96,8 @@
             <article class="scene">
               <h3>{scene.name}</h3>
               <p>{scene.source === 'preset' ? (scene.category || 'Curated') : scene.source === 'bridge' ? 'Hue bridge · freshness unverified' : 'Custom scene'}</p>
-              <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error}
-                on:click={() => requestedReviewId = scene.id}>Review preset impact</button>
+              <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error || applying}
+                on:click={async () => { requestedReviewId = scene.id; await tick(); panel?.querySelector('.review-panel')?.scrollIntoView({block:'nearest'}) }}>{functional ? 'Choose scene' : 'Review preset impact'}</button>
             </article>
           {/each}
         </div>
@@ -101,7 +105,7 @@
     {/if}
     {#if reviewedScene}
       <div class="review-panel" role="status">
-        <strong>{reviewedScene.name} · review only</strong>
+        <strong>{reviewedScene.name}{functional ? '' : ' · review only'}</strong>
         <p>{reviewedScene.description}</p>
         {#if reviewedScene.declaredTargets}
           <div class="declared-scope">
@@ -113,11 +117,16 @@
             </ul>
           </div>
         {/if}
-        <p>These are saved targets, not measured fixture states or guaranteed applied results. HomeHub's protected-light, scene and effect rules may change the final outcome. Activation requires the separately reviewed safety path. No scene command has been sent.</p>
-        <button type="button" on:click={dismissSceneReview}>Dismiss review</button>
+        <p>These are saved targets, not measured fixture states or guaranteed applied results. HomeHub's protected-light, scene and effect rules may change the final outcome.{#if !functional} Activation requires the separately reviewed safety path. No scene command has been sent.{/if}</p>
+        <button type="button" disabled={applying} on:click={dismissSceneReview}>Dismiss review</button>
       </div>
     {/if}
-    <p class="footer-note">Scene activation, Try It/cancel, custom editing, and effects remain in the existing Control experience until reviewed separately. This preview sends no device commands.</p>
+    {#if functional}
+      <QuietAtlasSceneApply scene={reviewedScene} connected={connected && !loading && !error} bind:pending={applying} {onApplied} />
+      <p class="footer-note">Try It, custom scene editing and effects are not yet migrated. <a href="/classic#apartment-controls">Advanced scene tools (Classic)</a>.</p>
+    {:else}
+      <p class="footer-note">Scene activation, Try It/cancel, custom editing, and effects remain in the existing Control experience until reviewed separately. This preview sends no device commands.</p>
+    {/if}
   </section>
 </div>
 <style>

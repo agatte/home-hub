@@ -87,7 +87,7 @@ export const MORE_DESTINATIONS = [
 // Only explicitly enumerated, read-only review routes may suppress global error toasts.
 // Future functional routes fail open to the normal error display.
 const READ_ONLY_PREVIEW_PATHS = new Set([
-  '/quiet-atlas', '/quiet-atlas/control',
+  '/quiet-atlas',
   '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
   '/quiet-atlas/music/artist-review',
 ])
@@ -95,7 +95,7 @@ const READ_ONLY_PREVIEW_PATHS = new Set([
 /** @param {string} pathname */
 export function isQuietAtlasReadOnlyPreview(pathname) {
   const match = /^\/quiet-atlas\/lighting\/([^/]+)$/.exec(pathname)
-  return READ_ONLY_PREVIEW_PATHS.has(pathname) || (match !== null && isKnownLightingGroup(match[1]))
+  return READ_ONLY_PREVIEW_PATHS.has(pathname) || (match !== null && match[1] === 'other')
 }
 
 export function shouldUseQuietAtlasShell(pathname, searchParams) {

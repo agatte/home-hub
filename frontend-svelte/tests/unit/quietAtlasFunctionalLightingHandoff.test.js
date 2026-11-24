@@ -6,11 +6,11 @@ import classic from '../../src/routes/classic/+page.svelte?raw'
 import apartment from '../../src/lib/components/ApartmentWidget.svelte?raw'
 
 describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
-  it('exposes one primary working-controls destination without claiming the preview writes', () => {
-    expect(control).toContain('href="/classic#apartment-controls"')
-    expect(control).toContain('Adjust lights now')
-    expect(control).toContain('still a read-only preview')
-    expect(control.match(/href="\/classic#apartment-controls"/g)).toHaveLength(1)
+  it('uses the existing guarded controls in the redesigned Control route', () => {
+    expect(control).not.toContain('href="/classic#apartment-controls"')
+    expect(control).not.toContain('Adjust lights now')
+    expect(control).toContain('<QuietAtlasLightingExperience {routeIntent} functional={true} />')
+    expect(control).not.toContain('still a read-only preview')
     expect(control).not.toMatch(/(?:apiPut|apiPost|light_command|activateScene|setLight)\s*\(/)
   })
 
@@ -24,8 +24,8 @@ describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
   })
 
   it('preserves accessible phone action and compiles both pages without new warnings', () => {
-    expect(control).toContain('min-height: 56px')
-    expect(control).toContain('.live-lighting-link:focus-visible')
+    expect(control).toContain('Adjust lights by room')
+    expect(control).toContain('functional={true}')
     for (const [filename, source] of [['quiet-atlas/control/+page.svelte', control], ['+page.svelte', home], ['classic/+page.svelte', classic]]) {
       const result = compile(source, { filename, generate: 'dom', css: 'external' })
       expect(result.warnings).toEqual([])
