@@ -19,8 +19,8 @@
 </main>
 
 <style>
-  .quiet-atlas-control { min-height: 100%; padding: 22px 0 40px; color: #eaeae4; background: #101a15; }
+  .quiet-atlas-control { min-height: 100%; padding: 22px 0 40px; color: var(--hh-ink, #f1eee7); background: var(--hh-page-background, #121917); }
   .page-heading { max-width: 1100px; margin: 0 auto; padding: 0 clamp(14px, 4vw, 34px) 8px; }
   h1 { margin: 0; font: normal clamp(34px, 6vw, 48px)/1.1 Georgia, serif; }
-  .intro { margin: 10px 0 0; color: #bdc9be; font-size: 14px; line-height: 1.5; }
+  .intro { margin: 10px 0 0; color: var(--hh-muted, #bec8c0); font-size: 14px; line-height: 1.5; }
 </style>
