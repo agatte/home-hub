@@ -1470,6 +1470,15 @@ def desk_fill_rig(mock_hue_v2, mock_ws):
     engine._manual_override = True  # Semantic manual Watching is allowed.
     engine._override_mode = "watching"
     engine._get_time_period = lambda: "night"
+    # These tests force a period and assert its steady-state brightness, not
+    # the wall-clock-dependent approach to the next period. Fix only the
+    # schedule input to the real floor calculator, outside either ramp.
+    # Keep the real clock for fresh presence and physical acceptance checks.
+    desk_floor_for_period = engine._desk_floor_for_period
+    def steady_desk_floor(period, now, **kwargs):
+        schedule_now = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        return desk_floor_for_period(period, schedule_now, **kwargs)
+    engine._desk_floor_for_period = steady_desk_floor
     req = _make_request(engine, sync)
     req.app.state.presence = presence
     return req, engine, sync, presence, hue
