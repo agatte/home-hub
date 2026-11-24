@@ -1,6 +1,7 @@
 <script>
   // #461 default Home: HomeHub status comes only from guarded REST. Lighting uses the existing WebSocket commands.
   import { onMount } from 'svelte'
+  import { activityTone } from '$lib/quietAtlas/widgetTone.js'
   import { connected } from '$lib/stores/connection.js'
   import { lights } from '$lib/stores/lights.js'
   import { homeRoomLightSummary } from '$lib/quietAtlas/homeRoomLightSummary.js'
@@ -373,7 +374,7 @@
     {#if recentActivity.status === 'recent'}
       <ol class="recent-log-events" aria-label="Recent recorded activities">
         {#each recentActivity.items as entry (entry.key)}
-          <li>
+          <li data-tone={activityTone(entry.label)}>
             <strong>{entry.label}</strong>
             <time datetime={new Date(entry.timestamp).toISOString()}>{recentActivityTime(entry.timestamp)}</time>
           </li>
@@ -540,14 +541,21 @@
   .scene-line>span {display:flex;flex-direction:column;gap:5px;}
   .scene-line strong {font-size:14px;}
   .scene-line a {color:var(--gold);white-space:nowrap;font-size:14px;padding:10px 0;}
-  .recent-log{margin-top:24px;padding:20px 23px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
+  .recent-log{margin-top:18px;padding:20px;border:1px solid var(--line);border-radius:var(--hh-radius-panel,20px);background:var(--hh-card-background,linear-gradient(145deg,var(--stage),var(--deep)));}
   .recent-log-head{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;}
   .recent-log-head h2{font-size:22px;font-weight:600;letter-spacing:-.03em;margin:0;}
   .recent-log-head>span{font-size:14px;color:var(--muted);}
-  .recent-log-events{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;margin:16px 0 9px;padding:0;gap:8px;}
-  .recent-log-events li{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;border-left:2px solid var(--gold);padding:6px 12px;min-width:0;}
-  .recent-log-events strong{font-size:14px;font-weight:600;}
-  .recent-log-events time{color:var(--muted);font-size:14px;}
+  .recent-log-events{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;margin:16px 0 9px;padding:0;gap:var(--hh-gap,10px);}
+   .recent-log-events li{display:flex;flex-direction:column;justify-content:center;gap:6px;border:1px solid rgba(var(--activity-glow,169,181,171),.28);border-radius:var(--hh-radius-card,14px);background:radial-gradient(ellipse at 100% 0%,rgba(var(--activity-glow,169,181,171),.19),transparent 95%),var(--deep);padding:13px 12px;min-width:0;min-height:70px;}
+  .recent-log-events li[data-tone='focus']{--activity-glow:112,158,211;}
+  .recent-log-events li[data-tone='play']{--activity-glow:176,127,220;}
+  .recent-log-events li[data-tone='cinema']{--activity-glow:114,139,192;}
+  .recent-log-events li[data-tone='warm']{--activity-glow:228,157,95;}
+  .recent-log-events li[data-tone='calm']{--activity-glow:126,178,159;}
+  .recent-log-events li[data-tone='social']{--activity-glow:213,135,173;}
+  .recent-log-events li[data-tone='neutral']{--activity-glow:169,181,171;}
+  .recent-log-events strong{font-size:15px;font-weight:650;line-height:1.3;}
+  .recent-log-events time{color:var(--muted);font-size:12px;line-height:1.5;}
   .recent-log-status{font-size:14px;margin:16px 0 9px;color:var(--muted);}
   .recent-log-note{font-size:14px;color:var(--muted);margin:10px 0 0;line-height:1.5;}
   .recent-log-note a{color:var(--gold);text-decoration:underline;margin-left:10px;}
@@ -559,10 +567,10 @@
     .group-copy small {font-size:14px;}
   }
   @media (max-width:700px) {
-    .recent-log{padding:17px 4px;margin-top:16px;}
+    .recent-log{padding:14px;margin-top:14px;}
     .recent-log-head h2{font-size:19px;}
-    .recent-log-events{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;}
-    .recent-log-events li{padding:6px 10px;}
+    .recent-log-events{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--hh-gap,10px);}
+    .recent-log-events li{padding:11px 10px;}
     .recent-log-note a{display:inline-block;margin:7px 0 0;}
     .home-review {padding:14px 13px 16px;}
     .preview-ribbon {gap:8px;font-size:14px;}
