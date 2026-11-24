@@ -4,6 +4,8 @@
 > **Primary user experience owner:** [#461](https://github.com/agatte/home-hub/issues/461), under [#157](https://github.com/agatte/home-hub/issues/157).
 > **Policy/source of truth:** [PROJECT_SPEC.md](PROJECT_SPEC.md), the checked-in code and live issue evidence. This page summarizes what is deployed, what is still uncertain, and the safe resume point for UI work. It does not supersede the product spec, create host authority, or grant future deployment permission.
 
+> **Later product-direction clarification (2026-11-23):** the owner wants Classic removed after functional migration and acceptance. It is a temporary fallback only. See [the current #461 checklist](https://github.com/agatte/home-hub/issues/461) and [Dashboard Redesign Vision](DASHBOARD_REDESIGN_VISION.md#single-interface-completion-and-classic-retirement--owner-decision-2026-11-23). The port and kiosk facts below are independent of that future UI cleanup; retiring Classic does not require removing port 8000 or altering HTTPS, integrations or network settings. The dated earlier release evidence below remains historical.
+
 ## Answer to the owner: why two ports and why no clean hostname?
 
 There is **one HomeHub FastAPI process and one frontend build**, not two independently maintained websites. The app's `run.py` starts ordinary HTTP on port **8000** and, when its TLS cert/key are configured, adds a **second TLS socket** on port **8443**, sharing the same app, backend state, Hue/Sonos integrations and lifecycle. The second socket exists to provide private-LAN HTTPS/WSS for owner access on iPhone **without breaking the kiosk, companion agents, integrations, or existing localhost/API URLs**. It is not a new service, a port migration, or a new version of the interface.

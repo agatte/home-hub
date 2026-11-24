@@ -13,6 +13,24 @@ This document preserves the product and visual direction for the HomeHub Dashboa
 
 The August audit remains historical evidence in `DASHBOARD_UX_AUDIT_2026_08_18.md`. This document describes the **target design direction** established after that audit and after visual review of the first redesign experiment.
 
+## Single-interface completion and Classic retirement — owner decision 2026-11-23
+
+**DECIDED TARGET:** HomeHub has one fully functional owner-facing application, one coherent design language, and no permanent Classic alternative. Quiet Atlas is a design working name, not a separate product. The owner explicitly clarified that the old interface is to be removed after migration, not merely made optional. Do not equate a polished Home screen or read-only prototype with product completion.
+
+**Next work: functionality first, design together.** Preserve the positive room-first Home direction; do not spend repeated iterations polishing already-usable Home while Control, Music, settings or household tools still require Classic. Bring each remaining feature into the redesigned interface with the existing visual language, shared components, truthful status, responsive ergonomics and supported action handlers.
+
+The ordered, live completion checklist is maintained in [#461](https://github.com/agatte/home-hub/issues/461), coordinated with [#157](https://github.com/agatte/home-hub/issues/157):
+
+1. Complete the functional Control/room/scene increment (#546), validate actual everyday workflows.
+2. Complete lighting and scene parity: independent fixtures, native scenes, custom scene CRUD, effects, Try It and cancel/revert, mode and ownership semantics.
+3. Integrate functional Music and playback; routines and household capabilities; Settings and Insights. Inventory all Classic capabilities and explicitly decide any intentional retirement with the owner rather than silently lose functionality. Existing functional components and routes can be reused in the redesigned shell.
+4. Finish unified visual language, navigation, accessible states, phone and kiosk ergonomics; obtain real-device acceptance.
+5. Retire Classic deliberately: audit links, anchors, bookmarks, PWA/cache, tests, docs and obsolete layout/style dependencies; remove the old layout, route and unused assets only once no required task depends on it. Preserve shared components, consider a safe redirect for old bookmarks, retain a tested Git rollback path, and verify the release. No parallel permanent owner dashboard.
+
+`/classic` is a **temporary migration/rollback fallback**, not an accepted end state. Removing it is independent of HTTP :8000 and HTTPS :8443, which serve the same backend/app. The existing localhost kiosk and integration endpoints remain compatible; DNS, listener hardening and authentication changes are separate work. Separate guest and Game Day experiences are not the old owner dashboard and retain their own boundaries. #192 Apartment Canvas and #540 guest Return Home retain their separate scope.
+
+Existing security, lighting authority, protected controls, scoped merge/deployment and real-device acceptance gates remain in force. This product decision grants no blanket approval for device writes or production changes.
+
 ## Design thesis
 
 HomeHub should feel like a **living instrument for the apartment**, not a collection of smart-home cards.
