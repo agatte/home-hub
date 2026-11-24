@@ -27,7 +27,9 @@ describe('Quiet Atlas phone-native Insights activity review (#461)', () => {
     expect(route).toContain('What actually changed?')
     expect(route).toContain('not source-qualified in this preview')
     expect(route).toContain('DESIGN STUDY · NOT A LIVE FUSION OR DECISION TRACE')
-    expect(route).toContain('href="/analytics?shell=quiet-atlas"')
+    expect(route).not.toContain('href="/analytics?shell=quiet-atlas"')
+    expect(route).toContain('bind:open={diagnosticsOpen}')
+    expect(route).toContain('<SectorBoard />')
   })
 
   it('places unverified decision explanation behind an accessible disclosure at every width', () => {

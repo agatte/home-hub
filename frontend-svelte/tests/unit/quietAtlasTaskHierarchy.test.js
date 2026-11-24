@@ -36,18 +36,16 @@ describe('Quiet Atlas task-first route hierarchy (#157)', () => {
     const css = compile(insights, { css: 'external' }).css.code
     // The default rule must precede all media queries, so hiding is not phone-only.
     expect(css.indexOf('.study-content.phone-collapsed')).toBeLessThan(css.indexOf('@media'))
-    expect(insights).toContain('href="/analytics?shell=quiet-atlas"')
+    expect(insights).not.toContain('href="/analytics?shell=quiet-atlas"')
+    expect(insights).toContain('<SectorBoard />')
   })
 
-  it('preserves all eleven original settings destinations in the same task groups', () => {
-    const groups = [...settings.matchAll(/id: '([^']+)',\s+index:/g)].map(m => m[1])
-    expect(groups).toEqual(['behavior', 'experience', 'system'])
-    const sections = [...settings.matchAll(/id: '([^']+)', label:/g)].map(m => m[1])
-    expect(sections).toEqual(['automation', 'dnd', 'schedule', 'modes', 'music', 'audio', 'learning', 'gameday', 'overview', 'host', 'network'])
+  it('preserves all eleven original settings destinations and grouped navigation', () => {
+    for (const id of ['automation','dnd','schedule','modes','music','audio','learning','gameday','overview','host','network']) expect(settings).toContain("id: '"+id+"'")
+    for (const group of ['How HomeHub behaves','Listening & experiences','Systems & access']) expect(settings).toContain(group)
     expect(settings).toContain('<h1>Settings</h1>')
-    expect(settings.match(/withQuietAtlasShell\('\/settings'\)/g)).toHaveLength(1)
-    expect(settings).toContain("withQuietAtlasShell('/settings?section=' + item.id)")
-    expect(settings).toContain('aria-expanded={expandedGroup === group.id}')
+    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>')
+    expect(settings).not.toContain('withQuietAtlasShell')
   })
 
   it('keeps route-level writers delegated to existing components and compiles without warnings', () => {

@@ -1,5 +1,5 @@
 <script>
-  /** @typedef {{id: string, label: string, icon?: any}} SectionDef */
+  /** @typedef {{id: string, label: string, icon?: any, group?: string}} SectionDef */
 
   /** @type {SectionDef[]} */
   export let sections = []

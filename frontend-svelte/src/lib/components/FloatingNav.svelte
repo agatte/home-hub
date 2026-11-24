@@ -6,8 +6,8 @@
     { id: 'home', href: '/', label: 'Home', icon: Home },
     { id: 'music', href: '/quiet-atlas/music', label: 'Music', icon: Music },
     { id: 'gameday', href: '/gameday', label: 'Game Day', icon: Trophy },
-    { id: 'analytics', href: '/analytics', label: 'Analytics', icon: BarChart3 },
-    { id: 'settings', href: '/settings', label: 'Settings', icon: Settings },
+    { id: 'analytics', href: '/quiet-atlas/insights', label: 'Analytics', icon: BarChart3 },
+    { id: 'settings', href: '/quiet-atlas/settings', label: 'Settings', icon: Settings },
   ]
 
   $: currentPath = $page.url.pathname

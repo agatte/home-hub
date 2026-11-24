@@ -3,33 +3,17 @@ import { compile } from 'svelte/compiler'
 import gateway from '../../src/routes/quiet-atlas/settings/+page.svelte?raw'
 import rail from '../../src/lib/components/settings/SettingsRail.svelte?raw'
 import row from '../../src/lib/components/settings/SettingRow.svelte?raw'
-import functional from '../../src/routes/settings/+page.svelte?raw'
+import functional from '../../src/routes/quiet-atlas/settings/+page.svelte?raw'
 
 describe('Quiet Atlas phone-native Settings navigation (#461)', () => {
-  it('preserves the eleven real settings destinations, with no invented setting', () => {
-    const offered = [...gateway.matchAll(/\{\s*id: '([^']+)', label: /g)].map((m) => m[1])
-    const actual = [...functional.matchAll(/\{\s*id:\s*'([^']+)',\s*label:/g)].map((m) => m[1])
-    expect(offered).toHaveLength(11)
-    expect(new Set(offered).size).toBe(11)
-    expect(offered.slice().sort()).toEqual(actual.slice().sort())
-    expect(gateway).toContain("withQuietAtlasShell('/settings?section=' + item.id)")
-    expect(gateway).toContain("withQuietAtlasShell('/settings')")
-    expect(gateway).toContain('no live settings or device state')
-  })
-
-  it('uses progressively disclosed mobile categories while retaining the desktop directory', () => {
-    expect(gateway).toContain("let expandedGroup = 'behavior'")
-    expect(gateway).toContain('aria-controls={\'settings-links-\' + group.id}')
-    expect(gateway).toContain('aria-expanded={expandedGroup === group.id}')
-    expect(gateway).toContain('on:click={() => expandedGroup = expandedGroup === group.id ? null : group.id}')
-    expect(gateway).toContain("id={'settings-links-' + group.id}")
-    expect(gateway).toContain('class:mobile-collapsed={expandedGroup !== group.id}')
-    expect(gateway).toContain('.section-links.mobile-collapsed {display:none}')
-    expect(gateway).toContain('.mobile-group-toggle {display:flex;')
-    expect(gateway).toContain('.mobile-group-toggle:focus-visible')
-    expect(gateway).toContain('.setting-link {box-sizing:border-box;min-height:64px;')
-    expect(gateway).toContain('.all-settings {box-sizing:border-box;display:flex;')
-    expect(gateway).toContain('href="/quiet-atlas/home"')
+  it('makes the actual Settings controls the native page rather than an intermediate gateway', () => {
+    expect(gateway).toContain('<SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>')
+    expect(gateway).not.toContain('withQuietAtlasShell')
+    expect(gateway).toContain('settings-workspace')
+    expect(rail).toContain('{#each groups as group (group)}')
+    expect(gateway).toContain('How HomeHub behaves')
+    expect(gateway).toContain('Listening & experiences')
+    expect(gateway).toContain('Systems & access')
   })
 
   it('uses one accessible native section picker for functional mobile settings', () => {
