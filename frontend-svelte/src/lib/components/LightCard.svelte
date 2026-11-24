@@ -33,9 +33,14 @@
   /** @type {string | undefined} */
   export let nameOverride = undefined
 
+  // Optional additional caller guard; Classic and independent cards retain
+  // the existing path. Linked kitchen checks current fixture state at send time.
+  /** @type {() => boolean} */
+  export let writeAllowed = () => true
+
   /** @param {string} id @param {Record<string, unknown>} state */
   function fanout(id, state) {
-    if (commandPending || controlUnavailable) return
+    if (commandPending || controlUnavailable || !writeAllowed()) return
     setLight(id, state, { optimistic: false })
     for (const linked of linkedIds) setLight(linked, state, { optimistic: false })
   }

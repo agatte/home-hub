@@ -1,4 +1,5 @@
 <script>
+  import { get } from 'svelte/store'
   import { lights } from '$lib/stores/lights.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { lightCommandResults } from '$lib/stores/lightCommandResults.js'
@@ -11,8 +12,8 @@
   export let compact = false
 
   // Each card sends one existing light_command over HomeHub's WebSocket.
-  // Individual cards remain independent. Only the explicit Kitchen pair
-  // power buttons below send to the two configured fixtures.
+  // Individual cards remain independent. Only explicitly selected Kitchen
+  // pair actions send to the two configured fixtures.
   const ROOM_LIGHTS = Object.freeze({
     living: ['1'],
     bedroom: ['2', '5'],
@@ -28,13 +29,40 @@
   $: fixtureIds = ROOM_LIGHTS[room] ?? []
   $: roomLabel = ROOMS[room] ?? 'Room'
   const KITCHEN_IDS = ROOM_LIGHTS.kitchen
-  $: kitchenReady = room === 'kitchen' && $connected && $deviceStatus.light_command_results === true && KITCHEN_IDS.every(lid => $lights[lid]?.reachable === true)
+  let kitchenView = 'together'
+  $: kitchenReady = room === 'kitchen' && $connected && $deviceStatus.light_command_results === true && KITCHEN_IDS.every(lid => $lights[lid]?.light_id === lid && $lights[lid]?.reachable === true && typeof $lights[lid]?.on === 'boolean')
   $: kitchenPending = KITCHEN_IDS.some(lid => $lightCommandResults[lid]?.status === 'pending')
   $: kitchenOnCount = KITCHEN_IDS.filter(lid => $lights[lid]?.on === true).length
 
+  // Recheck current stores at the moment of an explicit action, not only
+  // the last rendered state. No new room/group write endpoint.
+  function pairCanWrite() {
+    const current = get(lights)
+    const receipts = get(lightCommandResults)
+    return room === 'kitchen' && kitchenView === 'together' && get(connected) &&
+      get(deviceStatus).light_command_results === true &&
+      KITCHEN_IDS.every(lid => current[lid]?.light_id === lid && current[lid]?.reachable === true &&
+        typeof current[lid]?.on === 'boolean' && receipts[lid]?.status !== 'pending')
+  }
+
+  function linkedCanWrite() {
+    const current = get(lights)
+    return pairCanWrite() && current['3']?.on === current['4']?.on
+  }
+
+  /** @param {string | undefined} status */
+  function receiptLabel(status) {
+    if (status === 'pending') return 'Changing light…'
+    if (status === 'acknowledged') return 'Bridge acknowledged; check actual light.'
+    if (status === 'denied') return 'Blocked by lighting ownership or house state.'
+    if (status === 'unavailable') return 'Control unavailable; no command sent.'
+    if (status === 'invalid') return 'Request rejected.'
+    return 'Result uncertain; check actual light.'
+  }
+
   /** @param {boolean} on */
   function setKitchenPower(on) {
-    if (room !== 'kitchen' || !kitchenReady || kitchenPending) return
+    if (!pairCanWrite()) return
     // Each target retains its own authorization, receipt, and state readback.
     // This is not an atomic Hue group write, and partial success is possible.
     for (const lid of KITCHEN_IDS) setLight(lid, { on })
@@ -42,7 +70,7 @@
 </script>
 
 <section class="room-control" class:compact aria-labelledby={`${id}-heading`}>
-  <h4 id={`${id}-heading`} class="sr-only">Individual {roomLabel} lights</h4>
+  <h4 id={`${id}-heading`} class="sr-only">{roomLabel} lights</h4>
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
   {:else if $deviceStatus.light_command_results !== true}
@@ -51,6 +79,12 @@
     <p role="status" class="warning">No configured fixtures for this room.</p>
   {:else}
     {#if room === 'kitchen'}
+      <div class="kitchen-switch" role="group" aria-label="Kitchen control scope">
+        <button type="button" aria-pressed={kitchenView === 'together'} on:click={() => kitchenView = 'together'}>Together</button>
+        <button type="button" aria-pressed={kitchenView === 'individual'} on:click={() => kitchenView = 'individual'}>Individually</button>
+      </div>
+    {/if}
+    {#if room === 'kitchen' && kitchenView === 'together'}
       <div class="kitchen-power" aria-busy={kitchenPending}>
         <div class="kitchen-summary"><strong>Both kitchen lights</strong><span>{!kitchenReady ? 'Waiting for both lights' : kitchenPending ? 'Changing lights…' : kitchenOnCount === 2 ? 'Both on' : kitchenOnCount === 0 ? 'Both off' : '1 of 2 on'}</span></div>
         <div class="kitchen-actions">
@@ -58,7 +92,18 @@
           <button type="button" disabled={!kitchenReady || kitchenPending} on:click={() => setKitchenPower(false)}>Both off</button>
         </div>
       </div>
-    {/if}
+      {#if kitchenReady && kitchenOnCount !== 1}
+        <p class="light-hint">Both lights receive each adjustment. Displayed brightness and color reference Kitchen front (L3); Kitchen back (L4) may differ.</p>
+        <LightCard light={$lights['3']} linkedIds={['4']} nameOverride="Kitchen · front reference" writeAllowed={linkedCanWrite} />
+      {:else}
+        <p class="light-hint">{kitchenReady ? 'Power differs. Turn both on or off before linked brightness and color adjustments.' : 'Both fixtures must be reachable for linked adjustments. Use Individually to control an available light.'}</p>
+        {#each KITCHEN_IDS as lid}
+          {#if $lightCommandResults[lid]?.status}
+            <p class="light-hint" role="status">L{lid}: {receiptLabel($lightCommandResults[lid].status)}</p>
+          {/if}
+        {/each}
+      {/if}
+    {:else}
     {#if compact}<p class="light-hint">Drag to dim · tap power or color</p>{/if}
     <div class="fixture-grid">
       {#each fixtureIds as lightId (lightId)}
@@ -72,10 +117,11 @@
         </div>
       {/each}
     </div>
+    {/if}
   {/if}
   <details class="control-details">
     <summary>About these controls</summary>
-    <p class="provenance">Each slider requests a change to one light. Kitchen pair power sends one request to each kitchen light; either may be refused independently. HomeHub can refuse a change when another mode or effect is in control. Opening a room does not change any lights.</p>
+    <p class="provenance">Individual controls request one light. Kitchen Together sends one request to each of L3 and L4; either may be refused independently. HomeHub can refuse a change when another mode or effect is in control. Opening a room does not change any lights.</p>
     <p class="footnote">A successful request does not guarantee the physical light changed. Check the light itself when needed.</p>
     <a href="/classic#apartment-controls">Classic light controls</a>
   </details>
@@ -85,6 +131,10 @@
   .room-control {grid-column:1 / -1;min-width:0;}
   .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
   .provenance,.footnote { font-size:13px;line-height:1.6;color:var(--muted);max-width:70ch; }
+  .kitchen-switch {display:flex;gap:4px;padding:4px;margin:0 0 10px;border-radius:14px;background:rgba(255,255,255,.06);}
+  .kitchen-switch button {flex:1;min-width:0;min-height:44px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--muted);font:inherit;cursor:pointer;}
+  .kitchen-switch button[aria-pressed="true"] {background:rgba(237,207,160,.12);border-color:var(--line);color:var(--ink);}
+  .kitchen-switch button:focus-visible {outline:3px solid var(--gold);outline-offset:2px;}
   .kitchen-power {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:12px;border:1px solid var(--line);border-radius:14px;margin:0 0 10px;}
   .kitchen-summary {display:grid;gap:4px;flex:1 1 130px;min-width:0;}
   .kitchen-summary strong {font-size:14px;color:var(--ink);}
