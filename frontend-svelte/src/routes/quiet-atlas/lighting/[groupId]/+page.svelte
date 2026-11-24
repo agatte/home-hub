@@ -4,6 +4,7 @@
   import { page } from '$app/stores'
   import { connected } from '$lib/stores/connection.js'
   import QuietAtlasGroupSheet from '$lib/components/QuietAtlasGroupSheet.svelte'
+  import QuietAtlasRoomControls from '$lib/components/QuietAtlasRoomControls.svelte'
   import { buildLightingOverview } from '$lib/quietAtlas/lightingModel.js'
   import { isKnownLightingGroup, lightingDetailOrigin } from '$lib/quietAtlas/navigation.js'
   import {
@@ -20,6 +21,7 @@
   $: snapshotStatus = readStatus(snapshot, nowMs)
   $: roomId = $page.params.groupId
   $: knownRoom = isKnownLightingGroup(roomId)
+  $: functionalRoom = knownRoom && roomId !== 'other'
   $: room = buildLightingOverview(snapshot.fixtures, snapshotStatus === 'recent-read')
     .find((item) => item.id === roomId)
   $: origin = lightingDetailOrigin($page.url.searchParams)
@@ -121,7 +123,7 @@
 
 <svelte:head>
   <title>Lighting detail · Quiet Atlas | HomeHub</title>
-  <meta name="description" content="Read-only, non-modal lighting detail with source-qualified fixture reports." />
+  <meta name="description" content="Individual lighting controls with reported fixture status." />
 </svelte:head>
 
 <main class="lighting-detail" aria-label="Focused lighting detail">
@@ -130,7 +132,7 @@
       <span class="back-icon" aria-hidden="true">‹</span>
       <span>{originLabel}</span>
     </a>
-    <span class="read-only-label">Quiet Atlas · Read-only preview</span>
+    <span class="read-only-label">{functionalRoom ? 'Individual lighting' : 'Read-only report'}</span>
   </nav>
 
   {#if !knownRoom}
@@ -159,7 +161,7 @@
       <section class="room-overview" aria-labelledby="detail-room-title">
         <p class="eyebrow">YOUR APARTMENT / {origin === 'home' ? 'ATMOSPHERE' : 'LIGHT STUDIO'}</p>
         <h1 id="detail-room-title">{room.label}</h1>
-        <p class="room-intro">A closer look at the room, without leaving the apartment behind.</p>
+        <p class="room-intro">{functionalRoom ? 'Adjust each light separately.' : 'Additional fixtures are not mapped to a control group.'}</p>
         <div class="room-visual" aria-hidden="true">
           <div class="halo"></div>
           <div class="fixture-dots">
@@ -177,11 +179,11 @@
         <p class="freshness" role="status">{snapshotNote}</p>
         <button type="button" class="refresh-button" on:click={refresh}>Refresh report</button>
 
-        <div class="navigation-options">
-          <a class="legacy-action" href="/classic#apartment-controls">
-            <span><strong>Adjust lights now</strong><small>Open existing functional HomeHub controls</small></span>
+        {#if !functionalRoom}<div class="navigation-options">
+          {#if !functionalRoom}<a class="legacy-action" href="/classic#apartment-controls">
+            <span><strong>Classic light controls</strong><small>Additional unmapped fixtures</small></span>
             <span aria-hidden="true">↗</span>
-          </a>
+          </a>{/if}
           {#if origin === 'home'}
             <a class="secondary-action" href="/quiet-atlas/control">
               Explore precision controls and scenes <span aria-hidden="true">→</span>
@@ -191,16 +193,22 @@
               Return to apartment atmosphere <span aria-hidden="true">→</span>
             </a>
           {/if}
-        </div>
+        </div>{/if}
       </section>
 
       <div class="detail-inspector">
         <div class="detail-note">
           <p class="eyebrow">CONTROL / INDIVIDUAL LIGHTS</p>
-          <p>Preview brightness changes for each fixture separately. No changes are sent.</p>
+          {#if !functionalRoom}<p>Additional fixture adjustments are read-only here.</p>{/if}
         </div>
         {#key room.id}
-          <QuietAtlasGroupSheet inline={true} group={room} {snapshotStatus} fixtureStates={snapshot.fixtures} />
+          {#if functionalRoom}
+            <section class="live-controls" aria-label="Individual light controls">
+              <QuietAtlasRoomControls room={roomId} id="detail-live" compact={true} />
+            </section>
+          {:else}
+            <QuietAtlasGroupSheet inline={true} group={room} {snapshotStatus} fixtureStates={snapshot.fixtures} />
+          {/if}
         {/key}
       </div>
     </div>
@@ -238,6 +246,7 @@
   .legacy-action small { color:#45644d; font-size:12px; line-height:1.45; }
   .secondary-action { display:inline-flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 3px; min-height:44px; font-size:13px; font-weight:600; color:#c7dfbe; line-height:1.5; }
   .detail-inspector { min-width:0; }
+  .live-controls {--line:#425449;--gold:#e9ca94;--muted:#b8c5b5;--ink:#edf0e8; padding:16px;border:1px solid var(--line);border-radius:18px;background:#14231c;}
   .detail-note { padding:12px 3px 18px; }
   .detail-note p:last-child { color:#b7c7b9; font-size:14px; line-height:1.5; margin:7px 0 0; }
   .unknown-room { max-width:630px; margin:30px auto; border:1px solid #56705c; border-radius:20px; padding:25px; }
@@ -257,7 +266,7 @@
     .read-only-label { max-width:45%; font-size:11px; }
     .return-link { padding:7px 12px; min-height:48px; }
     h1 { font-size:clamp(36px,10vw,48px); margin:11px 0 9px; }
-    .room-visual { height:150px; margin:15px 0 12px; }
+    .room-visual { display:none; }
     .room-intro { font-size:14px; line-height:1.55; }
     .navigation-options { margin-top:17px; }
     .detail-note { padding-top:4px; }
