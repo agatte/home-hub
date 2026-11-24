@@ -63,6 +63,9 @@ class EffectManager:
         # local active-name slot is empty. A successful release/start makes
         # the tracker authoritative and lets steady-state None reapplies no-op.
         self._tracker_known = False
+        # A read-only boot recovery is permitted only before any effect or
+        # scene mutation has been attempted in this manager's lifetime.
+        self._startup_observation_pending = True
 
     @property
     def active_name(self) -> Optional[str]:
@@ -83,6 +86,7 @@ class EffectManager:
         return self._transition_boundary
 
     async def _mutate(self, write, validator=None):
+        self._startup_observation_pending = False
         try:
             return await self._transition_boundary.run_write(write, validator=validator)
         except asyncio.CancelledError:
@@ -90,6 +94,7 @@ class EffectManager:
             raise
 
     async def _mutate_many(self, writes, validator=None):
+        self._startup_observation_pending = False
         try:
             return await self._transition_boundary.write_many(
                 writes, validator=validator,
@@ -159,6 +164,7 @@ class EffectManager:
         """
         if not self._transition_boundary.held_by_current_task:
             raise RuntimeError("Static replacement acknowledgement requires boundary")
+        self._startup_observation_pending = False
         self._transition_boundary.authority.invalidate()
         if self._tracker_known and self._active_name is None:
             return
@@ -197,6 +203,42 @@ class EffectManager:
             return bool(covers(required))
         return result is True
 
+    async def _observe_startup_static(self, required: set[str]) -> bool:
+        """Recover the empty boot tracker only from a complete current read.
+
+        Called with the shared boundary held, before any effect mutation.
+        A full-scope lease fences newer authority publications during the read.
+        Never use this shortcut after ambiguous effect/scene writes.
+        """
+        if (
+            not self._startup_observation_pending or self._tracker_known
+            or self._active_name is not None
+            or not set(ALL_LIGHT_IDS) <= required
+            or not self._transition_boundary.held_by_current_task
+        ):
+            return False
+        observe = getattr(self._hue_v2, "observe_no_effects", None)
+        if not callable(observe):
+            return False
+        authority = self._transition_boundary.authority
+        lease = authority.issue("effect_startup_observation", None)
+        try:
+            static = await observe(required)
+        except Exception:
+            return False
+        if (
+            static is not True or not authority.valid(lease)
+            or not self._startup_observation_pending
+            or required != self.release_light_ids()
+        ):
+            return False
+        self._active_name = None
+        self._active_lights = None
+        self._tracker_known = True
+        self._startup_observation_pending = False
+        logger.info("Effect startup authority reconciled from complete static Hue observation")
+        return True
+
     async def reconcile(
         self,
         desired: Optional[str | dict[str, Any]],
@@ -230,6 +272,14 @@ class EffectManager:
             def current():
                 return self._transition_current(checkpoint, physical)
             self._attach_effect_acceptance(current, checkpoint, physical)
+            if not current():
+                return False
+
+            # No effect release is needed if the bridge already explicitly
+            # reports a complete static inventory at boot. This is a read,
+            # not a replacement or takeover of any fixture.
+            if desired_effect is None and await self._observe_startup_static(required):
+                return current()
             if not current():
                 return False
 
