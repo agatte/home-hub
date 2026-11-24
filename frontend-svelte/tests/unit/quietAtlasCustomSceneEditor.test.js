@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import CustomSceneEditor from '../../src/lib/components/CustomSceneEditor.svelte'
 import { lights } from '../../src/lib/stores/lights.js'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../src/lib/api.js'
@@ -52,4 +52,41 @@ it('blocks saving a scene that no longer exists', async () => {
   await screen.findByText('Scene no longer exists')
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   expect(apiPut).not.toHaveBeenCalled()
+})
+
+it('edits exclusive color modes in the draft, updates the preview and saves only the chosen values', async () => {
+  render(CustomSceneEditor, { libraryOnly: true })
+  const name = screen.getByRole('textbox', { name: 'Scene name' })
+  await waitFor(() => expect(name).not.toBeDisabled())
+  const preview = screen.getByLabelText('Draft apartment preview')
+  expect(within(preview).getByText('2857 K')).toBeInTheDocument()
+  await fireEvent.change(screen.getByRole('combobox', { name: 'Living color mode' }), { target: { value: 'color' } })
+  await fireEvent.input(screen.getByRole('slider', { name: 'Living hue' }), { target: { value: '32768' } })
+  await fireEvent.input(screen.getByRole('slider', { name: 'Living saturation' }), { target: { value: '254' } })
+  expect(within(preview).getByText('Hue 180°, 100% saturation')).toBeInTheDocument()
+  expect(apiPut).not.toHaveBeenCalled()
+  expect(apiPost).not.toHaveBeenCalled()
+  await fireEvent.change(screen.getByRole('combobox', { name: 'Living color mode' }), { target: { value: 'temperature' } })
+  await fireEvent.input(screen.getByRole('slider', { name: 'Living white temperature' }), { target: { value: '250' } })
+  expect(within(preview).getByText('4000 K')).toBeInTheDocument()
+  expect(within(preview).getAllByText('Not specified')).toHaveLength(5)
+  await fireEvent.input(name, { target: { value: 'Warm room' } })
+  expect(apiPost).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/scenes/custom', {
+    name: 'Warm room', category: 'custom', effect: null, light_states: { '1': { on: true, bri: 100, ct: 250 } },
+  }))
+  expect(apiPut).not.toHaveBeenCalled()
+})
+
+it('cancels a color edit without saving or sending a device command', async () => {
+  const onCancel = vi.fn()
+  render(CustomSceneEditor, { libraryOnly: true, editingId: 7, onCancel })
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Scene name' })).toHaveValue('Saved scene'))
+  await fireEvent.change(screen.getByRole('combobox', { name: 'Living color mode' }), { target: { value: 'color' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(onCancel).toHaveBeenCalledOnce()
+  expect(apiPost).not.toHaveBeenCalled()
+  expect(apiPut).not.toHaveBeenCalled()
+  expect(apiDelete).not.toHaveBeenCalled()
 })
