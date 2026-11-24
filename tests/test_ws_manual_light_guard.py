@@ -178,6 +178,34 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(self.engine.persists, 2)
 
+    async def test_suggestion_context_can_only_restrict_manual_dispatch(self):
+        result = await dispatch_manual_light(
+            self.engine, self.hue, "2", {"bri": 100}, context_valid=lambda: False,
+        )
+        self.assertEqual(result.status, "denied")
+        self.assertEqual(self.hue.calls, [])
+        self.engine._custom_protected.add("2")
+        result = await dispatch_manual_light(
+            self.engine, self.hue, "2", {"bri": 100}, context_valid=lambda: True,
+        )
+        self.assertEqual(result.status, "denied")
+        self.assertEqual(self.engine.stamps, [])
+
+    async def test_suggestion_context_change_at_read_prevents_hue_write(self):
+        active = True
+
+        async def change_context():
+            nonlocal active
+            active = False
+
+        self.hue.get_hook = change_context
+        result = await dispatch_manual_light(
+            self.engine, self.hue, "2", {"bri": 100}, context_valid=lambda: active,
+        )
+        self.assertEqual(result.status, "denied")
+        self.assertEqual(self.hue.calls, [])
+        self.assertEqual(self.engine.stamps, [])
+
     async def test_rejects_unknown_target_or_mixed_color_temperature(self):
         for lid, state in [
             ("unknown", {"on": True}), ("999", {"bri": 100}),

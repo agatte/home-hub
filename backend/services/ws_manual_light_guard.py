@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from backend.services.light_state_calculator import ALL_LIGHT_IDS
 from backend.services.lighting_transition_boundary import settle_lighting_io
@@ -50,7 +50,10 @@ def _valid_request(light_id: str, state: dict[str, Any]) -> bool:
     return True
 
 
-async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any]) -> ManualLightDispatch:
+async def dispatch_manual_light(
+    engine, hue, light_id: str, state: dict[str, Any], *,
+    context_valid: Callable[[], bool] | None = None,
+) -> ManualLightDispatch:
     """Issue a scoped authority lease before queuing, then revalidate at Hue dispatch.
 
     No trust or takeover authority comes from the WebSocket client, REST
@@ -85,6 +88,9 @@ async def dispatch_manual_light(engine, hue, light_id: str, state: dict[str, Any
                 return False
             if engine.house_state not in _AWAKE_HOUSE_STATES:
                 logger.info("Manual light guard denied: fixture=%s reason=house_state_%s", light_id, engine.house_state)
+                return False
+            # Optional caller context can only restrict the existing authority.
+            if context_valid is not None and context_valid() is not True:
                 return False
             return bool(engine.validate_lighting_lease(candidate_lease, allow_manual=True))
         except Exception as exc:
