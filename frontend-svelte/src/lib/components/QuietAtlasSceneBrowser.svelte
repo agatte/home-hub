@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte'
-  import { filterScenes, normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
+  import { normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
+  import { sceneCards, sceneCardBackground } from '$lib/quietAtlas/sceneCards.js'
   import { reviewSceneDraft } from '$lib/quietAtlas/controlDraft.js'
   import QuietAtlasSceneApply from './QuietAtlasSceneApply.svelte'
   import QuietAtlasSceneTools from './QuietAtlasSceneTools.svelte'
@@ -49,7 +50,19 @@
   let closeButton
   /** @type {HTMLElement | null} */
   let previousFocus
-  $: visible = filterScenes(sceneList, { category, search })
+  const PAGE_SIZE = 12
+  let visibleLimit = PAGE_SIZE
+  $: { category; search; visibleLimit = PAGE_SIZE }
+  $: visible = sceneCards(sceneList, { category, search })
+  $: shown = visible.slice(0, visibleLimit)
+
+  /** @param {string} id */
+  async function chooseScene(id) {
+    if (!connected || loading || error || busy || editorOpen) return
+    requestedReviewId = id
+    await tick()
+    panel?.querySelector('.review-panel')?.scrollIntoView({block:'nearest'})
+  }
 
   async function dismissSceneReview() {
     const id = requestedReviewId
@@ -71,7 +84,7 @@
   function handleKeys(event) {
     if (event.key === 'Escape') { event.preventDefault(); if (!busy) { if (editorOpen) closeEditor(); else closeBrowser() } return }
     if (event.key !== 'Tab' || !panel) return
-    const tabbable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]')]
+    const tabbable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, a[href]')]
       .filter((element) => element instanceof HTMLElement)
       .filter((element) => element.getClientRects().length > 0)
     const first = tabbable[0], last = tabbable[tabbable.length - 1]
@@ -121,18 +134,38 @@
     {#if !loading && !error}
       {#if visible.length}
         <div class="scene-grid">
-          {#each visible as scene (scene.id)}
-            <article class="scene">
-              <h3>{scene.name}</h3>
-              <p>{scene.source === 'preset' ? (scene.category || 'Curated') : scene.source === 'bridge' ? 'Hue bridge · freshness unverified' : 'Custom scene'}</p>
-              <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error || busy || editorOpen}
-                on:click={async () => { requestedReviewId = scene.id; await tick(); panel?.querySelector('.review-panel')?.scrollIntoView({block:'nearest'}) }}>{functional ? 'Choose scene' : 'Review preset impact'}</button>
+          {#each shown as scene (scene.key)}
+            <article class="scene" style:background={sceneCardBackground(scene.palette) || null}>
+              <div class="scene-heading">
+                <h3>{scene.name}</h3>
+                <p>{scene.source === 'preset' ? (scene.category || 'Curated') : scene.source === 'bridge' ? 'Hue bridge' : 'Custom scene'}</p>
+              </div>
+              {#if scene.palette.length}
+                <div class="palette" aria-hidden="true">
+                  {#each scene.palette as color (color)}<span style:background={color}></span>{/each}
+                </div>
+              {/if}
+              {#if scene.variants.length > 1}
+                <details class="variants">
+                  <summary>{scene.variants.length} Hue versions</summary>
+                  {#each scene.variants as variant (variant.id)}
+                    <button class="scene-review variant" data-scene-id={variant.id} type="button" disabled={!connected || loading || !!error || busy || editorOpen} on:click={() => chooseScene(variant.id)}>{variant.label} <span aria-hidden="true">↗</span><span class="sr-only"> · {scene.name} · {variant.id.slice(-6)}</span></button>
+                  {/each}
+                </details>
+              {:else}
+                <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error || busy || editorOpen}
+                  on:click={() => chooseScene(scene.id)}>{functional ? 'Choose scene' : 'Review preset impact'}</button>
+              {/if}
               {#if functional && scene.source === 'custom'}
                 <button type="button" class="scene-review edit-scene" disabled={!connected || loading || !!error || busy || editorOpen} on:click={() => openEditor(scene.id)}>Edit scene</button>
               {/if}
             </article>
           {/each}
         </div>
+        <div class="library-summary"><span>Showing {shown.length} of {visible.length} scenes</span>{#if category === 'all' && !search}<span>Filter by category to find more</span>{/if}</div>
+        {#if shown.length < visible.length}
+          <button type="button" class="show-more" on:click={() => visibleLimit += PAGE_SIZE}>Show {Math.min(PAGE_SIZE, visible.length - shown.length)} more scenes</button>
+        {/if}
       {:else}<p class="notice">No scenes match this selection.</p>{/if}
     {/if}
     {#if reviewedScene}
@@ -174,10 +207,17 @@
   .filters{display:flex;gap:7px;overflow-x:auto;margin:17px 0;padding:1px 0 10px;scrollbar-width:thin;}
   .filters button{flex:0 0 auto;border:1px solid #526656;border-radius:999px;background:#24362a;color:#d6e4d3;padding:10px 15px;min-height:44px;cursor:pointer;font-size:13px;}
   .filters button.active{background:#a7c4a0;color:#10221a;border-color:#a7c4a0;font-weight:700;}
-  .scene-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.scene{border:1px solid #435c47;border-radius:14px;padding:15px;background:#213127;min-height:106px;box-sizing:border-box;}
-  .scene h3{font-size:15px;margin:0 0 8px;overflow-wrap:anywhere;}.scene p{font-size:12px;color:#c2cdbb;text-transform:capitalize;margin:0 0 14px;}
+  .library-summary{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;color:#bacfbe;font-size:12px;margin:10px 0;}
+  .scene-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start;}
+  .scene{display:flex;flex-direction:column;gap:8px;border:1px solid #536956;border-radius:14px;padding:12px;background:#213127;min-width:0;box-sizing:border-box;}
+  .scene h3{font-size:15px;margin:0 0 4px;overflow-wrap:anywhere;}.scene p{font-size:12px;color:#d4dcd0;text-transform:capitalize;margin:0;}
+  .palette{display:flex;gap:3px;height:5px;overflow:hidden;border-radius:3px;}.palette span{flex:1;min-width:0;}
+  .variants{min-width:0;}.variants summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:12px;color:#e6ece2;}.variants summary::before{content:'▸';margin-right:6px;}.variants[open] summary::before{content:'▾';}
+  .variant{display:flex;justify-content:space-between;gap:4px;width:100%;margin-top:5px;overflow-wrap:anywhere;}
+  .show-more{display:block;width:100%;margin-top:10px;min-height:44px;border:1px solid #719479;border-radius:10px;background:#253b2d;color:#ecf1e5;font:inherit;font-size:13px;cursor:pointer;}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
   .scene-review,.review-panel button{min-height:44px;border:1px solid #7b967c;border-radius:10px;background:#2a4534;color:#ecf1e5;padding:9px 11px;font-size:12px;cursor:pointer;}
-  .editor-toolbar{margin-bottom:14px;}.edit-scene{margin-top:8px;}
+  .editor-toolbar{margin-bottom:14px;}
   .scene-review:disabled{opacity:.5;cursor:not-allowed;}
   .review-panel{border:1px solid #a98e58;border-radius:14px;background:#392f21;color:#f1e3c4;margin:15px 0;padding:16px;}
   .review-panel strong{font-size:15px;}.review-panel p{font-size:12px;line-height:1.55;}
@@ -187,7 +227,6 @@
   .notice,.warning{padding:15px;border:1px dashed #65816d;border-radius:12px;color:#bacfbe;}.warning{border-color:#a9895a;color:#f1d4a6;}.warning button{min-height:44px;padding:8px;border:1px solid #a9895a;color:#f1d4a6;background:none;cursor:pointer;}
   button:focus-visible,input:focus-visible{outline:3px solid #d1e9be;outline-offset:3px;}
   @media(min-width:800px){.browser-root{align-items:center}.browser{max-height:88dvh;border-radius:24px;padding:30px}.scene-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
-  @media(max-width:340px){.scene-grid{grid-template-columns:1fr;}}
   /* A category picker replaces horizontal chip scrolling on phone-sized screens. */
   @media(max-width:700px){
     .browser { min-width:0; width:100%; max-height:95dvh; border-radius:20px 20px 0 0; padding:19px 16px calc(24px + env(safe-area-inset-bottom,0px)); }
@@ -195,14 +234,15 @@
     .mobile-category-label { display:block; margin-top:14px; }
     .mobile-category-select { display:block; box-sizing:border-box; width:100%; min-height:48px; padding:10px 14px; border:1px solid #719479; border-radius:11px; background:#223328; color:#f1f1e8; font:inherit; font-size:16px; }
     .filters { display:none; }
-    .scene-grid { grid-template-columns:minmax(0,1fr); gap:10px; }
-    .scene { min-width:0; min-height:98px; padding:15px; }
-    .scene h3 { font-size:17px; line-height:1.25; }
+    .scene-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }
+    .scene { min-width:0; padding:12px; }
+    .scene h3 { font-size:15px; line-height:1.25; }
     .scene p { line-height:1.45; }
-    .scene-review { min-height:48px; width:100%; font-size:14px; }
+    .scene-review { min-height:44px; width:100%; font-size:12px; padding:8px; overflow-wrap:anywhere; }
     .review-panel { overflow-wrap:anywhere; }
     .declared-scope ul { grid-template-columns:minmax(0,1fr); }
     .footer-note { line-height:1.6; }
   }
+  @media(max-width:350px){.scene-grid{grid-template-columns:minmax(0,1fr);}}
   .mobile-category-select:focus-visible{outline:3px solid #d1e9be;outline-offset:3px;}
 </style>
