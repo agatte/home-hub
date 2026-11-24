@@ -23,7 +23,7 @@ describe('Quiet Atlas shared shell navigation', () => {
   })
 
   it('keeps global API error toasts off isolated review surfaces', () => {
-    expect(shouldShowGlobalErrorToast('/quiet-atlas/control', new URLSearchParams())).toBe(false)
+    expect(shouldShowGlobalErrorToast('/quiet-atlas/control', new URLSearchParams())).toBe(true)
     expect(shouldShowGlobalErrorToast('/quiet-atlas', new URLSearchParams())).toBe(false)
     expect(shouldShowGlobalErrorToast('/quiet-atlas/home', new URLSearchParams())).toBe(true)
     expect(shouldShowGlobalErrorToast('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
@@ -36,13 +36,13 @@ describe('Quiet Atlas shared shell navigation', () => {
 
   it('labels only known read-only reviews as previews and keeps functional warnings visible', () => {
     for (const route of [
-      '/quiet-atlas', '/quiet-atlas/control',
+      '/quiet-atlas',
       '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
     ]) {
       expect(isQuietAtlasReadOnlyPreview(route)).toBe(true)
       expect(shouldShowGlobalErrorToast(route, new URLSearchParams())).toBe(false)
     }
-    for (const route of ['/music', '/settings', '/journal', '/personality', '/quiet-atlas/future-functional']) {
+    for (const route of ['/music', '/settings', '/journal', '/personality', '/quiet-atlas/control', '/quiet-atlas/lighting/bedroom', '/quiet-atlas/future-functional']) {
       expect(isQuietAtlasReadOnlyPreview(route)).toBe(false)
       expect(shouldShowGlobalErrorToast(route, new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     }
