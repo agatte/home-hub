@@ -67,7 +67,7 @@ export function sceneCardBackground(palette) {
   if (!palette.length) return ''
   const colors = palette.length === 1 ? [palette[0], palette[0]] : palette
   // Keep the lower controls on a dark base; let light bloom along the upper-right edge.
-  return 'linear-gradient(135deg, rgba(12,15,19,.80) 0%, rgba(12,15,19,.65) 42%, rgba(12,15,19,.25) 70%, rgba(12,15,19,.70) 100%), linear-gradient(115deg, ' + colors.join(', ') + ')'
+  return 'linear-gradient(135deg, rgba(12,15,19,.76) 0%, rgba(12,15,19,.60) 48%, rgba(12,15,19,.72) 72%, rgba(12,15,19,.86) 100%), linear-gradient(115deg, ' + colors.join(', ') + ')'
 }
 
 /** Same saved-scene background for compact shortcuts and library cards.
