@@ -17,7 +17,7 @@ import sys
 import urllib.error
 import urllib.request
 from urllib.parse import unquote, urlsplit
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 REPO = "agatte/home-hub"
@@ -356,12 +356,43 @@ def check_development_journal(
         owners = sorted({int(n) for n in ISSUE_LINK.findall(body)})
         if not owners:
             drift.append(f"{where}: missing linked owning issue/evidence")
+        revisions: dict[int, str] = {}
+        revision_lines = re.findall(r"(?m)^\*\*Source revisions:\*\*(.*)$", body)
+        if revision_lines:
+            if len(revision_lines) != 1:
+                drift.append(f"{where}: expected one source revisions line")
+            else:
+                for item in revision_lines[0].split(";"):
+                    revision = re.fullmatch(
+                        r"\s*#([1-9]\d*) @ (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*",
+                        item,
+                    )
+                    if not revision:
+                        drift.append(f"{where}: invalid source revision marker")
+                        continue
+                    number = int(revision.group(1))
+                    stamp = revision.group(2)
+                    if number in revisions or number not in owners:
+                        drift.append(f"{where}: duplicate or unlinked source revision #{number}")
+                        continue
+                    try:
+                        datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+                    except ValueError:
+                        drift.append(f"{where}: invalid source revision timestamp #{number}")
+                        continue
+                    revisions[number] = stamp
         for number in owners:
             issue = issues.get(number)
             if issue is None:
                 notices.append(f"{where}: linked issue #{number} absent from supplied metadata")
                 continue
             updated = issue.get("updated_at")
+            if number in revisions:
+                if not isinstance(updated, str):
+                    notices.append(f"{where}: issue #{number} revision metadata unavailable; recheck")
+                elif updated != revisions[number]:
+                    notices.append(f"{where}: issue #{number} revision differs from checkpoint; recheck")
+                continue
             if isinstance(updated, str):
                 try:
                     updated_day = date.fromisoformat(updated[:10])
