@@ -26,7 +26,8 @@ describe('Functional redesigned Music (#461)', () => {
     expect(workspace).toContain('before separately approving or starting playback')
     expect(approved).toContain('id="approved-apple-track"')
     expect(workspace).toContain('href="#approved-apple-track"')
-    expect(workspace).not.toMatch(/apiPost\\(|sonosCommand\\(/)
+    expect(workspace).not.toContain('apiPost(')
+    expect(workspace).not.toContain('sonosCommand(')
   })
   it('validates speaker reports and neutralizes disconnected, stale or invalid status', () => {
     const value = {state:'PLAYING',track:'Reported track',artist:'Artist',album:'Album',art_url:'/art.jpg',volume:24}
@@ -42,7 +43,8 @@ describe('Functional redesigned Music (#461)', () => {
     expect(player).toContain("fetch('/api/sonos/status'")
     expect(player).toContain('pending?.abort()')
     expect(player).toContain('disabled={!current}')
-    expect(player).not.toMatch(/apiPost\\(|sonos\\.set\\(/)
+    expect(player).not.toContain('apiPost(')
+    expect(player).not.toContain('sonos.set(')
   })
   it('compiles native routes and workspace without warnings', () => {
     for(const source of [music,legacy,workspace,player]) expect(compile(source,{generate:'dom',css:'external'}).warnings).toEqual([])

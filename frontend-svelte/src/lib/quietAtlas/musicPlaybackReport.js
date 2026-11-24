@@ -3,7 +3,9 @@ export function musicPlaybackReport(value) {
   if (!value || !['PLAYING','PAUSED_PLAYBACK','STOPPED','TRANSITIONING','NO_MEDIA_PRESENT'].includes(value.state) ||
       !Number.isFinite(value.volume) || value.volume < 0 || value.volume > 100 ||
       typeof value.track !== 'string' || typeof value.artist !== 'string' || typeof value.album !== 'string') return null
-  const art = typeof value.art_url === 'string' && /^(https?:\\/\\/|\\/(?!\\/))/.test(value.art_url) ? value.art_url : ''
+  const rawArt = typeof value.art_url === 'string' ? value.art_url : ''
+  const art = rawArt.startsWith('https://') || rawArt.startsWith('http://') ||
+    (rawArt.startsWith('/') && !rawArt.startsWith('//') && !rawArt.includes(String.fromCharCode(92))) ? rawArt : ''
   return {state:value.state,track:value.track,artist:value.artist,album:value.album,art_url:art,volume:value.volume}
 }
 
