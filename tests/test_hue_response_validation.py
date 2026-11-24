@@ -169,6 +169,7 @@ async def test_route_only_marks_manual_after_accepted_ack(payload, accepted):
         assert "uncertain" in error.value.detail
         assert engine.stamps == []
         assert engine.persists == 0
+    assert set(service._manual_readbacks) == ({"1"} if accepted else set())
     service._bridge.request.assert_called_once_with(
         "PUT", "/api/offline/lights/1/state", {"on": False},
     )
