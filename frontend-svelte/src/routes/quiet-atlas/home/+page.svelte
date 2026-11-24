@@ -469,13 +469,13 @@
 
 <style>
   .home-review {
-    --bg: #101a15;
-    --stage: #1a2a21;
-    --deep: #0f211b;
-    --line: rgba(224,235,214,.14);
-    --ink: #f7f3e8;
-    --muted: #b4c6b5;
-    --gold: #edcfa0;
+    --bg: var(--hh-canvas, #121917);
+    --stage: var(--hh-panel, #1c2522);
+    --deep: var(--hh-panel-deep, #141c19);
+    --line: var(--hh-line, rgba(229,233,220,.17));
+    --ink: var(--hh-ink, #f1eee7);
+    --muted: var(--hh-muted, #bec8c0);
+    --gold: var(--hh-accent, #e4c99e);
     --glow: rgba(155,179,117,.24);
     color: var(--ink);
     background: radial-gradient(ellipse at 72% 12%,rgba(178,154,104,.09),transparent 50%),var(--bg);
