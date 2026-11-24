@@ -616,7 +616,6 @@
   .recent-log-note a{color:var(--gold);text-decoration:underline;margin-left:10px;}
   .mobile-context {display:none;}
   .review-footer {display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;font-size:14px;color:var(--muted);margin-top:23px;}
-  .review-footer a {text-decoration:underline;}
   @media (max-width:960px) {
     .group {padding:10px;gap:7px;}
     .group-copy small {font-size:14px;}
@@ -713,7 +712,7 @@
     .group-arrow {display:none;}
   }
   .home-review {min-width:0;overflow-wrap:anywhere;}
-  .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
+  .rail-footer,.browse-link,.scene-line a {min-height:44px;display:inline-flex;align-items:center;}
   .group-copy small {white-space:normal;}
   .phone-room,.group {color:var(--ink);text-align:left;cursor:pointer;width:100%;font:inherit;}
   /* Real reported fixture state drives the lighting cues, never sample presence. */
