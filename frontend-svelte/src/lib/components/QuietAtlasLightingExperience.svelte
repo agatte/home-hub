@@ -11,6 +11,7 @@
 
   /** @type {string | null} Validated route target from the Control page. */
   export let routeIntent = null
+  export let functional = false
   /** @type {string | null | undefined} */
   let handledRouteIntent = undefined
 
@@ -202,12 +203,12 @@
 </script>
 
 <div class="qa-experience">
-  <div class="review-banner" role="note"><strong>Quiet Atlas · development review</strong> — This experimental route reads light and scene information but cannot turn on lights, change brightness, apply scenes, or alter automation.</div>
-  <QuietAtlasLightingOverview {groups} {snapshotStatus} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
+  {#if !functional}<div class="review-banner" role="note"><strong>Quiet Atlas · development review</strong> — This experimental route reads light and scene information but cannot turn on lights, change brightness, apply scenes, or alter automation.</div>{/if}
+  <QuietAtlasLightingOverview {functional} {groups} {snapshotStatus} onRefreshLights={refreshLights} {sceneList} sceneLoading={scenesLoading} {sceneError}
     onOpenGroup={openGroup} onBrowseScenes={browseScenes} onOpenScene={openSpecificScene} />
 </div>
 {#if sceneBrowserOpen}
-  <QuietAtlasSceneBrowser {sceneList} loading={scenesLoading} error={sceneError} connected={$connected}
+  <QuietAtlasSceneBrowser {functional} onApplied={refreshLights} {sceneList} loading={scenesLoading} error={sceneError} connected={$connected}
     selectedSceneId={focusSceneId} onRetry={refreshScenes} onClose={closeScenes} />
 {/if}
 
