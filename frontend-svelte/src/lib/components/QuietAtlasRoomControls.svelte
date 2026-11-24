@@ -6,6 +6,7 @@
   /** Existing HomeHub fixture IDs, not a new actuation authority. */
   export let room
   export let id
+  export let compact = false
 
   // Each card sends one existing light_command over HomeHub's WebSocket.
   // No paired Kitchen commands: each card addresses its own fixture.
@@ -25,7 +26,7 @@
   $: roomLabel = ROOMS[room] ?? 'Room'
 </script>
 
-<section class="room-control" aria-labelledby={`${id}-heading`}>
+<section class="room-control" class:compact aria-labelledby={`${id}-heading`}>
   <h4 id={`${id}-heading`} class="sr-only">Individual {roomLabel} lights</h4>
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
@@ -34,9 +35,10 @@
   {:else if fixtureIds.length === 0}
     <p role="status" class="warning">No configured fixtures for this room.</p>
   {:else}
+    {#if compact}<p class="light-hint">Drag to dim · tap power or color</p>{/if}
     <div class="fixture-grid">
       {#each fixtureIds as lightId (lightId)}
-        <div class="fixture" aria-label={`Light L${lightId}`}>
+        <div class="fixture" class:identified={$lights[lightId]?.reachable === true} aria-label={`Light L${lightId}`}>
           <div class="fixture-heading"><span class="fixture-id">L{lightId}</span></div>
           {#if $lights[lightId] && $lights[lightId].reachable === true}
             <LightCard light={$lights[lightId]} optimisticStore={false} />
@@ -65,6 +67,11 @@
   .fixture-id {display:inline-flex;align-items:center;font-size:11px;font-weight:750;letter-spacing:.1em;color:var(--gold);}
   .warning { font-size:14px; line-height:1.5; padding:14px; border:1px solid var(--line);border-radius:8px; }
   .control-details {margin-top:10px;color:var(--muted);font-size:13px;}
+  .light-hint {font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 9px;}
+  .compact .fixture-grid {gap:9px;margin:0;}
+  .compact .fixture.identified .fixture-heading {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);min-height:0;margin:0;}
+  .compact .control-details {margin-top:3px;}
+  .compact :global(.light-chip) {border-radius:13px;}
   .control-details summary {display:flex;align-items:center;min-height:44px;cursor:pointer;}
   a {display:inline-flex;align-items:center;min-height:44px;font-size:14px;color:var(--gold);text-decoration:underline;text-underline-offset:4px; }
   a:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
