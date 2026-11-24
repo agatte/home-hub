@@ -992,6 +992,10 @@ class RuleEngineService:
                 suggestion_id,
             )
 
+    def brightness_context_matches(self, payload: dict[str, Any]) -> bool:
+        """Recheck the original suggestion context at guarded dispatch."""
+        return self._brightness_context_matches(payload)
+
     def _brightness_context_matches(self, payload: dict[str, Any]) -> bool:
         """True only while a brightness suggestion's context is active."""
         automation = self._automation

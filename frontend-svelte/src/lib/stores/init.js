@@ -13,7 +13,7 @@ import { automation, automationStateFromStatus, mergeAutomationUpdate } from './
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
-import { showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
+import { brightnessSuggestion, showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
 import { pipeline } from './pipeline.js'
@@ -123,7 +123,8 @@ export function initStores() {
           showBrightnessSuggestion(data)
           break
         case 'brightness_suggestion_dismissed':
-          dismissBrightnessSuggestion()
+          if (Number.isSafeInteger(data?.id)) brightnessSuggestion.update(current => current?.id === data.id ? null : current)
+          else if (data?.id == null) dismissBrightnessSuggestion()
           break
         case 'ambient_update':
           ambient.set(data)
