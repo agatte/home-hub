@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   let password = ''
   let authenticated = false
+  let checking = true
+  let confirmLock = false
   let open = false
   let busy = false
   let error = ''
@@ -11,6 +13,7 @@
       const response = await fetch('/api/owner/session', { credentials: 'same-origin', cache: 'no-store' })
       authenticated = (await response.json()).authenticated === true
     } catch { /* Read-only state remains available. */ }
+    finally { checking = false }
   })
 
   async function unlock() {
@@ -35,7 +38,9 @@
   }
 
   async function lock() {
+    if (!authenticated || !confirmLock || busy) return
     busy = true
+    error = ''
     try {
       const response = await fetch('/api/owner/session', { method: 'DELETE', credentials: 'same-origin' })
       if (!response.ok) throw new Error('logout failed')
@@ -44,11 +49,23 @@
   }
 </script>
 
-<div class="owner-unlock">
-  {#if authenticated}
-    <button type="button" on:click={lock} disabled={busy} aria-label="Lock owner controls"><span class="full-label">Lock owner controls</span><span class="compact-label" aria-hidden="true">Lock</span></button>
-  {:else}
-    <button type="button" on:click={() => open = !open} aria-expanded={open} aria-controls="owner-login" aria-label="Unlock owner controls"><span class="full-label">Unlock owner controls</span><span class="compact-label" aria-hidden="true">Unlock</span></button>
+<section class="owner-unlock" aria-label="Owner device access">
+  <div class="access-heading">
+    <strong>Owner access</strong>
+    <small>{checking ? 'Checking this device…' : authenticated ? 'This device is trusted' : 'Unlock to use protected controls'}</small>
+  </div>
+  {#if !checking && authenticated}
+    {#if confirmLock}
+      <p class="lock-note">Locking signs out this browser. It does not change the house mode.</p>
+      <div class="access-actions">
+        <button type="button" on:click={() => confirmLock = false} disabled={busy}>Cancel</button>
+        <button type="button" on:click={lock} disabled={busy}>Confirm lock</button>
+      </div>
+    {:else}
+      <button type="button" on:click={() => confirmLock = true} disabled={busy}>Lock this device</button>
+    {/if}
+  {:else if !checking}
+    <button type="button" on:click={() => open = !open} aria-expanded={open} aria-controls="owner-login">Unlock owner controls</button>
     {#if open}
       <form id="owner-login" on:submit|preventDefault={unlock}>
         <label for="owner-password">Owner passphrase</label>
@@ -58,25 +75,21 @@
     {/if}
   {/if}
   {#if error}<p role="alert">{error}</p>{/if}
-</div>
+</section>
 
 <style>
-  .owner-unlock { position: fixed; right: 1rem; top: 1rem; z-index: 100; padding: .5rem; border-radius: .5rem; background: #20252d; color: white; }
-  form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding-top: .5rem; }
+  .owner-unlock {display:grid;gap:10px;padding:14px;border:1px solid rgba(190,215,188,.24);border-radius:14px;background:#18271f;color:#edf1e7;min-width:0;box-sizing:border-box;}
+  .access-heading {display:grid;gap:4px;}
+  .access-heading strong {font-size:14px;font-weight:700;}
+  .access-heading small,.lock-note {font-size:12px;color:#b9cbbd;line-height:1.5;}
+  .access-actions {display:flex;flex-wrap:wrap;gap:8px;}
+  .access-actions button {flex:1 1 95px;}
+  form {display:grid;gap:8px;}
+  form label {font-size:13px;}
   button, input { font: inherit; min-height: 44px; box-sizing: border-box; }
-  button { padding: .625rem .75rem; border-radius: .375rem; }
-  input { min-width: 0; flex: 1 1 12rem; padding: .5rem .625rem; }
+  button {padding:9px 12px;border-radius:10px;border:1px solid #536d59;background:#25392b;color:#edf1e7;font-size:13px;cursor:pointer;}
+  input {min-width:0;width:100%;padding:8px 10px;border-radius:9px;border:1px solid #65816d;background:#101c15;color:#fff;}
+  button:disabled {opacity:.55;cursor:not-allowed;}
   button:focus-visible, input:focus-visible { outline: 2px solid white; outline-offset: 2px; }
-  p { max-width: 24rem; }
-  .compact-label { display:none; }
-  @media (max-width:760px) {
-    /* Keep the owner gate reachable without covering HomeHub's phone header. */
-    .owner-unlock {right:10px;top:11px;padding:0;max-width:calc(100vw - 20px);border:1px solid rgba(190,215,188,.2);box-shadow:0 6px 20px rgba(0,0,0,.2);}
-    .owner-unlock > button {min-height:44px;padding:8px 12px;font-size:12px;font-weight:650;}
-    .full-label {display:none;}
-    .compact-label {display:inline;}
-    .owner-unlock:has(form) {width:min(330px,calc(100vw - 20px));padding:12px;box-sizing:border-box;}
-    form {flex-direction:column;align-items:stretch;gap:9px;}
-    input {width:100%;min-width:0;flex-basis:auto;}
-  }
+  p {margin:0;max-width:32ch;font-size:13px;}
 </style>
