@@ -39,6 +39,16 @@ describe('#461 redesigned Home mode recovery', () => {
     expect(panel).not.toContain('window.confirm(')
   })
 
+  it('keeps reported mode and Auto visible while disclosing manual choices', () => {
+    const picker = panel.indexOf('<details class="mode-picker">')
+    expect(picker).toBeGreaterThan(panel.indexOf('class="reported-mode"'))
+    expect(picker).toBeGreaterThan(panel.indexOf("requestMode('auto')"))
+    expect(panel).toContain('<summary>Change mode</summary>')
+    expect(panel.indexOf('id="home-mode-choice"')).toBeGreaterThan(picker)
+    expect(panel.indexOf('requestMode(selectedMode)')).toBeGreaterThan(picker)
+    expect(panel.indexOf('role="status" aria-live="polite"')).toBeGreaterThan(panel.indexOf('</details>'))
+  })
+
   it('compiles without Svelte accessibility warnings', () => {
     expect(compile(panel, {
       filename: 'QuietAtlasHomeModeControls.svelte', generate: 'dom', css: 'external',

@@ -10,9 +10,9 @@
   {#if open}
     <section class="shelf" aria-labelledby={`${id}-title`}>
       <div class="introduction">
-        <h3 id={`${id}-title`}>{group.name}</h3>
+        <h3 id={`${id}-title`}>{group.name} lights</h3>
       </div>
-      <QuietAtlasRoomControls room={group.id} id={`${id}-fixtures`} />
+      <QuietAtlasRoomControls room={group.id} id={`${id}-fixtures`} compact={true} />
     </section>
   {/if}
 </div>
@@ -20,10 +20,10 @@
 <style>
   .reveal {min-width:0;}
   .reveal[hidden] {display:none;}
-  .shelf {box-sizing:border-box;min-width:0;padding:28px;margin:10px 0 16px;border:1px solid var(--line);border-radius:16px;background:var(--deep);color:var(--ink);animation:unfold 220ms ease-out;}
-  .introduction {margin-bottom:22px;}
-  h3 {font-size:clamp(22px,2.4vw,30px);font-weight:550;line-height:1.2;margin:0 0 10px;}
+  .shelf {box-sizing:border-box;min-width:0;padding:18px 20px 10px;margin:8px 0 12px;border:1px solid var(--line);border-top:2px solid var(--gold);border-radius:15px;background:linear-gradient(130deg,var(--stage),var(--deep));color:var(--ink);animation:unfold 220ms ease-out;}
+  .introduction {margin-bottom:10px;}
+  h3 {font-size:18px;font-weight:650;line-height:1.3;letter-spacing:-.025em;margin:0;}
   @keyframes unfold {from {opacity:0;transform:translateY(-6px);} to {opacity:1;transform:translateY(0);}}
-  @media (max-width:700px) {.shelf {padding:20px 16px;margin:0 0 5px;border-radius:10px 10px 16px 16px;}.introduction{margin-bottom:14px;}h3{font-size:25px;}}
+  @media (max-width:700px) {.shelf {padding:14px 12px 6px;margin:0 0 4px;}.introduction{margin-bottom:8px;}}
   @media (prefers-reduced-motion:reduce) {.shelf {animation:none;}}
 </style>

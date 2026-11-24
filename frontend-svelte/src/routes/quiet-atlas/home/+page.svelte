@@ -306,7 +306,7 @@
 
   <section class="phone-actions" aria-labelledby="phone-lighting-title">
     <div class="phone-actions-head">
-      <span class="eyebrow">LIGHTING / YOUR ROOMS</span>
+      <span class="eyebrow">LIGHTING</span>
       <h2 id="phone-lighting-title">Your rooms</h2>
       <p>Choose a room to adjust its lights.</p>
     </div>
@@ -321,7 +321,7 @@
       {/each}
     </div>
     <a class="phone-scenes" href={CONTROL_SCENES_HREF}>
-      <span><strong>Scenes &amp; presets</strong><small>Explore available scenes</small></span>
+      <span><strong>Scenes &amp; presets</strong></span>
       <span aria-hidden="true">↗</span>
     </a>
   </section>
@@ -329,7 +329,7 @@
   <section class="lighting-dock" aria-labelledby="lighting-title">
     <div class="dock-head">
       <div>
-        <p class="eyebrow">LIGHTING / YOUR ROOMS</p>
+        <p class="eyebrow">LIGHTING</p>
         <h2 id="lighting-title">Your rooms</h2>
       </div>
       <a class="browse-link" href="/quiet-atlas/control">Browse Control <span aria-hidden="true">↗</span></a>
@@ -347,7 +347,7 @@
       <QuietAtlasHomeLightingReveal id={`dock-reveal-${group.id}`} {group} open={selectedRoom === group.id} />
     {/each}
     <div class="scene-line">
-      <span><strong>Scenes & presets</strong><small>View available scenes without changing the lights.</small></span>
+      <span><strong>Scenes & presets</strong></span>
       <a href={CONTROL_SCENES_HREF}>Browse scenes <span aria-hidden="true">↗</span></a>
     </div>
   </section>
@@ -365,7 +365,7 @@
   <section class="recent-log" aria-labelledby="recent-log-title">
     <div class="recent-log-head">
       <div>
-        <p class="eyebrow">RECORDED / RECENT</p>
+        
         <h2 id="recent-log-title">Recent activity</h2>
       </div>
       <span>Last 24 hours</span>
@@ -539,7 +539,6 @@
   .scene-line {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 2px;border-bottom:1px solid var(--line);}
   .scene-line>span {display:flex;flex-direction:column;gap:5px;}
   .scene-line strong {font-size:14px;}
-  .scene-line small {font-size:14px;color:var(--muted);line-height:1.4;}
   .scene-line a {color:var(--gold);white-space:nowrap;font-size:14px;padding:10px 0;}
   .recent-log{margin-top:24px;padding:20px 23px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
   .recent-log-head{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;}
@@ -586,7 +585,6 @@
     .group-copy small {font-size:14px;}
     .scene-line {padding:10px 2px;}
     .scene-line strong {font-size:14px;}
-    .scene-line small {font-size:14px;max-width:250px;}
     .scene-line a {font-size:14px;}
     .mobile-context {display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:13px;border-top:1px solid var(--line);padding-top:11px;font-size:14px;color:var(--muted);}
     .mobile-context-kind {font-size:14px;color:var(--gold);letter-spacing:.07em;text-transform:uppercase;}
@@ -618,7 +616,7 @@
     .phone-actions {margin-bottom:16px;}
     .phone-actions-head .eyebrow {font-size:11px;margin:0 0 5px;}
     .phone-actions-head h2 {font-size:25px;font-weight:620;line-height:1.12;margin:0 0 6px;}
-    .phone-actions-head p {font-size:13px;color:var(--muted);line-height:1.45;margin:0 0 12px;}
+    .phone-actions-head p {font-size:13px;color:var(--muted);line-height:1.45;margin:0 0 6px;}
     .phone-rooms {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;}
     .phone-rooms :global(.reveal) {grid-column:1 / -1;}
     .phone-room {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;min-height:88px;box-sizing:border-box;min-width:0;padding:13px;border-radius:15px;border:1px solid var(--line);background:linear-gradient(130deg,var(--stage),var(--deep));}
@@ -631,9 +629,8 @@
     .phone-scenes {min-height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:13px;margin-top:11px;padding:11px 15px;border:1px solid var(--line);border-radius:14px;background:rgba(210,183,136,.07);}
     .phone-scenes>span:first-child {display:flex;flex-direction:column;gap:5px;min-width:0;}
     .phone-scenes strong {font-size:16px;font-weight:640;}
-    .phone-scenes small {font-size:14px;color:var(--muted);line-height:1.4;}
     .phone-scenes>span:last-child {color:var(--gold);font-size:21px;}
-    .phone-actions-head {margin-bottom:16px;}
+    .phone-actions-head {margin-bottom:9px;}
     .phone-apartment-entry {padding:9px 2px 0;margin:9px 0 13px;border-top:1px solid var(--line);}
     .phone-apartment-entry .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
     .phone-apartment-entry a {min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:14px;font-weight:650;}
@@ -651,7 +648,6 @@
     .lighting-dock {margin-top:9px;}
     .browse-link {max-width:90px;text-align:right;}
     .group-arrow {display:none;}
-    .scene-line small {max-width:165px;}
   }
   .home-review {min-width:0;overflow-wrap:anywhere;}
   .rail-footer,.browse-link,.scene-line a,.review-footer a {min-height:44px;display:inline-flex;align-items:center;}
