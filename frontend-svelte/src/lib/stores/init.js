@@ -3,6 +3,7 @@
 // function that closes the socket — Svelte's onMount uses the returned value
 // as its destroy hook.
 
+import { validBrightnessSuggestion, validModeSuggestion } from '../quietAtlas/suggestionValidation.js'
 import { receiveAmbientContext, resetAmbientContext } from '../quietAtlas/ambient.js'
 import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
@@ -11,8 +12,8 @@ import { lightCommandTracker } from './lightCommandResults.js'
 import { sonos, sonosLiveReport } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
-import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
-import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
+import { showMusicSuggestion, showMusicAutoPlayed, dismissMusicSuggestion, musicAutoPlayed } from './music.js'
+import { modeSuggestion, showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 import { brightnessSuggestion, showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
@@ -28,7 +29,92 @@ let socket = null
 let modeRequestPending = false
 let modeUpdateEpoch = 0
 
+function resetSuggestions() {
+  dismissModeSuggestion()
+  dismissBrightnessSuggestion()
+  dismissMusicSuggestion()
+  musicAutoPlayed.set(null)
+}
+
+// Restore only a fresh, still-pending record matching the reported context.
+// This read never grants command authority; all accept actions remain ID-scoped
+// and the server rechecks pending status (and brightness context).
+/** @param {any} result @param {{mode:string,time_period?:string}} context @param {Set<number>} invalidModeIds @param {Set<number>} invalidBrightnessIds */
+function pendingSuggestionRows(result, context, invalidModeIds, invalidBrightnessIds) {
+  const now = Date.now()
+  const rows = Array.isArray(result?.suggestions) ? result.suggestions.filter(row => {
+    const fired = Date.parse(row?.fired_at)
+    return row?.status === 'pending' && Number.isSafeInteger(row.id) && row.id > 0 &&
+      Number.isFinite(fired) && fired <= now && now - fired < 60 * 60 * 1000 &&
+      row.current_mode_at_fire === context.mode &&
+      Number.isInteger(row.confidence) && row.confidence >= 0 && row.confidence <= 100 &&
+      Number.isSafeInteger(row.sample_count) && row.sample_count > 0
+  }) : []
+  const mode = rows.find(row => row.kind === 'mode' && !invalidModeIds.has(row.id) &&
+    Number.isSafeInteger(row.rule_id) && row.rule_id > 0 &&
+    ['relax','working','watching','gaming','cooking','social'].includes(row.predicted_mode))
+  const brightness = rows.find(row => validBrightnessSuggestion(row) && !invalidBrightnessIds.has(row.id) &&
+    row.payload.mode === context.mode && typeof context.time_period === 'string' &&
+    row.payload.period === context.time_period)
+  return {
+    mode: mode ? {suggestion_id:mode.id,rule_id:mode.rule_id,predicted_mode:mode.predicted_mode,confidence:mode.confidence,sample_count:mode.sample_count,message:''} : null,
+    brightness: brightness ?? null,
+  }
+}
+
 export function initStores() {
+  let connectionEpoch = 0
+  let socketConnected = false
+  let restored = false
+  let modeEvents = 0
+  let brightnessEvents = 0
+  let liveContextKey = ''
+  /** @type {{house_state?:string,mode?:string,time_period?:string}} */
+  let liveContext = {}
+  let contextEpoch = 0
+  /** @type {Set<number>} */
+  const invalidModeIds = new Set()
+  /** @type {Set<number>} */
+  const invalidBrightnessIds = new Set()
+
+  /** @param {any} data */
+  function restorePendingSuggestions(data) {
+    if (!socketConnected || !data || typeof data !== 'object') return
+    // Partial mode_update frames must not inherit REST or optimistic context.
+    const next = {...liveContext}
+    if (Object.hasOwn(data,'house_state')) next.house_state = typeof data.house_state === 'string' ? data.house_state : undefined
+    if (Object.hasOwn(data,'mode')) next.mode = typeof data.mode === 'string' ? data.mode : undefined
+    if (Object.hasOwn(data,'time_period')) next.time_period = typeof data.time_period === 'string' ? data.time_period : undefined
+    liveContext = next
+    const key = JSON.stringify([next.house_state,next.mode,next.time_period])
+    if (liveContextKey !== key) {
+      liveContextKey = key
+      contextEpoch += 1
+      restored = false
+      modeEvents = 0
+      brightnessEvents = 0
+      // A card belongs to the live context in which it was received.
+      // Do not revive an invalidated ID if the context later cycles back.
+      modeSuggestion.update(current => { if (current) invalidModeIds.add(current.suggestion_id); return null })
+      brightnessSuggestion.update(current => { if (current) invalidBrightnessIds.add(current.id); return null })
+      dismissMusicSuggestion()
+    }
+    if (restored || !['home','winding_down'].includes(next.house_state ?? '') || !next.mode) return
+    restored = true
+    const connection = connectionEpoch
+    const context = contextEpoch
+    const observed = {mode:next.mode,time_period:next.time_period}
+    apiGet('/api/rules/suggestions?status=pending&limit=20')
+      .then(result => {
+        if (!socketConnected || connectionEpoch !== connection || contextEpoch !== context) return
+        const rows = pendingSuggestionRows(result,observed,invalidModeIds,invalidBrightnessIds)
+        if (modeEvents === 0 && rows.mode && !invalidModeIds.has(rows.mode.suggestion_id)) modeSuggestion.update(current => current ?? rows.mode)
+        if (brightnessEvents === 0 && rows.brightness && !invalidBrightnessIds.has(rows.brightness.id)) brightnessSuggestion.update(current => current ?? rows.brightness)
+      })
+      .catch(() => {})
+  }
+
+  resetSuggestions()
   sonosLiveReport.set(null)
   resetAmbientContext()
   lightCommandTracker.reset()
@@ -96,6 +182,7 @@ export function initStores() {
           modeUpdateEpoch += 1
           receiveAmbientContext(data)
           automation.update((prev) => mergeAutomationUpdate(prev, data))
+          restorePendingSuggestions(data)
           break
         case 'dnd_update':
           automation.update((prev) => ({
@@ -114,16 +201,27 @@ export function initStores() {
           showMusicAutoPlayed(data)
           break
         case 'mode_suggestion':
-          showModeSuggestion(data)
+          modeEvents += 1
+          if (socketConnected && ['home','winding_down'].includes(liveContext.house_state ?? '') && liveContext.mode && validModeSuggestion(data) && !invalidModeIds.has(data.suggestion_id)) showModeSuggestion(data)
           break
         case 'mode_suggestion_dismissed':
-          dismissModeSuggestion()
+          modeEvents += 1
+          if (Number.isSafeInteger(data?.id)) {
+            invalidModeIds.add(data.id)
+            modeSuggestion.update(current => current?.suggestion_id === data.id ? null : current)
+          }
+          else if (data?.id == null) dismissModeSuggestion()
           break
         case 'brightness_suggestion':
-          showBrightnessSuggestion(data)
+          brightnessEvents += 1
+          if (socketConnected && ['home','winding_down'].includes(liveContext.house_state ?? '') && validBrightnessSuggestion(data) && data.payload.mode === liveContext.mode && data.payload.period === liveContext.time_period && !invalidBrightnessIds.has(data.id)) showBrightnessSuggestion(data)
           break
         case 'brightness_suggestion_dismissed':
-          if (Number.isSafeInteger(data?.id)) brightnessSuggestion.update(current => current?.id === data.id ? null : current)
+          brightnessEvents += 1
+          if (Number.isSafeInteger(data?.id)) {
+            invalidBrightnessIds.add(data.id)
+            brightnessSuggestion.update(current => current?.id === data.id ? null : current)
+          }
           else if (data?.id == null) dismissBrightnessSuggestion()
           break
         case 'ambient_update':
@@ -144,6 +242,17 @@ export function initStores() {
       }
     },
     (isConnected) => {
+      connectionEpoch += 1
+      socketConnected = isConnected
+      restored = false
+      modeEvents = 0
+      brightnessEvents = 0
+      liveContextKey = ''
+      liveContext = {}
+      invalidModeIds.clear()
+      invalidBrightnessIds.clear()
+      contextEpoch += 1
+      resetSuggestions()
       sonosLiveReport.set(null)
       resetAmbientContext()
       connected.set(isConnected)
@@ -156,6 +265,9 @@ export function initStores() {
   socket.connect()
 
   return () => {
+    connectionEpoch += 1
+    socketConnected = false
+    resetSuggestions()
     sonosLiveReport.set(null)
     resetAmbientContext()
     lightCommandTracker.reset()

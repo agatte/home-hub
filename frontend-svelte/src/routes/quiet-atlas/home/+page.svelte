@@ -10,6 +10,8 @@
   import { CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import QuietAtlasHomeLightingReveal from '$lib/components/QuietAtlasHomeLightingReveal.svelte'
   import QuietAtlasHomeModeControls from '$lib/components/QuietAtlasHomeModeControls.svelte'
+  import QuietAtlasAllOff from '$lib/components/QuietAtlasAllOff.svelte'
+  import QuietAtlasHomeSuggestions from '$lib/components/QuietAtlasHomeSuggestions.svelte'
   let selectedRoom = null
   function toggleRoom(id) {
     selectedRoom = selectedRoom === id ? null : id
@@ -416,6 +418,8 @@
 
   <!-- Lighting is the primary task on both phone and kiosk. -->
   <QuietAtlasHomeModeControls />
+  <QuietAtlasAllOff />
+  <QuietAtlasHomeSuggestions />
 
   <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
     <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
