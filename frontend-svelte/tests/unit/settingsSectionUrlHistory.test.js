@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
-import settings from '../../src/routes/settings/+page.svelte?raw'
+import settings from '../../src/routes/quiet-atlas/settings/+page.svelte?raw'
 
 describe('functional Settings URL and browser history synchronization (#461)', () => {
   it('uses URL as section authority when Back/Forward removes or invalidates section', () => {

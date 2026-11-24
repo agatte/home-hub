@@ -22,11 +22,8 @@ afterEach(() => {
 
 describe('first opt-in Quiet Atlas ambient candidate (#15, not full acceptance)', () => {
   it('permits only current native read-only routes with the desktop viewport gate', () => {
-    for (const route of ['insights', 'settings']) {
-      expect(ambientRouteEligible(`/quiet-atlas/${route}`)).toBe(true)
-    }
     for (const route of ['/', '/quiet-atlas/home', '/quiet-atlas/control', '/quiet-atlas/lighting/bedroom', '/quiet-atlas', '/quiet-atlas/future-functional', '/guest',
-      '/gameday', '/settings', '/music', '/quiet-atlas/music', '/quiet-atlas/music/artist-review',
+      '/gameday', '/settings', '/music', '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/household', '/quiet-atlas/music', '/quiet-atlas/music/artist-review',
       '/quiet-atlas/music/artist-review/nested']) {
       expect(ambientRouteEligible(route)).toBe(false)
     }

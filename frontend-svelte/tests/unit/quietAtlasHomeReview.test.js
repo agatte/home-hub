@@ -78,7 +78,8 @@ describe('Quiet Atlas opt-in Home composition contract', () => {
     expect(homeRoute).toContain('View Insights')
     expect(homeRoute).toContain('Open Insights')
     // Advanced tools are still one clearly labeled link away from Insights.
-    expect(insightsRoute).toContain('href="/analytics?shell=quiet-atlas"')
-    expect(insightsRoute).toContain('href="/quiet-atlas/home"')
+    expect(insightsRoute).not.toContain('href="/analytics?shell=quiet-atlas"')
+    expect(insightsRoute).toContain('<SectorBoard />')
+    expect(insightsRoute).toContain('href="/"')
   })
 })

@@ -1,9 +1,16 @@
 <script>
-  // #270 Insights review: only recorded activity has a live source here.
+  // #270 source-qualified summary plus explicitly separated existing diagnostics.
   // A logged activity is not a current activity, presence, room, or causal trace.
   import { onMount } from 'svelte'
   import { connected } from '$lib/stores/connection.js'
   import InsightsContextReadout from '$lib/components/InsightsContextReadout.svelte'
+  import SectorBoard from '$lib/components/sector-board/SectorBoard.svelte'
+  import HistoryDrawer from '$lib/components/constellation/HistoryDrawer.svelte'
+  import AutonomyGateCard from '$lib/components/AutonomyGateCard.svelte'
+  import NarrativeCard from '$lib/components/analytics/NarrativeCard.svelte'
+
+  export let diagnosticsInitiallyOpen = false
+  let diagnosticsOpen = diagnosticsInitiallyOpen
   import {
     newRecentActivityLog, recentActivityConnectionChanged, invalidateRecentActivity,
     beginRecentActivityRead, acceptRecentActivityRead, failRecentActivityRead,
@@ -111,11 +118,11 @@
 </script>
 
 <svelte:head>
-  <title>Insights · Quiet Atlas design review | HomeHub</title>
-  <meta name="description" content="Read-only source-qualified activity evidence in the Quiet Atlas Insights design study." />
+  <title>Insights | HomeHub</title>
+  <meta name="description" content="Source-qualified reported context, recorded activity and existing HomeHub analytics." />
 </svelte:head>
 
-<main class="insights-review" aria-label="Quiet Atlas Insights design review">
+<main class="insights-review" aria-label="HomeHub Insights">
   <header class="insights-hero">
     <h1>Insights</h1>
     <p class="intro">Read HomeHub's reported context and recorded activity. Unknown or unavailable information stays clearly marked.</p>
@@ -191,16 +198,34 @@
         </div>
       </div>
       </div>
-      <a class="existing-link" href="/analytics?shell=quiet-atlas">
-        Open existing Analytics tools <span aria-hidden="true">↗</span>
-      </a>
-      <p class="mechanism-note">The existing tools remain available. This isolated study does not replace them or claim its explanatory layers are live.</p>
+      <p class="mechanism-note">The proposed layers are not a live decision trace. Existing diagnostic tools are available separately below.</p>
     </aside>
   </div>
 
+  <section class="diagnostics" id="system-analysis" aria-labelledby="diagnostics-heading">
+    <h2 id="diagnostics-heading">System analysis</h2>
+    <p class="description">Inspect HomeHub's existing diagnostics, recorded history and generated narrative. These are reported diagnostic signals, not independent physical or causal confirmation.</p>
+    <details bind:open={diagnosticsOpen}>
+      <summary>Decision pipeline, history &amp; analysis</summary>
+      {#if diagnosticsOpen}
+        <div class="diagnostic-tools">
+          {#if $connected}
+            <p class="diagnostic-note">Connection established. Pipeline data may lag or reflect earlier reports.</p>
+            <SectorBoard />
+            <HistoryDrawer />
+          {:else}
+            <p class="diagnostic-note" role="status">Live pipeline connection unavailable.</p>
+          {/if}
+          <AutonomyGateCard />
+          <NarrativeCard />
+        </div>
+      {/if}
+    </details>
+  </section>
+
   <footer class="review-footer">
     <span>DESIGN STUDY · NOT A LIVE FUSION OR DECISION TRACE</span>
-    <a href="/quiet-atlas/home">Return to Home <span aria-hidden="true">↗</span></a>
+    <a href="/">Return to Home <span aria-hidden="true">↗</span></a>
   </footer>
 </main>
 
@@ -210,6 +235,9 @@
     --gold: var(--hh-accent,#e4c99e); --deep: var(--hh-canvas,#121917);
     min-height: 100%; padding: clamp(18px,3vw,36px) clamp(16px,4vw,52px) 48px;
     color: var(--ink); background: var(--hh-page-background,var(--deep));
+    --bg-primary:var(--hh-panel-deep);--bg-secondary:var(--hh-panel);--bg-card:var(--hh-card-background);
+    --text-primary:var(--hh-ink);--text-secondary:var(--hh-muted);--text-muted:var(--hh-muted);--accent:var(--hh-accent);
+    --border:var(--hh-line);--radius:var(--hh-radius-panel);--radius-sm:var(--hh-radius-control);--font-body:var(--hh-font);
     font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   }
   .insights-hero {max-width:850px;padding:8px 0 28px;}
@@ -244,9 +272,13 @@
   .stage-id {display:block;color:var(--gold);letter-spacing:.13em;font-size:14px;font-weight:700;margin:0 0 8px;}
   .stage strong {display:block;font-size:15px;font-weight:570;color:var(--ink);}
   .stage p {color:var(--muted);font-size:14px;line-height:1.65;margin:7px 0 0;}
-  .existing-link {display:flex;gap:12px;justify-content:space-between;align-items:center;min-height:46px;padding:12px 14px;border:1px solid rgba(214,183,128,.45);border-radius:8px;color:#f5ddad;text-decoration:none;font-size:14px;}
-  .existing-link:hover {background:rgba(214,183,128,.07);}
-  .existing-link:focus-visible,.review-footer a:focus-visible {outline:3px solid #f1d499;outline-offset:4px;}
+  .review-footer a:focus-visible,.diagnostics summary:focus-visible {outline:3px solid #f1d499;outline-offset:4px;}
+  .diagnostics {border-top:1px solid var(--line);margin-top:32px;padding-top:24px;min-width:0;scroll-margin-top:80px;}
+  .diagnostics details {border:1px solid var(--line);border-radius:var(--hh-radius-panel);background:var(--hh-card-background);padding:12px 16px;}
+  .diagnostics summary {cursor:pointer;padding:12px 0;min-height:48px;color:var(--gold);font-weight:650;}
+  .diagnostic-tools {display:grid;gap:16px;min-width:0;padding:6px 0 12px;}
+  .diagnostic-note {font-size:13px;line-height:1.55;color:var(--muted);}
+  @media(prefers-reduced-motion:reduce){.diagnostics summary{scroll-behavior:auto}}
   .mechanism-note {font-size:14px;line-height:1.6;color:var(--muted);margin:14px 0 0;}
   .review-footer {display:flex;justify-content:space-between;gap:16px;border-top:1px solid var(--line);margin:52px 0 0;padding-top:20px;font-size:14px;letter-spacing:.08em;color:var(--muted);}
   .review-footer a {font-size:14px;letter-spacing:0;color:var(--gold);}
@@ -290,10 +322,8 @@
     .mechanism-intro {margin:15px 0;font-size:14px;line-height:1.6;}
     .stages {margin:18px 0 8px;}
     .stage {padding-bottom:17px;}
-    .existing-link {min-height:48px;margin-top:14px;font-size:14px;}
     .mechanism-note {font-size:14px;line-height:1.55;}
     .review-footer {margin:29px 0 0;padding-top:17px;line-height:1.5;}
     .review-footer a {display:inline-flex;align-items:center;min-height:44px;}
   }
-  @media(prefers-reduced-motion:reduce){.existing-link{scroll-behavior:auto}}
 </style>

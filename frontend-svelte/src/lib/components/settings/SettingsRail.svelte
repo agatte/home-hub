@@ -1,5 +1,5 @@
 <script>
-  /** @typedef {{id: string, label: string, icon?: any, hint?: string}} SectionDef */
+  /** @typedef {{id: string, label: string, icon?: any, hint?: string, group?: string}} SectionDef */
 
   /** @type {SectionDef[]} */
   export let sections = []
@@ -7,6 +7,8 @@
   export let activeId = ''
   /** @type {(id: string) => void} */
   export let onSelect = () => {}
+
+  $: groups = [...new Set(sections.map(section => section.group || 'Settings'))]
 
   /** @param {Event} event */
   function selectPhoneSection(event) {
@@ -18,7 +20,7 @@
 
 <aside class="settings-rail">
   <header class="rail-head">
-    <h1>Settings</h1>
+    <h2>Sections</h2>
   </header>
   <div class="phone-section-picker">
     <label for="homehub-phone-settings-section">Choose a settings section</label>
@@ -27,10 +29,13 @@
         <option value={section.id}>{section.label}</option>
       {/each}
     </select>
-    <p>The section below contains the existing functional settings. Changing this menu only navigates.</p>
+    <p>Choose a section to view its settings. Changing this menu only navigates.</p>
   </div>
   <nav class="rail-nav" aria-label="Settings sections">
-    {#each sections as section (section.id)}
+    {#each groups as group (group)}
+      <div class="rail-group">
+        <h3>{group}</h3>
+        {#each sections.filter(section => (section.group || 'Settings') === group) as section (section.id)}
       <button
         type="button"
         class="rail-item"
@@ -45,6 +50,8 @@
         {/if}
         <span class="rail-label">{section.label}</span>
       </button>
+        {/each}
+      </div>
     {/each}
   </nav>
 </aside>
@@ -69,7 +76,7 @@
     margin-bottom: 14px;
   }
 
-  .rail-head h1 {
+  .rail-head h2 {
     font-family: var(--font-display, 'Bebas Neue', sans-serif);
     font-size: 24px;
     margin: 0;
@@ -83,6 +90,8 @@
     gap: 2px;
   }
 
+  .rail-group {display:grid;gap:2px;}
+  .rail-group h3 {font-size:11px;line-height:1.4;font-weight:650;letter-spacing:.04em;color:var(--text-muted);margin:12px 8px 5px;}
   .rail-item {
     width: 100%;
     text-align: left;
@@ -131,12 +140,13 @@
   @media (max-width: 900px) {
     .settings-rail {position:static;max-height:none}
     .rail-nav {flex-direction:row;flex-wrap:wrap;gap:6px}
-    .rail-item {flex:1 1 calc(50% - 6px);min-width:140px}
+    .rail-group {flex:1 1 190px;min-width:0}
+    .rail-item {min-width:0}
   }
   @media (max-width: 600px) {
     .settings-rail {position:static;box-sizing:border-box;min-width:0;max-height:none;overflow:visible;padding:15px;border-radius:15px;background:#17251c;border-color:rgba(167,194,165,.25)}
     .rail-head {margin-bottom:11px}
-    .rail-head h1 {font-family:var(--font-body,system-ui);font-size:21px;font-weight:650;letter-spacing:0;line-height:1.25;color:#eef2e8}
+    .rail-head h2 {font-family:var(--font-body,system-ui);font-size:21px;font-weight:650;letter-spacing:0;line-height:1.25;color:#eef2e8}
     .rail-nav {display:none}
     .phone-section-picker {display:flex;flex-direction:column;gap:8px;min-width:0}
     .phone-section-picker label {font-size:13px;font-weight:650;color:#e6eddf}

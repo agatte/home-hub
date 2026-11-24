@@ -17,15 +17,17 @@ import {
 } from '../../src/lib/quietAtlas/homeContextSnapshot.js'
 
 describe('Quiet Atlas opt-in Insights archetype', () => {
-  it('is its own read-only route and preserves functional Analytics', () => {
+  it('is the functional Insights route and preserves Analytics in place', () => {
     expect(shell).toContain("id: 'insights', label: 'Insights', href: '/quiet-atlas/insights'")
     expect(activeQuietAtlasSection('/quiet-atlas/insights')).toBe('insights')
     expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
     expect(activeQuietAtlasSection('/analytics')).toBe('insights')
     expect(shouldUseQuietAtlasShell('/quiet-atlas/insights', new URLSearchParams())).toBe(true)
-    expect(shouldShowGlobalErrorToast('/quiet-atlas/insights', new URLSearchParams())).toBe(false)
-    expect(route).toContain('href="/analytics?shell=quiet-atlas"')
-    expect(route).toContain('href="/quiet-atlas/home"')
+    expect(shouldShowGlobalErrorToast('/quiet-atlas/insights', new URLSearchParams())).toBe(true)
+    expect(shouldUseQuietAtlasShell('/analytics', new URLSearchParams())).toBe(true)
+    expect(route).not.toContain('href="/analytics?shell=quiet-atlas"')
+    expect(route).toContain('href="/"')
+    for (const component of ['SectorBoard','HistoryDrawer','AutonomyGateCard','NarrativeCard']) expect(route).toContain('<'+component+' />')
     expect(route).toContain('DESIGN STUDY · NOT A LIVE FUSION OR DECISION TRACE')
   })
 

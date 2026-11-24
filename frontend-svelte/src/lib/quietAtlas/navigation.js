@@ -88,7 +88,6 @@ export const MORE_DESTINATIONS = [
 // Future functional routes fail open to the normal error display.
 const READ_ONLY_PREVIEW_PATHS = new Set([
   '/quiet-atlas',
-  '/quiet-atlas/insights', '/quiet-atlas/settings',
   '/quiet-atlas/music/artist-review',
 ])
 
@@ -99,7 +98,7 @@ export function isQuietAtlasReadOnlyPreview(pathname) {
 }
 
 export function shouldUseQuietAtlasShell(pathname, searchParams) {
-  if (pathname === '/' || pathname === '/music') return true // Migrated Home and Music, including old bookmarks.
+  if (['/', '/music', '/settings', '/analytics'].includes(pathname)) return true // Migrated workspaces, including old bookmarks.
   if (pathname === '/classic') return false // Always preserve original chrome.
   if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) return true
   if (pathname === '/gameday' || pathname.startsWith('/gameday/') ||
