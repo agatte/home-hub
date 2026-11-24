@@ -84,6 +84,10 @@ class HueService:
         # loop skips that light so mid-transition bridge reads don't bounce
         # the UI back to stale values.
         self._inflight_until: dict[str, float] = {}
+        # Manual ACKs request one early, post-transition read via the existing
+        # poller; never start a competing poll task or publish predicted state.
+        self._manual_readbacks: dict[str, float] = {}
+        self._manual_readback_wake = asyncio.Event()
         # Successful-write physical completion deadlines, without the UI
         # polling buffer. Effect release waits on these exact commanded
         # transition durations; API acknowledgement alone is not completion.
@@ -501,6 +505,28 @@ class HueService:
             logger.error("Hue flash request failed; remote outcome unknown")
             return False
 
+    def request_manual_readback(self, light_id: str) -> None:
+        """Wake the shared read-only poller after a guarded manual ACK."""
+        self._manual_readbacks[str(light_id)] = time.monotonic()
+        self._manual_readback_wake.set()
+
+    async def _wait_for_next_poll(self) -> None:
+        """Keep ordinary cadence, but service coalesced manual reads sooner."""
+        normal_due = time.monotonic() + (5.0 if self._v2_stream_active else 0.5)
+        while True:
+            self._manual_readback_wake.clear()
+            now = time.monotonic()
+            due = min([normal_due] + [
+                max(requested, self._inflight_until.get(lid, 0.0))
+                for lid, requested in self._manual_readbacks.items()
+            ])
+            if due <= now:
+                return
+            try:
+                await asyncio.wait_for(self._manual_readback_wake.wait(), timeout=due - now)
+            except asyncio.TimeoutError:
+                return
+
     async def poll_state_loop(self, ws_manager) -> None:
         """
         Continuously poll light state and broadcast changes via WebSocket.
@@ -514,11 +540,27 @@ class HueService:
             try:
                 if self._heartbeat is not None:
                     self._heartbeat.tick("hue")
+                # A read that began before a manual write/settle cannot
+                # satisfy that write's readback, even if it returns late.
+                read_started = time.monotonic()
+                readbacks = self._manual_readbacks.copy()
+                deadlines = self._inflight_until.copy()
+                cached_at_start = self._last_states.copy()
                 lights = await self.get_all_lights()
                 now = time.monotonic()
 
                 for light in lights:
                     lid = light["light_id"]
+                    if lid in self._manual_readbacks:
+                        requested = readbacks.get(lid)
+                        deadline_at_start = deadlines.get(lid, 0.0)
+                        if (
+                            requested is None or requested != self._manual_readbacks[lid]
+                            or deadline_at_start != self._inflight_until.get(lid, 0.0)
+                            or read_started < max(requested, deadline_at_start)
+                            or self._last_states.get(lid) is not cached_at_start.get(lid)
+                        ):
+                            continue
 
                     # Skip lights that were just written: their bridge state
                     # is mid-transition and would bounce the UI to a stale value.
@@ -540,6 +582,17 @@ class HueService:
                         self._last_states[lid] = light
                         await ws_manager.broadcast("light_update", light)
 
+                # Consume only the matured requests covered by this read
+                # attempt. Missing/unreachable fixtures and newer SSE reports
+                # fall back to the normal poll rather than retrying in a loop.
+                for lid, requested in readbacks.items():
+                    if (
+                        self._manual_readbacks.get(lid) == requested
+                        and deadlines.get(lid, 0.0) == self._inflight_until.get(lid, 0.0)
+                        and read_started >= max(requested, deadlines.get(lid, 0.0))
+                    ):
+                        self._manual_readbacks.pop(lid, None)
+
                 # Cadence depends on whether the v2 EventStream is healthy.
                 # Stream covers on/brightness push; we still need v1 polling
                 # for color/ct + bridge reachability, but at a much lower rate.
@@ -551,7 +604,7 @@ class HueService:
                 # unconditionally — it negates the v2 push benefit. If the
                 # color lag becomes user-visible, the right move is to add
                 # the xy→hue/sat conversion, not to drop this branch.
-                await asyncio.sleep(5.0 if self._v2_stream_active else 0.5)
+                await self._wait_for_next_poll()
             except asyncio.CancelledError:
                 logger.info("Hue polling stopped")
                 break
