@@ -57,8 +57,8 @@ describe('Quiet Atlas phone-first Home composition', () => {
     expect(home).not.toContain('class="phone-functional-handoff"')
     expect(home).toContain('id="phone-lighting-title"')
     expect(home).toContain('<QuietAtlasHomeModeControls />')
-    expect(home).toContain('href="/classic"')
-    expect(home).toContain('Classic dashboard')
+    expect(home).toContain('href="/quiet-atlas/household"')
+    expect(home).not.toContain('href="/classic"')
   })
 
   it('compiles in Svelte with zero warnings and leaves existing status lifecycle intact', () => {

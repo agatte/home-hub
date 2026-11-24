@@ -74,7 +74,7 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(homeSource).not.toContain('Control · precision workspace')
     expect(homeSource).toContain('class="browse-link" href="/quiet-atlas/control">Browse Control')
     expect(homeSource).not.toContain("href={lightingDetailHref(group.id, 'home')}")
-    expect(homeSource.match(/href="\/quiet-atlas"/g)).toHaveLength(1) // legacy permalink only
+    expect(homeSource).not.toContain('href="/quiet-atlas"') // obsolete preview link removed
     expect(activeQuietAtlasSection('/quiet-atlas/home')).toBe('home')
     expect(activeQuietAtlasSection('/')).toBe('home')
     expect(activeQuietAtlasSection('/quiet-atlas/control')).toBe('control')
@@ -105,7 +105,7 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(activeQuietAtlasSection('/settings')).toBe('more')
     expect(activeQuietAtlasSection('/quiet-atlas/settings')).toBe('more')
     expect(MORE_DESTINATIONS.map(({ href }) => href)).toEqual([
-      '/quiet-atlas/settings', '/journal', '/personality', '/classic', '/gameday', '/guest',
+      '/quiet-atlas/settings', '/journal', '/personality', '/quiet-atlas/household', '/gameday', '/guest',
     ])
     expect(MORE_DESTINATIONS.filter((item) => item.shell).map((item) => item.href)).toEqual([
       '/journal', '/personality',

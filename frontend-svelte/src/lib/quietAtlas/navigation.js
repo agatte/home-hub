@@ -63,9 +63,9 @@ export const MORE_DESTINATIONS = [
   },
   {
     id: 'apartment',
-    label: 'Apartment and household tools',
-    description: 'Original Apartment dashboard, plants, bar, Guest Wi-Fi, routines, and ambient controls.',
-    href: '/classic',
+    label: 'Household',
+    description: 'Apartment overview, routines, plants, bar, Guest Wi-Fi, ambient sound and network.',
+    href: '/quiet-atlas/household',
     shell: false,
   },
   {
@@ -135,7 +135,7 @@ export function activeQuietAtlasSection(pathname, _hash = '', searchParams = nul
   if (pathname.startsWith('/quiet-atlas/lighting/')) return lightingDetailOrigin(searchParams)
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/insights') return 'insights'
-  if (pathname === '/quiet-atlas/settings') return 'more'
+  if (pathname === '/quiet-atlas/settings' || pathname === '/quiet-atlas/household') return 'more'
   if (pathname === '/quiet-atlas/music' || pathname.startsWith('/quiet-atlas/music/')) return 'music'
   if (pathname === '/quiet-atlas/home' || pathname.startsWith('/quiet-atlas/')) return 'home'
   if (pathname.startsWith('/music')) return 'music'

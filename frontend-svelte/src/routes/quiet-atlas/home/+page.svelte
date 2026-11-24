@@ -326,7 +326,7 @@
       <h1><span class="desktop-home-heading">Home</span><span class="mobile-home-heading">Home</span></h1>
       <p class="subhead">Lights, modes, and what’s happening at home.</p>
     </div>
-    <a class="apartment-link" href="/classic" aria-label="Open original Apartment and household tools">
+    <a class="apartment-link" href="/quiet-atlas/household" aria-label="Open household tools">
       <span class="icon-dot" aria-hidden="true"></span>
       More tools <span aria-hidden="true">↗</span>
     </a>
@@ -419,7 +419,7 @@
 
   <section class="phone-apartment-entry" aria-labelledby="phone-apartment-title">
     <h2 id="phone-apartment-title" class="sr-only">Other tools</h2>
-    <a href="/classic">Classic dashboard <span aria-hidden="true">↗</span></a>
+    <a href="/quiet-atlas/household">Household tools <span aria-hidden="true">↗</span></a>
   </section>
 
   <QuietAtlasEnvironment />
@@ -524,7 +524,6 @@
   </section>
   <footer class="review-footer">
     <span>Changing lights sends requests to HomeHub. Scene browsing does not activate them.</span>
-    <a href="/quiet-atlas">Back to lighting preview</a>
   </footer>
   </details>
 
