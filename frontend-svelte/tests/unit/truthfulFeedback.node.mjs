@@ -203,3 +203,17 @@ test('malformed live and pending brightness rows never become actionable',async(
   h.pendingReads[1].resolve(rows);await tick()
   assert.equal(h.brightnessSuggestion.value,null)
 })
+
+test('context cycle skips invalidated IDs and restores later eligible pending rows',async()=>{
+  const h=setup();h.ws.onConnection(true);live(h)
+  h.pendingReads[0].resolve(pendingRows());await tick()
+  assert.equal(h.modeSuggestion.value.suggestion_id,71)
+  assert.equal(h.brightnessSuggestion.value.id,72)
+  live(h,'gaming');live(h)
+  const rows=pendingRows()
+  rows.suggestions.push({...rows.suggestions[0],id:61},{...rows.suggestions[1],id:62})
+  h.pendingReads[1].resolve(pendingRows());h.pendingReads[2].resolve(rows);await tick()
+  assert.equal(h.modeSuggestion.value.suggestion_id,61)
+  assert.equal(h.brightnessSuggestion.value.id,62)
+  assert.equal(h.posts.length,0)
+})

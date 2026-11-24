@@ -39,8 +39,8 @@ function resetSuggestions() {
 // Restore only a fresh, still-pending record matching the reported context.
 // This read never grants command authority; all accept actions remain ID-scoped
 // and the server rechecks pending status (and brightness context).
-/** @param {any} result @param {{mode:string,time_period?:string}} context */
-function pendingSuggestionRows(result, context) {
+/** @param {any} result @param {{mode:string,time_period?:string}} context @param {Set<number>} invalidModeIds @param {Set<number>} invalidBrightnessIds */
+function pendingSuggestionRows(result, context, invalidModeIds, invalidBrightnessIds) {
   const now = Date.now()
   const rows = Array.isArray(result?.suggestions) ? result.suggestions.filter(row => {
     const fired = Date.parse(row?.fired_at)
@@ -50,10 +50,10 @@ function pendingSuggestionRows(result, context) {
       Number.isInteger(row.confidence) && row.confidence >= 0 && row.confidence <= 100 &&
       Number.isSafeInteger(row.sample_count) && row.sample_count > 0
   }) : []
-  const mode = rows.find(row => row.kind === 'mode' &&
+  const mode = rows.find(row => row.kind === 'mode' && !invalidModeIds.has(row.id) &&
     Number.isSafeInteger(row.rule_id) && row.rule_id > 0 &&
     ['relax','working','watching','gaming','cooking','social'].includes(row.predicted_mode))
-  const brightness = rows.find(row => validBrightnessSuggestion(row) &&
+  const brightness = rows.find(row => validBrightnessSuggestion(row) && !invalidBrightnessIds.has(row.id) &&
     row.payload.mode === context.mode && typeof context.time_period === 'string' &&
     row.payload.period === context.time_period)
   return {
@@ -107,7 +107,7 @@ export function initStores() {
     apiGet('/api/rules/suggestions?status=pending&limit=20')
       .then(result => {
         if (!socketConnected || connectionEpoch !== connection || contextEpoch !== context) return
-        const rows = pendingSuggestionRows(result,observed)
+        const rows = pendingSuggestionRows(result,observed,invalidModeIds,invalidBrightnessIds)
         if (modeEvents === 0 && rows.mode && !invalidModeIds.has(rows.mode.suggestion_id)) modeSuggestion.update(current => current ?? rows.mode)
         if (brightnessEvents === 0 && rows.brightness && !invalidBrightnessIds.has(rows.brightness.id)) brightnessSuggestion.update(current => current ?? rows.brightness)
       })
