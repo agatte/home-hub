@@ -3,6 +3,8 @@
   import { filterScenes, normalizeSceneList } from '$lib/quietAtlas/lightingModel.js'
   import { reviewSceneDraft } from '$lib/quietAtlas/controlDraft.js'
   import QuietAtlasSceneApply from './QuietAtlasSceneApply.svelte'
+  import QuietAtlasSceneTools from './QuietAtlasSceneTools.svelte'
+  import CustomSceneEditor from './CustomSceneEditor.svelte'
 
   export let sceneList = []
   export let loading = false
@@ -11,6 +13,24 @@
   export let functional = false
   export let onApplied = () => {}
   let applying = false
+  let toolsPending = false
+  let editorOpen = false
+  let editorPending = false
+  /** @type {number | null} */
+  let editingId = null
+  $: busy = applying || toolsPending || editorPending
+  function closeBrowser() { if (!busy) onClose() }
+  /** @param {string | null} id */
+  function openEditor(id = null) {
+    if (!functional || !connected || loading || error || busy) return
+    const match = id === null ? null : /^custom_(\d+)$/.exec(id)
+    if (id !== null && !match) return
+    editingId = match ? Number(match[1]) : null
+    requestedReviewId = null
+    editorOpen = true
+  }
+  function closeEditor() { if (!editorPending) editorOpen = false }
+  function editorSaved() { editorOpen = false; requestedReviewId = null; onRetry() }
   /** @type {string | null} */
   export let selectedSceneId = null
   export let onClose = () => {}
@@ -49,7 +69,7 @@
     { id: 'custom', label: 'Custom' }, { id: 'bridge', label: 'Hue' },
   ]
   function handleKeys(event) {
-    if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
+    if (event.key === 'Escape') { event.preventDefault(); if (!busy) { if (editorOpen) closeEditor(); else closeBrowser() } return }
     if (event.key !== 'Tab' || !panel) return
     const tabbable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]')]
       .filter((element) => element instanceof HTMLElement)
@@ -69,11 +89,20 @@
 
 <svelte:window on:keydown={handleKeys} />
 <div class="browser-root">
-  <button class="scrim" aria-label="Close preset library" on:click={onClose} type="button"></button>
+  <button class="scrim" aria-label="Close preset library" on:click={closeBrowser} disabled={busy} type="button"></button>
   <section bind:this={panel} class="browser" role="dialog" aria-modal="true" aria-label="Lighting preset library">
-    <header><div><p class="eyebrow">LIGHTING · LIBRARY</p><h2>All presets</h2></div><button bind:this={closeButton} class="close" type="button" on:click={onClose} aria-label="Close preset library">✕</button></header>
-    <p class="copy">{functional ? 'Choose a scene, then apply it to your lights.' : 'Browse scenes reported by HomeHub. This read-only preview cannot apply them.'}</p>
+    <header><div><p class="eyebrow">LIGHTING · LIBRARY</p><h2>All presets</h2></div><button bind:this={closeButton} class="close" type="button" on:click={closeBrowser} disabled={busy} aria-label="Close preset library">✕</button></header>
+    <p class="copy">{functional ? 'Choose a scene to apply or preview, create your own, or explore Hue effects.' : 'Browse scenes reported by HomeHub. This read-only preview cannot apply them.'}</p>
     {#if !connected}<p class="warning" role="status">HomeHub is disconnected. Previously fetched scenes may be stale.</p>{/if}
+    {#if functional}
+      <div class="editor-toolbar">
+        <button type="button" class="scene-review" disabled={!connected || loading || !!error || busy || editorOpen} on:click={() => openEditor()}>New custom scene</button>
+      </div>
+      {#if editorOpen}
+        {#if !connected}<p class="warning" role="status">Reconnect before saving your scene.</p>{/if}
+        <CustomSceneEditor {editingId} libraryOnly={true} available={connected} bind:saving={editorPending} onSave={editorSaved} onCancel={closeEditor} />
+      {/if}
+    {/if}
     <label for="qa-scene-search">Search scenes</label>
     <input id="qa-scene-search" class="search" type="search" bind:value={search} placeholder="Name of a scene" />
     <label class="mobile-category-label" for="qa-scene-category">Scene category</label>
@@ -96,8 +125,11 @@
             <article class="scene">
               <h3>{scene.name}</h3>
               <p>{scene.source === 'preset' ? (scene.category || 'Curated') : scene.source === 'bridge' ? 'Hue bridge · freshness unverified' : 'Custom scene'}</p>
-              <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error || applying}
+              <button class="scene-review" data-scene-id={scene.id} type="button" disabled={!connected || loading || !!error || busy || editorOpen}
                 on:click={async () => { requestedReviewId = scene.id; await tick(); panel?.querySelector('.review-panel')?.scrollIntoView({block:'nearest'}) }}>{functional ? 'Choose scene' : 'Review preset impact'}</button>
+              {#if functional && scene.source === 'custom'}
+                <button type="button" class="scene-review edit-scene" disabled={!connected || loading || !!error || busy || editorOpen} on:click={() => openEditor(scene.id)}>Edit scene</button>
+              {/if}
             </article>
           {/each}
         </div>
@@ -118,12 +150,13 @@
           </div>
         {/if}
         <p>These are saved targets, not measured fixture states or guaranteed applied results. HomeHub's protected-light, scene and effect rules may change the final outcome.{#if !functional} Activation requires the separately reviewed safety path. No scene command has been sent.{/if}</p>
-        <button type="button" disabled={applying} on:click={dismissSceneReview}>Dismiss review</button>
+        <button type="button" disabled={busy} on:click={dismissSceneReview}>Dismiss review</button>
       </div>
     {/if}
     {#if functional}
-      <QuietAtlasSceneApply scene={reviewedScene} connected={connected && !loading && !error} bind:pending={applying} {onApplied} />
-      <p class="footer-note">Try It, custom scene editing and effects are not yet migrated. <a href="/classic#apartment-controls">Advanced scene tools (Classic)</a>.</p>
+      <QuietAtlasSceneApply scene={reviewedScene} connected={connected && !loading && !error && !toolsPending && !editorOpen} bind:pending={applying} {onApplied} />
+      <QuietAtlasSceneTools scene={reviewedScene} {connected} blocked={applying || editorOpen} bind:pending={toolsPending} onChanged={onApplied} />
+      <p class="footer-note">Save custom scenes before trying them. Previewing a saved scene uses HomeHub's timed restore rather than permanent manual light changes.</p>
     {:else}
       <p class="footer-note">Scene activation, Try It/cancel, custom editing, and effects remain in the existing Control experience until reviewed separately. This preview sends no device commands.</p>
     {/if}
@@ -144,6 +177,7 @@
   .scene-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.scene{border:1px solid #435c47;border-radius:14px;padding:15px;background:#213127;min-height:106px;box-sizing:border-box;}
   .scene h3{font-size:15px;margin:0 0 8px;overflow-wrap:anywhere;}.scene p{font-size:12px;color:#c2cdbb;text-transform:capitalize;margin:0 0 14px;}
   .scene-review,.review-panel button{min-height:44px;border:1px solid #7b967c;border-radius:10px;background:#2a4534;color:#ecf1e5;padding:9px 11px;font-size:12px;cursor:pointer;}
+  .editor-toolbar{margin-bottom:14px;}.edit-scene{margin-top:8px;}
   .scene-review:disabled{opacity:.5;cursor:not-allowed;}
   .review-panel{border:1px solid #a98e58;border-radius:14px;background:#392f21;color:#f1e3c4;margin:15px 0;padding:16px;}
   .review-panel strong{font-size:15px;}.review-panel p{font-size:12px;line-height:1.55;}
