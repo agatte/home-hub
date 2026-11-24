@@ -4,6 +4,21 @@
 > **Established:** 2026-10-08. Implementation tracker: [#339](https://github.com/agatte/home-hub/issues/339).
 > **Verified dashboard:** [Private HomeHub GitHub Project #1](https://github.com/users/agatte/projects/1), created and linked to `agatte/home-hub` on 2026-10-08 after authenticated owner/repository inventory found no existing Project. See [#339](https://github.com/agatte/home-hub/issues/339) for setup and remaining follow-up gates.
 
+## Project continuity command center
+
+Start here for the conversation-level view, then follow the owning source for live status:
+
+| View | Where to look |
+| --- | --- |
+| Development journal and dated milestones | [DEVELOPMENT_JOURNAL.md](DEVELOPMENT_JOURNAL.md) |
+| Active goals and exact gates | [Execution map](EXECUTION_MAP.md), [live project board](https://github.com/users/agatte/projects/1) and owning issues |
+| Decisions and preferences | [Product specification](PROJECT_SPEC.md), subsystem specs and linked owner decisions |
+| Ideas and discoveries | [Future development](Future_Development.md), owning issues and dated evidence |
+| Resume an interrupted task | [Knowledge workflow](KNOWLEDGE_WORKFLOW.md), owning issue/PR checkpoints, [local workspace](LOCAL_WORKSPACE.md) and live task registry |
+| Lessons and history | [Development journal](DEVELOPMENT_JOURNAL.md), [audits](audits/) and Git history |
+
+This is the Vault-readable navigation layer for [#365](https://github.com/agatte/home-hub/issues/365), not a separate editable backlog or live runtime report. The journal uses reviewed dated summaries; detailed issue comments remain on GitHub. Existing scheduled Markdown delivery can carry these files without a host configuration change; current delivery must be verified separately.
+
 ## Start with the question
 
 | Question | Where to look | Rule |
