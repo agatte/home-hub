@@ -133,7 +133,6 @@
     {#if error}<p class="warning" role="alert">{error} <button type="button" on:click={onRetry}>Retry</button></p>{/if}
     {#if !loading && !error}
       {#if visible.length}
-        <div class="library-summary"><span>Showing {shown.length} of {visible.length} scenes</span>{#if category === 'all' && !search}<span>Filter by category to find more</span>{/if}</div>
         <div class="scene-grid">
           {#each shown as scene (scene.key)}
             <article class="scene" style:background={sceneCardBackground(scene.palette) || null}>
@@ -163,6 +162,7 @@
             </article>
           {/each}
         </div>
+        <div class="library-summary"><span>Showing {shown.length} of {visible.length} scenes</span>{#if category === 'all' && !search}<span>Filter by category to find more</span>{/if}</div>
         {#if shown.length < visible.length}
           <button type="button" class="show-more" on:click={() => visibleLimit += PAGE_SIZE}>Show {Math.min(PAGE_SIZE, visible.length - shown.length)} more scenes</button>
         {/if}
@@ -234,7 +234,7 @@
     .mobile-category-label { display:block; margin-top:14px; }
     .mobile-category-select { display:block; box-sizing:border-box; width:100%; min-height:48px; padding:10px 14px; border:1px solid #719479; border-radius:11px; background:#223328; color:#f1f1e8; font:inherit; font-size:16px; }
     .filters { display:none; }
-    .scene-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .scene-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }
     .scene { min-width:0; padding:12px; }
     .scene h3 { font-size:15px; line-height:1.25; }
     .scene p { line-height:1.45; }
