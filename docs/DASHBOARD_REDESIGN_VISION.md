@@ -13,6 +13,24 @@ This document preserves the product and visual direction for the HomeHub Dashboa
 
 The August audit remains historical evidence in `DASHBOARD_UX_AUDIT_2026_08_18.md`. This document describes the **target design direction** established after that audit and after visual review of the first redesign experiment.
 
+## Post-deployment owner feedback — 2026-11-24
+
+**Current deployed checkpoint:** `db95bdae` on Latitude; successful owner-run deployment and independent health/build/read-route smoke ([#461 evidence](https://github.com/agatte/home-hub/issues/461#issuecomment-7140487471)). The owner has reviewed the new interface and identified the following remaining design and functional requirements. The latest [#461 completion checklist](https://github.com/agatte/home-hub/issues/461) owns execution status and acceptance. This supersedes earlier *next-work sequencing*, not the visual foundation or safety rules.
+
+| Area | Owner feedback / required outcome | Open acceptance |
+| --- | --- | --- |
+| Home mode controls | Direct buttons are much better than a dropdown, but the large enclosing box with smaller mode boxes feels awkward. Pursue a more refined, Apple-like integrated composition, with less nested card framing. | Preserve direct access, clear selected/current/Auto states, safe confirmation, pending/failure feedback and accessible touch targets. Compare phone/kiosk compositions with owner. |
+| Music experience | Requiring individual track approval defeats the purpose of simply playing new music or a particular mood. Rethink the flow completely before redesigning the page. | A normal discovery/mood listening session does not require approval of each track. Design a bounded session-level intent and real playable-candidate/ownership/fallback contract with [#254](https://github.com/agatte/home-hub/issues/254); keep optional track review separate from normal listening. Respect #431 privacy/account gates and provider constraints; no bypass or assumed playback API. |
+| Music visual design | The page needs a redesign once the new flow is defined. | Listening-first mood/discovery entry points, truthful Now Playing, usable transport and volume; deeper taste/library/review tools optional. Real audible playback and phone/kiosk owner acceptance. |
+| Settings | Settings panel and some pages need redesign. | Audit actual pages, improve grouping and hierarchy, progressive disclosure, readability and responsive ergonomics; preserve working settings/actions. Navigation overall feels okay, so retain its direction absent a specific issue. |
+| Lighting and scene parity | Finish additional-fixture inventory (if present), linked kitchen brightness/color controls and remaining scene previews. | Reconcile Classic hover/schematic and unsaved scene previews with guarded saved-scene Try It/cancel/revert. Preserve existing independent fixture and lighting-authority semantics, no unauthorized group fan-out or physical writes. |
+| Unified validation | Finish the coherent single HomeHub experience rather than merely shipping pages. | Phone Safari/PWA, kiosk and desktop real-use checks, accessibility, responsive layout, honest status/error/empty states, functional workflows and owner acceptance. |
+| Classic retirement | Retain the temporary fallback until parity and accepted replacements are proven. | Audit every remaining dependency, preserve shared features and rollback, safe old-bookmark handling, separate release authorization and real-device acceptance. |
+
+**Suggested order (assistant proposal, not an owner-imposed ranking):** refine the bounded Home mode presentation; establish the Music interaction and authority contract before page redesign; address Settings and lighting/scene gaps in coherent slices; validate the unified experience; retire Classic. Coordinate Music Intelligence under #254 and dashboard delivery under #461/#157. Keep guest, Game Day, networking, account/credential and broader security work distinct unless a demonstrated dependency blocks this scope.
+
+The design direction is accepted only to the extent of the owner's stated feedback; proposed compositions, music playback policy, additional fixture inventory, and which specific Settings pages need modification remain to be verified. No blanket integration, deployment, account access, or live device authorization is implied.
+
 ## Single-interface completion and Classic retirement — owner decision 2026-11-23
 
 **DECIDED TARGET:** HomeHub has one fully functional owner-facing application, one coherent design language, and no permanent Classic alternative. Quiet Atlas is a design working name, not a separate product. The owner explicitly clarified that the old interface is to be removed after migration, not merely made optional. Do not equate a polished Home screen or read-only prototype with product completion.
