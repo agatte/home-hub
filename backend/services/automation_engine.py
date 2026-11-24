@@ -6515,49 +6515,85 @@ class AutomationEngine:
         stamps. Rust may borrow ScreenSync's baseline, but any later frame
         changes the generation and revokes its delayed restore.
         """
-        if not self._transition_boundary.authority.valid(lease):
+        def denied(reason: str) -> bool:
+            # Diagnostic only: keep the same policy, evaluation order and
+            # lease validity checks. Never log credentials or command contents.
+            if lease is not None and lease.producer in {"websocket_manual", "websocket_manual_ack"}:
+                logger.info(
+                    "Manual light guard denied: fixtures=%s reason=%s",
+                    [lid for lid, _ in lease.light_generations], reason,
+                )
             return False
+
+        if not self._transition_boundary.authority.valid(lease):
+            return denied("lease_superseded")
         if lease.intent_only:
-            return False  # A setup checkpoint is never physical write authority.
+            return denied("intent_only_lease")  # Not physical write authority.
         # Legacy registered owners still protect the compositor. Delayed work
         # cannot prove monotonic currency without their publication contract.
         if any(not callable(getattr(owner, "set_lighting_authority_notifier", None)) for owner in self._active_external_light_owners()):
-            return False
-        if (
-            (not self._enabled and not scene_ack)
-            or self._external_off_detected or self._away_hold or self._host_return_hold
-            or (self.current_mode == "sleeping" and not scene_ack)
-            or (expected_mode is not None and self.current_mode != expected_mode)
-            or self._gaming_scene_transition_pending
-        ):
-            return False
-        if not allow_scene and (
-            self._active_scene_override_key is not None
-            or self._gaming_scene_override is not None
-            or not self._effect_manager.authority_known
-        ):
-            return False
+            return denied("external_owner_missing_authority_notifier")
+        if not self._enabled and not scene_ack:
+            return denied("automation_disabled")
+        if self._external_off_detected:
+            return denied("external_off")
+        if self._away_hold:
+            return denied("away_hold")
+        if self._host_return_hold:
+            return denied("host_return_hold")
+        if self.current_mode == "sleeping" and not scene_ack:
+            return denied("sleeping")
+        if expected_mode is not None and self.current_mode != expected_mode:
+            return denied("mode_changed")
+        if self._gaming_scene_transition_pending:
+            return denied("gaming_scene_transition_pending")
+        if not allow_scene:
+            if self._active_scene_override_key is not None:
+                return denied("mode_scene_override")
+            if self._gaming_scene_override is not None:
+                return denied("gaming_scene_override")
+            if not self._effect_manager.authority_known:
+                return denied("effect_authority_unknown")
         targets = {lid for lid, _ in lease.light_generations}
         if lease.whole_generation is not None:
             targets = set(ALL_LIGHT_IDS)
-        blocked = set(self._transit_light_overrides)
+        transit = set(self._transit_light_overrides)
+        blocked = transit.copy()
         if not allow_manual:
             blocked |= set(self.manual_light_overrides)
-        blocked |= self._applicator.external_owned_light_ids()
+        external = self._applicator.external_owned_light_ids()
+        blocked |= external
         protected = self._protected_light_ids()
         if allow_manual:
             protected -= set(self.manual_light_overrides)
         if allow_screen_sync and self._screen_sync is not None:
             protected -= self._screen_sync.fresh_owned_light_ids()
         blocked |= protected
+        screen_sync_owned: set[str] = set()
         if not allow_screen_sync and self._screen_sync is not None:
-            blocked |= self._screen_sync.fresh_owned_light_ids()
+            screen_sync_owned = self._screen_sync.fresh_owned_light_ids()
+            blocked |= screen_sync_owned
         if screen_sync_kind == "rust" and self._screen_sync is not None:
             blocked |= self._screen_sync.fresh_owned_light_ids() - self._screen_sync.rust_owned_light_ids()
         if not allow_scene and self._active_effect_name is not None:
             blocked |= set(self._active_effect_lights or ALL_LIGHT_IDS)
         # Owner getters may synchronously publish releases: recheck currency.
-        return not (targets & blocked) and self._transition_boundary.authority.valid(lease)
+        if targets & blocked:
+            reasons = []
+            if targets & transit:
+                reasons.append("transit")
+            if targets & external:
+                reasons.append("external_owner")
+            if targets & screen_sync_owned:
+                reasons.append("screen_sync")
+            if not allow_manual and targets & set(self.manual_light_overrides):
+                reasons.append("manual_owner")
+            if targets & protected:
+                reasons.append("protected_fixture")
+            if not allow_scene and self._active_effect_name is not None and targets & set(self._active_effect_lights or ALL_LIGHT_IDS):
+                reasons.append("active_effect")
+            return denied("+".join(reasons) or "protected_fixture")
+        return self._transition_boundary.authority.valid(lease) or denied("lease_superseded_during_owner_check")
 
     def validate_screen_sync_lease(self, lease, light_id, mode, source) -> bool:
         return (

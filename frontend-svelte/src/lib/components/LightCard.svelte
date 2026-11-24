@@ -276,6 +276,8 @@
   class:light-on={displayOn}
   class:light-off={!displayOn}
   class:light-unreachable={!light.reachable}
+  class:command-pending={commandPending}
+  aria-busy={commandPending}
   class:dragging
   style="--fill-pct: {fillPct}%; --fill-color: {fillColor};"
 >
@@ -370,10 +372,10 @@
   {#each commandIds as commandId}
   {@const commandStatus = $lightCommandResults[commandId]?.status}
   {#if commandStatus}
-    <p class="chip-command-status" role="status" aria-live="polite">
+    <p class="chip-command-status" class:command-denied={commandStatus === 'denied'} role="status" aria-live="polite">
       {#if linkedIds.length}Light {commandId}: {/if}
       {#if commandStatus === 'pending'}
-        Sending request to HomeHub…
+        Changing light…
       {:else if commandStatus === 'acknowledged'}
         Bridge acknowledged. Actual light state awaits a fresh report.
       {:else if commandStatus === 'denied'}
@@ -414,6 +416,8 @@
     transition: border-color 0.2s, background 0.2s;
   }
 
+  .light-chip.command-pending {border-color:rgba(237,207,160,.8);box-shadow:inset 0 0 0 1px rgba(237,207,160,.24);}
+  .chip-command-status.command-denied {color:#f1c6a0;}
   .light-chip:hover {
     background: rgba(255, 255, 255, 0.045);
   }
