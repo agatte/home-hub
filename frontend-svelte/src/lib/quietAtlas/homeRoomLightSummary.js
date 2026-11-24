@@ -1,4 +1,5 @@
 import { sceneTemperatureColor, sceneCardBackground } from './sceneCards.js'
+import { readStatus } from './lightSnapshot.js'
 
 /**
  * Reported room lighting summary for Home. This is a UI projection of the
@@ -57,4 +58,22 @@ export function roomColorBackground(fixtureIds, lightMap, connected) {
     colors.push(`color-mix(in srgb, ${color} ${Math.round(18 + bri / 254 * 82)}%, #141c19)`)
   }
   return sceneCardBackground([...new Set(colors)])
+}
+
+/** Home retains its live room labels and controls. A palette is shown only when
+ * the recent independent REST snapshot agrees with those last reported values.
+ * A changed live value immediately removes the old palette until the next read.
+ * @param {string[]} fixtureIds
+ * @param {import('./lightSnapshot.js').ReadOnlySnapshot} snapshot
+ * @param {number} nowMs
+ * @param {Record<string, import('./lightingModel.js').Fixture>} liveLights
+ * @param {boolean} available
+ */
+export function homeSnapshotRoomColor(fixtureIds, snapshot, nowMs, liveLights, available) {
+  if (!available || readStatus(snapshot, nowMs) !== 'recent-read') return ''
+  const reported = roomColorBackground(fixtureIds, snapshot.fixtures, true)
+  if (!reported || reported !== roomColorBackground(fixtureIds, liveLights, true)) return ''
+  const snapshotSummary = homeRoomLightSummary(fixtureIds, snapshot.fixtures, true)
+  const liveSummary = homeRoomLightSummary(fixtureIds, liveLights, true)
+  return snapshotSummary.label === liveSummary.label ? reported : ''
 }

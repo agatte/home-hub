@@ -2,9 +2,10 @@
   // #461 default Home: HomeHub status comes only from guarded REST. Lighting uses the existing WebSocket commands.
   import { onMount } from 'svelte'
   import { activityTone, houseTone } from '$lib/quietAtlas/widgetTone.js'
-  import { connected } from '$lib/stores/connection.js'
+  import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { lights } from '$lib/stores/lights.js'
-  import { homeRoomLightSummary, roomColorBackground } from '$lib/quietAtlas/homeRoomLightSummary.js'
+  import { homeRoomLightSummary, homeSnapshotRoomColor } from '$lib/quietAtlas/homeRoomLightSummary.js'
+  import { newReadOnlySnapshot, connectionChanged as lightConnectionChanged, invalidateLightRead, beginLightRead, acceptLightRead, failLightRead } from '$lib/quietAtlas/lightSnapshot.js'
   import QuietAtlasEnvironment from '$lib/components/QuietAtlasEnvironment.svelte'
   import { CONTROL_SCENES_HREF } from '$lib/quietAtlas/navigation.js'
   import QuietAtlasHomeLightingReveal from '$lib/components/QuietAtlasHomeLightingReveal.svelte'
@@ -44,6 +45,7 @@
   let sampleState = 'unavailable'
   let contextSnapshot = newHomeContextSnapshot()
   let contextNowMs = 0
+  let paletteSnapshot = newReadOnlySnapshot()
   $: contextDisplay = homeContextPresentation(contextSnapshot, contextNowMs)
 
   // The tile IDs mirror the existing independently controlled L1–L6 room fixtures.
@@ -58,7 +60,7 @@
     groups.map((group) => [group.id, homeRoomLightSummary(group.fixtures, $lights, $connected)])
   )
 
-  $: roomBackgrounds = Object.fromEntries(groups.map(group => [group.id, roomColorBackground(group.fixtures, $lights, $connected)]))
+  $: roomBackgrounds = Object.fromEntries(groups.map(group => [group.id, homeSnapshotRoomColor(group.fixtures, paletteSnapshot, contextNowMs, $lights, $connected && $deviceStatus.hue)]))
   $: contextTone = contextDisplay.status === 'recent' ? houseTone(contextDisplay.house) : 'neutral'
 
   const examples = {
@@ -96,6 +98,47 @@
     let activityController = null
     let activityFailures = 0
     let nextActivityPollAt = 0
+    /** @type {AbortController | null} */
+    let paletteController = null
+    let nextPalettePollAt = 0
+    let paletteFailures = 0
+
+    function abortPaletteRead() {
+      paletteController?.abort()
+      paletteController = null
+    }
+
+    async function refreshRoomPalette() {
+      if (!mounted || !paletteSnapshot.connected || paletteSnapshot.pending || document.visibilityState !== 'visible') return
+      const next = beginLightRead(paletteSnapshot)
+      paletteSnapshot = next.state
+      if (!next.ticket) return
+      const ticket = next.ticket
+      const request = new AbortController()
+      paletteController = request
+      const timeout = window.setTimeout(() => request.abort(), 8000)
+      nextPalettePollAt = Date.now() + 15000
+      try {
+        const response = await fetch('/api/lights', { signal: request.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error('Room palette unavailable')
+        const rows = await response.json()
+        if (!mounted || paletteController !== request) return
+        const receivedAt = Date.now()
+        paletteSnapshot = acceptLightRead(paletteSnapshot, ticket, rows, receivedAt)
+        contextNowMs = receivedAt
+        paletteFailures = paletteSnapshot.receivedAt === receivedAt ? 0 : Math.min(3, paletteFailures + 1)
+      } catch {
+        if (!mounted || paletteController !== request) return
+        paletteSnapshot = failLightRead(paletteSnapshot, ticket)
+        paletteFailures = Math.min(3, paletteFailures + 1)
+      } finally {
+        window.clearTimeout(timeout)
+        if (paletteController === request) {
+          paletteController = null
+          if (paletteFailures) nextPalettePollAt = Date.now() + 15000 * 2 ** paletteFailures
+        }
+      }
+    }
 
     function abortRead() {
       controller?.abort()
@@ -193,6 +236,11 @@
       if (!mounted) return
       abortRead()
       abortActivityRead()
+      abortPaletteRead()
+      paletteSnapshot = lightConnectionChanged(paletteSnapshot, available)
+      paletteFailures = 0
+      nextPalettePollAt = 0
+      if (available && document.visibilityState === 'visible') void refreshRoomPalette()
       const activityWasConnected = activityLog.connected
       activityLog = recentActivityConnectionChanged(activityLog, available)
       activityNowMs = Date.now()
@@ -215,6 +263,12 @@
       if (!mounted) return
       abortRead()
       abortActivityRead()
+      abortPaletteRead()
+      paletteSnapshot = invalidateLightRead(paletteSnapshot)
+      if (document.visibilityState === 'visible' && paletteSnapshot.connected) {
+        nextPalettePollAt = 0
+        void refreshRoomPalette()
+      }
       activityLog = invalidateRecentActivity(activityLog)
       activityNowMs = Date.now()
       if (document.visibilityState === 'visible' && activityLog.connected) {
@@ -238,6 +292,8 @@
     const pollTimer = window.setInterval(() => {
       if (!contextSnapshot.pending && contextSnapshot.connected &&
           document.visibilityState === 'visible' && Date.now() >= nextPollAt) void refreshContext()
+      if (!paletteSnapshot.pending && paletteSnapshot.connected &&
+          document.visibilityState === 'visible' && Date.now() >= nextPalettePollAt) void refreshRoomPalette()
       if (!activityLog.pending && activityLog.connected &&
           document.visibilityState === 'visible' && Date.now() >= nextActivityPollAt) void refreshRecentActivity()
     }, 15000)
@@ -245,6 +301,8 @@
       mounted = false
       abortRead()
       abortActivityRead()
+      abortPaletteRead()
+      paletteSnapshot = invalidateLightRead(paletteSnapshot)
       activityLog = invalidateRecentActivity(activityLog)
       unsubscribe()
       document.removeEventListener('visibilitychange', visibilityChanged)

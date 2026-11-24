@@ -1,7 +1,6 @@
 <script>
-  import { lights } from '$lib/stores/lights.js'
   import { roomColorBackground } from '$lib/quietAtlas/homeRoomLightSummary.js'
-  import { connected } from '$lib/stores/connection.js'
+  import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { automation, houseStateLabel, activityLabel, automationSourceLabel } from '$lib/stores/automation.js'
   import { selectQuickScenes } from '$lib/quietAtlas/lightingModel.js'
   import { sceneBackgroundForId } from '$lib/quietAtlas/sceneCards.js'
@@ -11,6 +10,9 @@
   export let functional = false
   /** @type {ReturnType<import('$lib/quietAtlas/lightingModel.js').buildLightingOverview>} */
   export let groups = []
+  /** The same accepted REST snapshot used to construct the room status labels. */
+  /** @type {Record<string, import('$lib/quietAtlas/lightingModel.js').Fixture>} */
+  export let snapshotFixtures = {}
   /** @type {'disconnected'|'unverified'|'recent-read'|'stale-read'} */
   export let snapshotStatus = 'unverified'
   /** @type {() => void} */
@@ -28,7 +30,7 @@
   /** @type {(sceneId: string) => void} Parent owns existing authorized actuation. */
   export let onOpenScene = () => {}
 
-  $: roomBackgrounds = Object.fromEntries(groups.map(group => [group.id, roomColorBackground(group.fixtureIds, $lights, $connected && snapshotStatus === 'recent-read')]))
+  $: roomBackgrounds = Object.fromEntries(groups.map(group => [group.id, roomColorBackground(group.fixtureIds, snapshotFixtures, $connected && $deviceStatus.hue && snapshotStatus === 'recent-read')]))
   $: quickScenes = selectQuickScenes(sceneList, favoriteSceneIds)
   $: house = houseStateLabel($automation.house_state) || 'State unavailable'
   $: activity = activityLabel($automation.activity)
