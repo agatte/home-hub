@@ -127,3 +127,19 @@ describe('Quiet Atlas reviewed, strictly local future control intents', () => {
     }
   })
 })
+
+it('previews only declared fixture states and detects changed saved colors in reviewed scene identity', () => {
+  const row = { id: 'warm', source: 'preset', display_name: 'Warm', lights: {
+    '1': { on: true, bri: 100, ct: 350 }, '3': { on: false }, '4': { on: true, hue: 32768, sat: 254 },
+    '5': { on: true, bri: 50, ct: 350, hue: 8000, sat: 140 },
+  } }
+  const first = reviewSceneDraft('warm', [row], sceneStatus)
+  expect(first?.previewRows?.find(x => x.id === '1')).toMatchObject({ power: 'On', brightness: 39, colorLabel: '2857 K', colorKey: [350] })
+  expect(first?.previewRows?.find(x => x.id === '2')).toMatchObject({ power: 'Not specified', brightness: null, color: null })
+  expect(first?.previewRows?.find(x => x.id === '3')).toMatchObject({ power: 'Off', brightness: null })
+  expect(first?.previewRows?.find(x => x.id === '4')).toMatchObject({ power: 'On', brightness: null, colorKey: [32768, 254] })
+  expect(first?.previewRows?.find(x => x.id === '5')).toMatchObject({ color: null, colorKey: null })
+  const changed = reviewSceneDraft('warm', [{ ...row, lights: { ...row.lights, '1': { on: true, bri: 100, ct: 351 } } }], sceneStatus)
+  expect(changed).not.toEqual(first)
+  expect(reviewSceneDraft('warm', [{ ...row, source: 'bridge' }], sceneStatus)?.previewRows).toBeNull()
+})
