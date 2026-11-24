@@ -37,10 +37,15 @@ describe('HomeHub widget palette', () => {
     ]) expect(activityTone(label)).toBe(tone)
   })
   it('keeps Home widget appearance within shared tokens', () => {
-    for (const source of [home, modes]) {
-      expect(source).toContain('var(--hh-card-background')
-      expect(source).toContain('var(--hh-radius-panel')
-    }
+    expect(home).toContain('var(--hh-card-background')
+    expect(home).toContain('var(--hh-radius-panel')
+    // Mode controls intentionally no longer use a nested panel or card tiles.
+    expect(modes).not.toContain('var(--hh-card-background')
+    expect(modes).toContain('data-palette={modeTone(mode.label, true)}')
+    expect(modes).toContain('var(--hh-control)')
+    expect(modes).toContain('var(--event-accent')
+    expect(modes).toContain('var(--hh-expressive')
+    expect(modes).toContain('var(--line)')
     expect(home).toContain('data-tone={activityTone(entry.label)}')
     expect(weather).toContain('data-tone={sky}')
     expect(weather).toContain('var(--hh-radius-panel')

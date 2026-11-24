@@ -29,6 +29,15 @@ describe('#461 direct Home mode tiles', () => {
     expect(panel).not.toContain('<details')
     expect(compile(panel, { filename:'QuietAtlasHomeModeControls.svelte',generate:'dom',css:'external' }).warnings).toEqual([])
   })
+  it('gives each activity its existing semantic palette without implying selection', () => {
+    const view = render(ModeControls)
+    for (const [label,palette] of [['Relax','calm'],['Working','focus'],['Watching','cinema'],['Gaming','play'],['Cooking','warm'],['Party','social'],['Sleep','sleep'],['Return to Auto','neutral']]) {
+      const button = view.getByRole('button',{name:label})
+      expect(button.getAttribute('data-palette')).toBe(palette)
+      expect(button.getAttribute('aria-pressed')).toBe(String(label === 'Return to Auto'))
+    }
+    expect(setManualMode).not.toHaveBeenCalled()
+  })
   it('offers eight direct buttons, sends no action on mount and never marks an acknowledgement as a reported mode', async () => {
     const view = render(ModeControls)
     for (const label of ['Relax','Working','Watching','Gaming','Cooking','Party','Sleep','Return to Auto']) expect(view.getByRole('button',{name:label})).toBeTruthy()
