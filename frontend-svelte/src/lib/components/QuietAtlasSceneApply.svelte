@@ -3,6 +3,7 @@
   import { apiGet, apiPost } from '$lib/api.js'
   import { reviewSceneDraft } from '$lib/quietAtlas/controlDraft.js'
 
+  /** @type {ReturnType<typeof reviewSceneDraft>} */
   export let scene = null
   export let connected = false
   export let pending = false
@@ -20,7 +21,7 @@
       // Re-read the inventory before every explicit apply. No URL query,
       // draft slider, mount, or browse operation can activate a scene.
       const result = await apiGet('/api/scenes')
-      if (!active || !connected || scene !== intended) return
+      if (!active || !connected || document.visibilityState !== 'visible' || scene !== intended) return
       const current = reviewSceneDraft(intended.id, result?.scenes, { connected, loading: false, error: '' })
       if (!current || JSON.stringify(current) !== JSON.stringify(intended)) {
         feedback = 'Scene changed or is unavailable. Refresh the library before applying.'
@@ -40,12 +41,12 @@
   }
 </script>
 
-<div class="scene-apply">
+{#if scene || pending || feedback}<div class="scene-apply">
   <button type="button" disabled={!connected || !scene || pending} on:click={apply}>
     {pending ? 'Applying…' : 'Apply scene'}
   </button>
   {#if feedback}<p role="status" aria-live="polite">{feedback}</p>{/if}
-</div>
+</div>{/if}
 
 <style>
   .scene-apply {display:grid;gap:9px;margin:12px 0;}
