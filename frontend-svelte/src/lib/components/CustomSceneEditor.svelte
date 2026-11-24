@@ -13,6 +13,12 @@
   export let onSave = () => {}
   /** @type {() => void} */
   export let onCancel = () => {}
+  // The redesigned library saves drafts without making live per-light writes.
+  // Saved scenes can use the server's timed Try It operation.
+  export let libraryOnly = false
+  export let available = true
+  export let saving = false
+  let loaded = false
 
   let name = ''
   let category = 'custom'
@@ -22,7 +28,6 @@
   let lightStates = {}
   /** @type {Array<{name: string, display_name: string}>} */
   let availableEffects = []
-  let saving = false
   let error = ''
 
   const CATEGORY_OPTIONS = Object.entries(SCENE_CATEGORIES).map(([id, meta]) => ({
@@ -30,10 +35,12 @@
   }))
 
   function captureCurrent() {
+    if (saving || !available) return
     const live = get(lights)
     /** @type {typeof lightStates} */
     const snapshot = {}
     for (const [id, l] of Object.entries(live)) {
+      if (libraryOnly && (l.reachable !== true || typeof l.on !== 'boolean' || !/^[1-6]$/.test(id))) continue
       if (l.colormode === 'ct' && l.ct) {
         snapshot[id] = { on: l.on, bri: l.bri, ct: l.ct }
       } else {
@@ -75,17 +82,20 @@
           category = scene.category || 'custom'
           effect = scene.effect || null
           lightStates = scene.light_states || {}
-        }
+          loaded = true
+        } else error = 'Scene no longer exists'
       } catch {
         error = 'Failed to load scene'
       }
     } else {
       // New mode — seed from current live lights
       captureCurrent()
+      loaded = true
     }
   })
 
   async function preview() {
+    if (libraryOnly || !available || saving) return
     // Apply each light state individually via PUT /api/lights/{id}
     for (const [id, state] of Object.entries(lightStates)) {
       try {
@@ -97,6 +107,7 @@
   }
 
   async function save() {
+    if (!available || saving || !loaded) return
     if (!name.trim()) {
       error = 'Name is required'
       return
@@ -117,9 +128,11 @@
 
     try {
       if (editingId != null) {
-        await apiPut(`/api/scenes/custom/${editingId}`, body)
+        const result = await apiPut(`/api/scenes/custom/${editingId}`, body)
+        if (libraryOnly && result?.status !== 'ok') throw new Error('Save unconfirmed. Refresh the library before retrying.')
       } else {
-        await apiPost('/api/scenes/custom', body)
+        const result = await apiPost('/api/scenes/custom', body)
+        if (libraryOnly && result?.status !== 'ok') throw new Error('Save unconfirmed. Refresh the library before retrying.')
       }
       saving = false
       onSave()
@@ -130,21 +143,23 @@
   }
 
   async function remove() {
-    if (editingId == null) return
+    if (editingId == null || !available || saving || !loaded) return
     if (!confirm(`Delete scene "${name}"?`)) return
+    saving = true
     try {
-      await apiDelete(`/api/scenes/custom/${editingId}`)
+      const result = await apiDelete(`/api/scenes/custom/${editingId}`)
+      if (libraryOnly && result?.status !== 'ok') throw new Error('Delete unconfirmed. Refresh before retrying.')
       onSave()
     } catch (e) {
       error = e instanceof Error ? e.message : 'Delete failed'
-    }
+    } finally { saving = false }
   }
 </script>
 
 <div class="scene-editor">
   <div class="editor-header">
     <span class="editor-title">{editingId != null ? 'Edit scene' : 'New scene'}</span>
-    <button class="icon-btn" on:click={onCancel} aria-label="Cancel">
+    <button class="icon-btn" on:click={onCancel} disabled={saving} aria-label="Cancel">
       <X size={14} strokeWidth={2} />
     </button>
   </div>
@@ -156,13 +171,15 @@
       placeholder="Scene name"
       bind:value={name}
       maxlength="100"
+      aria-label="Scene name"
+      disabled={saving || !available || !loaded}
     />
   </div>
 
   <div class="editor-row editor-row-split">
     <label class="field">
       <span class="field-label">Category</span>
-      <select class="editor-select" bind:value={category}>
+      <select class="editor-select" bind:value={category} disabled={saving || !available || !loaded}>
         {#each CATEGORY_OPTIONS as opt}
           <option value={opt.id}>{opt.label}</option>
         {/each}
@@ -171,7 +188,7 @@
 
     <label class="field">
       <span class="field-label">Effect</span>
-      <select class="editor-select" bind:value={effect}>
+      <select class="editor-select" bind:value={effect} disabled={saving || !available || !loaded}>
         <option value={null}>None</option>
         {#each availableEffects as e}
           <option value={e.name}>{e.display_name}</option>
@@ -181,7 +198,7 @@
   </div>
 
   <div class="editor-capture">
-    <button class="capture-btn" on:click={captureCurrent} title="Snapshot the current live light state">
+    <button class="capture-btn" on:click={captureCurrent} disabled={saving || !available || !loaded} title="Snapshot the current live light state">
       <Camera size={13} strokeWidth={1.8} />
       Capture current
     </button>
@@ -197,7 +214,12 @@
           style="background: {previewColor(state)}"
         ></span>
         <span class="preview-name">{lightName(id)}</span>
-        {#if state.on && state.bri != null}
+        {#if libraryOnly}
+          <label class="draft-power"><input type="checkbox" bind:checked={state.on} disabled={saving || !available || !loaded} /> On</label>
+          {#if state.on}
+            <label class="draft-brightness">Brightness <input type="range" min="1" max="254" bind:value={state.bri} disabled={saving || !available || !loaded} aria-label={lightName(id) + ' brightness'} /> {Math.round((state.bri ?? 1) / 254 * 100)}%</label>
+          {/if}
+        {:else if state.on && state.bri != null}
           <span class="preview-meta">{Math.round((state.bri / 254) * 100)}%</span>
         {/if}
       </div>
@@ -213,14 +235,14 @@
 
   <div class="editor-actions">
     {#if editingId != null}
-      <button class="action-btn danger-btn" on:click={remove} aria-label="Delete scene">
+      <button class="action-btn danger-btn" on:click={remove} disabled={saving || !available || !loaded} aria-label="Delete scene">
         <Trash2 size={13} strokeWidth={1.8} />
         Delete
       </button>
     {/if}
     <div class="action-spacer"></div>
-    <button class="action-btn" on:click={preview}>Preview</button>
-    <button class="action-btn primary-btn" on:click={save} disabled={saving}>
+    {#if !libraryOnly}<button class="action-btn" on:click={preview} disabled={saving || !available}>Preview</button>{/if}
+    <button class="action-btn primary-btn" on:click={save} disabled={saving || !available || !loaded}>
       <Save size={13} strokeWidth={1.8} />
       {saving ? 'Saving...' : 'Save'}
     </button>
@@ -228,6 +250,10 @@
 </div>
 
 <style>
+  .draft-power,.draft-brightness{display:flex;align-items:center;gap:6px;min-height:44px;font-size:12px;flex-wrap:wrap;}
+  .draft-brightness input{width:90px;max-width:100%;}
+  .preview-row:has(.draft-power){flex-wrap:wrap;}
+
   .scene-editor {
     display: flex;
     flex-direction: column;
