@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { Music, Play, Pause, SkipBack, SkipForward, Volume2 } from 'lucide-svelte'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
-  import { sonos } from '$lib/stores/sonos.js'
+  import { sonosLiveReport } from '$lib/stores/sonos.js'
   import { sonosCommand } from '$lib/stores/init.js'
   import { musicPlaybackReport, recentPlaybackReport } from '$lib/quietAtlas/musicPlaybackReport.js'
 
@@ -33,6 +33,7 @@
     report = musicPlaybackReport(data)
     receivedAt = report ? Date.now() : null
     now = Date.now()
+    if (report && message.startsWith('Request sent.')) message = 'Speaker report refreshed; command acceptance is not confirmed by this report.'
   }
 
   async function refresh() {
@@ -64,11 +65,11 @@
     const unsubscribeConnection = connected.subscribe(value => { if (value !== wasConnected) { wasConnected = value; sync() } })
     const unsubscribeDevice = deviceStatus.subscribe(value => { if (value.sonos !== wasSonos) { wasSonos = value.sonos; sync() } })
     let initial = true
-    const unsubscribeSonos = sonos.subscribe(value => {
+    const unsubscribeSonos = sonosLiveReport.subscribe(value => {
       if (initial) { initial = false; return }
       // The store's initial value may belong to a previous connection. A new
       // report wins over an outstanding read; no optimistic playback updates.
-      if (!active || !visible || !$connected || !$deviceStatus.sonos) return
+      if (!value || !active || !visible || !$connected || !$deviceStatus.sonos) return
       pending?.abort(); pending = null
       accept(value)
     })
@@ -88,7 +89,10 @@
   }
   /** @param {Event} event */
   function volumeChanged(event) {
-    const value = Number(/** @type {HTMLInputElement} */ (event.currentTarget).value)
+    const input = /** @type {HTMLInputElement} */ (event.currentTarget)
+    const value = Number(input.value)
+    // Revert the input to the reported value; sending is not an ACK.
+    if (current) input.value = String(current.volume)
     if (Number.isFinite(value)) command('volume', {volume:value})
   }
 </script>
