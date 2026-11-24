@@ -61,7 +61,8 @@ describe('Home parity actions',()=>{
     expect(apiPost).not.toHaveBeenCalled()
   })
   it('does not dismiss a newer suggestion when an older response arrives',async()=>{
-    let finish
+    /** @type {(value:any)=>void} */
+    let finish = () => { throw new Error('Expected pending request') }
     vi.mocked(apiPost).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
     modeSuggestion.set({suggestion_id:17,rule_id:3,predicted_mode:'gaming',confidence:80,sample_count:12,message:''})
     const v=render(Suggestions)

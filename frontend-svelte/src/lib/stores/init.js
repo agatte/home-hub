@@ -12,8 +12,8 @@ import { sonos, sonosLiveReport } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed, dismissMusicSuggestion, musicAutoPlayed } from './music.js'
-import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
-import { showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
+import { modeSuggestion, showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
+import { brightnessSuggestion, showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
 import { pipeline } from './pipeline.js'
@@ -125,13 +125,15 @@ export function initStores() {
           showModeSuggestion(data)
           break
         case 'mode_suggestion_dismissed':
-          dismissModeSuggestion()
+          if (Number.isSafeInteger(data?.id)) modeSuggestion.update(current => current?.suggestion_id === data.id ? null : current)
+          else if (data?.id == null) dismissModeSuggestion()
           break
         case 'brightness_suggestion':
           showBrightnessSuggestion(data)
           break
         case 'brightness_suggestion_dismissed':
-          dismissBrightnessSuggestion()
+          if (Number.isSafeInteger(data?.id)) brightnessSuggestion.update(current => current?.id === data.id ? null : current)
+          else if (data?.id == null) dismissBrightnessSuggestion()
           break
         case 'ambient_update':
           ambient.set(data)

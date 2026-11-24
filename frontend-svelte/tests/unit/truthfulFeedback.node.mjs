@@ -11,6 +11,7 @@ function setup() {
   const automation = store({ mode: 'home', manual_override: false }), sonos = store({ volume: 20 })
   const initial = deferred(), initialSonos = deferred(), posts = [], gets = [], sends = []
   const sonosLiveReport = store(null)
+  const modeSuggestion = store(null), brightnessSuggestion = store(null)
   let ws, sendOK = true
   class HubSocket { constructor(onMessage, onConnection) { ws = { onMessage, onConnection } } connect() {} close() {} send(type, data) { sends.push({ type, data }); return sendOK } }
   const noop = () => {}, dummy = store({})
@@ -21,11 +22,11 @@ function setup() {
     mergeAutomationUpdate: (prev, data) => ({ ...prev, ...data }),
     lightCommandTracker: { reset: noop, disconnect: noop, setCapability: noop, receive: noop },
     deviceStatus: dummy, connected: dummy, ambient: dummy, camera: dummy, pipeline: dummy,
-    receiveAmbientContext: noop, resetAmbientContext: noop, dismissModeSuggestion: noop, dismissBrightnessSuggestion: noop, dismissMusicSuggestion: noop, musicAutoPlayed: {set: noop}, setLightsFromList: noop, applyLightUpdate: noop,
+    receiveAmbientContext: noop, resetAmbientContext: noop, modeSuggestion, brightnessSuggestion, showModeSuggestion: v => modeSuggestion.set(v), showBrightnessSuggestion: v => brightnessSuggestion.set(v), dismissModeSuggestion: () => modeSuggestion.set(null), dismissBrightnessSuggestion: () => brightnessSuggestion.set(null), dismissMusicSuggestion: noop, musicAutoPlayed: {set: noop}, setLightsFromList: noop, applyLightUpdate: noop,
     startWeatherPolling: noop, stopWeatherPolling: noop }
   const api = runInNewContext(`${source}\n;({initStores, setManualMode, sonosCommand})`, ctx)
   api.initStores()
-  return { ...api, automation, sonos, sonosLiveReport, initialSonos, initial, posts, gets, sends, ws, setSendOK: v => { sendOK = v } }
+  return { ...api, automation, sonos, sonosLiveReport, modeSuggestion, brightnessSuggestion, initialSonos, initial, posts, gets, sends, ws, setSendOK: v => { sendOK = v } }
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -85,4 +86,21 @@ test('Music live report is isolated from late startup reads, sends and connectio
   assert.equal(h.sonosLiveReport.value, null)
   h.ws.onMessage({ type: 'sonos_update', data: { volume: 42 } })
   assert.equal(h.sonosLiveReport.value.volume, 42)
+})
+
+test('ID-specific dismissals preserve newer suggestions and reconnect invalidates cache', () => {
+  const h = setup()
+  h.ws.onConnection(true)
+  h.ws.onMessage({type:'mode_suggestion',data:{suggestion_id:18}})
+  h.ws.onMessage({type:'brightness_suggestion',data:{id:20}})
+  h.ws.onMessage({type:'mode_suggestion_dismissed',data:{id:17}})
+  h.ws.onMessage({type:'brightness_suggestion_dismissed',data:{id:19}})
+  assert.equal(h.modeSuggestion.value.suggestion_id,18)
+  assert.equal(h.brightnessSuggestion.value.id,20)
+  h.ws.onMessage({type:'mode_suggestion_dismissed',data:{id:18}})
+  assert.equal(h.modeSuggestion.value,null)
+  h.ws.onConnection(false)
+  assert.equal(h.brightnessSuggestion.value,null)
+  h.ws.onConnection(true)
+  assert.equal(h.modeSuggestion.value,null)
 })
