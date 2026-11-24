@@ -2,6 +2,7 @@
   import { connected } from '$lib/stores/connection.js'
   import { automation, houseStateLabel, activityLabel, automationSourceLabel } from '$lib/stores/automation.js'
   import { selectQuickScenes } from '$lib/quietAtlas/lightingModel.js'
+  import { sceneBackgroundForId } from '$lib/quietAtlas/sceneCards.js'
 
   /** @type {Array<Record<string, any>>} */
   export let sceneList = []
@@ -98,7 +99,7 @@
   {:else if quickScenes.length}
     <div class="scene-row">
       {#each quickScenes as scene (scene.id)}
-        <button type="button" class="scene" on:click={() => onOpenScene(scene.id)}>
+        <button type="button" class="scene" style:background={sceneBackgroundForId(sceneList, scene.id) || null} on:click={() => onOpenScene(scene.id)}>
           <span>{scene.name}</span><span class="scene-kind">{scene.source === 'custom' ? 'Custom' : scene.source === 'bridge' ? 'Hue scene' : 'Curated'}</span>
         </button>
       {/each}
@@ -139,7 +140,7 @@
   .browse { background: transparent; color: #c9e2c0; border: none; text-decoration: underline; padding: 10px 0; min-height: 44px; font-size: 13px; }
   .scene-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .scene { color: #edece4; text-align: left; background: #243127; border: 1px solid #425449; border-radius: 14px; min-height: 76px; padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; justify-content: space-between; }
-  .scene-kind { font-size: 11px; color: #bac9ba; }
+  .scene-kind { font-size: 11px; color: #e1e2dd; }
   .empty { border: 1px dashed #526057; border-radius: 12px; color: #bac9ba; font-size: 13px; padding: 18px; }
   @media(min-width: 900px) { .groups { grid-template-columns: repeat(4, minmax(0, 1fr)); } .scene-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media(max-width: 350px) { .context { padding: 16px 14px; } .group { padding: 12px; } .group-name { font-size: 14px; } }
