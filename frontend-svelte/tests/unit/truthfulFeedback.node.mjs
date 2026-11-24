@@ -21,7 +21,7 @@ function setup() {
     mergeAutomationUpdate: (prev, data) => ({ ...prev, ...data }),
     lightCommandTracker: { reset: noop, disconnect: noop, setCapability: noop, receive: noop },
     deviceStatus: dummy, connected: dummy, ambient: dummy, camera: dummy, pipeline: dummy,
-    receiveAmbientContext: noop, resetAmbientContext: noop, setLightsFromList: noop, applyLightUpdate: noop,
+    receiveAmbientContext: noop, resetAmbientContext: noop, dismissModeSuggestion: noop, dismissBrightnessSuggestion: noop, dismissMusicSuggestion: noop, musicAutoPlayed: {set: noop}, setLightsFromList: noop, applyLightUpdate: noop,
     startWeatherPolling: noop, stopWeatherPolling: noop }
   const api = runInNewContext(`${source}\n;({initStores, setManualMode, sonosCommand})`, ctx)
   api.initStores()

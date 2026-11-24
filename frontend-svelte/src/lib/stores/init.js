@@ -11,7 +11,7 @@ import { lightCommandTracker } from './lightCommandResults.js'
 import { sonos, sonosLiveReport } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
-import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
+import { showMusicSuggestion, showMusicAutoPlayed, dismissMusicSuggestion, musicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 import { showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
 import { ambient } from './ambient.js'
@@ -28,7 +28,15 @@ let socket = null
 let modeRequestPending = false
 let modeUpdateEpoch = 0
 
+function resetSuggestions() {
+  dismissModeSuggestion()
+  dismissBrightnessSuggestion()
+  dismissMusicSuggestion()
+  musicAutoPlayed.set(null)
+}
+
 export function initStores() {
+  resetSuggestions()
   sonosLiveReport.set(null)
   resetAmbientContext()
   lightCommandTracker.reset()
@@ -143,6 +151,7 @@ export function initStores() {
       }
     },
     (isConnected) => {
+      resetSuggestions()
       sonosLiveReport.set(null)
       resetAmbientContext()
       connected.set(isConnected)
@@ -155,6 +164,7 @@ export function initStores() {
   socket.connect()
 
   return () => {
+    resetSuggestions()
     sonosLiveReport.set(null)
     resetAmbientContext()
     lightCommandTracker.reset()

@@ -1,60 +1,39 @@
 <script>
-  import { onMount } from 'svelte'
-  import { apiGet, apiPost } from '$lib/api.js'
+  import { apiPost } from '$lib/api.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
-  import { automation } from '$lib/stores/automation.js'
+  import { ambientContext } from '$lib/quietAtlas/ambient.js'
   import { modeSuggestion, dismissModeSuggestion } from '$lib/stores/modeSuggestion.js'
-  import { brightnessSuggestion, showBrightnessSuggestion, dismissBrightnessSuggestion } from '$lib/stores/brightnessSuggestion.js'
+  import { brightnessSuggestion } from '$lib/stores/brightnessSuggestion.js'
   import { musicSuggestion, musicAutoPlayed, dismissMusicSuggestion } from '$lib/stores/music.js'
   import { playFavorite } from '$lib/stores/init.js'
 
   const MODES = { working:'Working', gaming:'Gaming', watching:'Watching', cooking:'Cooking', relax:'Relax', social:'Party' }
   let pending = false
   let feedback = ''
-  let mounted = false
-  let readEpoch = 0
-  $: available = $connected && ['home','winding_down'].includes($automation.house_state ?? '')
-  $: mode = available && $modeSuggestion && Number.isSafeInteger($modeSuggestion.suggestion_id) && $modeSuggestion.suggestion_id > 0 && MODES[$modeSuggestion.predicted_mode] ? $modeSuggestion : null
+  // Require house-state evidence received on the current connection.
+  $: available = $connected && ['home','winding_down'].includes($ambientContext?.house_state ?? '')
+  $: mode = available && $modeSuggestion && Number.isSafeInteger($modeSuggestion.suggestion_id) && $modeSuggestion.suggestion_id > 0 && Object.hasOwn(MODES, $modeSuggestion.predicted_mode) ? $modeSuggestion : null
   $: brightness = available && $brightnessSuggestion && Number.isSafeInteger($brightnessSuggestion.id) && $brightnessSuggestion.id > 0 && $brightnessSuggestion.payload ? $brightnessSuggestion : null
   $: music = available && $deviceStatus.sonos && $musicSuggestion && typeof $musicSuggestion.title === 'string' && $musicSuggestion.title.trim() ? $musicSuggestion : null
 
-  onMount(() => {
-    mounted = true
-    return () => { mounted = false; readEpoch += 1 }
-  })
-  $: if (mounted) {
-    if (available) void restoreBrightnessSuggestion()
-    else readEpoch += 1
-  }
-  async function restoreBrightnessSuggestion() {
-    const ticket = ++readEpoch
-    if ($brightnessSuggestion) return
-    try {
-      const result = await apiGet('/api/rules/suggestions?status=pending&limit=20')
-      if (!mounted || ticket !== readEpoch || !available || $brightnessSuggestion) return
-      const row = (Array.isArray(result?.suggestions) ? result.suggestions : []).find(row => row.kind === 'brightness' && row.payload && Number.isSafeInteger(row.id) && row.id > 0)
-      if (row) showBrightnessSuggestion(row)
-    } catch { /* existing api error surface */ }
-  }
-  /** @param {'mode'|'brightness'} kind @param {'accept'|'dismiss'} action @param {number} id */
-  async function resolve(kind, action, id) {
-    if (!available || pending || !Number.isSafeInteger(id) || id <= 0) return
-    const current = kind === 'mode' ? mode : brightness
-    const currentId = kind === 'mode' ? mode?.suggestion_id : brightness?.id
-    if (!current || currentId !== id) return
+  /** @param {'accept'|'dismiss'} action @param {number} id */
+  async function resolveMode(action, id) {
+    if (!available || pending || !Number.isSafeInteger(id) || id <= 0 || mode?.suggestion_id !== id) return
+    const intended = mode
     pending = true
     feedback = 'Sending suggestion response…'
     try {
-      const endpoint = kind === 'mode' ? 'suggestion' : 'brightness-suggestion'
-      const result = await apiPost('/api/rules/' + endpoint + '/' + action + '/' + id)
-      if (result?.status === 'ok' || (kind === 'brightness' && action === 'accept' && result?.status === 'accepted')) {
-        if (kind === 'mode' && $modeSuggestion?.suggestion_id === id) dismissModeSuggestion()
-        if (kind === 'brightness' && $brightnessSuggestion?.id === id) dismissBrightnessSuggestion()
+      const result = await apiPost('/api/rules/suggestion/' + action + '/' + id)
+      if (result?.status === 'ok' && (action === 'dismiss' || result.applied_mode === intended.predicted_mode)) {
         feedback = action === 'dismiss' ? 'Dismissal acknowledged.' : 'Suggestion acknowledged. Check HomeHub’s reported state.'
       } else feedback = 'Suggestion response unconfirmed. Check HomeHub before another action.'
     } catch {
       feedback = 'Suggestion response unconfirmed or expired. Check HomeHub before another action.'
-    } finally { pending = false }
+    } finally {
+      // An uncertain request must not leave the same card ready for retry.
+      if ($modeSuggestion === intended) dismissModeSuggestion()
+      pending = false
+    }
   }
   /** @param {string} title */
   async function play(title) {
@@ -67,7 +46,7 @@
       if ($musicSuggestion === intended) dismissMusicSuggestion()
       feedback = 'Playback requested. Check Now Playing for the reported result.'
     } catch { feedback = 'Playback unconfirmed. Check your speaker before another action.' }
-    finally { pending = false }
+    finally { if ($musicSuggestion === intended) dismissMusicSuggestion(); pending = false }
   }
   /** @param {unknown} payload */
   function brightnessLabel(payload) {
@@ -84,13 +63,12 @@
     {#if mode}
       <article>
         <div><span class="eyebrow">MODE SUGGESTION</span><strong>Switch to {MODES[mode.predicted_mode]}?</strong><p>{mode.confidence}% reported confidence · {mode.sample_count} observations</p></div>
-        <div class="actions"><button type="button" disabled={pending} on:click={() => resolve('mode','dismiss',mode.suggestion_id)}>Dismiss</button><button class="primary" type="button" disabled={pending} on:click={() => resolve('mode','accept',mode.suggestion_id)}>Switch</button></div>
+        <div class="actions"><button type="button" disabled={pending} on:click={() => resolveMode('dismiss',mode.suggestion_id)}>Dismiss</button><button class="primary" type="button" disabled={pending} on:click={() => resolveMode('accept',mode.suggestion_id)}>Switch</button></div>
       </article>
     {/if}
     {#if brightness}
       <article>
-        <div><span class="eyebrow">LEARNED LIGHTING</span><strong>{brightnessLabel(brightness.payload)}</strong><p>{brightness.payload.mode} · {brightness.payload.period} · {brightness.payload.weather_class}. Accepting saves a learned preference and may apply it now.</p></div>
-        <div class="actions"><button type="button" disabled={pending} on:click={() => resolve('brightness','dismiss',brightness.id)}>Dismiss</button><button class="primary" type="button" disabled={pending} on:click={() => resolve('brightness','accept',brightness.id)}>Save preference</button></div>
+        <div><span class="eyebrow">LEARNED LIGHTING</span><strong>{brightnessLabel(brightness.payload)}</strong><p>{brightness.payload.mode} · {brightness.payload.period} · {brightness.payload.weather_class}. Acceptance unavailable here until the lighting ownership path is verified.</p></div>
       </article>
     {/if}
     {#if music}

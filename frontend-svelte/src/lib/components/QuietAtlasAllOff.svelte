@@ -2,7 +2,7 @@
   import { Power } from 'lucide-svelte'
   import { apiPost } from '$lib/api.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
-  import { automation } from '$lib/stores/automation.js'
+  import { ambientContext } from '$lib/quietAtlas/ambient.js'
 
   let armed = false
   /** @type {string | null} */
@@ -10,17 +10,17 @@
   let pending = false
   let feedback = ''
   $: available = $connected && $deviceStatus.hue === true && $deviceStatus.light_command_results === true &&
-    ['home','winding_down','away','sleeping'].includes($automation.house_state ?? '')
-  $: if (armed && (!available || armedState !== $automation.house_state)) cancel()
+    ['home','winding_down','away','sleeping'].includes($ambientContext?.house_state ?? '')
+  $: if (armed && (!available || armedState !== $ambientContext?.house_state)) cancel()
   function cancel() { armed = false; armedState = null }
   function arm() {
     if (!available || pending) return
     armed = true
-    armedState = $automation.house_state
+    armedState = $ambientContext?.house_state ?? null
     feedback = ''
   }
   async function confirmOff() {
-    if (!available || pending || !armed || armedState !== $automation.house_state) { cancel(); return }
+    if (!available || pending || !armed || armedState !== $ambientContext?.house_state) { cancel(); return }
     cancel()
     pending = true
     feedback = 'Requesting All Off…'
