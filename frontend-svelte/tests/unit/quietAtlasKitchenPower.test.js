@@ -28,11 +28,11 @@ describe('Kitchen pair power', () => {
     expect(setLight).not.toHaveBeenCalled()
     expect(screen.getByText('1 of 2 on')).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Both on' }))
-    expect(setLight.mock.calls).toEqual([['3', { on: true }], ['4', { on: true }]])
+    expect(vi.mocked(setLight).mock.calls).toEqual([['3', { on: true }], ['4', { on: true }]])
     expect(screen.getByText('1 of 2 on')).toBeInTheDocument()
     vi.clearAllMocks()
     await fireEvent.click(screen.getByRole('button', { name: 'Both off' }))
-    expect(setLight.mock.calls).toEqual([['3', { on: false }], ['4', { on: false }]])
+    expect(vi.mocked(setLight).mock.calls).toEqual([['3', { on: false }], ['4', { on: false }]])
     expect(screen.getAllByRole('button', { name: /Turn (on|off)/ })).toHaveLength(2)
   })
 
