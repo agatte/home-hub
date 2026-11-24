@@ -213,6 +213,7 @@ class EffectManager:
         if (
             not self._startup_observation_pending or self._tracker_known
             or self._active_name is not None
+            or not set(ALL_LIGHT_IDS) <= required
             or not self._transition_boundary.held_by_current_task
         ):
             return False
