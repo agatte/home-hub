@@ -16,7 +16,7 @@ describe('Scene library presentation', () => {
     expect(sceneCardBackground([])).toBe('')
   })
   it('uses naturally warmer white temperatures and one shared shortcut gradient', () => {
-    const rgb = mirek => sceneTemperatureColor(mirek).match(/\d+/g).map(Number)
+    const rgb = mirek => (sceneTemperatureColor(mirek).match(/\d+/g) ?? []).map(Number)
     const cool = rgb(153), warm = rgb(500)
     expect(warm[0]).toBeGreaterThanOrEqual(warm[1])
     expect(warm[2]).toBeLessThan(cool[2])
