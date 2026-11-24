@@ -119,7 +119,7 @@
 </section>
 
 <style>
-  .mode-controls {margin:16px 0 18px;padding:16px 18px 4px;border:1px solid var(--line);border-radius:19px;background:linear-gradient(130deg,var(--stage),var(--deep));color:var(--ink);min-width:0;}
+  .mode-controls {margin:16px 0 18px;padding:16px 18px 4px;border:1px solid var(--line);border-radius:var(--hh-radius-panel,20px);background:radial-gradient(ellipse at 92% 0%,rgba(220,185,131,.10),transparent 65%),var(--hh-card-background,linear-gradient(130deg,var(--stage),var(--deep)));color:var(--ink);min-width:0;}
   .mode-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;}
   .mode-current {min-width:0;}
   h2 {margin:0 0 6px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.015em;}
@@ -133,7 +133,7 @@
   .mode-picker[open] summary::after {content:'−';}
   .mode-note {color:var(--muted);font-size:12px;line-height:1.5;margin:10px 0 14px;max-width:70ch;}
   .mode-actions {display:grid;grid-template-columns:minmax(0,1fr) minmax(100px,auto);gap:9px;align-items:center;margin-top:6px;}
-  button,select {font:inherit;min-height:48px;border-radius:13px;box-sizing:border-box;}
+  button,select {font:inherit;min-height:48px;border-radius:var(--hh-radius-control,10px);box-sizing:border-box;}
   button {padding:10px 14px;cursor:pointer;font-weight:650;}
   .auto-action {flex:0 0 auto;background:rgba(237,207,160,.10);color:var(--gold);border:1px solid rgba(237,207,160,.32);font-size:14px;}
   .apply-action {background:var(--gold);color:var(--deep);border:1px solid var(--gold);}
