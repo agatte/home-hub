@@ -41,6 +41,44 @@ Read a **specific** issue/spec or code surface rather than indexing the entire r
 - Cross-link an affected specification or execution-map route if the accepted decision/dependency changed; keep dated audits historically intact.
 - A new chat must be able to resume from GitHub/repo without relying on a long chat handoff. If publishing is not authorized, explicitly identify the local worktree and uncommitted evidence; never imply it is durable on GitHub.
 
+## Project continuity across conversations (#365)
+
+This owner-approved expansion (2026-11-24) captures the meaning of substantive work sessions, not verbatim transcripts. It extends the existing workflow; neither the existing scoped continuity acceptance nor merging these instructions proves this expanded outcome. See [owner-approved trial and baseline](https://github.com/agatte/home-hub/issues/365#issuecomment-7141844469).
+
+### Anchor the objective and limit drift
+
+Before a milestone or a new conversation, recover the owning issue's original owner goal, latest explicit changes to that goal, user-visible acceptance criteria, primary workstream, current bounded milestone, excluded work and exact next gate. Record a compact anchor in the owning issue if missing; reuse an existing current anchor instead of copying the entire roadmap. A generic "continue" retains the objective and approvals; it does not authorize a different goal.
+
+For every newly discovered dependency, classify it as a **demonstrated blocker**, **independent important finding**, or **idea/hypothesis**. A blocker record must identify the acceptance criterion at risk, reproducible evidence, smallest safe remedy or reason no safe alternative exists, owner and exit condition. Unknown severity is not evidence of a blocker. Preserve and route independent findings to their owning issues or future-development notes without silently promoting them to the critical path. Never bypass security or safety to meet an objective; if no safe bounded alternative exists, hold at the documented gate. Material scope/risk/priority changes require the owner's decision. Recheck the anchor before delegating, expanding scope, publishing, or declaring completion.
+
+### Incremental session checkpoint
+
+Persist a compact checkpoint in the owning issue/PR when substantive decisions, implementation progress, failed approaches, new dependencies or authorization gates change; also before delegation or handoff and after a meaningful worker/test/review result. In long active sessions, check for unsaved material progress roughly every 15–20 minutes or before a context-heavy step, whichever comes first; no unattended timer or guaranteed end-of-chat hook is implied. Avoid no-change comments and duplicate evidence. Before a worker launch record intent and scope; immediately after launch capture the durable registry ID and recovery route. Use an existing source-controlled local artifact only if publishing is not authorized, and explicitly record the local recovery location where permitted.
+
+Use this compact format (omit irrelevant fields; never omit unresolved gates):
+
+- **Date / owner / objective:** owning issue and acceptance criterion; link the controlling owner decision.
+- **Change / why:** concise decisions, user preferences, evidence and material findings; mark proposal versus accepted decision, hypothesis versus verified result.
+- **Recovery:** exact Git base/head/PR, worktree and task ID where applicable; verified tests and review links, failed approaches and unresolved risks. Re-read live refs/registry before resuming; a recorded PID is historical.
+- **State:** implemented / technically verified / operationally validated / owner-accepted, or unknown, separately. No inferred authorization or acceptance.
+- **Next:** one executable step, dependency or approval gate; route side discoveries to the existing owner, or mark as unaccepted ideas in the existing future-development notes.
+
+A conversation with a material product decision but no code also warrants capture. Routine acknowledgements, duplicate test logs and generic progress need no durable entry. Keep public repository records sanitized and project-relevant; no raw chats, account exports, unrelated personal details, credentials, private data or hidden reasoning. An owner's idea is not permission for account/host/device actions or implementation outside the selected scope.
+
+### Journal, consolidation and selective retrieval
+
+Owning issue/PR comments are the detailed chronological session journal. Reviewed Markdown (this workflow, existing project/admin and subsystem docs, dated notes as appropriate) is the compact Vault-readable view; issue comments are not mirrored directly. Promote accepted durable decisions/preferences to their owning spec, meaningful rejected approaches to dated evidence, and unaccepted ideas to the existing future-development home. Link sources instead of copying them into a competing backlog. A rolling summary can supersede an older summary without changing the historical evidence or erasing unresolved findings.
+
+Review recent material checkpoints at milestone close or a weekly reconciliation when substantive work is active. Aim for 100–300 words per checkpoint, a 300–500 word weekly summary when useful, and a concise monthly milestone history; these are targets, not truncation rules. Consolidate repeated facts and progress; after roughly 30 days prefer summaries over detailed recent-session reading, and after roughly 90 days prefer monthly milestone history over weekly summaries unless needed for evidence. Preserve active tasks, unique failures/evidence, decisions, permissions and unresolved ideas regardless of age. Do not delete issues/comments, raw exports, Git history, Vault snapshots or backups under this policy. Historical import remains a separate opt-in, locally filtered and privacy-reviewed task; automatic full-chat collection is not established.
+
+Fresh session retrieval order: current AGENTS/workflow/admin hub → owning goal and latest issue/PR checkpoints → live Git/runtime and worker registry as needed → targeted spec/evidence/history. Read only as much historical context as needed; do not redo a completed investigation unless current evidence or uncertainty warrants it. When sources conflict, resolve via controlling owner decision and fresh evidence, not a generated summary.
+
+### Real acceptance trial
+
+Use remaining #461/#254 work rather than inventing a test change. The [latest #461 checkpoint](https://github.com/agatte/home-hub/issues/461#issuecomment-7141601367) reports #568 merged but not deployed/owner-accepted; the [#254 recovery checkpoint](https://github.com/agatte/home-hub/issues/254#issuecomment-7141611534) identifies the actual non-actuating music session planner Write task to recover. These are dated source pointers, not fresh task/runtime proof. Keep Dashboard UI primary; admin trial is not a release blocker.
+
+Record in #365 at least two genuine fresh-session recoveries, including one interrupted/in-flight task, one captured incidental discovery, and a real blocker classification if encountered. Measure retrieval elapsed time, duplicated reads/investigation, avoidable owner prompts, scope changes, checkpoint size and missing or stale evidence; explicitly mark unavailable metrics. Historical baseline is the Nov 14–15 #461 scope correction, not an invented time/cost estimate. Coordinate overlapping delivery metrics with #504. Acceptance requires evidence of usable recovery, preserved original intent and idea retrieval, plus independently witnessed natural delivery of reviewed Markdown to the existing Vault through a permitted read-only path. Do not claim ongoing coverage of every chat or physical acceptance from a docs merge.
+
 ## Where new knowledge belongs
 
 | New information | Durable home |
