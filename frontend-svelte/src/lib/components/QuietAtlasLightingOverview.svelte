@@ -1,4 +1,6 @@
 <script>
+  import { lights } from '$lib/stores/lights.js'
+  import { roomColorBackground } from '$lib/quietAtlas/homeRoomLightSummary.js'
   import { connected } from '$lib/stores/connection.js'
   import { automation, houseStateLabel, activityLabel, automationSourceLabel } from '$lib/stores/automation.js'
   import { selectQuickScenes } from '$lib/quietAtlas/lightingModel.js'
@@ -26,6 +28,7 @@
   /** @type {(sceneId: string) => void} Parent owns existing authorized actuation. */
   export let onOpenScene = () => {}
 
+  $: roomBackgrounds = Object.fromEntries(groups.map(group => [group.id, roomColorBackground(group.fixtureIds, $lights, $connected && snapshotStatus === 'recent-read')]))
   $: quickScenes = selectQuickScenes(sceneList, favoriteSceneIds)
   $: house = houseStateLabel($automation.house_state) || 'State unavailable'
   $: activity = activityLabel($automation.activity)
@@ -70,6 +73,8 @@
       <button
         type="button"
         class="group"
+        class:room-colored={!!roomBackgrounds[group.id]}
+        style:background={roomBackgrounds[group.id] || null}
         on:click={() => onOpenGroup(group.id)}
         aria-label={`Open ${group.label} lighting controls: ${stateText[group.status]}`}
       >
@@ -128,6 +133,8 @@
   button { cursor: pointer; font: inherit; }
   button:focus-visible { outline: 3px solid #d2ebbe; outline-offset: 3px; }
   .group { min-width: 0; min-height: 111px; border: 1px solid #425449; border-radius: 18px; padding: 18px; color: #f0f2e9; text-align: left; background: var(--hh-card-background, linear-gradient(145deg,#1c2522,#141c19)); display: flex; flex-direction: column; justify-content: space-between; transition: border-color .15s ease, background .15s ease; }
+  .group.room-colored {border-color:rgba(238,241,245,.28);}
+  .group.room-colored .group-status,.group.room-colored .count,.group.room-colored .chevron {color:#e5e7eb;}
   .group:hover { border-color: #9dbb9d; }
   .group-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
   .group-name { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
