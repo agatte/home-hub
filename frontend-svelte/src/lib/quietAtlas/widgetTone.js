@@ -23,3 +23,31 @@ export function activityTone(label) {
     default: return 'neutral'
   }
 }
+
+/** Validated provider icon, including its reported day/night distinction.
+ * Keep an unknown or missing icon neutral with a condition-only fallback.
+ * @param {unknown} icon
+ */
+export function weatherIconCode(icon) {
+  return typeof icon === 'string' && /^(01|02|03|04|09|10|11|13|50)[dn]$/.test(icon) ? icon : null
+}
+
+/** @param {{status:string,report?:{description:string,icon?:string|null}|null}|null} view */
+export function weatherSky(view) {
+  if (view?.status !== 'recent' || !view.report) return 'neutral'
+  const icon = weatherIconCode(view.report.icon)
+  switch (icon) {
+    case '01d': return 'sun'
+    case '01n': return 'night'
+    case '02d': return 'partly-day'
+    case '02n': return 'partly-night'
+    case '03d': case '04d': return 'cloud'
+    case '03n': case '04n': return 'cloud-night'
+    case '09d': case '10d': return 'rain'
+    case '09n': case '10n': return 'rain-night'
+    case '11d': case '11n': return 'storm'
+    case '13d': case '13n': return 'snow'
+    case '50d': case '50n': return 'mist'
+    default: return weatherTone(view)
+  }
+}
