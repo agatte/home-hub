@@ -1,6 +1,7 @@
 <script>
   // Display-only exterior weather. Response receipt is not source observation age.
   import { onMount } from 'svelte'
+  import { weatherTone } from '$lib/quietAtlas/widgetTone.js'
   import { connected } from '$lib/stores/connection.js'
   import {
     newWeatherSnapshot, weatherConnectionChanged, invalidateWeatherRead,
@@ -105,7 +106,7 @@
   })
 </script>
 
-<section class="weather-band" aria-labelledby="weather-band-title" data-status={view.status}>
+<section class="weather-band" aria-labelledby="weather-band-title" data-status={view.status} data-tone={weatherTone(view)}>
   <div class="weather-lead">
     <p class="weather-kicker">OUTSIDE</p>
     <h2 id="weather-band-title">Weather</h2>
@@ -128,12 +129,19 @@
 </section>
 
 <style>
-  .weather-band {display:grid;grid-template-columns:minmax(110px,.65fr) minmax(150px,1.35fr) auto;gap:14px;align-items:center;margin-top:18px;padding:13px 2px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--ink);min-width:0;}
+  .weather-band {display:grid;grid-template-columns:minmax(110px,.65fr) minmax(150px,1.35fr) auto;gap:14px;align-items:center;margin-top:18px;padding:18px 20px;border:1px solid var(--line);border-radius:var(--hh-radius-panel,20px);background:radial-gradient(ellipse at 86% 4%,rgba(var(--weather-glow, 154,166,154),.23),transparent 70%),var(--hh-card-background,linear-gradient(135deg,var(--stage),var(--deep)));color:var(--ink);min-width:0;}
+  .weather-band[data-tone='sun'] {--weather-glow:237,173,84;}
+  .weather-band[data-tone='clear'] {--weather-glow:111,147,208;}
+  .weather-band[data-tone='cloud'] {--weather-glow:143,164,186;}
+  .weather-band[data-tone='rain'] {--weather-glow:74,137,194;}
+  .weather-band[data-tone='storm'] {--weather-glow:139,111,195;}
+  .weather-band[data-tone='snow'] {--weather-glow:192,220,237;}
+  .weather-band[data-tone='neutral'] {--weather-glow:154,166,154;}
   .weather-lead {min-width:0;}
   .weather-kicker {color:var(--gold);font-size:11px;letter-spacing:.1em;font-weight:750;margin:0 0 4px;}
   h2 {font-size:18px;letter-spacing:-.025em;font-weight:620;margin:0;}
   .weather-values {display:flex;align-items:center;gap:14px;min-width:0;}
-  .temp {font-size:29px;font-weight:625;line-height:1.08;white-space:nowrap;}
+  .temp {font-size:34px;font-weight:625;letter-spacing:-.04em;line-height:1.08;white-space:nowrap;}
   .weather-conditions {display:flex;flex-direction:column;gap:3px;min-width:0;}
   .weather-conditions strong {font-size:13px;font-weight:600;overflow-wrap:anywhere;}
   .weather-conditions span {color:var(--muted);font-size:12px;line-height:1.35;overflow-wrap:anywhere;}
@@ -145,13 +153,13 @@
   .weather-source {color:var(--muted);font-size:12px;line-height:1.5;margin:8px 0 0;max-width:70ch;}
   code {font:inherit;color:var(--gold);overflow-wrap:anywhere;}
   @media(max-width:700px) {
-    .weather-band {grid-template-columns:minmax(70px,.6fr) minmax(0,1fr);gap:7px 12px;margin-top:10px;padding:12px 1px;}
+    .weather-band {grid-template-columns:minmax(70px,.6fr) minmax(0,1fr);gap:10px 12px;margin-top:14px;padding:14px;}
     .weather-kicker {font-size:10px;}
     h2 {font-size:16px;}
-    .weather-values {gap:9px;}
-    .temp {font-size:26px;}
+    .weather-values {gap:9px;flex-wrap:wrap;}
+    .temp {font-size:29px;}
     .weather-details {grid-column:1/-1;}
-    .weather-details summary {min-height:34px;font-size:12px;}
+    .weather-details summary {min-height:44px;font-size:12px;}
     .weather-source {font-size:11px;}
   }
   @media(max-width:360px) {
