@@ -1,6 +1,8 @@
 <script>
   import { lights } from '$lib/stores/lights.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
+  import { lightCommandResults } from '$lib/stores/lightCommandResults.js'
+  import { setLight } from '$lib/stores/init.js'
   import LightCard from './LightCard.svelte'
 
   /** Existing HomeHub fixture IDs, not a new actuation authority. */
@@ -9,7 +11,8 @@
   export let compact = false
 
   // Each card sends one existing light_command over HomeHub's WebSocket.
-  // No paired Kitchen commands: each card addresses its own fixture.
+  // Individual cards remain independent. Only the explicit Kitchen pair
+  // power buttons below send to the two configured fixtures.
   const ROOM_LIGHTS = Object.freeze({
     living: ['1'],
     bedroom: ['2', '5'],
@@ -24,6 +27,18 @@
   })
   $: fixtureIds = ROOM_LIGHTS[room] ?? []
   $: roomLabel = ROOMS[room] ?? 'Room'
+  const KITCHEN_IDS = ROOM_LIGHTS.kitchen
+  $: kitchenReady = room === 'kitchen' && $connected && $deviceStatus.light_command_results === true && KITCHEN_IDS.every(lid => $lights[lid]?.reachable === true)
+  $: kitchenPending = KITCHEN_IDS.some(lid => $lightCommandResults[lid]?.status === 'pending')
+  $: kitchenOnCount = KITCHEN_IDS.filter(lid => $lights[lid]?.on === true).length
+
+  /** @param {boolean} on */
+  function setKitchenPower(on) {
+    if (room !== 'kitchen' || !kitchenReady || kitchenPending) return
+    // Each target retains its own authorization, receipt, and state readback.
+    // This is not an atomic Hue group write, and partial success is possible.
+    for (const lid of KITCHEN_IDS) setLight(lid, { on })
+  }
 </script>
 
 <section class="room-control" class:compact aria-labelledby={`${id}-heading`}>
@@ -35,6 +50,15 @@
   {:else if fixtureIds.length === 0}
     <p role="status" class="warning">No configured fixtures for this room.</p>
   {:else}
+    {#if room === 'kitchen'}
+      <div class="kitchen-power" aria-busy={kitchenPending}>
+        <div class="kitchen-summary"><strong>Both kitchen lights</strong><span>{!kitchenReady ? 'Waiting for both lights' : kitchenPending ? 'Changing lights…' : kitchenOnCount === 2 ? 'Both on' : kitchenOnCount === 0 ? 'Both off' : '1 of 2 on'}</span></div>
+        <div class="kitchen-actions">
+          <button type="button" disabled={!kitchenReady || kitchenPending} on:click={() => setKitchenPower(true)}>Both on</button>
+          <button type="button" disabled={!kitchenReady || kitchenPending} on:click={() => setKitchenPower(false)}>Both off</button>
+        </div>
+      </div>
+    {/if}
     {#if compact}<p class="light-hint">Drag to dim · tap power or color</p>{/if}
     <div class="fixture-grid">
       {#each fixtureIds as lightId (lightId)}
@@ -51,7 +75,7 @@
   {/if}
   <details class="control-details">
     <summary>About these controls</summary>
-    <p class="provenance">Each slider requests a change to one light. HomeHub can refuse it when another mode or effect is in control. Opening a room does not change any lights.</p>
+    <p class="provenance">Each slider requests a change to one light. Kitchen pair power sends one request to each kitchen light; either may be refused independently. HomeHub can refuse a change when another mode or effect is in control. Opening a room does not change any lights.</p>
     <p class="footnote">A successful request does not guarantee the physical light changed. Check the light itself when needed.</p>
     <a href="/classic#apartment-controls">Classic light controls</a>
   </details>
@@ -61,6 +85,14 @@
   .room-control {grid-column:1 / -1;min-width:0;}
   .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
   .provenance,.footnote { font-size:13px;line-height:1.6;color:var(--muted);max-width:70ch; }
+  .kitchen-power {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:12px;border:1px solid var(--line);border-radius:14px;margin:0 0 10px;}
+  .kitchen-summary {display:grid;gap:4px;flex:1 1 130px;min-width:0;}
+  .kitchen-summary strong {font-size:14px;color:var(--ink);}
+  .kitchen-summary span {font-size:12px;color:var(--muted);}
+  .kitchen-actions {display:flex;gap:6px;flex-wrap:wrap;}
+  .kitchen-actions button {min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:rgba(237,207,160,.08);font:inherit;font-size:13px;color:var(--ink);cursor:pointer;}
+  .kitchen-actions button:disabled {opacity:.5;cursor:not-allowed;}
+  .kitchen-actions button:focus-visible {outline:3px solid var(--gold);outline-offset:2px;}
   .fixture-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;min-width:0;margin:12px 0 16px;}
   .fixture {min-width:0;padding:0;border:0;}
   .fixture-heading {display:flex;align-items:center;min-height:25px;margin:0 0 5px;}
