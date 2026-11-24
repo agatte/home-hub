@@ -125,18 +125,25 @@
   }
 </script>
 
-<svelte:head><title>Personality · Home Hub</title></svelte:head>
+<svelte:head><title>Personalization | HomeHub</title></svelte:head>
 
-<section class="page">
-  <header>
-    <h1>Personality</h1>
-    <p class="sub">AI Personality Layer · Phase A (shadow-log)</p>
+<main class="page" aria-label="HomeHub personalization">
+  <header class="workspace-head">
+    <p class="eyebrow">HOMEHUB / PREFERENCES</p>
+    <h1>Personalization</h1>
+    <p class="sub">Review HomeHub's experimental mood estimates, provide your own feedback and manage the existing personality settings.</p>
+    <nav class="section-nav" aria-label="Personalization sections">
+      <a href="#mood">Mood estimate</a><a href="#calibrate">Calibration</a><a href="#preferences">Preferences</a><a href="#history">History</a>
+    </nav>
   </header>
 
   <!-- Live reading -->
-  <div class="widget">
-    <h2 class="widget-title">Live Mood</h2>
-    {#if !current?.enabled}
+  <div class="widget mood-widget" id="mood">
+    <h2 class="widget-title">Latest reported mood estimate</h2>
+    <p class="hint-block">Experimental model estimates may lag and are not proof of how you feel. The color swatch is a preview, not a physical lighting reading.</p>
+    {#if !current}
+      <p class="empty" role="status">No mood report available.</p>
+    {:else if !current.enabled}
       <p class="empty">Emotion detection is off. Enable it in Settings below to start the shadow log.</p>
     {:else if !current.vector}
       <p class="empty">
@@ -149,7 +156,7 @@
         <div
           class="swatch"
           style="background: {hsvToCss(current.preview_hsv)}; box-shadow: 0 0 30px {hsvToCss(current.preview_hsv)};"
-          title="Mood-ring color preview (Phase B will drive this onto a real lamp)"
+          title="Mood-ring color preview only"
         ></div>
         <div class="gauges">
           <div class="gauge">
@@ -187,7 +194,7 @@
   </div>
 
   <!-- Calibration form -->
-  <div class="widget">
+  <div class="widget" id="calibrate">
     <h2 class="widget-title">
       Calibrate
       <button class="ghost-btn" type="button" on:click={snapToDetected} disabled={!current?.vector}>
@@ -227,8 +234,8 @@
   </div>
 
   <!-- Settings -->
-  <div class="widget">
-    <h2 class="widget-title">Settings</h2>
+  <div class="widget" id="preferences">
+    <h2 class="widget-title">Personality preferences</h2>
     {#if settings}
       <div class="toggle-row">
         <label class="toggle">
@@ -275,15 +282,15 @@
         <code>F {settings.calibration_bias.focus.toFixed(3)}</code>
       </div>
     {:else}
-      <p class="empty">Loading…</p>
+      <p class="empty" role="status">No settings report available.</p>
     {/if}
   </div>
 
   <!-- History -->
-  <div class="widget">
+  <div class="widget" id="history">
     <h2 class="widget-title">
       Last 24 Hours
-      <span class="count">{history?.count ?? 0} samples</span>
+      <span class="count">{history ? history.count + ' samples' : 'Unavailable'}</span>
     </h2>
     {#if history && history.samples.length}
       <div class="history-strip">
@@ -300,48 +307,46 @@
           ></div>
         {/each}
       </div>
-    {:else}
+    {:else if history}
       <p class="empty">No samples recorded yet.</p>
+    {:else}
+      <p class="empty" role="status">No history report available.</p>
     {/if}
     {#if calHistory && calHistory.count > 0}
       <p class="cal-count">Calibration samples submitted: <strong>{calHistory.count}</strong></p>
     {/if}
   </div>
-</section>
+</main>
 
 <style>
   .page {
-    max-width: 880px;
+    max-width: 1080px;
+    min-width:0;color:var(--hh-ink);--text-primary:var(--hh-ink);--text-muted:var(--hh-muted);--border:var(--hh-line);--accent:var(--hh-accent);--font-body:var(--hh-font);--font-display:var(--hh-display);
     margin: 0 auto;
-    padding: 24px 16px 80px;
+    padding: clamp(18px,3vw,42px) var(--hh-gutter) 44px;
     display: flex;
     flex-direction: column;
     gap: 18px;
   }
-  header h1 {
-    font-family: var(--font-display, 'Bebas Neue'), sans-serif;
-    font-size: 42px;
-    letter-spacing: 3px;
-    margin: 0;
-  }
-  header .sub {
-    color: var(--text-muted);
-    margin: 4px 0 0;
-    font-size: 13px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-  }
+  .workspace-head {display:grid;gap:8px;}
+  .eyebrow {font-size:11px;letter-spacing:.14em;font-weight:750;color:var(--hh-accent);}
+  header h1 {font:500 clamp(36px,5vw,60px)/1.1 var(--hh-display);letter-spacing:-.04em;}
+  header .sub {color:var(--hh-muted);font-size:14px;line-height:1.6;}
+  .section-nav {display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;}
+  .section-nav a {display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:8px 12px;background:var(--hh-control);border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);color:var(--hh-ink);text-decoration:none;font-size:13px;}
+  .section-nav a:hover {background:var(--hh-control-hover);}
   .widget {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border);
-    border-radius: 12px;
+    min-width:0;overflow-wrap:anywhere;scroll-margin-top:80px;
+    background: var(--hh-card-background);
+    border: 1px solid var(--hh-line);
+    border-radius: var(--hh-radius-panel);
     padding: 20px;
     backdrop-filter: blur(12px);
   }
   .widget-title {
-    font-family: var(--font-display, 'Bebas Neue'), sans-serif;
-    font-size: 16px;
-    letter-spacing: 2px;
+    font-family: var(--hh-display);
+    font-size: 24px;
+    letter-spacing: 0;
     color: var(--text-primary);
     margin: 0 0 16px;
     display: flex;
@@ -350,7 +355,7 @@
   }
   .reading {
     display: grid;
-    grid-template-columns: 120px 1fr;
+    grid-template-columns: 120px minmax(0,1fr);
     gap: 18px;
     align-items: center;
   }
@@ -362,7 +367,7 @@
   }
   .gauges {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, minmax(0,1fr));
     gap: 12px;
   }
   .gauge {
@@ -414,7 +419,7 @@
   }
   .sliders label {
     display: grid;
-    grid-template-columns: 200px 1fr;
+    grid-template-columns: minmax(0,200px) minmax(0,1fr);
     align-items: center;
     gap: 12px;
   }
@@ -560,8 +565,16 @@
       text-align: center;
     }
     .gauges {
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0,1fr));
       gap: 16px;
     }
   }
+  .mood-widget {background:radial-gradient(ellipse at 100% 0%,rgba(141,117,175,.09),transparent 65%),var(--hh-card-background);}
+  .widget-title,.submit-row {flex-wrap:wrap;gap:10px;}
+  .primary-btn,.ghost-btn {min-height:44px;white-space:normal;}
+  .sliders input[type='range'] {min-width:0;min-height:44px;accent-color:var(--hh-accent);}
+  .toggle {min-height:44px;align-items:center;}
+  .toggle input {flex:0 0 auto;width:20px;height:20px;accent-color:var(--hh-accent);}
+  .section-nav a:focus-visible,.primary-btn:focus-visible,.ghost-btn:focus-visible,.toggle input:focus-visible,.sliders input:focus-visible {outline:3px solid var(--hh-focus);outline-offset:2px;}
+  @media(max-width:600px) {.page{padding:18px 16px 32px;}.widget{padding:16px;}.section-nav a{flex:1 1 auto;}.widget-title{font-size:21px;}.hint-block{line-height:1.55;}}
 </style>

@@ -146,29 +146,46 @@
 </script>
 
 <svelte:head>
-  <title>Apartment Logbook · Home Hub</title>
+  <title>Activity journal | HomeHub</title>
 </svelte:head>
 
-<div class="journal-shell">
-  <aside class="journal-rail">
+<main class="journal-workspace" aria-label="HomeHub activity journal">
+  <header class="workspace-head">
+    <p class="eyebrow">HOMEHUB / HISTORY</p>
+    <h1>Activity journal</h1>
+    <p>Daily generated summaries of the apartment's recorded activity. These are summaries, not independent confirmation of presence or events.</p>
+  </header>
+  <div class="journal-shell">
+  <aside class="journal-rail" aria-label="Journal dates">
     <header class="rail-head">
-      <h1>Logbook</h1>
-      <button class="rail-action" on:click={generateYesterday} disabled={regenerating}>
+      <h2>Logbook</h2>
+      <button type="button" class="rail-action" on:click={generateYesterday} disabled={regenerating || loading}>
         {regenerating ? '…' : 'Generate yesterday'}
       </button>
     </header>
 
     {#if entries.length === 0}
       <p class="rail-empty">
-        No entries yet. The nightly job runs at 2am — or click <em>Generate yesterday</em>.
+        No entries loaded. The nightly job is scheduled for 2am; you can also use <em>Generate yesterday</em>.
       </p>
     {:else}
+      <div class="phone-date">
+        <label for="journal-date">Choose an entry</label>
+        <select id="journal-date" value={activeDate || ''} disabled={loading || regenerating} on:change={(event) => selectDate(event.currentTarget.value)}>
+          {#each entries as entry (entry.date)}
+            <option value={entry.date}>{formatDateLabel(entry.date)} · {entry.date}</option>
+          {/each}
+        </select>
+      </div>
       <ul class="rail-list">
         {#each entries as entry}
           <li>
             <button
               class="rail-item"
               class:rail-active={activeDate === entry.date}
+              type="button"
+              aria-current={activeDate === entry.date ? 'date' : undefined}
+              disabled={loading || regenerating}
               on:click={() => selectDate(entry.date)}
             >
               <span class="rail-date">{formatDateLabel(entry.date)}</span>
@@ -180,16 +197,16 @@
     {/if}
   </aside>
 
-  <article class="journal-page">
+  <article class="journal-page" aria-busy={loading || regenerating}>
     {#if loadError}
-      <div class="journal-error">{loadError}</div>
+      <div class="journal-error" role="status">{loadError}</div>
     {/if}
 
     {#if loading}
       <div class="journal-loading">Loading…</div>
     {:else if markdown}
       <div class="journal-toolbar">
-        <button class="rail-action" on:click={regenerateActive} disabled={regenerating}>
+        <button type="button" class="rail-action" on:click={regenerateActive} disabled={regenerating || loading}>
           {regenerating ? 'Regenerating…' : 'Regenerate'}
         </button>
       </div>
@@ -205,28 +222,34 @@
       </p>
     {/if}
   </article>
-</div>
+  </div>
+</main>
 
 <style>
+  .journal-workspace {max-width:1440px;min-width:0;margin:0 auto;padding:clamp(18px,3vw,42px) var(--hh-gutter) 44px;color:var(--hh-ink);--text-primary:var(--hh-ink);--text-muted:var(--hh-muted);--font-body:var(--hh-font);--font-display:var(--hh-display);}
+  .workspace-head {display:grid;gap:8px;margin-bottom:24px;}
+  .workspace-head .eyebrow {font-size:11px;letter-spacing:.14em;font-weight:750;color:var(--hh-accent);}
+  .workspace-head h1 {font:500 clamp(36px,5vw,60px)/1.1 var(--hh-display);letter-spacing:-.04em;}
+  .workspace-head p:not(.eyebrow) {font-size:14px;line-height:1.6;color:var(--hh-muted);}
+  .phone-date {display:none;}
   .journal-shell {
     display: grid;
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: minmax(220px,280px) minmax(0,1fr);
     gap: 24px;
-    min-height: 100vh;
-    padding: 32px 24px 96px;
+    min-width: 0;
     box-sizing: border-box;
   }
 
-  @media (max-width: 768px) {
+  @media (max-width: 1000px) {
     .journal-shell {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0,1fr);
     }
   }
 
   .journal-rail {
-    background: rgba(20, 20, 32, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-md, 14px);
+    background: var(--hh-card-background);
+    border: 1px solid var(--hh-line);
+    border-radius: var(--hh-radius-panel);
     padding: 16px;
     backdrop-filter: blur(10px);
     align-self: start;
@@ -242,7 +265,7 @@
     margin-bottom: 12px;
   }
 
-  .rail-head h1 {
+  .rail-head h2 {
     font-family: var(--font-display, 'Bebas Neue', sans-serif);
     font-size: 22px;
     margin: 0;
@@ -250,8 +273,8 @@
   }
 
   .rail-action {
-    background: rgba(140, 100, 200, 0.22);
-    border: 1px solid rgba(140, 100, 200, 0.45);
+    background: var(--hh-control);
+    border: 1px solid var(--hh-line);
     color: var(--text-primary, #fff);
     padding: 6px 12px;
     border-radius: 999px;
@@ -262,7 +285,7 @@
   }
 
   .rail-action:hover:not(:disabled) {
-    background: rgba(140, 100, 200, 0.34);
+    background: var(--hh-control-hover);
   }
 
   .rail-action:disabled {
@@ -308,8 +331,8 @@
   }
 
   .rail-active {
-    border-color: rgba(140, 100, 200, 0.5);
-    background: rgba(140, 100, 200, 0.12);
+    border-color: var(--hh-accent);
+    background: var(--hh-control);
   }
 
   .rail-date {
@@ -323,10 +346,11 @@
   }
 
   .journal-page {
-    background: rgba(20, 20, 32, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-md, 14px);
-    padding: 32px 36px;
+    background: var(--hh-card-background);
+    border: 1px solid var(--hh-line);
+    border-radius: var(--hh-radius-panel);
+    min-width:0;overflow-wrap:anywhere;
+    padding: clamp(16px,3vw,36px);
     backdrop-filter: blur(10px);
     min-height: 60vh;
   }
@@ -381,7 +405,7 @@
   }
 
   .journal-error {
-    color: #d57;
+    color: #f5a9a9;
     font-size: 13px;
     margin-bottom: 12px;
   }
@@ -392,4 +416,10 @@
     font-size: 14px;
     line-height: 1.6;
   }
+  .rail-action,.rail-item {min-height:44px;}
+  .rail-action:focus-visible,.rail-item:focus-visible,.phone-date select:focus-visible {outline:3px solid var(--hh-focus);outline-offset:2px;}
+  .rail-item:disabled {cursor:not-allowed;opacity:.65;}
+  @media(max-width:1000px) {.journal-rail{position:static;}.rail-list{display:none;}.phone-date{display:grid;gap:8px;min-width:0;}.phone-date label{font-size:13px;color:var(--hh-muted);}.phone-date select{width:100%;min-width:0;min-height:48px;padding:8px 10px;background:var(--hh-control);border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);color:var(--hh-ink);font:inherit;font-size:16px;}}
+  @media(max-width:600px) {.journal-workspace{padding:18px 16px 32px;}.journal-shell{gap:14px;}.rail-head{flex-wrap:wrap;}.journal-content :global(h1){font-size:28px;}.journal-content :global(h2){font-size:15px;letter-spacing:.06em;}}
+  @media(prefers-reduced-motion:reduce) {.rail-action,.rail-item{transition:none;}}
 </style>

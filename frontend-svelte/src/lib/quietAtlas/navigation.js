@@ -51,15 +51,15 @@ export const MORE_DESTINATIONS = [
     id: 'journal',
     label: 'Activity journal',
     description: 'History and nightly summaries.',
-    href: '/journal',
-    shell: true,
+    href: '/quiet-atlas/journal',
+    shell: false,
   },
   {
     id: 'personality',
     label: 'Personalization',
     description: 'Mood, preferences, and learning tools.',
-    href: '/personality',
-    shell: true,
+    href: '/quiet-atlas/personalization',
+    shell: false,
   },
   {
     id: 'apartment',
@@ -98,7 +98,7 @@ export function isQuietAtlasReadOnlyPreview(pathname) {
 }
 
 export function shouldUseQuietAtlasShell(pathname, searchParams) {
-  if (['/', '/music', '/settings', '/analytics'].includes(pathname)) return true // Migrated workspaces, including old bookmarks.
+  if (['/', '/music', '/settings', '/analytics', '/journal', '/personality'].includes(pathname)) return true // Migrated workspaces, including old bookmarks.
   if (pathname === '/classic') return false // Always preserve original chrome.
   if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) return true
   if (pathname === '/gameday' || pathname.startsWith('/gameday/') ||
@@ -134,7 +134,7 @@ export function activeQuietAtlasSection(pathname, _hash = '', searchParams = nul
   if (pathname.startsWith('/quiet-atlas/lighting/')) return lightingDetailOrigin(searchParams)
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/insights') return 'insights'
-  if (pathname === '/quiet-atlas/settings' || pathname === '/quiet-atlas/household') return 'more'
+  if (['/quiet-atlas/settings', '/quiet-atlas/household', '/quiet-atlas/journal', '/quiet-atlas/personalization'].includes(pathname)) return 'more'
   if (pathname === '/quiet-atlas/music' || pathname.startsWith('/quiet-atlas/music/')) return 'music'
   if (pathname === '/quiet-atlas/home' || pathname.startsWith('/quiet-atlas/')) return 'home'
   if (pathname.startsWith('/music')) return 'music'
