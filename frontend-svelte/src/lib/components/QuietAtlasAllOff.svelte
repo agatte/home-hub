@@ -10,7 +10,7 @@
   let pending = false
   let feedback = ''
   $: available = $connected && $deviceStatus.hue === true && $deviceStatus.light_command_results === true &&
-    ['home','winding_down','away','sleeping'].includes($ambientContext?.house_state ?? '')
+    ['home','winding_down'].includes($ambientContext?.house_state ?? '')
   $: if (armed && (!available || armedState !== $ambientContext?.house_state)) cancel()
   function cancel() { armed = false; armedState = null }
   function arm() {
@@ -55,7 +55,7 @@
       <div class="actions"><button type="button" on:click={cancel}>Cancel</button><button type="button" class="off" disabled={!available || pending} on:click={confirmOff}>Confirm All Off</button></div>
     </div>
   {/if}
-  {#if !available}<p class="feedback" role="status">All Off unavailable until guarded lighting and house state are reported.</p>{/if}
+  {#if !available}<p class="feedback" role="status">All Off requires connected guarded lighting and an awake Home or Winding Down state.</p>{/if}
   {#if feedback}<p class="feedback" role="status">{feedback}</p>{/if}
 </section>
 

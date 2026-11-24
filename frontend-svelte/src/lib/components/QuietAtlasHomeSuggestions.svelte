@@ -1,25 +1,42 @@
 <script>
   import { apiPost } from '$lib/api.js'
+  import { brightnessAcceptanceFeedback } from '$lib/quietAtlas/brightnessAcceptanceFeedback.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { ambientContext } from '$lib/quietAtlas/ambient.js'
   import { modeSuggestion, dismissModeSuggestion } from '$lib/stores/modeSuggestion.js'
-  import { brightnessSuggestion } from '$lib/stores/brightnessSuggestion.js'
+  import { brightnessSuggestion, dismissBrightnessSuggestion } from '$lib/stores/brightnessSuggestion.js'
   import { musicSuggestion, musicAutoPlayed, dismissMusicSuggestion } from '$lib/stores/music.js'
   import { playFavorite } from '$lib/stores/init.js'
 
   const MODES = { working:'Working', gaming:'Gaming', watching:'Watching', cooking:'Cooking', relax:'Relax', social:'Party' }
   let pending = false
   let feedback = ''
+  /** @type {Set<number>} */
+  let attemptedBrightness = new Set()
+  /** @type {Set<number>} */
+  let attemptedModes = new Set()
+  /** @type {Array<{id:number,message:string,complete:boolean}>} */
+  let brightnessReceipts = []
+
+  /** @param {number} id @param {string} message @param {boolean} complete */
+  function recordReceipt(id, message, complete) {
+    const next = {id,message,complete}
+    brightnessReceipts = brightnessReceipts.some(row=>row.id === id)
+      ? brightnessReceipts.map(row=>row.id === id ? next : row)
+      : [...brightnessReceipts,next]
+  }
   // Require house-state evidence received on the current connection.
   $: available = $connected && ['home','winding_down'].includes($ambientContext?.house_state ?? '')
   $: mode = available && $modeSuggestion && Number.isSafeInteger($modeSuggestion.suggestion_id) && $modeSuggestion.suggestion_id > 0 && Object.hasOwn(MODES, $modeSuggestion.predicted_mode) ? $modeSuggestion : null
   $: brightness = available && $brightnessSuggestion && Number.isSafeInteger($brightnessSuggestion.id) && $brightnessSuggestion.id > 0 && $brightnessSuggestion.payload ? $brightnessSuggestion : null
+  $: canAcceptBrightness = available && $deviceStatus.hue === true && $deviceStatus.light_command_results === true
   $: music = available && $deviceStatus.sonos && $musicSuggestion && typeof $musicSuggestion.title === 'string' && $musicSuggestion.title.trim() ? $musicSuggestion : null
 
   /** @param {'accept'|'dismiss'} action @param {number} id */
   async function resolveMode(action, id) {
-    if (!available || pending || !Number.isSafeInteger(id) || id <= 0 || mode?.suggestion_id !== id) return
+    if (!available || pending || !Number.isSafeInteger(id) || id <= 0 || attemptedModes.has(id) || mode?.suggestion_id !== id) return
     const intended = mode
+    attemptedModes = new Set([...attemptedModes,id])
     pending = true
     feedback = 'Sending suggestion response…'
     try {
@@ -35,6 +52,29 @@
       pending = false
     }
   }
+  /** @param {'accept'|'dismiss'} action @param {number} id */
+  async function resolveBrightness(action, id) {
+    if (!available || pending || !Number.isSafeInteger(id) || id <= 0 || attemptedBrightness.has(id) || brightness?.id !== id) return
+    if (action === 'accept' && !canAcceptBrightness) return
+    const intended = brightness
+    attemptedBrightness = new Set([...attemptedBrightness,id])
+    pending = true
+    recordReceipt(id, action === 'accept' ? 'Saving brightness preference…' : 'Dismissing suggestion…', false)
+    try {
+      const result = await apiPost('/api/rules/brightness-suggestion/' + action + '/' + id, undefined, {timeout:20000})
+      const message = action === 'accept' ? brightnessAcceptanceFeedback(result).message
+        : result?.status === 'ok' ? 'Dismissal acknowledged.' : 'Dismissal unconfirmed.'
+      recordReceipt(id,message,true)
+    } catch (error) {
+      recordReceipt(id, /failed: 410\b/.test(error instanceof Error ? error.message : String(error))
+        ? 'Suggestion no longer pending. No retry sent.'
+        : action === 'accept' ? 'Brightness acceptance unconfirmed. Check saved preferences and actual lights before another action.' : 'Dismissal unconfirmed. No retry sent.', true)
+    } finally {
+      if ($brightnessSuggestion === intended) dismissBrightnessSuggestion()
+      pending = false
+    }
+  }
+
   /** @param {string} title */
   async function play(title) {
     if (!available || pending || !$deviceStatus.sonos || !music || music.title !== title) return
@@ -58,17 +98,18 @@
   }
 </script>
 
-{#if mode || brightness || music || ($connected && $musicAutoPlayed) || feedback}
+{#if mode || brightness || music || ($connected && $musicAutoPlayed) || feedback || brightnessReceipts.length}
   <section class="suggestions" aria-label="HomeHub suggestions" aria-busy={pending}>
     {#if mode}
       <article>
         <div><span class="eyebrow">MODE SUGGESTION</span><strong>Switch to {MODES[mode.predicted_mode]}?</strong><p>{mode.confidence}% reported confidence · {mode.sample_count} observations</p></div>
-        <div class="actions"><button type="button" disabled={pending} on:click={() => resolveMode('dismiss',mode.suggestion_id)}>Dismiss</button><button class="primary" type="button" disabled={pending} on:click={() => resolveMode('accept',mode.suggestion_id)}>Switch</button></div>
+        <div class="actions"><button type="button" disabled={pending || attemptedModes.has(mode.suggestion_id)} on:click={() => resolveMode('dismiss',mode.suggestion_id)}>Dismiss</button><button class="primary" type="button" disabled={pending || attemptedModes.has(mode.suggestion_id)} on:click={() => resolveMode('accept',mode.suggestion_id)}>Switch</button></div>
       </article>
     {/if}
     {#if brightness}
       <article>
-        <div><span class="eyebrow">LEARNED LIGHTING</span><strong>{brightnessLabel(brightness.payload)}</strong><p>{brightness.payload.mode} · {brightness.payload.period} · {brightness.payload.weather_class}. Acceptance unavailable here until the lighting ownership path is verified.</p></div>
+        <div><span class="eyebrow">LEARNED LIGHTING</span><strong>{brightnessLabel(brightness.payload)}</strong><p>{brightness.payload.mode} · {brightness.payload.period} · {brightness.payload.weather_class}. Save preference and request an immediate adjustment? Existing lighting protections apply.</p>{#if !canAcceptBrightness}<p>Acceptance unavailable until guarded lighting is connected.</p>{/if}</div>
+        <div class="actions"><button type="button" disabled={pending || attemptedBrightness.has(brightness.id)} on:click={() => resolveBrightness('dismiss',brightness.id)}>Dismiss</button><button type="button" class="primary" disabled={pending || !canAcceptBrightness || attemptedBrightness.has(brightness.id)} on:click={() => resolveBrightness('accept',brightness.id)}>Save preference</button></div>
       </article>
     {/if}
     {#if music}
@@ -79,6 +120,12 @@
     {:else if $connected && $musicAutoPlayed}
       <article><div><span class="eyebrow">MUSIC AUTOMATION</span><strong>HomeHub reported a playback request for {$musicAutoPlayed.title}</strong><p>Check Now Playing for current speaker status.</p></div></article>
     {/if}
+    {#each brightnessReceipts as receipt (receipt.id)}
+      <article class="feedback" role="status" aria-live="polite" aria-label={'Brightness suggestion #' + receipt.id}>
+        <div><strong>Suggestion #{receipt.id}</strong><p>{receipt.message}</p></div>
+        {#if receipt.complete}<button type="button" aria-label={'Close suggestion #' + receipt.id + ' result'} on:click={() => brightnessReceipts = brightnessReceipts.filter(row=>row.id !== receipt.id)}>Close</button>{/if}
+      </article>
+    {/each}
     {#if feedback}<p class="feedback" role="status">{feedback}</p>{/if}
   </section>
 {/if}
