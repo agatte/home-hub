@@ -5,6 +5,8 @@
   import { lights } from '$lib/stores/lights.js'
   import { hueToHsl, ctToColor } from '$lib/utils/lightColor.js'
   import { SCENE_CATEGORIES } from '$lib/theme.js'
+  import { draftColorMode, withDraftColor, scenePreviewRows } from '$lib/quietAtlas/scenePreview.js'
+  import QuietAtlasScenePreview from './QuietAtlasScenePreview.svelte'
   import { Camera, Save, Trash2, X } from 'lucide-svelte'
 
   /** @type {number | null} numeric db id when editing, null when creating */
@@ -48,6 +50,18 @@
       }
     }
     lightStates = snapshot
+  }
+
+  /** @param {string} id @param {{ct:number}|{hue:number,sat:number}} color */
+  function changeDraftColor(id, color) {
+    if (!libraryOnly || !available || !loaded || saving || !/^[1-6]$/.test(id) || lightStates[id]?.on !== true) return
+    lightStates = { ...lightStates, [id]: withDraftColor(lightStates[id], color) }
+  }
+
+  /** @param {string} id @param {string} mode */
+  function chooseColorMode(id, mode) {
+    if (mode === 'color') changeDraftColor(id, { hue: 8000, sat: 140 })
+    else if (mode === 'temperature') changeDraftColor(id, { ct: 350 })
   }
 
   function previewColor(state) {
@@ -205,6 +219,11 @@
     <span class="capture-hint">{Object.keys(lightStates).length} lights captured</span>
   </div>
 
+  {#if libraryOnly && loaded}
+    <QuietAtlasScenePreview rows={scenePreviewRows(lightStates)} title="Draft apartment preview" />
+    <p class="draft-note">Adjust the saved scene below without changing your lights. Save first, then use Try It for a temporary physical preview.</p>
+  {/if}
+
   <div class="preview-dots">
     {#each Object.entries(lightStates) as [id, state]}
       <div class="preview-row">
@@ -217,7 +236,24 @@
         {#if libraryOnly}
           <label class="draft-power"><input type="checkbox" bind:checked={state.on} disabled={saving || !available || !loaded} /> On</label>
           {#if state.on}
-            <label class="draft-brightness">Brightness <input type="range" min="1" max="254" bind:value={state.bri} disabled={saving || !available || !loaded} aria-label={lightName(id) + ' brightness'} /> {Math.round((state.bri ?? 1) / 254 * 100)}%</label>
+            <label class="draft-brightness">Brightness <input type="range" min="1" max="254" bind:value={state.bri} disabled={saving || !available || !loaded} aria-label={lightName(id) + ' brightness'} /> {state.bri == null ? 'Unspecified' : Math.round(state.bri / 254 * 100) + '%'}</label>
+            {#if /^[1-6]$/.test(id)}
+              <div class="draft-color">
+                <label class="draft-mode">Color mode
+                  <select aria-label={lightName(id) + ' color mode'} value={draftColorMode(state)} disabled={saving || !available || !loaded} on:change={e => chooseColorMode(id, e.currentTarget.value)}>
+                    <option value="unspecified" disabled>Not specified</option>
+                    <option value="color">Color</option>
+                    <option value="temperature">White temperature</option>
+                  </select>
+                </label>
+                {#if draftColorMode(state) === 'color'}
+                  <label>Hue <input type="range" min="0" max="65535" value={state.hue} aria-label={lightName(id) + ' hue'} disabled={saving || !available || !loaded} on:input={e => changeDraftColor(id, { hue: e.currentTarget.valueAsNumber, sat: state.sat ?? 0 })} /> {Math.round((state.hue ?? 0) / 65535 * 360)}°</label>
+                  <label>Saturation <input type="range" min="0" max="254" value={state.sat} aria-label={lightName(id) + ' saturation'} disabled={saving || !available || !loaded} on:input={e => changeDraftColor(id, { hue: state.hue ?? 0, sat: e.currentTarget.valueAsNumber })} /> {Math.round((state.sat ?? 0) / 254 * 100)}%</label>
+                {:else if draftColorMode(state) === 'temperature'}
+                  <label>White temperature <input type="range" min="153" max="500" value={state.ct} aria-label={lightName(id) + ' white temperature'} disabled={saving || !available || !loaded} on:input={e => changeDraftColor(id, { ct: e.currentTarget.valueAsNumber })} /> {Math.round(1000000 / (state.ct ?? 350))} K</label>
+                {/if}
+              </div>
+            {/if}
           {/if}
         {:else if state.on && state.bri != null}
           <span class="preview-meta">{Math.round((state.bri / 254) * 100)}%</span>
@@ -252,7 +288,13 @@
 <style>
   .draft-power,.draft-brightness{display:flex;align-items:center;gap:6px;min-height:44px;font-size:12px;flex-wrap:wrap;}
   .draft-brightness input{width:90px;max-width:100%;}
-  .preview-row:has(.draft-power){flex-wrap:wrap;}
+  .preview-row:has(.draft-power){flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border);}
+  .draft-note{font-size:12px;line-height:1.5;color:var(--text-secondary);margin:0;}
+  .draft-color{width:100%;min-width:0;display:grid;gap:5px;padding:0 0 4px;}
+  .draft-color label{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;min-height:44px;color:var(--text-secondary);}
+  .draft-color input{flex:1;min-width:72px;accent-color:#e9ca94;}
+  .draft-color select{flex:1;min-width:0;min-height:44px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--hh-control,#202a26);color:var(--hh-ink,#f1eee7);font:inherit;font-size:16px;}
+  .draft-color input:focus-visible,.draft-color select:focus-visible{outline:2px solid #e9ca94;outline-offset:2px;}
 
   .scene-editor {
     display: flex;
