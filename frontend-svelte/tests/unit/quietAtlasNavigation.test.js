@@ -104,10 +104,8 @@ describe('Quiet Atlas shared shell navigation', () => {
     expect(activeQuietAtlasSection('/settings')).toBe('more')
     expect(activeQuietAtlasSection('/quiet-atlas/settings')).toBe('more')
     expect(MORE_DESTINATIONS.map(({ href }) => href)).toEqual([
-      '/quiet-atlas/settings', '/journal', '/personality', '/quiet-atlas/household', '/gameday', '/guest',
+      '/quiet-atlas/settings', '/quiet-atlas/journal', '/quiet-atlas/personalization', '/quiet-atlas/household', '/gameday', '/guest',
     ])
-    expect(MORE_DESTINATIONS.filter((item) => item.shell).map((item) => item.href)).toEqual([
-      '/journal', '/personality',
-    ])
+    expect(MORE_DESTINATIONS.filter((item) => item.shell)).toEqual([])
   })
 })
