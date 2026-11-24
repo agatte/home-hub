@@ -74,3 +74,49 @@ def test_bad_date_and_missing_section():
 def test_dated_checkpoint_label_is_supported():
     text = journal(entry()).replace("**Next:**", "**Next at this dated checkpoint:**")
     assert check_development_journal(text, {254: {}}, date(2026, 11, 24)) == ([], [])
+
+
+def test_revision_detects_same_day_change_without_claiming_staleness():
+    text = journal(entry()).replace(
+        "**Next:**", "**Source revisions:** #254 @ 2026-11-24T19:28:20Z\n\n**Next:**"
+    )
+    assert check_development_journal(
+        text, {254: {"updated_at": "2026-11-24T19:28:20Z"}}, date(2026, 11, 24)
+    ) == ([], [])
+    drift, notices = check_development_journal(
+        text, {254: {"updated_at": "2026-11-24T19:28:21Z"}}, date(2026, 11, 24)
+    )
+    assert drift == []
+    assert notices == ["Journal entry 1: issue #254 revision differs from checkpoint; recheck"]
+
+
+def test_revision_missing_metadata_is_unknown():
+    text = journal(entry()).replace(
+        "**Next:**", "**Source revisions:** #254 @ 2026-11-24T19:28:20Z\n\n**Next:**"
+    )
+    assert check_development_journal(text, {254: {}}, date(2026, 11, 24)) == (
+        [],
+        ["Journal entry 1: issue #254 revision metadata unavailable; recheck"],
+    )
+
+
+def test_revision_invalid_or_unlinked_marker_reported():
+    text = journal(entry()).replace(
+        "**Next:**",
+        "**Source revisions:** #254 @ 2026-02-31T00:00:00Z; "
+        "#365 @ 2026-11-24T19:28:20Z; not-a-revision\n\n**Next:**",
+    )
+    drift, _ = check_development_journal(text, {254: {}}, date(2026, 11, 24))
+    assert any("invalid source revision timestamp #254" in msg for msg in drift)
+    assert any("unlinked source revision #365" in msg for msg in drift)
+    assert any("invalid source revision marker" in msg for msg in drift)
+
+
+def test_revision_duplicate_marker_reported():
+    text = journal(entry()).replace(
+        "**Next:**",
+        "**Source revisions:** #254 @ 2026-11-24T19:28:20Z; "
+        "#254 @ 2026-11-24T19:28:21Z\n\n**Next:**",
+    )
+    drift, _ = check_development_journal(text, {254: {}}, date(2026, 11, 24))
+    assert any("duplicate or unlinked source revision #254" in msg for msg in drift)

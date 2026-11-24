@@ -20,7 +20,9 @@
 
 **Ideas and discovery:** Scrobblie → Last.fm has a recorded three-track trial, not proof of active HomeHub learning. Last.fm top/loved tracks may provide opt-in ephemeral seed hints; names/MBIDs are not Apple playback IDs. Soulbeet is a recommendation-design reference (familiar/balanced/adventurous discovery), not a verified Apple Music/Sonos integration or new stack dependency. Keep the idea under #254/#431 and preserve separate account/retention/playback gates. [Research and limitations](https://github.com/agatte/home-hub/issues/254#issuecomment-7142027763).
 
-**Next at this dated checkpoint:** #570 CI/review; resolve exact playable track supply and bounded session-executor authority before Music UI. No account access, speaker action or deployment authorized here. Continue the remaining unified-interface scope under #461. Avoid duplicate Codex launches and preserve staged local work.
+**Source revisions:** #461 @ 2026-11-24T19:28:05Z; #254 @ 2026-11-24T19:28:20Z
+
+**Next at this dated checkpoint:** The [newer #461 scope reassessment](https://github.com/agatte/home-hub/issues/461) supersedes Music-first execution. Await owner confirmation of the proposed single-track sequence: Home visual acceptance, Control/scene parity, Settings, bounded Music, unified acceptance, Classic retirement. [#254 parking decision](https://github.com/agatte/home-hub/issues/254#issuecomment-7142144212): preserve #570 and the source research; no merge, new Music implementation, account reads or playback work until the Music slice is selected. Preserve local staged work. Separate release/device approvals remain required.
 
 ### 2026-11-24 — Project Admin continuity
 
