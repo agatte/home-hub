@@ -50,7 +50,7 @@
 
   /** @param {string | null} mode @param {boolean} [confirmed] */
   async function requestMode(mode, confirmed = false) {
-    if (!canChange || pending || !CHOICES.some(choice => choice.id === mode)) return
+    if (!canChange || pending || !mode || !CHOICES.some(choice => choice.id === mode)) return
     if (confirmed && (armedMode !== mode || armedHouseState !== $automation.house_state)) {
       cancelConfirmation()
       return

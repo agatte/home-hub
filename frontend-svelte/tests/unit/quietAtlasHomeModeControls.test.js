@@ -63,7 +63,7 @@ describe('#461 direct Home mode tiles', () => {
     await fireEvent.click(view.getByRole('button',{name:'Gaming'}))
     connected.set(false); await tick()
     expect(view.queryByRole('button',{name:'Confirm Gaming'})).toBeNull()
-    expect(view.getByRole('button',{name:'Gaming'}).disabled).toBe(true)
+    expect(view.getByRole('button',{name:'Gaming'}).hasAttribute('disabled')).toBe(true)
     expect(setManualMode).not.toHaveBeenCalled()
   })
 })
