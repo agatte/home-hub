@@ -312,7 +312,7 @@
     </div>
     <div class="phone-rooms" role="group" aria-label="Browse lighting by room">
       {#each groups as group (group.id)}
-        <button type="button" id={`phone-room-${group.id}`} class="phone-room" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+        <button type="button" id={`phone-room-${group.id}`} class="phone-room" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls, last reported ${roomStatuses[group.id].label}`} aria-expanded={selectedRoom === group.id} aria-controls={`phone-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="phone-room-icon" aria-hidden="true"></span>
           <span class="phone-room-copy"><strong>{group.name}</strong><small>{roomStatuses[group.id].label}</small></span>
           <span class="phone-room-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
@@ -336,7 +336,7 @@
     </div>
     <div class="groups" role="group" aria-label="Browse lighting groups">
       {#each groups as group}
-        <button type="button" id={`dock-room-${group.id}`} class="group" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
+        <button type="button" id={`dock-room-${group.id}`} class="group" data-tone={roomStatuses[group.id].tone} aria-label={`${group.name} lighting controls, last reported ${roomStatuses[group.id].label}`} aria-expanded={selectedRoom === group.id} aria-controls={`dock-reveal-${group.id}`} on:click={() => toggleRoom(group.id)}>
           <span class="group-mark" aria-hidden="true"></span>
           <span class="group-copy"><strong>{group.name}</strong><small>{roomStatuses[group.id].label}</small></span>
           <span class="group-arrow" aria-hidden="true">{selectedRoom === group.id ? '−' : '+'}</span>
