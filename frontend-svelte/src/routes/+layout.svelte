@@ -151,8 +151,8 @@
   {/if}
 </div>
 
-{#if $page.url.pathname === "/" || $page.url.pathname === "/classic" || $page.url.pathname.startsWith("/quiet-atlas/")}
-  <OwnerUnlock />
+{#if !isQuietAtlasShell && $page.url.pathname === "/classic"}
+  <div class="classic-owner-access"><OwnerUnlock /></div>
 {/if}
 
 {#if ambientVisible}
@@ -171,3 +171,7 @@
 {#if shouldShowGlobalErrorToast($page.url.pathname, $page.url.searchParams)}
   <ErrorToast />
 {/if}
+
+<style>
+  .classic-owner-access {position:fixed;right:12px;top:12px;z-index:100;width:min(280px,calc(100vw - 24px));}
+</style>
