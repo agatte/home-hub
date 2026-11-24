@@ -1,0 +1,40 @@
+/* Shared HomeHub visual language, scoped to the redesigned shell.
+   Semantic device colors, artwork, saved-scene palettes and legacy routes
+   remain independent. Use these tokens for chrome and ordinary surfaces. */
+.qa-shell {
+  --hh-canvas: #121917;
+  --hh-panel: #1c2522;
+  --hh-panel-deep: #141c19;
+  --hh-ink: #f1eee7;
+  --hh-muted: #bec8c0;
+  --hh-accent: #e4c99e;
+  --hh-line: rgba(229, 233, 220, .17);
+  --hh-control: #202a26;
+  --hh-control-hover: #303b35;
+  --hh-chrome: rgba(16, 23, 20, .96);
+  --hh-focus: #e6cfaa;
+  --hh-radius-card: 14px;
+  --hh-radius-panel: 20px;
+  --hh-radius-control: 10px;
+  --hh-gap: 10px;
+  --hh-touch: 44px;
+  --hh-gutter: clamp(16px, 4vw, 52px);
+  --hh-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --hh-display: Georgia, "Times New Roman", serif;
+  --hh-page-background: radial-gradient(ellipse at 82% 0%, rgba(173, 146, 101, .08), transparent 52%), var(--hh-canvas);
+  --hh-card-background: linear-gradient(145deg, var(--hh-panel), var(--hh-panel-deep));
+}
+/* Existing optional Home daylight preview remains local to the current route. */
+.qa-shell:has(.home-review.daylight) {
+  --hh-canvas: #eeeee6;
+  --hh-panel: #e0e5d8;
+  --hh-panel-deep: #d5dfd3;
+  --hh-ink: #263a2d;
+  --hh-muted: #5b6d5f;
+  --hh-accent: #805f37;
+  --hh-line: rgba(45, 77, 55, .18);
+  --hh-control: #e8ecdf;
+  --hh-control-hover: #dbe3d2;
+  --hh-chrome: rgba(245, 245, 236, .96);
+  --hh-focus: #805f37;
+}
