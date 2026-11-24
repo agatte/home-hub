@@ -13,7 +13,7 @@
   let nowMs = 0
   $: view = weatherPresentation(snapshot, nowMs)
   $: sky = weatherSky(view)
-  const skyIcons = { sun: Sun, night: MoonStar, 'partly-day': CloudSun, 'partly-night': CloudMoon, cloud: Cloud, 'cloud-night': Cloud, rain: CloudRain, 'rain-night': CloudRain, storm: CloudLightning, snow: Snowflake, mist: CloudFog, clear: Cloud, neutral: null }
+  const skyIcons = { sun: Sun, night: MoonStar, 'partly-day': CloudSun, 'partly-night': CloudMoon, cloud: Cloud, 'cloud-night': Cloud, rain: CloudRain, 'rain-night': CloudRain, storm: CloudLightning, snow: Snowflake, mist: CloudFog, clear: null, neutral: null }
   $: skyIcon = skyIcons[sky]
 
   onMount(() => {
