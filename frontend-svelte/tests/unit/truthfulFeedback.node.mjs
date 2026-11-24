@@ -9,12 +9,13 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 const store = value => ({ value, set(v) { this.value = v }, update(f) { this.value = f(this.value) } })
 function setup() {
   const automation = store({ mode: 'home', manual_override: false }), sonos = store({ volume: 20 })
-  const initial = deferred(), posts = [], gets = [], sends = []
+  const initial = deferred(), initialSonos = deferred(), posts = [], gets = [], sends = []
+  const sonosLiveReport = store(null)
   let ws, sendOK = true
-  class HubSocket { constructor(onMessage) { ws = { onMessage } } connect() {} close() {} send(type, data) { sends.push({ type, data }); return sendOK } }
+  class HubSocket { constructor(onMessage, onConnection) { ws = { onMessage, onConnection } } connect() {} close() {} send(type, data) { sends.push({ type, data }); return sendOK } }
   const noop = () => {}, dummy = store({})
-  const ctx = { HubSocket, automation, sonos, console: { error: noop, warn: noop },
-    apiGet: path => { if (path === '/api/automation/status') { const d = gets.length ? deferred() : initial; gets.push(d); return d.promise } return Promise.resolve({}) },
+  const ctx = { HubSocket, automation, sonos, sonosLiveReport, console: { error: noop, warn: noop },
+    apiGet: path => { if (path === '/api/sonos/status') return initialSonos.promise; if (path === '/api/automation/status') { const d = gets.length ? deferred() : initial; gets.push(d); return d.promise } return Promise.resolve({}) },
     apiPost: () => { const d = deferred(); posts.push(d); return d.promise }, apiDelete: noop,
     automationStateFromStatus: x => ({ mode: x.current_mode, manual_override: x.manual_override }),
     mergeAutomationUpdate: (prev, data) => ({ ...prev, ...data }),
@@ -24,7 +25,7 @@ function setup() {
     startWeatherPolling: noop, stopWeatherPolling: noop }
   const api = runInNewContext(`${source}\n;({initStores, setManualMode, sonosCommand})`, ctx)
   api.initStores()
-  return { ...api, automation, sonos, initial, posts, gets, sends, ws, setSendOK: v => { sendOK = v } }
+  return { ...api, automation, sonos, sonosLiveReport, initialSonos, initial, posts, gets, sends, ws, setSendOK: v => { sendOK = v } }
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -65,4 +66,23 @@ test('Sonos send and failure never patch volume; server update is authoritative'
   assert.equal(h.sonos.value.volume, 20)
   h.ws.onMessage({ type: 'sonos_update', data: { volume: 35 } })
   assert.equal(h.sonos.value.volume, 35)
+})
+
+test('Music live report is isolated from late startup reads, sends and connection changes', async () => {
+  const h = setup()
+  assert.equal(h.sonosLiveReport.value, null)
+  h.ws.onConnection(true)
+  h.ws.onMessage({ type: 'sonos_update', data: { volume: 35 } })
+  assert.equal(h.sonosLiveReport.value.volume, 35)
+  h.initialSonos.resolve({ volume: 12 }); await tick()
+  assert.equal(h.sonos.value.volume, 12)
+  assert.equal(h.sonosLiveReport.value.volume, 35)
+  h.sonosCommand('volume', { volume: 60 })
+  assert.equal(h.sonosLiveReport.value.volume, 35)
+  h.ws.onConnection(false)
+  assert.equal(h.sonosLiveReport.value, null)
+  h.ws.onConnection(true)
+  assert.equal(h.sonosLiveReport.value, null)
+  h.ws.onMessage({ type: 'sonos_update', data: { volume: 42 } })
+  assert.equal(h.sonosLiveReport.value.volume, 42)
 })

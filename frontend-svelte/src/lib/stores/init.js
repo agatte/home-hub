@@ -8,7 +8,7 @@ import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
 import { lights, setLightsFromList, applyLightUpdate } from './lights.js'
 import { lightCommandTracker } from './lightCommandResults.js'
-import { sonos } from './sonos.js'
+import { sonos, sonosLiveReport } from './sonos.js'
 import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
@@ -29,6 +29,7 @@ let modeRequestPending = false
 let modeUpdateEpoch = 0
 
 export function initStores() {
+  sonosLiveReport.set(null)
   resetAmbientContext()
   lightCommandTracker.reset()
   deviceStatus.update((prev) => ({ ...prev, light_command_results: false }))
@@ -79,6 +80,7 @@ export function initStores() {
           applyLightUpdate(data)
           break
         case 'sonos_update':
+          sonosLiveReport.set(data)
           sonos.set(data)
           break
         case 'connection_status':
@@ -141,6 +143,7 @@ export function initStores() {
       }
     },
     (isConnected) => {
+      sonosLiveReport.set(null)
       resetAmbientContext()
       connected.set(isConnected)
       if (!isConnected) {
@@ -152,6 +155,7 @@ export function initStores() {
   socket.connect()
 
   return () => {
+    sonosLiveReport.set(null)
     resetAmbientContext()
     lightCommandTracker.reset()
     socket?.close()

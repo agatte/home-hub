@@ -24,3 +24,8 @@ const initial = {
 
 /** @type {import('svelte/store').Writable<SonosState>} */
 export const sonos = writable(initial)
+
+// Presentation-only feed: only accepted WebSocket reports for the active
+// connection, never the legacy startup REST response or a command prediction.
+/** @type {import('svelte/store').Writable<SonosState | null>} */
+export const sonosLiveReport = writable(null)

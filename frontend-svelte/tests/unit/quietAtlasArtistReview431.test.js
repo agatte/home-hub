@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
 
-import landing from '../../src/routes/quiet-atlas/music/+page.svelte?raw'
+import landing from '../../src/lib/components/MusicWorkspace.svelte?raw'
 import packet from '../../src/lib/appleMusicArtistReviewHandoff431.fixture.json'
 import { adaptSyntheticArtistReview431 } from '../../src/lib/appleMusicArtistReviewHandoff431.js'
 import review from '../../src/routes/quiet-atlas/music/artist-review/+page.svelte?raw'
@@ -22,8 +22,8 @@ describe('#431 Quiet Atlas fictional artist identity preview', () => {
   it('has an explicit, nonfunctional entry point under the real Music review', () => {
     expect(landing).toContain('href="/quiet-atlas/music/artist-review"')
     expect(landing).toContain('Preview fictional artist matching')
-    expect(landing).toContain("withQuietAtlasShell('/music')")
-    expect(landing).toContain('withQuietAtlasShell(\'/music#approved-apple-track\')')
+    expect(landing).toContain('Experimental design studies')
+    expect(landing).not.toContain("withQuietAtlasShell('/music')")
     expect(activeQuietAtlasSection(REVIEW_ROUTE)).toBe('music')
     expect(isQuietAtlasReadOnlyPreview(REVIEW_ROUTE)).toBe(true)
     expect(shouldShowGlobalErrorToast(REVIEW_ROUTE, new URLSearchParams())).toBe(false)
