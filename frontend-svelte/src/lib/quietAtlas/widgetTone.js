@@ -18,8 +18,8 @@ export function activityTone(label) {
     case 'Gaming': return 'play'
     case 'Watching': return 'cinema'
     case 'Cooking': return 'warm'
-    case 'Relaxing': return 'calm'
-    case 'Social': return 'social'
+    case 'Relax': case 'Relaxing': return 'calm'
+    case 'Party': case 'Social': return 'social'
     default: return 'neutral'
   }
 }
@@ -50,4 +50,22 @@ export function weatherSky(view) {
     case '50d': case '50n': return 'mist'
     default: return weatherTone(view)
   }
+}
+
+/** @param {string|null|undefined} label */
+export function houseTone(label) {
+  switch (label) {
+    case 'Home': return 'home'
+    case 'Winding Down': return 'dusk'
+    case 'Sleeping': case 'Sleep': return 'sleep'
+    case 'Away': return 'away'
+    default: return 'neutral'
+  }
+}
+
+/** A mode can share its palette with Activity, without conflating their meaning. */
+export function modeTone(label, verified) {
+  if (!verified) return 'neutral'
+  const house = houseTone(label)
+  return house !== 'neutral' ? house : activityTone(label)
 }
