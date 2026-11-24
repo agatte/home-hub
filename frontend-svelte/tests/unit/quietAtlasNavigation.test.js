@@ -37,12 +37,12 @@ describe('Quiet Atlas shared shell navigation', () => {
   it('labels only known read-only reviews as previews and keeps functional warnings visible', () => {
     for (const route of [
       '/quiet-atlas',
-      '/quiet-atlas/insights', '/quiet-atlas/settings', '/quiet-atlas/music',
+      '/quiet-atlas/insights', '/quiet-atlas/settings',
     ]) {
       expect(isQuietAtlasReadOnlyPreview(route)).toBe(true)
       expect(shouldShowGlobalErrorToast(route, new URLSearchParams())).toBe(false)
     }
-    for (const route of ['/music', '/settings', '/journal', '/personality', '/quiet-atlas/control', '/quiet-atlas/lighting/bedroom', '/quiet-atlas/future-functional']) {
+    for (const route of ['/quiet-atlas/music', '/music', '/settings', '/journal', '/personality', '/quiet-atlas/control', '/quiet-atlas/lighting/bedroom', '/quiet-atlas/future-functional']) {
       expect(isQuietAtlasReadOnlyPreview(route)).toBe(false)
       expect(shouldShowGlobalErrorToast(route, new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     }

@@ -1,54 +1,50 @@
 import { describe, expect, it } from 'vitest'
 import { compile } from 'svelte/compiler'
-import musicReview from '../../src/routes/quiet-atlas/music/+page.svelte?raw'
-import functionalMusic from '../../src/routes/music/+page.svelte?raw'
-import approvedEntry from '../../src/lib/components/ApprovedAppleMusicEntry.svelte?raw'
-import shellSource from '../../src/lib/components/QuietAtlasShell.svelte?raw'
-import {
-  activeQuietAtlasSection,
-  isQuietAtlasReadOnlyPreview,
-  shouldShowGlobalErrorToast,
-  shouldUseQuietAtlasShell,
-  withQuietAtlasShell,
-} from '../../src/lib/quietAtlas/navigation.js'
+import music from '../../src/routes/quiet-atlas/music/+page.svelte?raw'
+import legacy from '../../src/routes/music/+page.svelte?raw'
+import workspace from '../../src/lib/components/MusicWorkspace.svelte?raw'
+import player from '../../src/lib/components/QuietAtlasNowPlaying.svelte?raw'
+import approved from '../../src/lib/components/ApprovedAppleMusicEntry.svelte?raw'
+import { activeQuietAtlasSection, isQuietAtlasReadOnlyPreview, shouldShowGlobalErrorToast, shouldUseQuietAtlasShell } from '../../src/lib/quietAtlas/navigation.js'
+import { musicPlaybackReport, recentPlaybackReport } from '../../src/lib/quietAtlas/musicPlaybackReport.js'
 
-describe('Quiet Atlas Music design-review route', () => {
-  it('makes the primary Music tab a truthful opt-in review and preserves functional Music', () => {
-    expect(shellSource).toContain("id: 'music', label: 'Music', href: '/quiet-atlas/music'")
-    expect(activeQuietAtlasSection('/quiet-atlas/music')).toBe('music')
-    expect(activeQuietAtlasSection('/music')).toBe('music')
-    expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/music')).toBe(true)
-    expect(isQuietAtlasReadOnlyPreview('/music')).toBe(false)
-    expect(shouldUseQuietAtlasShell('/quiet-atlas/music', new URLSearchParams())).toBe(true)
-    expect(shouldShowGlobalErrorToast('/quiet-atlas/music', new URLSearchParams())).toBe(false)
-    expect(shouldShowGlobalErrorToast('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
-    expect(musicReview).toContain("withQuietAtlasShell('/music')")
-    expect(musicReview).toContain("withQuietAtlasShell('/music#approved-apple-track')")
-    expect(withQuietAtlasShell('/music#approved-apple-track')).toBe('/music?shell=quiet-atlas#approved-apple-track')
-    expect(functionalMusic).toContain('ApprovedAppleMusicEntry')
-    expect(approvedEntry).toContain('id="approved-apple-track"')
+describe('Functional redesigned Music (#461)', () => {
+  it('uses one workspace for canonical Music and existing bookmarks, with visible functional failures', () => {
+    for (const source of [music, legacy]) expect(source).toContain('<MusicWorkspace />')
+    for (const route of ['/music','/quiet-atlas/music']) {
+      expect(activeQuietAtlasSection(route)).toBe('music')
+      expect(shouldUseQuietAtlasShell(route,new URLSearchParams())).toBe(true)
+      expect(isQuietAtlasReadOnlyPreview(route)).toBe(false)
+      expect(shouldShowGlobalErrorToast(route,new URLSearchParams())).toBe(true)
+    }
+    expect(isQuietAtlasReadOnlyPreview('/quiet-atlas/music/artist-review')).toBe(true)
+    expect(workspace).not.toContain("withQuietAtlasShell('/music')")
   })
-
-  it('is a static navigation surface with clear functional handoff and no misleading music status', () => {
-    expect(musicReview).toContain('READ-ONLY DESIGN REVIEW')
-    expect(musicReview).toContain('Existing tools are functional and may change preferences')
-    expect(musicReview).toContain('no live track or speaker state')
-    expect(musicReview).toContain('No catalog, personal taste, source availability')
-    expect(musicReview).toContain('aria-label="Current music destinations"')
-    expect(musicReview).toContain('href="/quiet-atlas/home"')
-    expect(musicReview).toContain('min-height:48px')
-    expect(musicReview).toContain('@media(max-width:600px)')
-    expect(musicReview).toContain('@media(prefers-reduced-motion:reduce)')
-    expect(musicReview).not.toMatch(/\b(fetch|apiGet|apiPost|apiPut|apiDelete|goto|setLight|activateScene|hueWrite)\s*\(/)
-    expect(musicReview).not.toMatch(/\bon:(click|change|submit|input)\s*=/)
+  it('retains every existing music tool and separate exact track review, not automatic playback', () => {
+    for (const component of ['ShadowDiscoveryPanel','ApprovedAppleMusicEntry','PrepareSonosAction','TasteProfileCard','ModePlaylistMapper','MusicBanditDiagnostics','QuietAtlasNowPlaying']) expect(workspace).toContain('<'+component)
+    expect(workspace).toContain('selectedAppleTrack = { provider_id: providerId }')
+    expect(workspace).toContain('before separately approving or starting playback')
+    expect(approved).toContain('id="approved-apple-track"')
+    expect(workspace).toContain('href="#approved-apple-track"')
+    expect(workspace).not.toMatch(/apiPost\\(|sonosCommand\\(/)
   })
-
-  it('compiles the actual Svelte page without warnings and leaves playback components untouched', () => {
-    const result = compile(musicReview, { filename: 'QuietAtlasMusicReview.svelte', generate: 'dom', css: 'external' })
-    expect(result.warnings).toEqual([])
-    expect(functionalMusic).toContain('ShadowDiscoveryPanel')
-    expect(functionalMusic).toContain('ApprovedAppleMusicEntry')
-    expect(functionalMusic).toContain('PrepareSonosAction')
-    expect(functionalMusic).toContain('MusicBanditDiagnostics')
+  it('validates speaker reports and neutralizes disconnected, stale or invalid status', () => {
+    const value = {state:'PLAYING',track:'Reported track',artist:'Artist',album:'Album',art_url:'/art.jpg',volume:24}
+    const report = musicPlaybackReport(value)
+    expect(report).toEqual(value)
+    expect(recentPlaybackReport(report,1000,2000,true)).toEqual(report)
+    expect(recentPlaybackReport(report,1000,31001,true)).toBeNull()
+    expect(recentPlaybackReport(report,1000,2000,false)).toBeNull()
+    expect(recentPlaybackReport(report,null,2000,true)).toBeNull()
+    for (const patch of [{state:'error'},{state:'disconnected'},{volume:101},{track:null}]) expect(musicPlaybackReport({...value,...patch})).toBeNull()
+    expect(musicPlaybackReport({...value,art_url:'javascript:bad'})?.art_url).toBe('')
+    expect(player).toContain("sonosCommand(action, params)")
+    expect(player).toContain("fetch('/api/sonos/status'")
+    expect(player).toContain('pending?.abort()')
+    expect(player).toContain('disabled={!current}')
+    expect(player).not.toMatch(/apiPost\\(|sonos\\.set\\(/)
+  })
+  it('compiles native routes and workspace without warnings', () => {
+    for(const source of [music,legacy,workspace,player]) expect(compile(source,{generate:'dom',css:'external'}).warnings).toEqual([])
   })
 })

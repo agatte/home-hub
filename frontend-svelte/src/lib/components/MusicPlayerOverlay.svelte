@@ -85,7 +85,7 @@
         <Slider value={$sonos.volume} min={0} max={100} onChange={onVolumeChange} liveUpdate={false} className="player-volume-slider" />
       </div>
 
-      <a class="music-page-link" href="/music" on:click={closeMusicPlayer}>
+      <a class="music-page-link" href="/quiet-atlas/music" on:click={closeMusicPlayer}>
         <ExternalLink size={16} strokeWidth={1.8} />
         <span>Open Music</span>
       </a>
