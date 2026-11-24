@@ -66,6 +66,9 @@
 
   function previewColor(state) {
     if (!state?.on) return 'var(--text-muted)'
+    if (libraryOnly) {
+      return scenePreviewRows({ '1': state }).find(row => row.id === '1')?.color ?? 'var(--text-muted)'
+    }
     if (state.ct) return ctToColor(state.ct)
     if (state.hue != null && state.sat != null) {
       return hueToHsl(state.hue, state.sat, state.bri ?? 200)
