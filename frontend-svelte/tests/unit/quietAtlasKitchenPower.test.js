@@ -90,7 +90,7 @@ describe('Kitchen linked precision controls', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Change color' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Temp' }))
     const temp = document.querySelector('.chip-preset-dot')
-    expect(temp).toBeTruthy()
+    if (!temp) throw new Error('Expected temperature preset')
     await fireEvent.click(temp)
     const calls = vi.mocked(setLight).mock.calls
     expect(calls).toHaveLength(2)
@@ -135,7 +135,7 @@ describe('Kitchen linked precision controls', () => {
   it('retains independent command outcomes when a partial response leaves mixed power', async () => {
     bothOn()
     render(RoomControls, { room: 'kitchen', id: 'partial-kitchen' })
-    lightCommandResults.set({ '3': { status: 'acknowledged' }, '4': { status: 'denied' } })
+    lightCommandResults.set({ '3': { status: 'acknowledged', commandId: 'front' }, '4': { status: 'denied', commandId: 'back' } })
     await tick()
     expect(screen.getByText(/Light 3:.*Bridge acknowledged/)).toBeInTheDocument()
     expect(screen.getByText(/Light 4:.*Change blocked/)).toBeInTheDocument()
