@@ -19,8 +19,8 @@ describe('Quiet Atlas task-first route hierarchy (#157)', () => {
     expect(home).toContain('id="lighting-title"')
     expect(home).toContain('At a glance')
     expect(home).toContain('Classic dashboard')
-    expect(control).toContain('href="/classic#apartment-controls"')
-    expect(control).toContain('<QuietAtlasLightingExperience {routeIntent} />')
+    expect(control).not.toContain('href="/classic#apartment-controls"')
+    expect(control).toContain('<QuietAtlasLightingExperience {routeIntent} functional={true} />')
   })
 
   it('keeps future explanation closed on desktop too, with real reports outside it', () => {
@@ -49,7 +49,7 @@ describe('Quiet Atlas task-first route hierarchy (#157)', () => {
     expect(settings).toContain('aria-expanded={expandedGroup === group.id}')
   })
 
-  it('keeps the four routes read-only and compiles without warnings', () => {
+  it('keeps route-level writers delegated to existing components and compiles without warnings', () => {
     for (const [name, source] of Object.entries({ home, control, insights, settings })) {
       expect(source.match(/<h1[> ]/g), name).toHaveLength(1)
       expect(source, name).not.toMatch(/\b(apiPost|apiPut|setLight|activateScene|hueWrite)\s*\(/)
