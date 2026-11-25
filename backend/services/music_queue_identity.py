@@ -20,3 +20,26 @@ def apple_song_id(uri: str) -> str | None:
         return match.group(1) if match else None
     except ValueError:
         return None
+
+
+def play_source_fingerprint(evidence):
+    """Exact source and track identity, including metadata. Unknown is not empty."""
+    if not isinstance(evidence, dict):
+        return None
+    proof = tuple(evidence.get(key) for key in (
+        "current_uri", "queue_track_uri", "media_metadata", "metadata",
+    ))
+    return proof if all(isinstance(value, str) for value in proof) else None
+
+
+def selected_apple_source(proof, uid, provider_id):
+    """Only unloaded or the exact selected Apple track on its own queue/source."""
+    if not proof or len(proof) != 4:
+        return False
+    uri, track, media_metadata, metadata = proof
+    if not track:
+        return not any((uri, media_metadata, metadata))
+    return (
+        apple_song_id(track) == provider_id
+        and uri in {track, f"x-rincon-queue:{uid}#0"}
+    )

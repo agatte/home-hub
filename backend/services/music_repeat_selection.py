@@ -14,7 +14,7 @@ from backend.services.music_favorite_execution import (
     MAX_CONTAINER_TRACKS, _exact_queued_songs, _resolve_live_container, to_didl_string,
 )
 from backend.services.music_mix_execution import MixStartResult, _item_matches
-from backend.services.music_queue_identity import apple_song_id
+from backend.services.music_queue_identity import apple_song_id, play_source_fingerprint
 from backend.services.music_selected_plan import MAX_SELECTED_TRACKS, _exact_song
 from backend.services.music_sustained_listening import (
     MAX_SESSION_TRACKS, QueueProof, RetainedQueue, _read_prefix_sync, started_queue_proof,
@@ -310,6 +310,7 @@ async def _run_repeat(
         reason = "repeat_play_unverified"
         if not sonos._play_queue_item_if_unchanged_sync(
             offset, len(rows), target, queue_uid=uid, max_volume=volume,
+            expected_source=play_source_fingerprint(evidence),
         ):
             return None
         return first, target, rows

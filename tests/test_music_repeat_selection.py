@@ -34,7 +34,9 @@ class StoppedSonos(PlayingSonos):
     def _play_queue_item_if_unchanged_sync(self, index, size, snapshot, **kwargs):
         assert size == len(self.ids)
         assert snapshot == self._queue_item_snapshot_sync(index, 1)
-        assert kwargs == {"queue_uid": "speaker", "max_volume": 15}
+        from backend.services.music_queue_identity import play_source_fingerprint
+        assert kwargs == {"queue_uid": "speaker", "max_volume": 15,
+                          "expected_source": play_source_fingerprint(self._prepare_evidence_sync())}
         self.play_calls.append(index)
         self.state = "PLAYING"
         self.index = index + 1

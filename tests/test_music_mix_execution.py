@@ -50,7 +50,8 @@ class FakeSonos:
         return self._prepare_evidence_sync()
 
     def _prepare_evidence_sync(self):
-        return {"queue_size": len(self.queue), "queue_uid": "speaker", "volume": 15}
+        return {"queue_size": len(self.queue), "queue_uid": "speaker", "volume": 15,
+                "current_uri": "", "queue_track_uri": "", "media_metadata": "", "metadata": ""}
 
     def prepare_unloaded(self, evidence):
         return evidence["queue_size"] == 0
@@ -75,7 +76,9 @@ class FakeSonos:
         self.writes.append(("play", index))
         assert size == len(self.queue)
         assert snapshot == self._queue_item_snapshot_sync(index, 1)
-        assert kwargs == {"queue_uid": "speaker", "max_volume": 15}
+        from backend.services.music_queue_identity import play_source_fingerprint
+        assert kwargs == {"queue_uid": "speaker", "max_volume": 15,
+                          "expected_source": play_source_fingerprint(self._prepare_evidence_sync())}
         return not self.fail_play
 
     async def _verify_queue_playback_started(self, *args, **kwargs):
@@ -85,7 +88,7 @@ class FakeSonos:
 
     async def preflight(self, *, expected_queue_size, allowed_loaded_provider_id=None):
         reason = None if len(self.queue) == expected_queue_size else "queue_changed"
-        return {"reason": reason, "volume_used": 15}
+        return {"reason": reason, "volume_used": 15, "_loaded_uri": ""}
 
     async def run(self, operation):
         return await operation() if self.admitted else None

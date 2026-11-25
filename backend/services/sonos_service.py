@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from backend.config import settings
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from backend.services.music_queue_identity import selected_apple_source
 from backend.services.music_learning_provenance import (
     capture_owned_music_session,
 )
@@ -2184,6 +2185,11 @@ class SonosService:
                     queue_uid = await self._safe_call(lambda: str(self._device.uid))
                     if not queue_uid:
                         return None
+                expected_source = None
+                if expected_snapshot is not None:
+                    expected_source = await self._safe_call(self._play_source_fingerprint_sync, 1.0)
+                    if not selected_apple_source(expected_source, str(queue_uid), provider_id):
+                        return None
                 if before_play is not None:
                     guard_result = await before_play()
                     if isinstance(guard_result, dict):
@@ -2193,6 +2199,8 @@ class SonosService:
                             )
                             return None
                         final_max_volume = int(guard_result.get("volume_used") or 0)
+                        if expected_source is not None and guard_result.get("_loaded_uri") != expected_source[1]:
+                            return None
                     elif not guard_result:
                         logger.warning(
                             "Apple Music ShareLink pre-play authority changed; refusing play"
@@ -2209,7 +2217,7 @@ class SonosService:
                         int(expected_queue_size) + 1,
                         expected_snapshot,
                         queue_uid=str(queue_uid),
-                        max_volume=final_max_volume,
+                        max_volume=final_max_volume, expected_source=expected_source,
                     )
                     if not played:
                         logger.warning(
@@ -2287,9 +2295,21 @@ class SonosService:
             raise TimeoutError("assisted Sonos final transaction exceeded budget")
         return remaining
 
+    def _play_source_fingerprint_sync(self, budget: float) -> tuple | None:
+        deadline = time.monotonic() + budget
+        media = self._device.avTransport.GetMediaInfo(
+            [("InstanceID", 0)], timeout=self._final_timeout(deadline),
+        )
+        position = self._device.avTransport.GetPositionInfo(
+            [("InstanceID", 0)], timeout=self._final_timeout(deadline),
+        )
+        fields = (media.get("CurrentURI"), position.get("TrackURI"),
+                  media.get("CurrentURIMetaData"), position.get("TrackMetaData"))
+        return fields if all(isinstance(value, str) for value in fields) else None
+
     def _play_queue_item_if_unchanged_sync(
         self, index: int, expected_queue_size: int, expected_snapshot: tuple,
-        *, queue_uid: str, max_volume: int | None,
+        *, queue_uid: str, max_volume: int | None, expected_source: tuple,
     ) -> bool:
         """Bounded final queue/ownership proof and play with no HomeHub await.
 
@@ -2328,11 +2348,21 @@ class SonosService:
         if snapshot != expected_snapshot or snapshot[1] != int(expected_queue_size):
             return False
 
+        # Recheck the positively admitted source immediately before replacing it.
+        # Queue revision alone does not prove source ownership. UPnP is not CAS.
+        if (expected_source is None or str(self._device.uid) != queue_uid
+                or self._play_source_fingerprint_sync(timeout()) != expected_source):
+            return False
         uri = f"x-rincon-queue:{queue_uid}#0"
         self._device.avTransport.SetAVTransportURI(
             [("InstanceID", 0), ("CurrentURI", uri), ("CurrentURIMetaData", "")],
             timeout=timeout(),
         )
+        media = self._device.avTransport.GetMediaInfo(
+            [("InstanceID", 0)], timeout=timeout(),
+        )
+        if media.get("CurrentURI") != uri:
+            return False
         self._device.avTransport.Seek(
             [("InstanceID", 0), ("Unit", "TRACK_NR"), ("Target", index + 1)],
             timeout=timeout(),

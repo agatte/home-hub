@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.services.music_continuation import MAX_CONTINUATION_TRACKS
-from backend.services.music_queue_identity import apple_song_id
+from backend.services.music_queue_identity import apple_song_id, play_source_fingerprint, selected_apple_source
 from backend.services.music_selected_plan import MAX_SELECTED_TRACKS, SelectedListeningPlan
 
 
@@ -167,10 +167,15 @@ async def start_selected_mix(
             appended = index + 1
 
         failure = "authority_or_queue_changed_before_play"
+        source_evidence = await sonos.get_prepare_evidence()
+        source = play_source_fingerprint(source_evidence)
+        if not selected_apple_source(source, uid, ids[0]):
+            return None
         final = await preflight(
             expected_queue_size=len(members), allowed_loaded_provider_id=ids[0],
         )
-        if final.get("reason") is not None or final.get("volume_used") != volume:
+        if (final.get("reason") is not None or final.get("volume_used") != volume
+                or final.get("_loaded_uri") != source[1]):
             return None
         if str(await sonos._safe_call(lambda: sonos.device.uid)) != uid:
             return None
@@ -181,7 +186,7 @@ async def start_selected_mix(
         # between the intent guard and the exact queue/source/transport check.
         failure = "play_command_unverified"
         if not sonos._play_queue_item_if_unchanged_sync(
-            0, len(members), previous[0], queue_uid=uid, max_volume=volume,
+            0, len(members), previous[0], queue_uid=uid, max_volume=volume, expected_source=source,
         ):
             return None
         return previous[0], uid, volume, device, previous

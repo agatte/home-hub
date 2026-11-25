@@ -499,6 +499,7 @@ class MusicAssistedPlaybackService:
             "volume_before": current_volume,
             "volume_used": current_volume,
             "queue_size": queue_size,
+            "_loaded_uri": loaded_uri,
         }
 
     @staticmethod

@@ -16,7 +16,7 @@ from soco.data_structures import to_didl_string
 
 from backend.services.music_continuation import MAX_CONTINUATION_TRACKS, QueuedSong
 from backend.services.music_mix_execution import MixStartResult, _item_matches
-from backend.services.music_queue_identity import apple_song_id
+from backend.services.music_queue_identity import apple_song_id, play_source_fingerprint
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.playlist_catalog import VerifiedMusicCandidate
 
@@ -311,6 +311,7 @@ async def start_selected_favorite(
         reason = "play_command_unverified"
         if not sonos._play_queue_item_if_unchanged_sync(
             0, snapshot[1], snapshot, queue_uid=uid, max_volume=volume,
+            expected_source=play_source_fingerprint(current),
         ):
             return None
         return snapshot, uid, volume, device, prefix
