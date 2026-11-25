@@ -377,6 +377,7 @@ async def preview_music_request(request: Request) -> dict:
         mode=str(body.get("mode") or "") or None,
         semantic_request=str(body.get("intent") or body.get("semantic_request") or "") or None,
         source=source,
+        listening=body.get("listening") is True,
     )
     try:
         result = await service.preview(
@@ -384,7 +385,12 @@ async def preview_music_request(request: Request) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return result.to_dict()
+    payload = result.to_dict()
+    if music_request.listening:
+        from backend.services.music_listening_choices import build_listening_choices
+
+        payload["listening"] = build_listening_choices(payload, limit=count)
+    return payload
 
 
 # ------------------------------------------------------------------
