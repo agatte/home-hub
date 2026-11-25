@@ -7,7 +7,7 @@ import functional from '../../src/routes/quiet-atlas/settings/+page.svelte?raw'
 
 describe('Quiet Atlas phone-native Settings navigation (#461)', () => {
   it('makes the actual Settings controls the native page rather than an intermediate gateway', () => {
-    expect(gateway).toContain('<SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>')
+    expect(gateway).toContain('<SettingsLayout sections={SECTIONS} {activeId} {indexView} {indexHref} onSelect={select}>')
     expect(gateway).not.toContain('withQuietAtlasShell')
     expect(gateway).toContain('settings-workspace')
     expect(rail).toContain('{#each groups as group (group)}')
@@ -16,23 +16,21 @@ describe('Quiet Atlas phone-native Settings navigation (#461)', () => {
     expect(gateway).toContain('Systems & access')
   })
 
-  it('uses one grouped navigation list with an accessible compact disclosure', () => {
-    expect(rail).toContain('aria-expanded={menuOpen}')
-    expect(rail).toContain('aria-controls="homehub-settings-sections"')
-    expect(rail).toContain('id="homehub-settings-sections"')
-    expect(rail).toContain('class:menu-open={menuOpen}')
-    expect(rail).toContain("if (!sections.some(section => section.id === id)) return")
-    expect(rail).toContain('if (id !== activeId) onSelect(id)')
-    expect(rail).toContain('menuButton?.focus()')
-    expect(rail).toContain("aria-current={activeId === section.id ? 'page' : undefined}")
+  it('uses a grouped index and persistent direct parent link for mobile detail', () => {
+    expect(rail).toContain('class:index-view={indexView}')
+    expect(rail).toContain('href={indexHref} data-sveltekit-replacestate')
+    expect(rail).toContain('aria-label="Back to Settings sections"')
+    expect(rail).toContain('if (indexView || id !== activeId) onSelect(id)')
+    expect(rail).toContain("aria-current={!indexView && activeId === section.id ? 'page' : undefined}")
     expect(rail).toContain('.rail-nav{display:none;}')
-    expect(rail).toContain('.rail-nav.menu-open{display:grid;')
+    expect(rail).toContain('.index-view .rail-nav{display:grid;')
+    expect(rail).toContain('position:sticky;top:0')
     expect(rail).toContain('min-height:56px')
-    expect(rail).toContain('activeSection?.label')
     expect(rail).not.toContain('<select')
     expect(functional).toContain("url.searchParams.set('section', id)")
-    expect(functional).toContain('keepFocus: true')
-    expect(functional).toContain('noScroll: true')
+    expect(functional).toContain("parent.searchParams.delete('section')")
+    expect(functional).toContain('indexView = !valid')
+    expect(functional).not.toContain('noScroll: true')
   })
 
   it('stacks real form labels and their existing controls without adding writes', () => {
