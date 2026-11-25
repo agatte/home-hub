@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.services.audio_ownership import AudioOwnershipService, QUEUE_SOURCE
+from backend.services.audio_ownership import AudioOwnershipService, MANUAL_TRANSPORT_DIMENSIONS, QUEUE_SOURCE
 from backend.services.music_mix_execution import MixStartResult
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.music_session_service import ListeningSessionService, MAX_TICKETS
@@ -231,7 +231,7 @@ async def test_familiar_only_ticket_dispatches_exact_favorite(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revoked", [False, True])
-async def test_tail_is_revalidated_under_shared_admission(monkeypatch, revoked):
+async def test_tail_is_revalidated_before_shared_admission(monkeypatch, revoked):
     service, _, planner, _, writes = await fixture(monkeypatch)
     tail = (song("21"),)
 
@@ -305,3 +305,51 @@ async def test_sustained_session_requires_confirmed_start_and_original_authority
         assert service._sustained._current(service._sustained._active)
         allowed[0] = False
         assert not service._sustained._current(service._sustained._active)
+
+@pytest.mark.asyncio
+async def test_manual_stop_finishes_during_start_provider_revalidation(monkeypatch):
+    service, state, planner, _, writes = await fixture(monkeypatch)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = planner.preview
+
+    async def held_lookup(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if planner.calls == 2:
+            entered.set()
+            await release.wait()
+        return result
+
+    planner.preview = held_lookup
+    task = asyncio.create_task(start(service, ticket(service)))
+
+    async def stop():
+        return True
+
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        result = await asyncio.wait_for(state.audio_ownership.run_manual(
+            MANUAL_TRANSPORT_DIMENSIONS, source="test", reason="stop", operation=stop,
+        ), timeout=1)
+        assert result is True
+        assert not writes
+    finally:
+        release.set()
+        receipt = await task
+    assert receipt.status == "suppressed"
+    assert not writes
+
+
+@pytest.mark.asyncio
+async def test_stale_start_validation_waiting_for_writer_lock_abstains(monkeypatch):
+    service, state, _, now, writes = await fixture(monkeypatch)
+    original = state.audio_ownership.run_if_opportunistic
+
+    async def delayed(token, operation):
+        now[0] += 4
+        return await original(token, operation)
+
+    state.audio_ownership.run_if_opportunistic = delayed
+    receipt = await start(service, ticket(service))
+    assert receipt.status == "suppressed"
+    assert not writes

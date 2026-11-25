@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import unquote
@@ -55,6 +56,7 @@ def _resolve_live_container(device, candidate: VerifiedMusicCandidate):
 
 
 MAX_CONTAINER_TRACKS = 32
+MAX_TAIL_VALIDATION_AGE = 3.0
 
 
 def _append_container_sync(device, item, uri):
@@ -193,8 +195,8 @@ async def start_selected_favorite(
     reason = "initial_admission_failed"
     continuation_count = 0
 
-    async def setup():
-        nonlocal attempted, appended, reason, continuation_count
+    async def prepare_container():
+        nonlocal attempted, appended, reason
         initial = await preflight(expected_queue_size=0)
         if initial.get("reason") is not None or not still_current():
             return None
@@ -242,34 +244,28 @@ async def start_selected_favorite(
             )
             if prefix is None:
                 return None
-            songs = _exact_queued_songs(prefix)
-            tail = await continuation_planner.preview_container(songs, mode=mode) if songs else ()
-            if tail and not await continuation_planner.revalidate(tail, mode=mode):
-                tail = ()
-            if not still_current() or sonos.device is not device:
-                return None
-            if len(tail) > MAX_CONTINUATION_TRACKS:
-                return None
-            ids = {song.provider_id for song in songs}
-            names = {(song.artist.casefold(), song.title.casefold()) for song in songs}
-            for item in tail:
-                artist = str(item.metadata.get("artist_name") or "")
-                identity = item.provider_id
-                if (
-                    not songs or item.provider != "itunes_search" or item.media_type != "track"
-                    or not item.verified or not item.catalog_verified or not item.playback_capable
-                    or item.playback_adapter != "sonos_apple_music_share_link"
-                    or item.playback_reference != item.uri
-                    or item.metadata.get("playback_verification") != "live_verified"
-                    or not identity.isascii() or not identity.isdigit()
-                    or identity in ids or not artist
-                    or (artist.casefold(), item.title.casefold()) in names
-                    or sonos._canonical_apple_music_share_link(item.uri) != f"song:{identity}"
-                ):
-                    return None
-                ids.add(identity)
-                names.add((artist.casefold(), item.title.casefold()))
+        return size, snapshot, current, uid, volume, device, prefix
 
+    async def finish(prepared, tail, validated_at):
+        nonlocal reason, appended, continuation_count
+        size, snapshot, current, uid, volume, device, prefix = prepared
+        reason = "container_or_authority_changed_before_play"
+        if not still_current() or sonos.device is not device:
+            return None
+        # Planning and reacquisition both ran outside custody. Never adopt a
+        # changed queue, even if no similar tracks will be added.
+        if await sonos.get_prepare_evidence() != current:
+            return None
+        if prefix is not None and await sonos._safe_call(
+            _queue_prefix_sync, device, size, snapshot[0],
+        ) != prefix:
+            return None
+        if not still_current() or sonos.device is not device:
+            return None
+        if tail and not 0 <= time.monotonic() - validated_at <= MAX_TAIL_VALIDATION_AGE:
+            # An optional stale recommendation is not authority to append.
+            tail = ()
+        if prefix is not None:
             for item in tail:
                 reason = "container_or_authority_changed_before_tail"
                 if not still_current() or sonos.device is not device:
@@ -322,7 +318,50 @@ async def start_selected_favorite(
         return snapshot, uid, volume, device, prefix
 
     try:
-        proof = await mutation_runner(setup)
+        prepared = await mutation_runner(prepare_container)
+        if prepared is None:
+            return MixStartResult("indeterminate" if attempted else "suppressed", reason, appended)
+        size, snapshot, current, uid, volume, device, prefix = prepared
+        tail = ()
+        validated_at = time.monotonic()
+        if prefix is not None and continuation_planner is not None:
+            reason = "continuation_planning_unverified"
+            songs = _exact_queued_songs(prefix)
+            # Slow recommendation/catalog reads must not hold the shared
+            # audio lock. Manual stop/skip/Away can win during this interval.
+            tail = await continuation_planner.preview_container(songs, mode=mode) if songs else ()
+            if tail and not await continuation_planner.revalidate(tail, mode=mode):
+                tail = ()
+            validated_at = time.monotonic()
+            if not still_current() or sonos.device is not device:
+                return MixStartResult("indeterminate", "authority_changed_during_planning", appended)
+            if len(tail) > MAX_CONTINUATION_TRACKS:
+                return MixStartResult("indeterminate", "invalid_continuation_tail", appended)
+            ids = {song.provider_id for song in songs}
+            names = {(song.artist.casefold(), song.title.casefold()) for song in songs}
+            for item in tail:
+                artist = str(item.metadata.get("artist_name") or "")
+                identity = item.provider_id
+                if (
+                    not songs or item.provider != "itunes_search" or item.media_type != "track"
+                    or not item.verified or not item.catalog_verified or not item.playback_capable
+                    or item.playback_adapter != "sonos_apple_music_share_link"
+                    or item.playback_reference != item.uri
+                    or item.metadata.get("playback_verification") != "live_verified"
+                    or not identity.isascii() or not identity.isdigit()
+                    or identity in ids or not artist
+                    or (artist.casefold(), item.title.casefold()) in names
+                    or sonos._canonical_apple_music_share_link(item.uri) != f"song:{identity}"
+                ):
+                    return MixStartResult("indeterminate", "invalid_continuation_tail", appended)
+                ids.add(identity)
+                names.add((artist.casefold(), item.title.casefold()))
+
+
+        async def resume():
+            return await finish(prepared, tail, validated_at)
+
+        proof = await mutation_runner(resume)
         if proof is None:
             return MixStartResult("indeterminate" if attempted else "suppressed", reason, appended)
         snapshot, uid, volume, device, prefix = proof

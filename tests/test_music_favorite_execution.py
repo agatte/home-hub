@@ -1,9 +1,11 @@
+import asyncio
 import hashlib
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from backend.services.audio_ownership import AudioOwnershipService, MANUAL_TRANSPORT_DIMENSIONS
 from backend.services.music_continuation import QueuedSong
 from backend.services.music_favorite_execution import start_selected_favorite
 from tests.test_music_continuation import candidate as related_candidate
@@ -281,3 +283,68 @@ async def test_optional_tail_abstains_and_original_playlist_starts(problem):
     assert result.continuation_tracks == 0
     assert sonos.writes == [("append", sonos.device.target), ("play", 0)]
     assert planner.calls == (0 if sonos.bad_metadata else 1)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["preview", "revalidate"])
+async def test_manual_stop_wins_during_favorite_provider_reads(phase):
+    sonos = Sonos()
+    planner = Continuation(sonos)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def load(key):
+        return {}
+
+    async def save(key, value):
+        pass
+
+    authority = AudioOwnershipService(setting_loader=load, setting_saver=save)
+    revision = authority.capture_manual_intent()
+    epoch = await authority.capture_opportunistic(MANUAL_TRANSPORT_DIMENSIONS, claim=True)
+
+    def current():
+        return (authority.opportunistic_is_current(epoch)
+                and authority.capture_manual_intent() == revision)
+
+    async def runner(operation):
+        executed, result = await authority.run_if_opportunistic(epoch, operation)
+        return result if executed else None
+
+    method = "preview_container" if phase == "preview" else "revalidate"
+    original = getattr(planner, method)
+
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    setattr(planner, method, held)
+    task = asyncio.create_task(start_selected_favorite(
+        sonos, plan(), mutation_runner=runner, preflight=sonos.preflight,
+        still_current=current, continuation_planner=planner,
+    ))
+
+    async def stop():
+        return True
+
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert sonos.writes == [("append", sonos.device.target)]
+        assert await asyncio.wait_for(authority.run_manual(
+            MANUAL_TRANSPORT_DIMENSIONS, source="test", reason="stop", operation=stop,
+        ), timeout=1)
+    finally:
+        release.set()
+        receipt = await task
+    assert receipt.status == "indeterminate"
+    assert sonos.writes == [("append", sonos.device.target)]
+    assert sonos.size == 3
+
+
+@pytest.mark.asyncio
+async def test_favorite_prefix_change_during_planning_even_without_tail_refuses():
+    sonos = Sonos()
+    planner = Continuation(sonos, changed=True, revoked=True)
+    result = await start(sonos, continuation_planner=planner)
+    assert result.status == "indeterminate"
+    assert sonos.writes == [("append", sonos.device.target)]

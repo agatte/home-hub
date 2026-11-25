@@ -22,6 +22,7 @@ from backend.services.music_selected_plan import SelectedListeningPlanner
 from backend.services.music_sustained_listening import SustainedListening, started_queue_proof
 
 TICKET_TTL = 120
+MAX_START_VALIDATION_AGE = 3.0
 MAX_TICKETS = 32
 
 
@@ -190,19 +191,26 @@ class ListeningSessionService:
                 return _refused("authority_changed")
 
         async def mutation_runner(operation):
+            # Provider and taste reads must not delay manual audio commands.
+            # Recheck authority after refresh and again inside writer admission.
+            if not current():
+                return None
+            fresh = await self._planner.preview(ticket.request, choice_id, limit=ticket.limit)
+            if fresh != selected or not current():
+                return None
+            if tail and not await self._continuation_planner.revalidate(
+                tail, mode=ticket.request.resolved_request.mode,
+            ):
+                return None
+            validated_at = self._clock()
+            if not current():
+                return None
+
             async def admitted():
-                # Refresh provider and current veto evidence again while the
-                # shared transaction is held, before the first possible write.
-                if not current():
-                    return None
-                fresh = await self._planner.preview(ticket.request, choice_id, limit=ticket.limit)
-                if fresh != selected or not current():
-                    return None
-                if tail and not await self._continuation_planner.revalidate(
-                    tail, mode=ticket.request.resolved_request.mode,
+                if (
+                    not current()
+                    or not 0 <= self._clock() - validated_at <= MAX_START_VALIDATION_AGE
                 ):
-                    return None
-                if not current():
                     return None
                 return await operation()
 
