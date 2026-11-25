@@ -250,6 +250,12 @@ class SustainedListening:
         self._retained = None
         return True
 
+    def restore_unwritten_retained(self, origin):
+        # Only the caller with unchanged fresh authority may restore a
+        # consumed identity after a definitively non-mutating refusal.
+        if self._retained is None and self._clock() < origin.expires:
+            self._retained = origin
+
     def forget_retained(self):
         self._retained = None
 

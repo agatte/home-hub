@@ -6,9 +6,14 @@ owner-selected start under the shared writer lock may append and start.
 from __future__ import annotations
 
 import hashlib
-from urllib.parse import unquote
+import re
+import xml.etree.ElementTree as ET
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from backend.services.music_continuation import QueuedSong
+from backend.services.music_favorite_execution import (
+    MAX_CONTAINER_TRACKS, _exact_queued_songs, _resolve_live_container, to_didl_string,
+)
 from backend.services.music_mix_execution import MixStartResult, _item_matches
 from backend.services.music_selected_plan import MAX_SELECTED_TRACKS, _exact_song
 from backend.services.music_sustained_listening import (
@@ -92,6 +97,148 @@ async def start_repeat_mix(
     except Exception:
         return MixStartResult("suppressed", "invalid_member")
 
+    batches = tuple(
+        ((QueuedSong(item.provider_id, item.title, item.metadata["artist_name"]),),
+         lambda item=item: sonos._add_apple_music_share_link_sync(item.uri))
+        for item in members
+    )
+    return await _run_repeat(
+        sonos, origin, initial, batches, mutation_runner=mutation_runner,
+        still_current=still_current, on_started=on_started,
+    )
+
+
+def _song_resources(rows):
+    """Require exact Apple service resources, not merely a numeric song id."""
+    result = []
+    for row in rows:
+        root = ET.fromstring(row)
+        resources = tuple((node.text or "").strip() for node in root
+                          if node.tag.rsplit("}", 1)[-1] == "res")
+        if not resources or any(
+            parse_qs(urlsplit(uri).query).get("sid") != ["204"]
+            for uri in resources
+        ):
+            return None
+        result.append(resources)
+    return tuple(result)
+
+
+def _saved_expansion(device, candidate, capacity):
+    """Bounded native saved playlist expansion; never guess cloud contents."""
+    item = _resolve_live_container(device, candidate)
+    if item is None:
+        return None
+    identity = getattr(item, "item_id", "")
+    match = re.fullmatch(r"SQ:([0-9]+)", identity) if isinstance(identity, str) else None
+    if (
+        not match or getattr(item, "parent_id", None) != "SQ:"
+        or candidate.uri != "file:///jffs/settings/savedqueues.rsq#" + match.group(1)
+    ):
+        return None
+    limit = min(MAX_CONTAINER_TRACKS, capacity)
+    if limit < 1:
+        return None
+    response = device.contentDirectory.Browse([
+        ("ObjectID", identity), ("BrowseFlag", "BrowseDirectChildren"),
+        ("Filter", "*"), ("StartingIndex", 0), ("RequestedCount", limit),
+        ("SortCriteria", ""),
+    ], timeout=3.0)
+    revision = str(response.get("UpdateID") or "")
+    count = int(response.get("TotalMatches") or 0)
+    xml = response.get("Result")
+    if (
+        not revision or not 1 <= count <= limit
+        or int(response.get("NumberReturned") or 0) != count
+        or not isinstance(xml, str) or len(xml) > 512000
+    ):
+        return None
+    root = ET.fromstring(xml)
+    if root.tag.rsplit("}", 1)[-1] != "DIDL-Lite":
+        return None
+    rows = tuple(ET.tostring(node, encoding="unicode") for node in root
+                 if node.tag.rsplit("}", 1)[-1] == "item")
+    songs = _exact_queued_songs(rows)
+    resources = _song_resources(rows)
+    if len(rows) != count or len(songs) != count or resources is None:
+        return None
+    item_resources = getattr(item, "resources", None) or []
+    if not item_resources or item_resources[0].uri != candidate.uri:
+        return None
+    return item, (identity, revision, songs, resources)
+
+
+async def start_repeat_favorite(
+    sonos, plan, origin, initial, *, mutation_runner, still_current, on_started,
+):
+    if (
+        plan.status != "verified_preview" or plan.kind != "favorite"
+        or plan.actuation_allowed is not False or len(plan.candidates) != 1
+    ):
+        return MixStartResult("suppressed", "invalid_favorite")
+    candidate = plan.candidates[0]
+    if (
+        candidate.provider != "sonos_favorite" or candidate.media_type != "favorite"
+        or candidate.source != "playlist" or not candidate.title or not candidate.uri
+        or candidate.verified is not True or candidate.catalog_verified is not True
+        or not candidate.playback_capable or candidate.playback_adapter != "sonos_favorite_title"
+        or candidate.playback_reference != candidate.title
+        or plan.choice_id != "sonos_favorite:" + candidate.provider_id
+        or candidate.provider_id != hashlib.sha256(
+            f"{candidate.source}|{candidate.uri}".encode(),
+        ).hexdigest()[:16]
+    ):
+        return MixStartResult("suppressed", "repeat_playlist_unavailable")
+    offset = len(origin.rows)
+    capacity = MAX_SESSION_TRACKS - offset
+    device = origin.device
+    try:
+        if not still_current() or sonos.device is not device:
+            return MixStartResult("suppressed", "repeat_queue_changed")
+        prepared = await sonos._safe_call(_saved_expansion, device, candidate, capacity)
+        if prepared is None or not still_current() or sonos.device is not device:
+            return MixStartResult("suppressed", "repeat_playlist_contents_unverified")
+        _, expected = prepared
+        songs, resources = expected[2:]
+
+        def prepare_append():
+            fresh = _saved_expansion(device, candidate, capacity)
+            if fresh is None or fresh[1] != expected:
+                return None
+            item = fresh[0]
+            metadata = to_didl_string(item)
+
+            def append():
+                result = device.avTransport.AddURIToQueue([
+                    ("InstanceID", 0), ("EnqueuedURI", candidate.uri),
+                    ("EnqueuedURIMetaData", metadata),
+                    ("DesiredFirstTrackNumberEnqueued", 0), ("EnqueueAsNext", 0),
+                ], timeout=5.0)
+                if (
+                    int(result["FirstTrackNumberEnqueued"]) != offset + 1
+                    or int(result["NumTracksAdded"]) != len(songs)
+                    or int(result["NewQueueLength"]) != offset + len(songs)
+                ):
+                    return None
+                return offset + 1
+
+            return append
+
+        return await _run_repeat(
+            sonos, origin, initial, ((songs, None),), mutation_runner=mutation_runner,
+            still_current=still_current, on_started=on_started,
+            prepare_append=prepare_append, expected_resources=resources,
+        )
+    except Exception:
+        return MixStartResult("suppressed", "repeat_playlist_contents_unverified")
+
+
+async def _run_repeat(
+    sonos, origin, initial, batches, *, mutation_runner, still_current, on_started,
+    prepare_append=None, expected_resources=None,
+):
+    offset = len(origin.rows)
+    ids = [song.provider_id for songs, _ in batches for song in songs]
     attempted = False
     appended = 0
     reason = "repeat_queue_changed"
@@ -105,12 +252,16 @@ async def start_repeat_mix(
         if await probe_repeat_queue(sonos, origin, ceiling=volume, still_current=still_current) != evidence:
             return None
         first = None
-        for item in members:
+        for songs, append in batches:
             size = len(rows)
+            new_size = size + len(songs)
 
             def append_one():
                 nonlocal attempted
                 if not still_current() or sonos.device is not device:
+                    return None
+                operation = prepare_append() if prepare_append is not None else append
+                if operation is None:
                     return None
                 if _read_prefix_sync(device, size, proof.revision) != rows:
                     return None
@@ -120,31 +271,32 @@ async def start_repeat_mix(
                 ):
                     return None
                 attempted = True
-                return sonos._add_apple_music_share_link_sync(item.uri)
+                return operation()
 
             reason = "repeat_append_unverified"
             position = await sonos._safe_mutation_call(append_one)
             if type(position) is not int or position != size + 1 or not still_current():
                 return None
             first = await sonos._safe_call(sonos._queue_item_snapshot_sync, 0, 1.0)
-            last = await sonos._safe_call(sonos._queue_item_snapshot_sync, size, 1.0)
+            last = await sonos._safe_call(sonos._queue_item_snapshot_sync, new_size - 1, 1.0)
             if (
-                not first or len(first) != 3 or first[1] != size + 1
+                not first or len(first) != 3 or first[1] != new_size
                 or not first[0] or first[0] == proof.revision
                 or hashlib.sha256(first[2].encode()).hexdigest() != proof.first_hash
-                or not _item_matches(last, item.provider_id, size + 1)
+                or not _item_matches(last, songs[-1].provider_id, new_size)
                 or last[0] != first[0]
             ):
                 return None
-            updated = await sonos._safe_call(_read_prefix_sync, device, size + 1, first[0])
-            if updated is None or updated[:-1] != rows:
+            updated = await sonos._safe_call(_read_prefix_sync, device, new_size, first[0])
+            if updated is None or updated[:size] != rows:
+                return None
+            if expected_resources is not None and _song_resources(updated[size:]) != expected_resources:
                 return None
             next_proof = started_queue_proof(first, uid, volume, updated)
-            song = QueuedSong(item.provider_id, item.title, item.metadata["artist_name"])
-            if next_proof is None or next_proof.songs != proof.songs + (song,):
+            if next_proof is None or next_proof.songs != proof.songs + songs:
                 return None
             fresh = await sonos.get_prepare_evidence()
-            expected = {**evidence, "queue_update_id": first[0], "queue_size": size + 1}
+            expected = {**evidence, "queue_update_id": first[0], "queue_size": new_size}
             if fresh != expected or not stopped_queue_matches(next_proof, fresh, ceiling=volume):
                 return None
             proof, rows, evidence = next_proof, updated, fresh

@@ -17,7 +17,7 @@ from backend.services.music_favorite_execution import start_selected_favorite
 from backend.services.music_listening_choices import build_listening_choices
 from backend.services.music_manual_policy import manual_volume_policy
 from backend.services.music_mix_execution import MixStartResult, start_selected_mix
-from backend.services.music_repeat_selection import probe_repeat_queue, start_repeat_mix
+from backend.services.music_repeat_selection import probe_repeat_queue, start_repeat_favorite, start_repeat_mix
 from backend.services.music_requests import MusicRequestResolver, MusicRequestResult
 from backend.services.music_selected_plan import SelectedListeningPlanner
 from backend.services.music_sustained_listening import SustainedListening, started_queue_proof
@@ -183,7 +183,7 @@ class ListeningSessionService:
             initial = await preflight(expected_queue_size=0)
             if initial.get("reason") is not None:
                 if (
-                    self._sustained is None or selected.kind != "artist_mix"
+                    self._sustained is None
                     or initial["reason"] not in {"sonos_busy", "sonos_queue_changed"}
                     or getattr(state, "bootstrap_ready", False) is not True
                 ):
@@ -260,10 +260,13 @@ class ListeningSessionService:
             if repeat_origin is not None:
                 if not current() or not self._sustained.consume_retained(repeat_origin):
                     return _refused("repeat_queue_changed")
-                result = await start_repeat_mix(
+                repeat_executor = start_repeat_favorite if selected.kind == 'favorite' else start_repeat_mix
+                result = await repeat_executor(
                     sonos, selected, repeat_origin, repeat_evidence,
                     mutation_runner=mutation_runner, still_current=current, on_started=on_started,
                 )
+                if result.status == "suppressed" and current():
+                    self._sustained.restore_unwritten_retained(repeat_origin)
             else:
                 if self._sustained is not None:
                     self._sustained.forget_retained()

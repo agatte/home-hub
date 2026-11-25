@@ -1,16 +1,19 @@
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from backend.services.audio_ownership import MANUAL_TRANSPORT_DIMENSIONS, TRANSPORT
-from backend.services.music_repeat_selection import probe_repeat_queue, start_repeat_mix
+from backend.services.music_repeat_selection import probe_repeat_queue, start_repeat_favorite, start_repeat_mix
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.music_sustained_listening import (
     RetainedQueue, SustainedListening, started_queue_proof,
 )
 from tests.test_music_continuation import candidate
+from tests.test_music_favorite_execution import plan as favorite_plan
 from tests.test_music_session_service import fixture, start, ticket
+from tests.test_music_selected_plan import request
 from tests.test_music_sustained_listening import Planner, PlayingSonos, authority
 
 
@@ -260,3 +263,168 @@ async def test_verified_refill_updates_retained_queue_before_stop():
     assert retained.proof.revision == str(sonos.revision)
     assert service._active is None
     assert await probe_repeat_queue(sonos, retained, ceiling=18, still_current=lambda: True)
+
+class SavedPlaylistSonos(StoppedSonos):
+    def __init__(self, now):
+        super().__init__(now)
+        item = favorite_plan().candidates[0]
+        self.playlist = SimpleNamespace(
+            title=item.title, uri=item.uri, item_id="SQ:1", parent_id="SQ:",
+            resources=[SimpleNamespace(uri=item.uri)],
+        )
+        self.device.get_sonos_playlists = lambda: [self.playlist]
+        self.device.avTransport = SimpleNamespace(AddURIToQueue=self.append_saved)
+        self.playlist_ids = ["31", "32", "33"]
+        self.playlist_revision = "playlist-rev"
+        self.playlist_reads = 0
+        self.playlist_count = None
+        self.changed_expansion = False
+        self.wrong_receipt = False
+        self.wrong_suffix = False
+        self.foreign_service = False
+        self.container_calls = []
+
+    def browse(self, args, *, timeout):
+        args_dict = dict(args)
+        if args_dict["ObjectID"] == "Q:0":
+            return super().browse(args, timeout=timeout)
+        assert args_dict["ObjectID"] == "SQ:1"
+        assert args_dict["StartingIndex"] == 0
+        assert 1 <= args_dict["RequestedCount"] <= 32
+        assert timeout == 3.0
+        self.playlist_reads += 1
+        ids = self.playlist_ids[:]
+        if self.changed_expansion and self.playlist_reads > 1:
+            ids[-1] = "99"
+        xml = "<DIDL-Lite>" + "".join(self.row(i) for i in ids) + "</DIDL-Lite>"
+        if self.foreign_service:
+            xml = xml.replace("sid=204", "sid=9")
+        return {"UpdateID": self.playlist_revision,
+                "TotalMatches": self.playlist_count if self.playlist_count is not None else len(ids),
+                "NumberReturned": len(ids), "Result": xml}
+
+    def append_saved(self, args, *, timeout):
+        args = dict(args)
+        assert args["EnqueuedURI"] == self.playlist.uri
+        assert args["EnqueuedURIMetaData"] == "playlist"
+        assert args["DesiredFirstTrackNumberEnqueued"] == args["EnqueueAsNext"] == 0
+        assert timeout == 5.0
+        offset = len(self.ids)
+        self.container_calls.append(args["EnqueuedURI"])
+        self.ids.extend(self.playlist_ids)
+        if self.wrong_suffix:
+            self.ids[-1] = "99"
+        self.revision += 1
+        return {"FirstTrackNumberEnqueued": str(offset + (2 if self.wrong_receipt else 1)),
+                "NumTracksAdded": str(len(self.playlist_ids)), "NewQueueLength": str(len(self.ids))}
+
+
+async def run_saved(sonos, origin, *, plan=None):
+    initial = await probe_repeat_queue(sonos, origin, ceiling=18, still_current=lambda: True)
+    assert initial is not None
+    started = []
+
+    async def runner(operation):
+        return await operation()
+
+    result = await start_repeat_favorite(
+        sonos, plan or favorite_plan(), origin, initial, mutation_runner=runner,
+        still_current=lambda: True, on_started=lambda *args: started.append(args),
+    )
+    return result, started
+
+
+@pytest.fixture
+def serialize_saved(monkeypatch):
+    monkeypatch.setattr("backend.services.music_repeat_selection.to_didl_string", lambda item: "playlist")
+
+
+@pytest.mark.asyncio
+async def test_repeat_saved_playlist_preserves_prefix_and_starts_exact_suffix(serialize_saved):
+    sonos = SavedPlaylistSonos([0.0])
+    result, started = await run_saved(sonos, origin_for(sonos))
+    assert result.status == "started"
+    assert result.confirmed_appends == 1
+    assert sonos.playlist_reads == 2
+    assert len(sonos.container_calls) == 1
+    assert sonos.ids == ["11", "12", "13", "31", "32", "33"]
+    assert sonos.play_calls == [3]
+    assert len(started) == 1 and started[0][-1] == sonos.rows()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cause", [
+    "cloud", "identity", "oversized", "foreign_service", "changed_expansion",
+    "wrong_receipt", "wrong_suffix", "worker_replacement",
+])
+async def test_repeat_saved_playlist_refuses_unverified_expansion_or_receipt(serialize_saved, cause):
+    sonos = SavedPlaylistSonos([0.0])
+    origin = origin_for(sonos)
+    plan = favorite_plan()
+    if cause == "cloud":
+        plan = favorite_plan("favorite")
+    elif cause == "identity":
+        sonos.playlist.item_id = "SQ:2"
+    elif cause == "oversized":
+        sonos.playlist_count = 33
+    elif cause == "foreign_service":
+        sonos.foreign_service = True
+    elif cause == "changed_expansion":
+        sonos.changed_expansion = True
+    elif cause == "wrong_receipt":
+        sonos.wrong_receipt = True
+    elif cause == "wrong_suffix":
+        sonos.wrong_suffix = True
+    else:
+        sonos.replace_before_worker = True
+    result, started = await run_saved(sonos, origin, plan=plan)
+    uncertain = cause in {"wrong_receipt", "wrong_suffix"}
+    assert result.status == ("indeterminate" if uncertain else "suppressed")
+    assert len(sonos.container_calls) == int(uncertain)
+    assert not sonos.play_calls and not started
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["playlist", "favorite"])
+async def test_repeat_favorite_session_dispatch_and_retained_refusal(monkeypatch, serialize_saved, source):
+    service, state, planner, now, _ = await fixture(monkeypatch)
+    state.bootstrap_ready = True
+    sonos = SavedPlaylistSonos(now)
+    state.sonos = sonos
+
+    async def busy(**kwargs):
+        return {"reason": "sonos_busy"}
+
+    state.music_assisted_playback._runtime_preflight = busy
+    service._continuation_planner = Planner()
+    service._sustained = SustainedListening(service._continuation_planner, clock=lambda: now[0])
+    origin = origin_for(sonos)
+    auth = state.audio_ownership
+    epoch = await auth.capture_opportunistic(MANUAL_TRANSPORT_DIMENSIONS, claim=True)
+    append_token = await auth.capture_listening_append(epoch, manual_revision=auth.capture_manual_intent())
+    assert service._sustained.install(
+        authority=auth, token=append_token, sonos=sonos, device=sonos.device,
+        proof=origin.proof, rows=origin.rows, mode="general", allowed=lambda: True,
+        owner_scope="owner",
+    )
+    selected = favorite_plan(source)
+
+    async def preview(*args, **kwargs):
+        return selected
+
+    planner.preview = preview
+    req = request()
+    req = replace(req, familiar_suggestions=(
+        replace(req.familiar_suggestions[0], candidate=selected.candidates[0]),
+    ))
+    selection = service.issue(req, owner_scope="owner")
+    receipt = await start(service, selection["token"], choice=selected.choice_id)
+    if source == "playlist":
+        assert receipt.status == "started"
+        assert receipt.sustained_listening is True
+        assert sonos.ids == ["11", "12", "13", "31", "32", "33"]
+        assert sonos.play_calls == [3]
+        assert service._sustained._active.initial_track == 4
+    else:
+        assert receipt.status == "suppressed"
+        assert not sonos.container_calls and not sonos.play_calls
+        assert service._sustained.retained("owner", sonos) is not None
