@@ -106,7 +106,7 @@
             <div class="choice-copy">
               <span class="type">{subtitle(choice)}</span>
               <h4>{choice.title}</h4>
-              {#if choice.familiarity === 'familiar' || choice.familiarity === 'proven'}<span class="taste">Familiar to you</span>{:else if choice.familiarity === 'exploratory'}<span class="taste">Explore something new</span>{/if}
+              {#if choice.familiarity === 'familiar' || choice.familiarity === 'proven'}<span class="taste">{choice.kind === 'favorite' ? 'Familiar to you' : 'Familiar artist'}</span>{:else if choice.familiarity === 'exploratory'}<span class="taste">Explore this artist</span>{/if}
               {#if choice.kind === 'album' && choice.matched_track}<p>Suggested from {choice.matched_track}</p>{/if}
               {#if choice.kind === 'artist_mix'}
                 <details><summary>View mix</summary><ul>{#each choice.tracks || [] as track}<li>{track.title}</li>{/each}</ul></details>
