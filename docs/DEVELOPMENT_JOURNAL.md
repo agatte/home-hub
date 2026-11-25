@@ -34,6 +34,8 @@
 
 **Progress:** #569/#571/#572/#574 integrated objective anchors, blocker evidence, journal/command center, advisory duplicate and same-day revision checks. [Natural Vault delivery PASS](https://github.com/agatte/home-hub/issues/365#issuecomment-7145070870): Nov 24 16:00 ET task exit 0, both document hashes matched manifest and pinned #572 source. [Real recovery trial #1](https://github.com/agatte/home-hub/issues/365#issuecomment-7153197996): after context cutoff, recovered active #580 and unfinished test output; 35 intervening issue comments preserved decisions and evidence, but this compact journal lagged. Live checker correctly flagged changed #461 revision. This reconciliation fixes the observed publication gap, not automatic transcript capture.
 
+**Source revisions:** #365 @ 2026-11-25T04:53:08Z
+
 **Next:** consolidate at meaningful slice closure or expected context transition, or on first safe recovery after unexpected cutoff. Preserve exact detailed checkpoints in owning issues. Second genuine recovery and measured efficiency remain pending; time/cost baseline unknown. Historical export is separate and locally filtered; no new infrastructure or host changes.
 
 ## Earlier milestone / lesson
