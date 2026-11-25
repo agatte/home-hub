@@ -8,7 +8,7 @@ from backend.services.audio_ownership import AudioOwnershipService, QUEUE_SOURCE
 from backend.services.music_mix_execution import MixStartResult
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.music_session_service import ListeningSessionService, MAX_TICKETS
-from tests.test_music_selected_plan import request, song
+from tests.test_music_selected_plan import favorite, request, song
 
 
 class Planner:
@@ -107,7 +107,7 @@ async def test_expired_hidden_album_and_untrusted_preview_abstain(monkeypatch):
     now[0] = 120
     assert (await start(service, token)).reason == "selection_expired"
     assert (await start(service, ticket(service), "artist_mix:11,99")).reason == "choice_not_visible"
-    assert service.issue(request(album=True), owner_scope="owner") == {"status": "unavailable"}
+    assert service.issue(request(album=True), owner_scope="owner")["choice_ids"] == ["sonos_favorite:fav1"]
     assert service.issue(replace(request(), actuation_allowed=True), owner_scope="owner") == {"status": "unavailable"}
     with pytest.raises(TypeError):
         service.issue({}, owner_scope="owner")
@@ -203,3 +203,27 @@ async def test_runtime_mode_change_after_issue_refuses(monkeypatch):
     state.automation.current_mode = "working"
     assert (await start(service, token)).reason == "selection_mode_changed"
     assert writes == []
+
+@pytest.mark.asyncio
+async def test_familiar_only_ticket_dispatches_exact_favorite(monkeypatch):
+    service, _, planner, _, writes = await fixture(monkeypatch)
+    selected = replace(request(), discovery=None)
+    issued = service.issue(selected, owner_scope="owner")
+    assert issued["choice_ids"] == ["sonos_favorite:fav1"]
+
+    async def preview(request, choice_id, *, limit):
+        return SelectedListeningPlan(choice_id, "favorite", "execution_not_connected", (favorite(),))
+
+    async def executor(sonos, plan, *, mutation_runner, preflight, still_current):
+        async def operation():
+            assert still_current()
+            writes.append(plan.choice_id)
+            return True
+        assert await mutation_runner(operation)
+        return MixStartResult("started", "mock_verified", 1)
+
+    monkeypatch.setattr(planner, "preview", preview)
+    monkeypatch.setattr("backend.services.music_session_service.start_selected_favorite", executor)
+    receipt = await start(service, issued["token"], "sonos_favorite:fav1")
+    assert receipt.status == "started"
+    assert writes == ["sonos_favorite:fav1"]

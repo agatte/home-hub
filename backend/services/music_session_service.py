@@ -1,4 +1,4 @@
-"""Process-local, single-use custody for explicit selected-mix start.
+"""Process-local, single-use custody for explicit listening selection.
 
 No route is registered here. Only an authenticated owner-facing adapter may
 issue or redeem tickets, using a server-derived owner scope, never a client
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from backend.services.audio_ownership import INTERRUPTION, QUEUE_SOURCE, TRANSPORT
+from backend.services.music_favorite_execution import start_selected_favorite
 from backend.services.music_listening_choices import build_listening_choices
 from backend.services.music_manual_policy import manual_volume_policy
 from backend.services.music_mix_execution import MixStartResult, start_selected_mix
@@ -56,12 +57,14 @@ class ListeningSessionService:
         if (
             request.status != "shadow_ready" or request.shadow is not True
             or request.actuation_allowed is not False
-            or request.discovery is None or request.discovery.shadow is not True
-            or request.discovery.actuation_allowed is not False
+            or (request.discovery is not None and (
+                request.discovery.shadow is not True
+                or request.discovery.actuation_allowed is not False
+            ))
         ):
             return {"status": "unavailable"}
         projected = build_listening_choices(request.to_dict(), limit=limit)["choices"]
-        choices = frozenset(row["id"] for row in projected if row["kind"] == "artist_mix")
+        choices = frozenset(row["id"] for row in projected if row["kind"] in {"artist_mix", "favorite"})
         if not choices:
             return {"status": "unavailable"}
         runtime_mode = str(getattr(getattr(self._state, "automation", None),
@@ -155,7 +158,7 @@ class ListeningSessionService:
             if not current():
                 return _refused("authority_changed")
             selected = await self._planner.preview(ticket.request, choice_id, limit=ticket.limit)
-            if selected.status != "verified_preview" or selected.kind != "artist_mix":
+            if selected.status != "verified_preview" or selected.kind not in {"artist_mix", "favorite"}:
                 return _refused(selected.reason)
             initial = await preflight(expected_queue_size=0)
             if initial.get("reason") is not None:
@@ -183,7 +186,8 @@ class ListeningSessionService:
         # Never retry the executor. It distinguishes suppressed from possibly
         # accepted I/O. If an unexpected error escapes, report uncertainty.
         try:
-            return await start_selected_mix(
+            executor = start_selected_favorite if selected.kind == "favorite" else start_selected_mix
+            return await executor(
                 sonos, selected, mutation_runner=mutation_runner,
                 preflight=preflight, still_current=current,
             )

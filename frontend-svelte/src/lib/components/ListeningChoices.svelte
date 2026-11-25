@@ -59,21 +59,22 @@
   }
 
   /** @param {any} choice */
-  async function startMix(choice) {
+  async function startSelection(choice) {
     if (busy || starting || !selection?.choice_ids.includes(choice.id)) return
+    const label = choice.kind === 'favorite' ? 'playlist' : 'mix'
     const token = selection.token
     selection = null
     starting = true
-    playbackMessage = 'Starting your mix on Sonos...'
+    playbackMessage = `Starting your ${label} on Sonos...`
     try {
       const receipt = await apiPost('/api/music/listening/start', {
         token, choice_id: choice.id,
       }, { timeout: 120000 })
       if (!alive) return
       if (receipt?.status === 'started') {
-        playbackMessage = 'Your mix started on Sonos.'
+        playbackMessage = `Your ${label} started on Sonos.`
       } else if (receipt?.status === 'suppressed') {
-        playbackMessage = 'Mix not started. Find music again when Sonos is ready.'
+        playbackMessage = `Your ${label} did not start. Find music again when Sonos is ready.`
       } else {
         playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'
       }
@@ -150,13 +151,11 @@
               {/if}
               {#if albumLink(choice)}
                 <a class="open" href={albumLink(choice) || undefined} target="_blank" rel="noopener noreferrer">Open in Apple Music <ArrowUpRight size={15}/></a>
-              {:else if choice.kind === 'favorite'}
-                <span class="pending">Sonos favorite · session start not connected yet</span>
-              {:else if choice.kind === 'artist_mix'}
+              {:else if choice.kind === 'favorite' || choice.kind === 'artist_mix'}
                 {#if selection?.choice_ids.includes(choice.id)}
-                  <button class="open" type="button" disabled={starting || busy} on:click={() => startMix(choice)}>Play on Sonos <Headphones size={15}/></button>
+                  <button class="open" type="button" disabled={starting || busy} on:click={() => startSelection(choice)}>Play on Sonos <Headphones size={15}/></button>
                 {:else}
-                  <span class="pending">Mix playback unavailable for this selection</span>
+                  <span class="pending">{choice.kind === 'favorite' ? 'Playlist' : 'Mix'} playback unavailable for this selection</span>
                 {/if}
               {:else}
                 <span class="pending">Apple Music destination unavailable</span>
@@ -166,7 +165,7 @@
         {/each}
       </div>
       {#if playbackMessage}<p class="status" role="status">{playbackMessage}</p>{/if}
-      <p class="footnote"><Headphones size={15}/> Sonos mix start requires an owner session and an available queue. Continuous listening is not connected yet.</p>
+      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Continuous listening is not connected yet.</p>
     {/if}
   {/if}
 </section>

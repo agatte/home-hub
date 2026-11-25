@@ -48,7 +48,7 @@ it('submits a free-text mood and never offers an unverified external link or pla
   expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/music/request/preview', expect.objectContaining({ request: 'Relaxing but upbeat' }), expect.anything())
   expect(screen.queryByRole('link', { name: 'Open in Apple Music' })).not.toBeInTheDocument()
   expect(screen.getByText('Mix playback unavailable for this selection')).toBeInTheDocument()
-  expect(screen.getByText('Sonos favorite · session start not connected yet')).toBeInTheDocument()
+  expect(screen.getByText('Playlist playback unavailable for this selection')).toBeInTheDocument()
 })
 
 it('renders honest empty results and does not reuse stale choices on error', async () => {
@@ -91,4 +91,17 @@ it('starts only the selected ticket once and reports confirmed playback', async 
   expect(post).toHaveBeenNthCalledWith(2, '/api/music/listening/start', { token: 'test-ticket', choice_id: mix.id }, { timeout: 120000 })
   await screen.findByText('Your mix started on Sonos.')
   expect(screen.queryByRole('button', { name: 'Play on Sonos' })).not.toBeInTheDocument()
+})
+
+it('starts a familiar playlist only through its selected ticket', async () => {
+  const favorite = { id: 'sonos_favorite:123', kind: 'favorite', title: 'Evening playlist' }
+  post.mockResolvedValueOnce({
+    ...response([favorite]),
+    listening_selection: { status: 'selection_available', token: 'test-ticket', choice_ids: [favorite.id], actuation_allowed: false },
+  }).mockResolvedValueOnce({ status: 'started' })
+  render(ListeningChoices)
+  await fireEvent.click(screen.getByRole('button', { name: 'Familiar' }))
+  await fireEvent.click(await screen.findByRole('button', { name: 'Play on Sonos' }))
+  expect(post).toHaveBeenNthCalledWith(2, '/api/music/listening/start', { token: 'test-ticket', choice_id: favorite.id }, { timeout: 120000 })
+  await screen.findByText('Your playlist started on Sonos.')
 })

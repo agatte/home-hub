@@ -164,7 +164,6 @@ class SelectedListeningPlanner:
         except Exception:
             return unavailable("taste_or_approval_unavailable", kind)
 
-        # Favorites still require an exact-identity execution seam; the existing
-        # title-only Sonos route is NOT an exact executor. Mixes need session
-        # ownership and continuation, not per-track approval mutation.
+        # Execution must use exact identities and shared runtime authority,
+        # not the existing title-only favorite route or per-track approval mutation.
         return SelectedListeningPlan(choice_id, kind, "execution_not_connected", tuple(candidates))
