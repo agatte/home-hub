@@ -112,11 +112,13 @@
                 <details><summary>View mix</summary><ul>{#each choice.tracks || [] as track}<li>{track.title}</li>{/each}</ul></details>
               {/if}
               {#if albumLink(choice)}
-                <a class="open" href={albumLink(choice)} target="_blank" rel="noopener noreferrer">Open in Apple Music <ArrowUpRight size={15}/></a>
+                <a class="open" href={albumLink(choice) || undefined} target="_blank" rel="noopener noreferrer">Open in Apple Music <ArrowUpRight size={15}/></a>
               {:else if choice.kind === 'favorite'}
                 <span class="pending">Sonos favorite · session start not connected yet</span>
-              {:else}
+              {:else if choice.kind === 'artist_mix'}
                 <span class="pending">Mix playback not connected yet</span>
+              {:else}
+                <span class="pending">Apple Music destination unavailable</span>
               {/if}
             </div>
           </article>
