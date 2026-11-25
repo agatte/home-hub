@@ -8,11 +8,14 @@
   /** @type {(id: string) => void} */
   export let onSelect = () => {}
 
+  export let indexView = false
+  export let indexHref = '/quiet-atlas/settings'
+
   import SettingsRail from './SettingsRail.svelte'
 </script>
 
-<div class="settings-shell">
-  <SettingsRail {sections} {activeId} {onSelect} />
+<div class="settings-shell" class:section-index={indexView}>
+  <SettingsRail {sections} {activeId} {indexView} {indexHref} {onSelect} />
   <article class="settings-main">
     <slot />
   </article>
@@ -40,7 +43,9 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1120px) {
+    .settings-shell.section-index .settings-main {display:none;}
+    .settings-shell {min-height:0;}
     .settings-shell {
       grid-template-columns: 1fr;
     }

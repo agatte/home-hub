@@ -1,6 +1,5 @@
 <script>
-  import { tick } from 'svelte'
-  import { ChevronDown, ChevronRight, Check } from 'lucide-svelte'
+  import { ChevronLeft, ChevronRight, Check } from 'lucide-svelte'
   /** @typedef {{id: string, label: string, icon?: any, hint?: string, group?: string}} SectionDef */
   /** @type {SectionDef[]} */
   export let sections = []
@@ -9,44 +8,36 @@
   /** @type {(id: string) => void} */
   export let onSelect = () => {}
 
-  let menuOpen = false
-  /** @type {HTMLButtonElement | null} */
-  let menuButton = null
+  export let indexView = false
+  export let indexHref = '/quiet-atlas/settings'
   $: groups = [...new Set(sections.map(section => section.group || 'Settings'))]
   $: activeSection = sections.find(section => section.id === activeId)
 
   /** @param {string} id */
-  async function chooseSection(id) {
+  function chooseSection(id) {
     if (!sections.some(section => section.id === id)) return
-    const wasOpen = menuOpen
-    menuOpen = false
-    if (id !== activeId) onSelect(id)
-    if (wasOpen) {
-      await tick()
-      menuButton?.focus()
-    }
+    if (indexView || id !== activeId) onSelect(id)
   }
 </script>
 
-<aside class="settings-rail">
+<aside class="settings-rail" class:index-view={indexView}>
   <header class="rail-head">
     <h2>Settings sections</h2>
     <p>Choose what to configure.</p>
   </header>
-  <button type="button" class="phone-section-trigger" aria-expanded={menuOpen} aria-controls="homehub-settings-sections" bind:this={menuButton} on:click={() => menuOpen = !menuOpen}>
-    {#if activeSection?.icon}
-      <span class="rail-icon current-icon"><svelte:component this={activeSection.icon} size={20} strokeWidth={1.75} /></span>
-    {/if}
-    <span class="trigger-copy"><small>{activeSection?.group || 'Settings'}</small><strong>{activeSection?.label || 'Choose a section'}</strong></span>
-    <span class="trigger-action">{menuOpen ? 'Close' : 'Change'}</span>
-    <span class="trigger-chevron" class:open={menuOpen}><ChevronDown size={18} /></span>
-  </button>
-  <nav id="homehub-settings-sections" class="rail-nav" class:menu-open={menuOpen} aria-label="Settings sections">
+  {#if !indexView}
+    <a class="section-back" href={indexHref} data-sveltekit-replacestate aria-label="Back to Settings sections">
+      <ChevronLeft size={21} strokeWidth={2} aria-hidden="true" />
+      <span>Settings</span>
+      <span class="back-current">{activeSection?.label || ''}</span>
+    </a>
+  {/if}
+  <nav id="homehub-settings-sections" class="rail-nav" aria-label="Settings sections">
     {#each groups as group (group)}
       <div class="rail-group" data-group={group}>
         <h3>{group}</h3>
         {#each sections.filter(section => (section.group || 'Settings') === group) as section (section.id)}
-          <button type="button" class="rail-item" class:rail-active={activeId === section.id} on:click={() => chooseSection(section.id)} aria-current={activeId === section.id ? 'page' : undefined}>
+          <button type="button" class="rail-item" class:rail-active={!indexView && activeId === section.id} on:click={() => chooseSection(section.id)} aria-current={!indexView && activeId === section.id ? 'page' : undefined}>
             {#if section.icon}
               <span class="rail-icon"><svelte:component this={section.icon} size={19} strokeWidth={1.75} /></span>
             {/if}
@@ -54,7 +45,7 @@
               <span class="rail-label">{section.label}</span>
               {#if section.hint}<span class="rail-hint">{section.hint}</span>{/if}
             </span>
-            <span class="rail-end" aria-hidden="true">{#if activeId === section.id}<Check size={15}/>{:else}<ChevronRight size={15}/>{/if}</span>
+            <span class="rail-end" aria-hidden="true">{#if !indexView && activeId === section.id}<Check size={15}/>{:else}<ChevronRight size={15}/>{/if}</span>
           </button>
         {/each}
       </div>
@@ -81,21 +72,18 @@
   .rail-hint{font-size:11px;line-height:1.35;color:var(--text-muted);}
   .rail-end{display:flex;color:var(--text-muted);flex-shrink:0;}
   .rail-active .rail-end{color:var(--accent);}
-  .phone-section-trigger{display:none;}
-  .rail-item:focus-visible,.phone-section-trigger:focus-visible{outline:3px solid var(--hh-focus,#d5e7bd);outline-offset:2px;}
+  .section-back{display:none;}
+  .rail-item:focus-visible,.section-back:focus-visible{outline:3px solid var(--hh-focus,#d5e7bd);outline-offset:2px;}
   @media(max-width:1120px){
-    .settings-rail{position:static;max-height:none;overflow:visible;padding:0;}
+    .settings-rail{position:sticky;top:0;z-index:10;max-height:none;overflow:visible;padding:0;background:var(--hh-chrome,#17251c);}
+    .settings-rail.index-view{position:static;background:transparent;}
     .rail-head{display:none;}
-    .phone-section-trigger{display:flex;align-items:center;text-align:left;gap:11px;box-sizing:border-box;width:100%;min-height:64px;padding:12px;border:1px solid var(--border);border-radius:15px;background:var(--bg-card);color:var(--text-primary);font:inherit;cursor:pointer;}
-    .trigger-copy{display:grid;gap:4px;flex:1;min-width:0;overflow-wrap:anywhere;}
-    .trigger-copy small{font-size:11px;color:var(--text-muted);}
-    .trigger-copy strong{font-size:16px;font-weight:650;}
-    .trigger-action{font-size:12px;color:var(--accent);}
-    .trigger-chevron{display:flex;color:var(--accent);flex-shrink:0;}
-    .trigger-chevron.open{transform:rotate(180deg);}
+    .section-back{display:flex;align-items:center;gap:8px;box-sizing:border-box;min-height:48px;padding:8px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--accent);text-decoration:none;font-size:15px;font-weight:650;}
+    .back-current{margin-left:auto;min-width:0;overflow-wrap:anywhere;color:var(--text-muted);font-size:12px;font-weight:500;text-align:right;}
     .rail-nav{display:none;}
-    .rail-nav.menu-open{display:grid;gap:14px;margin:10px 0 0;padding:12px 4px;}
+    .index-view .rail-nav{display:grid;gap:18px;}
     .rail-item{min-height:56px;}
     .rail-hint{font-size:12px;}
   }
+  @media(max-width:760px){.settings-rail{top:66px;}}
 </style>

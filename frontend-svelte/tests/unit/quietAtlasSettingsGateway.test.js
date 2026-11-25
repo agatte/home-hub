@@ -9,7 +9,7 @@ describe('Functional redesigned Settings (#461)', () => {
   it('retains all eleven original setting sections in three task groups', () => {
     for (const component of ['Overview','Host','Automation','Dnd','Schedule','Modes','Music','Audio','Network','Learning','GameDay']) expect(settings).toContain('<'+component+'Section />')
     for (const group of ['Systems & access','How HomeHub behaves','Listening & experiences']) expect(settings).toContain("group: '"+group+"'")
-    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>')
+    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} {indexView} {indexHref} onSelect={select}>')
     expect(rail).toContain('{#each groups as group (group)}')
     expect(alias).toContain('<SettingsWorkspace />')
     expect(settings).not.toContain("withQuietAtlasShell('/settings")

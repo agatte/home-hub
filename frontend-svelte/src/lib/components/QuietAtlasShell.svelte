@@ -3,13 +3,13 @@
   import '$lib/styles/homehub-surface.css'
   import { page } from '$app/stores'
   import {
-    Home, Sliders, Music, BarChart3, MoreHorizontal, X, ArrowUpRight,
+    Home, Sliders, Music, BarChart3, MoreHorizontal, X, ArrowUpRight, ChevronLeft,
     Settings, BookOpen, Brain, Building2, Trophy, Users,
   } from 'lucide-svelte'
   import { connected } from '$lib/stores/connection.js'
   import OwnerUnlock from './OwnerUnlock.svelte'
   import { rootRuntimeTargets } from '$lib/quietAtlas/runtimeRoutePolicy431.js'
-  import { MORE_DESTINATIONS, activeQuietAtlasSection, isQuietAtlasReadOnlyPreview, withQuietAtlasShell } from '$lib/quietAtlas/navigation.js'
+  import { MORE_DESTINATIONS, activeQuietAtlasSection, isQuietAtlasReadOnlyPreview, withQuietAtlasShell, hasMoreParent } from '$lib/quietAtlas/navigation.js'
 
   const NAV_ITEMS = [
     { id: 'home', label: 'Home', href: '/', icon: Home },
@@ -156,10 +156,14 @@
 
   <div class="qa-main" inert={moreOpen}>
     <header class="qa-mobile-header">
+      {#if hasMoreParent($page.url.pathname)}
+        <button class="qa-parent-back" type="button" on:click={openMore} aria-expanded={moreOpen} aria-controls="qa-more-panel" aria-label="Back to More destinations"><ChevronLeft size={22} strokeWidth={2} aria-hidden="true" /> More</button>
+      {:else}
       <a class="qa-mobile-brand" href="/" aria-label="HomeHub Home">
         <span class="qa-brand-mark" aria-hidden="true">H</span>
         <span><strong>HomeHub</strong><small>Home &amp; Control</small></span>
       </a>
+      {/if}
       <span class="qa-preview-badge" class:functional={!readOnlyPreview} class:home-controls={$page.url.pathname === '/' || $page.url.pathname === '/quiet-atlas/home'}>{readOnlyPreview ? 'Read-only preview' : 'HomeHub controls'}</span>
     </header>
 
@@ -328,6 +332,8 @@
   .qa-main { min-width: 0; width: 100%; }
   .qa-shell-content { min-width: 0; width: 100%; max-width: 1600px; margin: 0 auto; }
   .qa-mobile-header, .qa-mobile-nav { display: none; }
+  .qa-parent-back {display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 6px;background:transparent;border:0;color:var(--hh-accent);font:inherit;font-weight:650;cursor:pointer;}
+  .qa-parent-back:focus-visible {outline:3px solid var(--hh-focus);outline-offset:2px;border-radius:8px;}
   .qa-preview-badge { color: #e4d2a7; border: 1px solid rgba(199,169,106,.32); background: rgba(94,73,38,.22); border-radius: 999px; padding: 7px 10px; font-size: 10px; font-weight: 700; letter-spacing: .06em; white-space: nowrap; }
   .qa-preview-badge.functional { color: #d4e4d1; border-color: rgba(166,194,160,.34); background: rgba(70,102,78,.24); }
   .qa-mobile-nav a, .qa-mobile-nav button {

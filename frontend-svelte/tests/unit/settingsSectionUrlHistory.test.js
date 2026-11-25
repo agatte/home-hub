@@ -5,7 +5,7 @@ import settings from '../../src/routes/quiet-atlas/settings/+page.svelte?raw'
 describe('functional Settings URL and browser history synchronization (#461)', () => {
   it('uses URL as section authority when Back/Forward removes or invalidates section', () => {
     expect(settings).toContain("const fromUrl = $page.url.searchParams.get('section')")
-    expect(settings).toContain("activeId = fromUrl && SECTIONS.some((s) => s.id === fromUrl) ? fromUrl : 'overview'")
+    expect(settings).toContain("activeId = valid && fromUrl !== null ? fromUrl : 'overview'")
     expect(settings).not.toContain('onMount(() =>')
     expect(settings).toContain("let activeId = 'overview'")
   })
@@ -16,11 +16,13 @@ describe('functional Settings URL and browser history synchronization (#461)', (
       'overview', 'host', 'automation', 'dnd', 'schedule',
       'modes', 'music', 'audio', 'network', 'learning', 'gameday',
     ])
-    expect(settings).toContain('activeId = id')
+    expect(settings).toContain('indexView = !valid')
+    expect(settings).not.toContain('activeId = id')
+    expect(settings).toContain("parent.searchParams.delete('section')")
     expect(settings).toContain("url.searchParams.set('section', id)")
-    expect(settings).toContain('replaceState: false, keepFocus: true, noScroll: true')
+    expect(settings).toContain('replaceState: false')
     expect(settings).toContain("{#if activeId === 'overview'}")
-    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>')
+    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} {indexView} {indexHref} onSelect={select}>')
   })
 
   it('compiles the existing functional Settings route without Svelte warnings', () => {

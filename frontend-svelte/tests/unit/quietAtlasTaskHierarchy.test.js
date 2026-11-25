@@ -44,7 +44,7 @@ describe('Quiet Atlas task-first route hierarchy (#157)', () => {
     for (const id of ['automation','dnd','schedule','modes','music','audio','learning','gameday','overview','host','network']) expect(settings).toContain("id: '"+id+"'")
     for (const group of ['How HomeHub behaves','Listening & experiences','Systems & access']) expect(settings).toContain(group)
     expect(settings).toContain('<h1>Settings</h1>')
-    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>')
+    expect(settings).toContain('<SettingsLayout sections={SECTIONS} {activeId} {indexView} {indexHref} onSelect={select}>')
     expect(settings).not.toContain('withQuietAtlasShell')
   })
 

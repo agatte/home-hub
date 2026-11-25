@@ -3,6 +3,7 @@ import shellSource from '../../src/lib/components/QuietAtlasShell.svelte?raw'
 import homeSource from '../../src/routes/quiet-atlas/home/+page.svelte?raw'
 import {
   MORE_DESTINATIONS,
+  hasMoreParent,
   activeQuietAtlasSection,
   shouldUseQuietAtlasShell,
   shouldShowGlobalErrorToast,
@@ -108,4 +109,12 @@ describe('Quiet Atlas shared shell navigation', () => {
     ])
     expect(MORE_DESTINATIONS.filter((item) => item.shell)).toEqual([])
   })
+})
+
+it('only provides the More parent for explicit More workspaces', () => {
+  for (const path of ['/settings','/journal','/personality','/quiet-atlas/settings','/quiet-atlas/journal','/quiet-atlas/personalization','/quiet-atlas/household']) expect(hasMoreParent(path)).toBe(true)
+  for (const path of ['/','/quiet-atlas/control','/quiet-atlas/lighting/bedroom','/quiet-atlas/music/artist-review','/classic','/guest','/gameday','/quiet-atlas/future']) expect(hasMoreParent(path)).toBe(false)
+  expect(shellSource).toContain('hasMoreParent($page.url.pathname)')
+  expect(shellSource).toContain('aria-label="Back to More destinations"')
+  expect(shellSource).toContain('on:click={openMore}')
 })
