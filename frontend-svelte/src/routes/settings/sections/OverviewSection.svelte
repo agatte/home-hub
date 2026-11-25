@@ -83,7 +83,8 @@
 
   <details class="diagnostics">
     <summary><span><strong>Diagnostics</strong><small>Test notifications and speaker announcements</small></span><span class="disclosure" aria-hidden="true">⌄</span></summary>
-    <SettingGroup hint="These tests send real notifications or play audio when you press a test button.">
+    <p class="diagnostic-note">These tests send real notifications or play audio when you press a test button.</p>
+    <SettingGroup>
     <SettingRow label="Test TTS" hint="Plays 'Home Hub is connected and working.' on Sonos at volume 10">
       <SettingButton variant="ghost" loading={saving === 'tts'} on:click={testTTS}>
         {saving === 'tts' ? 'Speaking…' : 'Test TTS'}
@@ -112,6 +113,7 @@
   .disclosure{color:var(--accent);font-size:21px;}
   .diagnostics[open] .disclosure{transform:rotate(180deg);}
   .diagnostics[open] summary{margin-bottom:10px;}
+  .diagnostic-note{margin:0 4px 10px;font-size:13px;line-height:1.5;color:var(--text-muted);}
 
   .status-pill {
     display: inline-flex;
