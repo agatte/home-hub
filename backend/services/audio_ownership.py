@@ -5,6 +5,7 @@ import asyncio
 import logging
 import uuid
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable
 
@@ -42,6 +43,15 @@ def _dimensions(values: Iterable[str]) -> frozenset[str]:
     return dims
 
 
+@dataclass(frozen=True)
+class ListeningAppendToken:
+    """Process-local fence for append-only listening, never transport custody."""
+
+    generation: int
+    manual_revision: int
+    authority_id: str
+
+
 class AudioOwnershipService:
     """Durable lease registry for autonomous Sonos writers.
 
@@ -56,6 +66,8 @@ class AudioOwnershipService:
         self._save_setting = setting_saver
         self._lock = asyncio.Lock()
         self._manual_intent_revision = 0
+        self._listening_append_generation = 0
+        self._listening_authority_id = uuid.uuid4().hex
         self._lifecycle_revision = 0
         self._lifecycle_away = False
         self._loaded = False
@@ -69,11 +81,16 @@ class AudioOwnershipService:
             dimension: 0 for dimension in AUDIO_DIMENSIONS
         }
 
-    def _touch_opportunistic_locked(self, dimensions: Iterable[str]) -> None:
+    def _touch_opportunistic_locked(
+        self, dimensions: Iterable[str], *, preserve_listening_append: bool = False,
+    ) -> None:
         # Synchronous on the owning event loop. Interruption ingress also calls
         # this before acquiring the lock so admitted writers can observe it.
+        dimensions = frozenset(dimensions)
         for dimension in dimensions:
             self._opportunistic_epochs[dimension] += 1
+        if not preserve_listening_append and dimensions & MANUAL_TRANSPORT_DIMENSIONS:
+            self._listening_append_generation += 1
 
     def record_manual_intent(self, dimensions: Iterable[str]) -> int:
         """Record explicit Q/T ingress before any learning/status/lock await."""
@@ -468,6 +485,57 @@ class AudioOwnershipService:
             for dimension, epoch in token.items()
         )
 
+    async def capture_listening_append(
+        self, start_epoch: dict[str, int], *, manual_revision: int,
+    ) -> ListeningAppendToken | None:
+        """Exchange a still-current explicit start for append-only authority.
+
+        Call only after exact advancing playback was verified. Never renew
+        an expired token, claim an existing queue, or reconstruct on restart.
+        """
+        async with self._lock:
+            await self._load_locked()
+            if (
+                frozenset(start_epoch) != MANUAL_TRANSPORT_DIMENSIONS
+                or not self.opportunistic_is_current(start_epoch)
+                or manual_revision != self._manual_intent_revision
+                or self._lifecycle_away
+                or any(MANUAL_TRANSPORT_DIMENSIONS.intersection(lease.get("dimensions") or ())
+                       for lease in self._leases.values())
+            ):
+                return None
+            return ListeningAppendToken(
+                self._listening_append_generation, manual_revision, self._listening_authority_id,
+            )
+
+    def listening_append_is_current(self, token: ListeningAppendToken) -> bool:
+        return (
+            isinstance(token, ListeningAppendToken)
+            and token.authority_id == self._listening_authority_id
+            and token.generation == self._listening_append_generation
+            and token.manual_revision == self._manual_intent_revision
+            and not self._lifecycle_away
+        )
+
+    async def run_listening_append(
+        self, token: ListeningAppendToken, operation: Callable[[], Awaitable[Any]],
+    ) -> tuple[bool, Any]:
+        """Serialize append-only work with existing manual/lifecycle writers.
+
+        No clearance, transport or restore authority is granted. The internal
+        listening executor must verify the exact live queue and PLAYING source
+        immediately before every append and stop on any uncertainty.
+        """
+        async with self._lock:
+            await self._load_locked()
+            if (
+                not self.listening_append_is_current(token)
+                or any(MANUAL_TRANSPORT_DIMENSIONS.intersection(lease.get("dimensions") or ())
+                       for lease in self._leases.values())
+            ):
+                return False, None
+            return True, await operation()
+
     async def run_if_opportunistic(
         self,
         token: dict[str, int],
@@ -619,6 +687,7 @@ class AudioOwnershipService:
         *,
         source: str,
         reason: str,
+        preserve_listening_append: bool = False,
     ) -> dict[str, Any]:
         invalidated: list[dict[str, Any]] = []
         for lease_id, lease in list(self._leases.items()):
@@ -639,7 +708,12 @@ class AudioOwnershipService:
                 del self._leases[lease_id]
 
         self._generation += 1
-        self._touch_opportunistic_locked(selected)
+        # Retire existing cleanup/transport authority on every poll boundary.
+        # Only the distinct append-only fence can survive that exact event,
+        # and only when no conflicting durable lease actually existed.
+        self._touch_opportunistic_locked(
+            selected, preserve_listening_append=preserve_listening_append and not invalidated,
+        )
         self._last_invalidation = {
             "generation": self._generation,
             "source": str(source or "manual")[:80],
@@ -671,6 +745,10 @@ class AudioOwnershipService:
             await self._load_locked()
             return await self._invalidate_manual_locked(
                 selected, source=source, reason=reason,
+                preserve_listening_append=(
+                    selected == MANUAL_TRANSPORT_DIMENSIONS
+                    and source == "sonos_poll" and reason == "off_dashboard_track_boundary"
+                ),
             )
 
     async def run_manual(

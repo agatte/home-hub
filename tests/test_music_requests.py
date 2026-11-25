@@ -314,3 +314,25 @@ async def test_trust_event_reverifies_exact_identity_without_broad_catalog_searc
     assert catalog.lookup_calls == [(candidate.provider, candidate.provider_id)]
     assert result["candidate"]["provider_id"] == candidate.provider_id
     assert result["trust"]["playback_eligible"] is True
+
+
+@pytest.mark.asyncio
+async def test_listening_mood_balances_familiar_and_discovery_without_changing_legacy():
+    candidates = [_favorite(f"Known {index}") for index in range(6)]
+    matches = {candidate.title: _match("familiar", 0.4) for candidate in candidates}
+    service, _, _, discovery = _service(candidates=candidates, matches=matches)
+    result = await service.preview(MusicRequest(request_text="relaxing", listening=True), count=6)
+    assert len(result.familiar_suggestions) == 3
+    assert discovery.calls[-1]["count"] == 3
+    assert result.resolved_request.familiarity_target == 0.5
+    assert result.resolved_request.novelty_target == 0.5
+    legacy = await service.preview(MusicRequest(request_text="relaxing"), count=6)
+    assert len(legacy.familiar_suggestions) == 5
+    assert discovery.calls[-1]["count"] == 1
+
+
+def test_listening_new_adjective_means_explicit_discovery():
+    result = MusicRequestResolver().resolve(MusicRequest(request_text="new", listening=True))
+    assert result.kind == "discovery"
+    assert result.semantic_request is None
+    assert result.policy == "explore"

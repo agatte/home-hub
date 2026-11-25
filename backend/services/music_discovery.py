@@ -58,6 +58,8 @@ class DiscoveryTrack:
     taste_classification: str
     taste_preference: float
     taste_sources: tuple[str, ...]
+    album_provider_id: Optional[str] = None
+    album_external_url: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -490,6 +492,8 @@ class MusicDiscoveryService:
                 artist_name=artist_name,
                 track_name=track_name,
                 album_name=raw_track.get("album_name"),
+                album_provider_id=raw_track.get("album_provider_id"),
+                album_external_url=raw_track.get("album_external_url"),
                 preview_url=raw_track.get("preview_url"),
                 artwork_url=raw_track.get("artwork_url"),
                 external_url=raw_track.get("external_url"),

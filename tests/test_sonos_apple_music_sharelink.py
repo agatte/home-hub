@@ -55,7 +55,7 @@ class FakeAVTransport:
         return True
 
     def GetMediaInfo(self, args, **kwargs):
-        return {"CurrentURI": self.current_uri}
+        return {"CurrentURI": self.current_uri, "CurrentURIMetaData": ""}
 
     def GetPositionInfo(self, args, **kwargs):
         current = self.device.position_seconds
@@ -69,7 +69,7 @@ class FakeAVTransport:
                 if self.target and self.device.queue_size
                 else ""
             ),
-            "RelTime": f"0:00:{seconds:02d}",
+            "RelTime": f"0:00:{seconds:02d}", "TrackMetaData": "",
         }
 
     def Play(self, args, **kwargs):
@@ -333,6 +333,7 @@ def test_final_checked_play_refuses_same_size_queue_item_replacement():
     )
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
@@ -348,6 +349,7 @@ def test_final_checked_play_refuses_queue_update_or_busy_transport():
     device.queue_update_id += 1
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
@@ -355,6 +357,7 @@ def test_final_checked_play_refuses_queue_update_or_busy_transport():
     device.transport_state = "PLAYING"
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
@@ -369,6 +372,7 @@ def test_final_checked_play_starts_only_unchanged_exact_queue_object():
 
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is True
     assert device.calls == [("play_from_queue", 100)]
 
@@ -384,12 +388,14 @@ def test_final_checked_play_refuses_external_volume_raise_or_mute():
     device.volume = 21
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
     device.volume = 19
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
@@ -397,6 +403,7 @@ def test_final_checked_play_refuses_external_volume_raise_or_mute():
     device.mute = True
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
@@ -411,6 +418,7 @@ def test_final_checked_play_passes_bounded_timeouts_to_mutating_upnp_calls():
 
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is True
     assert len(device.upnp_calls) == 3
     for _name, _args, kwargs in device.upnp_calls:
@@ -434,6 +442,7 @@ def test_final_checked_play_aborts_if_external_play_wins_during_setup():
     device.avTransport.Seek = competing_seek
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
 
@@ -455,8 +464,31 @@ def test_final_checked_play_aborts_if_external_source_wins_during_setup():
     device.avTransport.Seek = competing_seek
     assert sonos._play_queue_item_if_unchanged_sync(
         100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
     ) is False
     assert device.calls == []
+
+
+def test_final_checked_play_does_not_seek_if_source_changes_after_selection():
+    sonos = SonosService()
+    device = FakeDevice()
+    device.play_mode = "NORMAL"
+    device.queue_size = 101
+    sonos._device = device
+    snapshot = sonos._queue_item_snapshot_sync(100)
+    original_set = device.avTransport.SetAVTransportURI
+
+    def competing_set(args, **kwargs):
+        result = original_set(args, **kwargs)
+        device.avTransport.current_uri = "x-rincon-stream:OTHER"
+        return result
+
+    device.avTransport.SetAVTransportURI = competing_set
+    assert sonos._play_queue_item_if_unchanged_sync(
+        100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=("", "", "", ""),
+    ) is False
+    assert [call[0] for call in device.upnp_calls] == ["SetAVTransportURI"]
 
 @pytest.mark.asyncio
 async def test_sharelink_requires_position_advancement_before_success(monkeypatch):
@@ -535,7 +567,7 @@ async def test_sharelink_start_verification_yields_to_post_play_manual_takeover(
 
 
 async def _async_guard(volume):
-    return {"reason": None, "volume_used": volume}
+    return {"reason": None, "volume_used": volume, "_loaded_uri": ""}
 
 @pytest.mark.asyncio
 async def test_start_verification_enforces_outer_breaker_budget_on_blocking_sample(monkeypatch):
@@ -564,3 +596,19 @@ async def test_start_verification_enforces_outer_breaker_budget_on_blocking_samp
 
     assert result is False
     assert elapsed < 0.20
+
+
+def test_final_checked_play_refuses_new_stopped_source_before_set():
+    sonos = SonosService()
+    device = FakeDevice()
+    device.play_mode = "NORMAL"
+    device.queue_size = 101
+    sonos._device = device
+    snapshot = sonos._queue_item_snapshot_sync(100)
+    source = sonos._play_source_fingerprint_sync(1.0)
+    device.avTransport.current_uri = "x-rincon-stream:OTHER"
+    assert sonos._play_queue_item_if_unchanged_sync(
+        100, 101, snapshot, queue_uid="RINCON_TEST", max_volume=20,
+        expected_source=source,
+    ) is False
+    assert device.upnp_calls == []

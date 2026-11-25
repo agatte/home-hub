@@ -299,7 +299,8 @@ class TestMusicAPI:
         assert resp.json()["actuation_allowed"] is False
         assert "familiar" in resp.json()["supported_kinds"]
 
-    def test_music_request_preview_preserves_source_and_structured_contract(self, client):
+    @pytest.mark.parametrize("listening", [False, True, "true"])
+    def test_music_request_preview_preserves_source_and_structured_contract(self, client, listening):
         previous = app.state.music_requests
         calls = []
 
@@ -324,7 +325,7 @@ class TestMusicAPI:
                 headers={"X-HomeHub-Source": "test:command"},
                 json={
                     "request": "play new music", "mode": "gaming",
-                    "count": 4, "tracks_per_artist": 2,
+                    "count": 4, "tracks_per_artist": 2, "listening": listening,
                 },
             )
         finally:
@@ -337,6 +338,14 @@ class TestMusicAPI:
         assert count == 4
         assert tracks_per_artist == 2
         assert resp.json()["actuation_allowed"] is False
+        assert music_request.listening is (listening is True)
+        if listening is True:
+            assert resp.json()["listening"] == {
+                "status": "unavailable", "choices": [], "actuation_allowed": False,
+                "continuation_available": False, "session_playback_available": False,
+            }
+        else:
+            assert "listening" not in resp.json()
 
     def test_music_assisted_playback_status_is_explicit_only(self, client):
         previous = app.state.music_assisted_playback

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Optional
 
 from backend.services.music_curator import MusicIntent
@@ -36,6 +36,7 @@ class MusicRequest:
     mode: Optional[str] = None
     semantic_request: Optional[str] = None
     source: str = "dashboard:music_request"
+    listening: bool = False
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,9 @@ class MusicRequestResolver:
             raise ValueError(f"unsupported music request kind: {explicit_kind}")
 
         familiar = self._contains(normalized, _FAMILIAR_PHRASES)
-        discovery = self._contains(normalized, _DISCOVERY_PHRASES)
+        discovery = self._contains(normalized, _DISCOVERY_PHRASES) or (
+            request.listening and normalized in {"new", "discover"}
+        )
         if familiar and discovery:
             raise ValueError("music request cannot ask for both familiar and new music")
         if explicit_kind == "familiar" and discovery:
@@ -195,6 +198,8 @@ class MusicRequestResolver:
         if kind not in {"familiar", "discovery"} or not text:
             return None
 
+        if request.listening and kind == "discovery" and text in {"new", "discover"}:
+            return None
         residual = text
         phrases = _FAMILIAR_PHRASES if kind == "familiar" else _DISCOVERY_PHRASES
         for phrase in sorted(phrases, key=len, reverse=True):
@@ -255,6 +260,15 @@ class MusicRequestService:
         current_mode = self._current_mode()
         resolved = self._resolver.resolve(request, current_mode=current_mode)
         familiar_limit, discovery_limit = self._allocation(resolved.kind, count)
+        if request.listening and resolved.kind in {"mood", "recommendation"}:
+            # Balance the two evidence lanes for the listening-first surface only.
+            discovery_limit = count // 2 if count > 1 else 1
+            familiar_limit = count - discovery_limit
+            resolved = replace(
+                resolved, familiarity_target=0.5, novelty_target=0.5,
+                rationale="Balanced familiar and discovery choices; availability may vary.",
+                provenance=(*resolved.provenance, "listening:balanced"),
+            )
 
         familiar: tuple[FamiliarMusicSuggestion, ...] = ()
         familiar_note: Optional[str] = None

@@ -18,6 +18,6 @@ export default defineConfig({
     // Don't try to scan the e2e folder.
     // Browser-runtime mount tests run separately via vitest.hue-browser.config.js.
     // Keep existing suites on their established SSR resolution semantics.
-    exclude: ['tests/e2e/**', 'node_modules/**', 'build/**', '.svelte-kit/**', 'tests/unit/components/HueAppHold.test.js', 'tests/unit/quietAtlasSceneTools.test.js', 'tests/unit/quietAtlasCustomSceneEditor.test.js', 'tests/unit/quietAtlasSettingsDisclosure.test.js', 'tests/unit/guestOwnerReturn.test.js'],
+    exclude: ['tests/e2e/**', 'node_modules/**', 'build/**', '.svelte-kit/**', 'tests/unit/components/HueAppHold.test.js', 'tests/unit/quietAtlasSceneTools.test.js', 'tests/unit/quietAtlasCustomSceneEditor.test.js', 'tests/unit/quietAtlasSettingsDisclosure.test.js', 'tests/unit/guestOwnerReturn.test.js', 'tests/unit/listeningChoices.test.js'],
   },
 })

@@ -7,6 +7,7 @@ recommendations based on the user's taste profile.
 """
 import asyncio
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote_plus
@@ -140,6 +141,31 @@ class RecommendationService:
             if len(results) >= max(1, count):
                 break
         return results
+
+    async def similar_tracks_for_artist(self, artist: str) -> list[dict]:
+        """Read-only bounded adjacency for a user-selected session tail."""
+        if not self.enabled or not isinstance(artist, str) or not artist.strip():
+            return []
+        similar = await self._get_similar_artists(artist, persist_cache=False)
+        ranked = []
+        seen = {artist.strip().casefold()}
+        for row in similar:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            try:
+                score = float(row.get("match"))
+            except (TypeError, ValueError):
+                continue
+            if not name or name.casefold() in seen or not math.isfinite(score) or not 0.5 <= score <= 1:
+                continue
+            seen.add(name.casefold())
+            ranked.append((score, name))
+        result = []
+        for score, name in sorted(ranked, key=lambda item: -item[0])[:3]:
+            for track in (await self._search_itunes_tracks(name, limit=2))[:2]:
+                result.append({**track, "seed_artist": artist, "source_match": score})
+        return result
 
     async def discover_mood_candidates(
         self,
@@ -699,6 +725,8 @@ class RecommendationService:
                         "artist_name": result_artist,
                         "track_name": track_name,
                         "album_name": result.get("collectionName"),
+                        "album_provider_id": str(result.get("collectionId") or ""),
+                        "album_external_url": result.get("collectionViewUrl"),
                         "preview_url": result.get("previewUrl"),
                         "artwork_url": result.get("artworkUrl100"),
                         "external_url": result.get("trackViewUrl"),
