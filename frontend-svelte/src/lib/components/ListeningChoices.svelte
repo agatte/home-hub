@@ -73,6 +73,9 @@
       if (!alive) return
       if (receipt?.status === 'started') {
         playbackMessage = `Your ${label} started on Sonos.`
+        if (Number.isInteger(receipt.continuation_tracks) && receipt.continuation_tracks > 0) {
+          playbackMessage += ` ${receipt.continuation_tracks} similar tracks queued next.`
+        }
       } else if (receipt?.status === 'suppressed') {
         playbackMessage = `Your ${label} did not start. Find music again when Sonos is ready.`
       } else {
@@ -165,7 +168,7 @@
         {/each}
       </div>
       {#if playbackMessage}<p class="status" role="status">{playbackMessage}</p>{/if}
-      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Continuous listening is not connected yet.</p>
+      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Artist mixes may include up to three verified similar tracks queued next. Playlist continuation is not connected yet.</p>
     {/if}
   {/if}
 </section>

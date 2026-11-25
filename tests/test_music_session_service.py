@@ -227,3 +227,37 @@ async def test_familiar_only_ticket_dispatches_exact_favorite(monkeypatch):
     receipt = await start(service, issued["token"], "sonos_favorite:fav1")
     assert receipt.status == "started"
     assert writes == ["sonos_favorite:fav1"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_tail_is_revalidated_under_shared_admission(monkeypatch, revoked):
+    service, _, planner, _, writes = await fixture(monkeypatch)
+    tail = (song("21"),)
+
+    class Continuation:
+        async def preview(self, selected, *, mode):
+            assert selected.choice_id == "artist_mix:11,12"
+            return tail
+
+        async def revalidate(self, candidates, *, mode):
+            assert candidates == tail
+            assert planner.calls == 2
+            return not revoked
+
+    service._continuation_planner = Continuation()
+
+    async def executor(sonos, selected, *, mutation_runner, preflight, still_current, continuation):
+        assert continuation == tail
+
+        async def operation():
+            assert still_current()
+            writes.extend([item.provider_id for item in selected.candidates + continuation])
+            return True
+
+        proof = await mutation_runner(operation)
+        return MixStartResult("started", "mock_verified", 3, 1) if proof else MixStartResult("suppressed", "mock_refused")
+
+    monkeypatch.setattr("backend.services.music_session_service.start_selected_mix", executor)
+    receipt = await start(service, ticket(service))
+    assert receipt.status == ("suppressed" if revoked else "started")
+    assert writes == ([] if revoked else ["11", "12", "21"])

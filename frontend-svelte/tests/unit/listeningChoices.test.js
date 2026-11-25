@@ -32,7 +32,7 @@ it('requests a balanced mood preview only on deliberate selection and shows real
   expect(link).toHaveAttribute('href', album.apple_music_url)
   expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   expect(screen.getByText('Example Album')).toBeInTheDocument()
-  expect(screen.getByText(/Continuous listening is not connected yet/)).toBeInTheDocument()
+  expect(screen.getByText(/Playlist continuation is not connected yet/)).toBeInTheDocument()
 })
 
 it('submits a free-text mood and never offers an unverified external link or play command', async () => {
@@ -83,13 +83,13 @@ it('starts only the selected ticket once and reports confirmed playback', async 
   post.mockResolvedValueOnce({
     ...response([mix]),
     listening_selection: { status: 'selection_available', token: 'test-ticket', choice_ids: [mix.id], actuation_allowed: false },
-  }).mockResolvedValueOnce({ status: 'started' })
+  }).mockResolvedValueOnce({ status: 'started', continuation_tracks: 2 })
   render(ListeningChoices)
   await fireEvent.click(screen.getByRole('button', { name: 'Relaxing' }))
   const play = await screen.findByRole('button', { name: 'Play on Sonos' })
   await fireEvent.click(play)
   expect(post).toHaveBeenNthCalledWith(2, '/api/music/listening/start', { token: 'test-ticket', choice_id: mix.id }, { timeout: 120000 })
-  await screen.findByText('Your mix started on Sonos.')
+  await screen.findByText('Your mix started on Sonos. 2 similar tracks queued next.')
   expect(screen.queryByRole('button', { name: 'Play on Sonos' })).not.toBeInTheDocument()
 })
 

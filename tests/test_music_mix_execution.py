@@ -94,10 +94,10 @@ class FakeSonos:
         return self.active
 
 
-async def start(fake, selected=None):
+async def start(fake, selected=None, continuation=()):
     return await start_selected_mix(
         fake, selected or plan(), mutation_runner=fake.run,
-        preflight=fake.preflight, still_current=fake.current,
+        preflight=fake.preflight, still_current=fake.current, continuation=continuation,
     )
 
 
@@ -203,3 +203,20 @@ async def test_queue_replacement_in_worker_refuses_second_append():
     result = await start(fake)
     assert result.status == "indeterminate"
     assert fake.writes == [("append", "11")]
+
+@pytest.mark.asyncio
+async def test_similar_tail_preserves_exact_selected_prefix_and_one_play():
+    fake = FakeSonos()
+    result = await start(fake, continuation=(song("21"), song("22")))
+    assert result.status == "started"
+    assert result.continuation_tracks == 2
+    assert fake.queue == ["11", "12", "21", "22"]
+    assert fake.writes == [("append", i) for i in fake.queue] + [("play", 0)]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_or_unbounded_tail_never_writes():
+    fake = FakeSonos()
+    for tail in ((song("11"),), tuple(song(str(i)) for i in range(21, 25))):
+        assert (await start(fake, continuation=tail)).status == "suppressed"
+    assert fake.writes == []

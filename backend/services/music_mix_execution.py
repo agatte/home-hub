@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
 
+from backend.services.music_continuation import MAX_CONTINUATION_TRACKS
 from backend.services.music_selected_plan import MAX_SELECTED_TRACKS, SelectedListeningPlan
 
 
@@ -15,6 +16,7 @@ class MixStartResult:
     status: str
     reason: str
     confirmed_appends: int = 0
+    continuation_tracks: int = 0
 
 
 def _item_matches(snapshot: tuple | None, identity: str, size: int) -> bool:
@@ -45,27 +47,30 @@ def _item_matches(snapshot: tuple | None, identity: str, size: int) -> bool:
 
 async def start_selected_mix(
     sonos: Any, plan: SelectedListeningPlan, *,
-    mutation_runner, preflight, still_current,
+    mutation_runner, preflight, still_current, continuation=(),
 ) -> MixStartResult:
     """Append a bounded exact mix to a proven empty queue and start item zero.
 
     Internal only. The caller MUST revalidate the plan and supply a shared Q/T
     ownership runner, fresh runtime admission (including volume and lifecycle),
     and synchronous intent/epoch guard. No title fallback, queue clearing,
-    replay, volume writes or automatic continuation. Any possibly accepted
+    replay, volume writes or post-start automatic commands. An optional
+    separately verified continuation tail is queued after the exact selection. Any possibly accepted
     append is retained on failure; never guess that the queue is unchanged.
     """
-    members = plan.candidates
+    selected = plan.candidates
+    members = selected + tuple(continuation)
     if (
         plan.status != "verified_preview" or plan.kind != "artist_mix"
         or plan.actuation_allowed is not False
-        or not 2 <= len(members) <= MAX_SELECTED_TRACKS
+        or not 2 <= len(selected) <= MAX_SELECTED_TRACKS
+        or len(continuation) > MAX_CONTINUATION_TRACKS
     ):
         return MixStartResult("suppressed", "invalid_mix")
     ids = [item.provider_id for item in members]
     if (
         len(set(ids)) != len(ids)
-        or plan.choice_id != "artist_mix:" + ",".join(ids)
+        or plan.choice_id != "artist_mix:" + ",".join(ids[:len(selected)])
     ):
         return MixStartResult("suppressed", "invalid_mix_identity")
     try:
@@ -197,7 +202,7 @@ async def start_selected_mix(
             return MixStartResult("indeterminate", "authority_changed_at_verification", appended)
         if not verified:
             return MixStartResult("indeterminate", "playback_start_unverified", appended)
-        return MixStartResult("started", "advancing_playback_verified", appended)
+        return MixStartResult("started", "advancing_playback_verified", appended, len(continuation))
     except Exception:
         return MixStartResult(
             "indeterminate" if mutation_attempted else "suppressed", failure, appended,

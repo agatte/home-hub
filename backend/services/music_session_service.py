@@ -41,9 +41,10 @@ def _refused(reason: str) -> MixStartResult:
 class ListeningSessionService:
     """Explicit selected-session start, with no continuing playback lease."""
 
-    def __init__(self, state: Any, planner: SelectedListeningPlanner, *, clock=time.monotonic):
+    def __init__(self, state: Any, planner: SelectedListeningPlanner, *, continuation_planner=None, clock=time.monotonic):
         self._state = state
         self._planner = planner
+        self._continuation_planner = continuation_planner
         self._clock = clock
         self._tickets: dict[str, _Ticket] = {}
 
@@ -169,6 +170,14 @@ class ListeningSessionService:
         except Exception:
             return _refused("selection_revalidation_failed")
 
+        tail = ()
+        if selected.kind == "artist_mix" and self._continuation_planner is not None:
+            tail = await self._continuation_planner.preview(
+                selected, mode=ticket.request.resolved_request.mode,
+            )
+            if not current():
+                return _refused("authority_changed")
+
         async def mutation_runner(operation):
             async def admitted():
                 # Refresh provider and current veto evidence again while the
@@ -177,6 +186,12 @@ class ListeningSessionService:
                     return None
                 fresh = await self._planner.preview(ticket.request, choice_id, limit=ticket.limit)
                 if fresh != selected or not current():
+                    return None
+                if tail and not await self._continuation_planner.revalidate(
+                    tail, mode=ticket.request.resolved_request.mode,
+                ):
+                    return None
+                if not current():
                     return None
                 return await operation()
 
@@ -187,9 +202,10 @@ class ListeningSessionService:
         # accepted I/O. If an unexpected error escapes, report uncertainty.
         try:
             executor = start_selected_favorite if selected.kind == "favorite" else start_selected_mix
+            extra = {"continuation": tail} if tail else {}
             return await executor(
                 sonos, selected, mutation_runner=mutation_runner,
-                preflight=preflight, still_current=current,
+                preflight=preflight, still_current=current, **extra,
             )
         except Exception:
             return MixStartResult("indeterminate", "execution_outcome_unknown")
