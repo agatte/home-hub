@@ -44,20 +44,28 @@
 
   /** @type {string} */
   let activeId = 'overview'
+  let indexView = true
+  let indexHref = '/quiet-atlas/settings'
 
   // The URL owns the selected section, including Back/Forward to a missing
   // or invalid ?section=. Never leave a stale section visible for another URL.
   $: {
     const fromUrl = $page.url.searchParams.get('section')
-    activeId = fromUrl && SECTIONS.some((s) => s.id === fromUrl) ? fromUrl : 'overview'
+    const valid = fromUrl !== null && SECTIONS.some((s) => s.id === fromUrl)
+    activeId = valid && fromUrl !== null ? fromUrl : 'overview'
+    indexView = !valid
+    const parent = new URL($page.url)
+    parent.searchParams.delete('section')
+    indexHref = parent.pathname + parent.search
   }
 
   /** @param {string} id */
   function select(id) {
-    activeId = id
-    const url = new URL(window.location.href)
+    if (!SECTIONS.some(section => section.id === id)) return
+    if (!indexView && activeId === id) return
+    const url = new URL($page.url)
     url.searchParams.set('section', id)
-    goto(`${url.pathname}${url.search}`, { replaceState: false, keepFocus: true, noScroll: true })
+    goto(`${url.pathname}${url.search}`, { replaceState: false })
   }
 
   // SvelteKit passes these implicit props — declare to silence Svelte warnings.
@@ -78,7 +86,7 @@
     <h1>Settings</h1>
     <p>Make HomeHub work the way you want.</p>
   </header>
-  <SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>
+  <SettingsLayout sections={SECTIONS} {activeId} {indexView} {indexHref} onSelect={select}>
   {#if activeId === 'overview'}
     <OverviewSection />
   {:else if activeId === 'host'}
