@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
@@ -263,3 +264,54 @@ async def test_refill_never_restarts_or_retries(cause):
     assert sonos.writes == expected
     await service.tick()
     assert sonos.writes == expected
+
+@pytest.mark.asyncio
+async def test_manual_stop_finishes_during_read_only_provider_revalidation():
+    service, auth, sonos, planner, now = await installed()
+    now[0] = 4
+    sonos.position += 4
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held_lookup(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return True
+
+    planner.revalidate = held_lookup
+    tick = asyncio.create_task(service.tick())
+
+    async def manual_stop():
+        return True
+
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        result = await asyncio.wait_for(auth.run_manual(
+            MANUAL_TRANSPORT_DIMENSIONS, source="test", reason="stop",
+            operation=manual_stop,
+        ), timeout=1)
+        assert result is True
+        assert not sonos.writes
+    finally:
+        release.set()
+        await tick
+    assert service._active is None
+    assert not sonos.writes
+
+
+@pytest.mark.asyncio
+async def test_stale_provider_validation_waiting_for_lock_abstains():
+    service, auth, sonos, planner, now = await installed()
+    now[0] = 4
+    sonos.position += 4
+    original = auth.run_listening_append
+
+    async def delayed(token, operation):
+        now[0] += 4
+        sonos.position += 4
+        return await original(token, operation)
+
+    auth.run_listening_append = delayed
+    await service.tick()
+    assert not sonos.writes
+    assert service._active is None

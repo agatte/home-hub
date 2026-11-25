@@ -20,6 +20,7 @@ from backend.services.music_selected_plan import _exact_song
 MAX_SESSION_SECONDS = 4 * 3600
 MAX_SESSION_TRACKS = 96
 MAX_SAMPLE_GAP = 12.0
+MAX_VALIDATION_AGE = 3.0
 NEAR_END_SECONDS = 6.0
 POSITION_TOLERANCE = 2.0
 REFILL_AT_REMAINING = 2
@@ -259,8 +260,19 @@ class SustainedListening:
             ids.add(item.provider_id)
             names.add((artist.casefold(), item.title.casefold()))
 
+        # Catalog/provider reads must not occupy the shared audio writer lock.
+        # A manual command can finish while this read-only refresh is pending.
+        if not self._current(session) or not await self._planner.revalidate(tail, mode=session.mode):
+            return False
+        validated_at = self._clock()
+        if not self._current(session):
+            return False
+
         async def admitted():
-            if not self._current(session) or not await self._planner.revalidate(tail, mode=session.mode):
+            if (
+                not self._current(session)
+                or not 0 <= self._clock() - validated_at <= MAX_VALIDATION_AGE
+            ):
                 return False
             current = await self._sample(session)
             if not _same_track(session.cursor, current) or not should_refill(
