@@ -76,6 +76,9 @@
         if (Number.isInteger(receipt.continuation_tracks) && receipt.continuation_tracks > 0) {
           playbackMessage += ` ${receipt.continuation_tracks} similar tracks queued next.`
         }
+        if (receipt.sustained_listening === true) {
+          playbackMessage += ' Continuous listening was enabled for this session.'
+        }
       } else if (receipt?.status === 'suppressed') {
         playbackMessage = `Your ${label} did not start. Find music again when Sonos is ready.`
       } else {
@@ -168,7 +171,7 @@
         {/each}
       </div>
       {#if playbackMessage}<p class="status" role="status">{playbackMessage}</p>{/if}
-      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Mixes and supported playlists may include up to three verified similar tracks queued next.</p>
+      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Mixes and supported playlists may include up to three verified similar tracks queued next. HomeHub can replenish a verified playing queue; it never restarts stopped music.</p>
     {/if}
   {/if}
 </section>

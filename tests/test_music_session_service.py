@@ -8,6 +8,7 @@ from backend.services.audio_ownership import AudioOwnershipService, QUEUE_SOURCE
 from backend.services.music_mix_execution import MixStartResult
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.music_session_service import ListeningSessionService, MAX_TICKETS
+from backend.services.music_sustained_listening import SustainedListening
 from tests.test_music_selected_plan import favorite, request, song
 
 
@@ -261,3 +262,46 @@ async def test_tail_is_revalidated_under_shared_admission(monkeypatch, revoked):
     receipt = await start(service, ticket(service))
     assert receipt.status == ("suppressed" if revoked else "started")
     assert writes == ([] if revoked else ["11", "12", "21"])
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["confirmed", "unknown", "no_proof", "revoked"])
+async def test_sustained_session_requires_confirmed_start_and_original_authority(monkeypatch, outcome):
+    service, state, _, now, writes = await fixture(monkeypatch)
+    state.bootstrap_ready = True
+    allowed = [True]
+
+    class Continuation:
+        async def preview(self, selected, *, mode):
+            return ()
+
+    service._continuation_planner = Continuation()
+    service._sustained = SustainedListening(service._continuation_planner, clock=lambda: now[0])
+    device = object()
+    state.sonos = SimpleNamespace(device=device)
+    rows = tuple(
+        f'<item><title>Track {i}</title><artist>Artist</artist><res>x-sonos-http:song%3a{i}?sid=204</res></item>'
+        for i in ("11", "12")
+    )
+
+    async def executor(sonos, selected, *, mutation_runner, preflight, still_current, on_started):
+        async def operation():
+            writes.append(selected.choice_id)
+            return True
+        assert await mutation_runner(operation)
+        if outcome != "no_proof":
+            on_started(("revision", 2, "<DIDL-Lite>" + rows[0] + "</DIDL-Lite>"),
+                       "speaker", 15, device, rows)
+        if outcome == "revoked":
+            allowed[0] = False
+        return MixStartResult("indeterminate" if outcome == "unknown" else "started", "mock", 2)
+
+    monkeypatch.setattr("backend.services.music_session_service.start_selected_mix", executor)
+    receipt = await service.start(ticket(service), "artist_mix:11,12",
+                                  owner_scope="owner", authorized=lambda: allowed[0])
+    assert receipt.sustained_listening is (outcome == "confirmed")
+    assert (service._sustained._active is not None) is (outcome == "confirmed")
+    if outcome == "confirmed":
+        now[0] = 121
+        assert service._sustained._current(service._sustained._active)
+        allowed[0] = False
+        assert not service._sustained._current(service._sustained._active)

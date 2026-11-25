@@ -1317,6 +1317,7 @@ async def lifespan(app: FastAPI):
 
     if sonos.connected:
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
+        tasks.append(asyncio.create_task(app.state.music_listening_session.run_loop()))
 
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))

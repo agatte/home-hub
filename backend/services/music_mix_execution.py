@@ -17,6 +17,7 @@ class MixStartResult:
     reason: str
     confirmed_appends: int = 0
     continuation_tracks: int = 0
+    sustained_listening: bool = False
 
 
 def _item_matches(snapshot: tuple | None, identity: str, size: int) -> bool:
@@ -47,7 +48,7 @@ def _item_matches(snapshot: tuple | None, identity: str, size: int) -> bool:
 
 async def start_selected_mix(
     sonos: Any, plan: SelectedListeningPlan, *,
-    mutation_runner, preflight, still_current, continuation=(),
+    mutation_runner, preflight, still_current, continuation=(), on_started=None,
 ) -> MixStartResult:
     """Append a bounded exact mix to a proven empty queue and start item zero.
 
@@ -186,7 +187,7 @@ async def start_selected_mix(
             0, len(members), previous[0], queue_uid=uid, max_volume=volume,
         ):
             return None
-        return previous[0], uid, volume, device
+        return previous[0], uid, volume, device, previous
 
     try:
         proof = await mutation_runner(setup)
@@ -194,7 +195,7 @@ async def start_selected_mix(
             return MixStartResult(
                 "indeterminate" if mutation_attempted else "suppressed", failure, appended,
             )
-        snapshot, uid, volume, device = proof
+        snapshot, uid, volume, device, rows = proof
         verified = await sonos._verify_queue_playback_started(
             0, len(members), snapshot, queue_uid=uid, max_volume=volume,
         )
@@ -202,6 +203,12 @@ async def start_selected_mix(
             return MixStartResult("indeterminate", "authority_changed_at_verification", appended)
         if not verified:
             return MixStartResult("indeterminate", "playback_start_unverified", appended)
+        if on_started is not None:
+            try:
+                prefix = tuple(ET.tostring(ET.fromstring(row[2])[0], encoding="unicode") for row in rows)
+                on_started(snapshot, uid, volume, device, prefix)
+            except Exception:
+                pass  # Optional renewal must not change a confirmed start receipt.
         return MixStartResult("started", "advancing_playback_verified", appended, len(continuation))
     except Exception:
         return MixStartResult(

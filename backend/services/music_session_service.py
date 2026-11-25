@@ -9,7 +9,7 @@ from __future__ import annotations
 import secrets
 import time
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from backend.services.audio_ownership import INTERRUPTION, QUEUE_SOURCE, TRANSPORT
@@ -19,6 +19,7 @@ from backend.services.music_manual_policy import manual_volume_policy
 from backend.services.music_mix_execution import MixStartResult, start_selected_mix
 from backend.services.music_requests import MusicRequestResolver, MusicRequestResult
 from backend.services.music_selected_plan import SelectedListeningPlanner
+from backend.services.music_sustained_listening import SustainedListening, started_queue_proof
 
 TICKET_TTL = 120
 MAX_TICKETS = 32
@@ -45,8 +46,13 @@ class ListeningSessionService:
         self._state = state
         self._planner = planner
         self._continuation_planner = continuation_planner
+        self._sustained = SustainedListening(continuation_planner, clock=clock) if continuation_planner is not None else None
         self._clock = clock
         self._tickets: dict[str, _Ticket] = {}
+
+    async def run_loop(self):
+        if self._sustained is not None:
+            await self._sustained.run_loop()
 
     def issue(self, request: MusicRequestResult, *, owner_scope: str, limit: int = 6) -> dict:
         if not isinstance(owner_scope, str) or not owner_scope or len(owner_scope) > 128:
@@ -128,24 +134,29 @@ class ListeningSessionService:
 
         volume = None
 
-        def current():
+        def session_allowed():
             try:
                 policy = manual_volume_policy(automation)
                 return (
-                    self._clock() < ticket.expires
-                    and authorized()
+                    authorized()
                     and state.audio_ownership is authority and state.music_mapper is mapper
                     and state.music_assisted_playback is assisted and state.sonos is sonos
                     and state.automation is automation and mode() == initial_mode
                     and mapper._manual_music_block_revision == block_revision
                     and authority.capture_manual_intent() == manual_revision
-                    and authority.opportunistic_is_current(epoch)
                     and assisted._policy_reason() is None
                     and policy["reason"] is None
                     and (volume is None or 0 < volume <= policy["volume_ceiling"])
                 )
             except Exception:
                 return False
+
+        def current():
+            return (
+                self._clock() < ticket.expires
+                and authority.opportunistic_is_current(epoch)
+                and session_allowed()
+            )
 
         async def preflight(**kwargs):
             if not current():
@@ -198,6 +209,13 @@ class ListeningSessionService:
             executed, proof = await authority.run_if_opportunistic(epoch, admitted)
             return proof if executed else None
 
+        started = []
+
+        def on_started(snapshot, uid, volume, device, rows):
+            proof = started_queue_proof(snapshot, uid, volume, rows)
+            if proof is not None:
+                started.append((proof, device, rows))
+
         # Never retry the executor. It distinguishes suppressed from possibly
         # accepted I/O. If an unexpected error escapes, report uncertainty.
         try:
@@ -206,9 +224,28 @@ class ListeningSessionService:
             if selected.kind == "favorite" and self._continuation_planner is not None:
                 extra = {"continuation_planner": self._continuation_planner,
                          "mode": ticket.request.resolved_request.mode}
-            return await executor(
+            if self._sustained is not None:
+                extra["on_started"] = on_started
+            result = await executor(
                 sonos, selected, mutation_runner=mutation_runner,
                 preflight=preflight, still_current=current, **extra,
             )
+            if result.status == "started" and started and current():
+                try:
+                    append_token = await authority.capture_listening_append(
+                        epoch, manual_revision=manual_revision,
+                    )
+                    if append_token is not None and current() and state.bootstrap_ready is True:
+                        proof, device, rows = started[0]
+                        installed = self._sustained.install(
+                            authority=authority, token=append_token, sonos=sonos, device=device,
+                            proof=proof, rows=rows, mode=ticket.request.resolved_request.mode,
+                            allowed=lambda: state.bootstrap_ready is True and session_allowed(),
+                        )
+                        if installed:
+                            result = replace(result, sustained_listening=True)
+                except Exception:
+                    pass  # Confirmed start stays truthful if renewal is unavailable.
+            return result
         except Exception:
             return MixStartResult("indeterminate", "execution_outcome_unknown")

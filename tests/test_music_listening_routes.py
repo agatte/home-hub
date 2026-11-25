@@ -64,7 +64,7 @@ def test_preview_and_start_require_direct_owner_context(monkeypatch):
     response = client.post("/api/music/listening/start", json=payload, headers=headers)
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.json() == {"status": "suppressed", "reason": "mock_no_device", "confirmed_appends": 0, "continuation_tracks": 0}
+    assert response.json() == {"status": "suppressed", "reason": "mock_no_device", "confirmed_appends": 0, "continuation_tracks": 0, "sustained_listening": False}
     assert service.calls[-1] == ("start", "synthetic-ticket", "artist_mix:11,12", scope)
     assert client.post("/api/music/listening/start", json={**payload, "owner_scope": "forged"},
                        headers=headers).status_code == 422

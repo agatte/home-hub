@@ -166,7 +166,7 @@ def _prepared_queue(evidence, snapshot, *, uid, volume):
 
 async def start_selected_favorite(
     sonos: Any, plan: SelectedListeningPlan, *, mutation_runner, preflight, still_current,
-    continuation_planner=None, mode: str = "general",
+    continuation_planner=None, mode: str = "general", on_started=None,
 ) -> MixStartResult:
     if (
         plan.status != "verified_preview" or plan.kind != "favorite"
@@ -234,6 +234,7 @@ async def start_selected_favorite(
                 or current["queue_update_id"] == evidence.get("queue_update_id")):
             return None
         appended = 1  # One confirmed container append, not a track count.
+        prefix = None
         if continuation_planner is not None and size <= MAX_CONTAINER_TRACKS:
             reason = "container_prefix_unverified"
             prefix = await sonos._safe_call(
@@ -318,13 +319,13 @@ async def start_selected_favorite(
             0, snapshot[1], snapshot, queue_uid=uid, max_volume=volume,
         ):
             return None
-        return snapshot, uid, volume, device
+        return snapshot, uid, volume, device, prefix
 
     try:
         proof = await mutation_runner(setup)
         if proof is None:
             return MixStartResult("indeterminate" if attempted else "suppressed", reason, appended)
-        snapshot, uid, volume, device = proof
+        snapshot, uid, volume, device, prefix = proof
         verified = await sonos._verify_queue_playback_started(
             0, snapshot[1], snapshot, queue_uid=uid, max_volume=volume,
         )
@@ -332,6 +333,11 @@ async def start_selected_favorite(
             return MixStartResult("indeterminate", "authority_changed_at_verification", appended)
         if not verified:
             return MixStartResult("indeterminate", "playback_start_unverified", appended)
+        if on_started is not None and prefix:
+            try:
+                on_started(snapshot, uid, volume, device, prefix)
+            except Exception:
+                pass
         return MixStartResult("started", "advancing_playback_verified", appended, continuation_count)
     except Exception:
         return MixStartResult("indeterminate" if attempted else "suppressed", reason, appended)

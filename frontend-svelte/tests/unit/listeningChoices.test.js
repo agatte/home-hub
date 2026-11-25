@@ -83,13 +83,13 @@ it('starts only the selected ticket once and reports confirmed playback', async 
   post.mockResolvedValueOnce({
     ...response([mix]),
     listening_selection: { status: 'selection_available', token: 'test-ticket', choice_ids: [mix.id], actuation_allowed: false },
-  }).mockResolvedValueOnce({ status: 'started', continuation_tracks: 2 })
+  }).mockResolvedValueOnce({ status: 'started', continuation_tracks: 2, sustained_listening: true })
   render(ListeningChoices)
   await fireEvent.click(screen.getByRole('button', { name: 'Relaxing' }))
   const play = await screen.findByRole('button', { name: 'Play on Sonos' })
   await fireEvent.click(play)
   expect(post).toHaveBeenNthCalledWith(2, '/api/music/listening/start', { token: 'test-ticket', choice_id: mix.id }, { timeout: 120000 })
-  await screen.findByText('Your mix started on Sonos. 2 similar tracks queued next.')
+  await screen.findByText('Your mix started on Sonos. 2 similar tracks queued next. Continuous listening was enabled for this session.')
   expect(screen.queryByRole('button', { name: 'Play on Sonos' })).not.toBeInTheDocument()
 })
 
