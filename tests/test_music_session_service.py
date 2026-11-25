@@ -353,3 +353,170 @@ async def test_stale_start_validation_waiting_for_writer_lock_abstains(monkeypat
     receipt = await start(service, ticket(service))
     assert receipt.status == "suppressed"
     assert not writes
+
+
+class StoppedSource:
+    """Sanitized shape of the physically verified stopped HTTP music source."""
+
+    def __init__(self, state, writes):
+        self.state = state
+        self.writes = writes
+        self.device = object()
+        uri = "http://example.invalid/music.mp3"
+        self.evidence = {
+            "queue_uid": "speaker", "queue_update_id": "revision", "queue_size": 0,
+            "coordinator": True, "play_mode": "NORMAL", "mute": False, "volume": 15,
+            "transport_state": "STOPPED", "current_uri": uri, "queue_track_uri": uri,
+            "metadata": (
+                '<DIDL-Lite><item><class>object.item.audioItem.musicTrack</class>'
+                f'<res protocolInfo="http-get:*:audio/mpeg:*">{uri}</res></item></DIDL-Lite>'
+            ),
+        }
+        self.outcome = "ready"
+        self.hook = None
+        self.unloaded = False
+
+    async def get_prepare_evidence(self):
+        return dict(self.evidence)
+
+    async def prepare_if_unchanged(self, expected, current):
+        if self.hook:
+            self.hook()
+        if expected != self.evidence or not current() or self.outcome == "refused":
+            return {"status": "refused", "reason": "source_or_authority_changed"}
+        self.writes.append("unload")
+        if self.outcome == "unknown":
+            return {"status": "not_ready", "reason": "unload_not_verified"}
+        self.unloaded = True
+        return {"status": "ready", "reason": "unloaded_verified_play_requires_separate_action"}
+
+
+async def stopped_fixture(monkeypatch):
+    service, state, planner, now, writes = await fixture(monkeypatch)
+    source = StoppedSource(state, writes)
+    state.sonos = source
+
+    async def preflight(**kwargs):
+        if source.unloaded:
+            return {"reason": None, "volume_used": source.evidence["volume"]}
+        return {"reason": "sonos_busy"}
+
+    state.music_assisted_playback._runtime_preflight = preflight
+
+    async def executor(sonos, selected, *, mutation_runner, preflight, still_current):
+        async def operation():
+            evidence = await preflight(expected_queue_size=0)
+            if not sonos.unloaded or evidence["reason"] is not None or not still_current():
+                return None
+            writes.append(selected.choice_id)
+            return True
+        proof = await mutation_runner(operation)
+        return MixStartResult("started", "verified", 2) if proof else MixStartResult("suppressed", "mock_refused")
+
+    monkeypatch.setattr("backend.services.music_session_service.start_selected_mix", executor)
+    monkeypatch.setattr("backend.services.music_session_service.start_selected_favorite", executor)
+    return service, state, planner, source, writes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["artist_mix", "favorite"])
+async def test_explicit_selection_prepares_verified_stopped_source_once(monkeypatch, kind):
+    service, _, planner, _, writes = await stopped_fixture(monkeypatch)
+    choice = "artist_mix:11,12"
+    token = ticket(service)
+    if kind == "favorite":
+        async def preview(request, choice_id, *, limit):
+            return SelectedListeningPlan(choice_id, "favorite", "execution_not_connected", (favorite(),))
+        monkeypatch.setattr(planner, "preview", preview)
+        choice = "sonos_favorite:fav1"
+        token = service.issue(replace(request(), discovery=None), owner_scope="owner")["token"]
+    assert (await start(service, token, choice)).status == "started"
+    assert writes == ["unload", choice]
+    assert (await start(service, token, choice)).status == "suppressed"
+    assert writes == ["unload", choice]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    {"transport_state": "PAUSED_PLAYBACK"}, {"transport_state": "PLAYING"},
+    {"queue_size": 1}, {"volume": 0}, {"volume": 19}, {"mute": True},
+    {"metadata": ""}, {"queue_track_uri": "http://example.invalid/other.mp3"},
+    {"play_mode": "SHUFFLE"}, {"coordinator": False}, {"queue_update_id": ""},
+])
+async def test_stopped_source_ineligible_never_unloads(monkeypatch, change):
+    service, _, _, source, writes = await stopped_fixture(monkeypatch)
+    source.evidence.update(change)
+    assert (await start(service, ticket(service))).status == "suppressed"
+    assert writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["source", "manual", "device", "revoked"])
+async def test_stopped_source_revalidates_before_unload(monkeypatch, change):
+    service, state, planner, source, writes = await stopped_fixture(monkeypatch)
+
+    def hook(call):
+        if call == 2:
+            if change == "source":
+                source.evidence["queue_update_id"] = "new"
+            elif change == "manual":
+                state.audio_ownership.record_manual_intent((QUEUE_SOURCE,))
+            elif change == "device":
+                source.device = object()
+
+    planner.hook = hook
+    planner.change = change == "revoked"
+    assert (await start(service, ticket(service))).status == "suppressed"
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_preparation_never_appends_or_retries(monkeypatch):
+    service, _, _, source, writes = await stopped_fixture(monkeypatch)
+    source.outcome = "unknown"
+    token = ticket(service)
+    receipt = await start(service, token)
+    assert receipt.status == "indeterminate"
+    assert receipt.reason == "source_preparation_unverified"
+    assert (await start(service, token)).status == "suppressed"
+    assert writes == ["unload"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["manual", "volume", "device"])
+async def test_change_after_verified_unload_prevents_start(monkeypatch, change):
+    service, state, _, source, writes = await stopped_fixture(monkeypatch)
+    original = source.prepare_if_unchanged
+
+    async def changed(expected, current):
+        receipt = await original(expected, current)
+        if change == "manual":
+            state.audio_ownership.record_manual_intent((QUEUE_SOURCE,))
+        elif change == "volume":
+            source.evidence["volume"] = 12
+        else:
+            source.device = object()
+        return receipt
+
+    source.prepare_if_unchanged = changed
+    receipt = await start(service, ticket(service))
+    assert receipt.status == "indeterminate"
+    assert writes == ["unload"]
+
+
+@pytest.mark.asyncio
+async def test_verified_unload_is_not_repeated_at_second_writer_admission(monkeypatch):
+    service, _, _, _, writes = await stopped_fixture(monkeypatch)
+
+    async def executor(sonos, selected, *, mutation_runner, preflight, still_current):
+        async def operation():
+            assert sonos.unloaded
+            writes.append("phase")
+            return True
+        assert await mutation_runner(operation)
+        assert await mutation_runner(operation)
+        return MixStartResult("started", "verified", 2)
+
+    monkeypatch.setattr("backend.services.music_session_service.start_selected_mix", executor)
+    assert (await start(service, ticket(service))).status == "started"
+    assert writes == ["unload", "phase", "phase"]

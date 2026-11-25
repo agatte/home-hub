@@ -21,6 +21,7 @@ from backend.services.music_repeat_selection import probe_repeat_queue, start_re
 from backend.services.music_requests import MusicRequestResolver, MusicRequestResult
 from backend.services.music_selected_plan import SelectedListeningPlanner
 from backend.services.music_sustained_listening import SustainedListening, started_queue_proof
+from backend.services.sonos_service import SonosService
 
 TICKET_TTL = 120
 MAX_START_VALIDATION_AGE = 3.0
@@ -137,6 +138,9 @@ class ListeningSessionService:
         volume = None
         repeat_origin = None
         repeat_evidence = None
+        stopped_evidence = None
+        stopped_device = None
+        preparation = None
 
         def session_allowed():
             try:
@@ -160,6 +164,7 @@ class ListeningSessionService:
                 self._clock() < ticket.expires
                 and authority.opportunistic_is_current(epoch)
                 and session_allowed()
+                and (stopped_device is None or sonos.device is stopped_device)
                 and (repeat_origin is None or (
                     getattr(state, "bootstrap_ready", False) is True
                     and self._clock() < repeat_origin.expires
@@ -172,6 +177,9 @@ class ListeningSessionService:
             evidence = await assisted._runtime_preflight(**kwargs)
             if not current():
                 return {"reason": "authority_changed"}
+            if (stopped_evidence is not None and evidence.get("reason") is None
+                    and evidence.get("volume_used") != volume):
+                return {"reason": "source_or_authority_changed"}
             return evidence
 
         try:
@@ -181,7 +189,21 @@ class ListeningSessionService:
             if selected.status != "verified_preview" or selected.kind not in {"artist_mix", "favorite"}:
                 return _refused(selected.reason)
             initial = await preflight(expected_queue_size=0)
-            if initial.get("reason") is not None:
+            # A Play selection explicitly replaces an eligible stopped music
+            # source, but never a paused/playing source or an existing queue.
+            if initial.get("reason") == "sonos_busy":
+                device = sonos.device
+                candidate = await sonos.get_prepare_evidence()
+                if device is not None and sonos.device is device and SonosService.prepare_stopped_eligible(candidate):
+                    stopped_volume = candidate["volume"]
+                    if not 0 < stopped_volume <= manual_volume_policy(automation)["volume_ceiling"]:
+                        return _refused("sonos_volume_above_policy")
+                    if not current():
+                        return _refused("authority_changed")
+                    stopped_evidence = dict(candidate)
+                    stopped_device = device
+                    volume = stopped_volume
+            if stopped_evidence is None and initial.get("reason") is not None:
                 if (
                     self._sustained is None
                     or initial["reason"] not in {"sonos_busy", "sonos_queue_changed"}
@@ -198,7 +220,7 @@ class ListeningSessionService:
                 if repeat_evidence is None or not current():
                     return _refused(initial["reason"])
                 volume = repeat_evidence["volume"]
-            else:
+            elif stopped_evidence is None:
                 volume = initial.get("volume_used")
             if type(volume) is not int or not current():
                 return _refused("volume_or_authority_unavailable")
@@ -230,9 +252,28 @@ class ListeningSessionService:
                 return None
 
             async def admitted():
+                nonlocal preparation
                 if (
                     not current()
                     or not 0 <= self._clock() - validated_at <= MAX_START_VALIDATION_AGE
+                ):
+                    return None
+                if stopped_evidence is not None and preparation is None:
+                    # No new transport primitive: reuse the deployed guarded
+                    # exact-source unload and verify it before any append.
+                    preparation = MixStartResult("indeterminate", "source_preparation_unverified")
+                    receipt = await sonos.prepare_if_unchanged(stopped_evidence, current)
+                    if receipt.get("status") == "refused":
+                        preparation = _refused(receipt.get("reason") or "source_preparation_refused")
+                        return None
+                    if receipt != {
+                        "status": "ready",
+                        "reason": "unloaded_verified_play_requires_separate_action",
+                    } or not current():
+                        return None
+                    preparation = MixStartResult("indeterminate", "source_prepared_start_unverified")
+                if stopped_evidence is not None and (
+                    preparation.reason != "source_prepared_start_unverified" or not current()
                 ):
                     return None
                 return await operation()
@@ -274,6 +315,8 @@ class ListeningSessionService:
                     sonos, selected, mutation_runner=mutation_runner,
                     preflight=preflight, still_current=current, **extra,
                 )
+            if preparation is not None and result.status == "suppressed":
+                return preparation
             if result.status == "started" and started and current():
                 try:
                     append_token = await authority.capture_listening_append(
