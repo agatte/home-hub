@@ -699,6 +699,8 @@ class RecommendationService:
                         "artist_name": result_artist,
                         "track_name": track_name,
                         "album_name": result.get("collectionName"),
+                        "album_provider_id": str(result.get("collectionId") or ""),
+                        "album_external_url": result.get("collectionViewUrl"),
                         "preview_url": result.get("previewUrl"),
                         "artwork_url": result.get("artworkUrl100"),
                         "external_url": result.get("trackViewUrl"),
