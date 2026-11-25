@@ -51,7 +51,7 @@
 
 <SettingsSection
   title="Overview"
-  description="At-a-glance device health and quick diagnostics. Everything else lives in the rail to the left."
+  description="Your connections at a glance, with diagnostic tools available when you need them."
   icon={Activity}
 >
   <SettingGroup title="Connections">
@@ -81,7 +81,10 @@
     {/if}
   </SettingGroup>
 
-  <SettingGroup title="Diagnostics" hint="Smoke-test the notification + audio chain.">
+  <details class="diagnostics">
+    <summary><span><strong>Diagnostics</strong><small>Test notifications and speaker announcements</small></span><span class="disclosure" aria-hidden="true">⌄</span></summary>
+    <p class="diagnostic-note">These tests send real notifications or play audio when you press a test button.</p>
+    <SettingGroup>
     <SettingRow label="Test TTS" hint="Plays 'Home Hub is connected and working.' on Sonos at volume 10">
       <SettingButton variant="ghost" loading={saving === 'tts'} on:click={testTTS}>
         {saving === 'tts' ? 'Speaking…' : 'Test TTS'}
@@ -93,12 +96,25 @@
       </SettingButton>
     </SettingRow>
     {#if actionFeedback}
-      <p class="feedback">{actionFeedback}</p>
+      <p class="feedback" role="status">{actionFeedback}</p>
     {/if}
-  </SettingGroup>
+    </SettingGroup>
+  </details>
 </SettingsSection>
 
 <style>
+  .diagnostics{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;}
+  .diagnostics summary{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:52px;padding:8px 4px;cursor:pointer;list-style:none;color:var(--text-primary);}
+  .diagnostics summary::-webkit-details-marker{display:none;}
+  .diagnostics summary span:first-child{display:grid;gap:5px;}
+  .diagnostics summary strong{font-size:15px;font-weight:600;}
+  .diagnostics summary small{font-size:13px;color:var(--text-muted);line-height:1.4;}
+  .diagnostics summary:focus-visible{outline:3px solid var(--hh-focus,#d5e7bd);outline-offset:2px;border-radius:8px;}
+  .disclosure{color:var(--accent);font-size:21px;}
+  .diagnostics[open] .disclosure{transform:rotate(180deg);}
+  .diagnostics[open] summary{margin-bottom:10px;}
+  .diagnostic-note{margin:0 4px 10px;font-size:13px;line-height:1.5;color:var(--text-muted);}
+
   .status-pill {
     display: inline-flex;
     align-items: center;
