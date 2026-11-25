@@ -32,7 +32,7 @@ it('requests a balanced mood preview only on deliberate selection and shows real
   expect(link).toHaveAttribute('href', album.apple_music_url)
   expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   expect(screen.getByText('Example Album')).toBeInTheDocument()
-  expect(screen.getByText(/Playlist continuation is not connected yet/)).toBeInTheDocument()
+  expect(screen.getByText(/Mixes and supported playlists may include up to three verified similar tracks/)).toBeInTheDocument()
 })
 
 it('submits a free-text mood and never offers an unverified external link or play command', async () => {

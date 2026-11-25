@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from dataclasses import dataclass
 
 from backend.services.music_selected_plan import SelectedListeningPlan, _exact_song
 from backend.services.playlist_catalog import VerifiedMusicCandidate
@@ -15,6 +16,13 @@ MAX_CONTINUATION_TRACKS = 3
 MAX_LOOKUPS = 6
 PLAN_TIMEOUT = 15.0
 RECHECK_TIMEOUT = 10.0
+
+
+@dataclass(frozen=True)
+class QueuedSong:
+    provider_id: str
+    title: str
+    artist: str
 
 
 class ContinuationPlanner:
@@ -48,42 +56,66 @@ class ContinuationPlanner:
         artist = selected.candidates[-1].metadata.get("artist_name")
         if not isinstance(artist, str) or not artist.strip():
             return ()
+        ids = {item.provider_id for item in selected.candidates}
+        names = {
+            (str(item.metadata.get("artist_name") or "").casefold(), item.title.casefold())
+            for item in selected.candidates
+        }
         try:
             async with asyncio.timeout(PLAN_TIMEOUT):
-                raw = await self._source.similar_tracks_for_artist(artist)
-                ids = {item.provider_id for item in selected.candidates}
-                names = {
-                    (str(item.metadata.get("artist_name") or "").casefold(), item.title.casefold())
-                    for item in selected.candidates
-                }
-                candidates = []
-                for row in raw[:MAX_LOOKUPS]:
-                    identity = row.get("provider_id")
-                    title = row.get("track_name")
-                    related = row.get("artist_name")
-                    score = row.get("source_match")
-                    if (
-                        row.get("provider") != "itunes_search"
-                        or row.get("catalog_verified") is not True
-                        or row.get("seed_artist") != artist
-                        or not isinstance(score, (float, int)) or isinstance(score, bool)
-                        or not math.isfinite(score) or not 0.5 <= score <= 1.0
-                        or not isinstance(identity, str) or not identity.isascii() or not identity.isdigit()
-                        or not isinstance(title, str) or not title.strip()
-                        or not isinstance(related, str) or not related.strip()
-                        or related.casefold() == artist.casefold()
-                        or identity in ids or (related.casefold(), title.casefold()) in names
-                    ):
-                        continue
-                    current = await self._catalog.get_by_identity("itunes_search", identity)
-                    if current is None or not _exact_song(current, identity, title, related):
-                        continue
-                    ids.add(identity)
-                    names.add((related.casefold(), title.casefold()))
-                    candidates.append(current)
-                return (await self._allowed(candidates, mode))[:MAX_CONTINUATION_TRACKS]
+                return await self._related(artist, ids, names, mode)
         except Exception:
             return ()
+
+    async def preview_container(self, songs: tuple[QueuedSong, ...], *, mode: str):
+        """Seed only from the actual expanded, exact, ordered queue."""
+        if not songs:
+            return ()
+        seed = songs[-1]
+        try:
+            async with asyncio.timeout(PLAN_TIMEOUT):
+                current = await self._catalog.get_by_identity("itunes_search", seed.provider_id)
+                if current is None or not _exact_song(
+                    current, seed.provider_id, seed.title, seed.artist,
+                ):
+                    return ()
+                if not await self._allowed((current,), mode):
+                    return ()
+                return await self._related(
+                    seed.artist, {song.provider_id for song in songs},
+                    {(song.artist.casefold(), song.title.casefold()) for song in songs}, mode,
+                )
+        except Exception:
+            return ()
+
+    async def _related(self, artist, ids, names, mode):
+        raw = await self._source.similar_tracks_for_artist(artist)
+        candidates = []
+        for row in raw[:MAX_LOOKUPS]:
+            identity = row.get("provider_id")
+            title = row.get("track_name")
+            related = row.get("artist_name")
+            score = row.get("source_match")
+            if (
+                row.get("provider") != "itunes_search"
+                or row.get("catalog_verified") is not True
+                or row.get("seed_artist") != artist
+                or not isinstance(score, (float, int)) or isinstance(score, bool)
+                or not math.isfinite(score) or not 0.5 <= score <= 1.0
+                or not isinstance(identity, str) or not identity.isascii() or not identity.isdigit()
+                or not isinstance(title, str) or not title.strip()
+                or not isinstance(related, str) or not related.strip()
+                or related.casefold() == artist.casefold()
+                or identity in ids or (related.casefold(), title.casefold()) in names
+            ):
+                continue
+            current = await self._catalog.get_by_identity("itunes_search", identity)
+            if current is None or not _exact_song(current, identity, title, related):
+                continue
+            ids.add(identity)
+            names.add((related.casefold(), title.casefold()))
+            candidates.append(current)
+        return (await self._allowed(candidates, mode))[:MAX_CONTINUATION_TRACKS]
 
     async def revalidate(self, tail: tuple[VerifiedMusicCandidate, ...], *, mode: str) -> bool:
         if not tail:

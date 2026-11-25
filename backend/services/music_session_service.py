@@ -203,6 +203,9 @@ class ListeningSessionService:
         try:
             executor = start_selected_favorite if selected.kind == "favorite" else start_selected_mix
             extra = {"continuation": tail} if tail else {}
+            if selected.kind == "favorite" and self._continuation_planner is not None:
+                extra = {"continuation_planner": self._continuation_planner,
+                         "mode": ticket.request.resolved_request.mode}
             return await executor(
                 sonos, selected, mutation_runner=mutation_runner,
                 preflight=preflight, still_current=current, **extra,

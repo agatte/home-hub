@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.services.music_continuation import ContinuationPlanner
+from backend.services.music_continuation import ContinuationPlanner, QueuedSong
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.recommendation_service import RecommendationService
 from tests.test_music_selected_plan import Approvals, Catalog, Taste, song
@@ -93,3 +93,18 @@ async def test_source_queries_exact_seed_read_only_and_bounds_lookup():
         assert service._search_itunes_tracks.await_count == 3
     finally:
         await service.close()
+
+@pytest.mark.asyncio
+async def test_actual_final_playlist_seed_and_duplicate_exclusion():
+    source = Source([related("11"), related("21"), related("22")])
+    catalog = Catalog({"12": song("12"), "11": candidate("11"),
+                       "21": candidate("21"), "22": candidate("22")})
+    planner = ContinuationPlanner(source=source, catalog=catalog, taste_provider=Taste(),
+                                  approval_service=Approvals())
+    prefix = (QueuedSong("11", "Track 11", "Artist"), QueuedSong("12", "Track 12", "Artist"))
+    assert [item.provider_id for item in await planner.preview_container(prefix, mode="general")] == ["21", "22"]
+    assert source.calls == ["Artist"]
+    assert catalog.calls[0] == ("itunes_search", "12")
+    source.calls.clear()
+    assert await planner.preview_container(prefix[:-1] + (QueuedSong("12", "Wrong title", "Artist"),), mode="general") == ()
+    assert source.calls == []

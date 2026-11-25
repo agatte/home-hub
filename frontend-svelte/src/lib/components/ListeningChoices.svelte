@@ -168,7 +168,7 @@
         {/each}
       </div>
       {#if playbackMessage}<p class="status" role="status">{playbackMessage}</p>{/if}
-      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Artist mixes may include up to three verified similar tracks queued next. Playlist continuation is not connected yet.</p>
+      <p class="footnote"><Headphones size={15}/> Sonos playback requires an owner session and an available queue. Mixes and supported playlists may include up to three verified similar tracks queued next.</p>
     {/if}
   {/if}
 </section>

@@ -8,10 +8,15 @@ play mode/volume, and never retry uncertain device writes.
 from __future__ import annotations
 
 import hashlib
+import re
 import xml.etree.ElementTree as ET
 from typing import Any
+from urllib.parse import unquote
 
-from backend.services.music_mix_execution import MixStartResult
+from soco.data_structures import to_didl_string
+
+from backend.services.music_continuation import MAX_CONTINUATION_TRACKS, QueuedSong
+from backend.services.music_mix_execution import MixStartResult, _item_matches
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.playlist_catalog import VerifiedMusicCandidate
 
@@ -47,6 +52,77 @@ def _resolve_live_container(device, candidate: VerifiedMusicCandidate):
     if uri != candidate.uri or str(getattr(obj, "title", "") or "").strip() != candidate.title:
         return None
     return item
+
+
+MAX_CONTAINER_TRACKS = 32
+
+
+def _append_container_sync(device, item, uri):
+    """Preserve the complete SOAP receipt, not just the first queue position."""
+    resources = getattr(item, "resources", None) or []
+    if not resources or resources[0].uri != uri:
+        return None
+    metadata = to_didl_string(item)
+    response = device.avTransport.AddURIToQueue([
+        ("InstanceID", 0), ("EnqueuedURI", uri), ("EnqueuedURIMetaData", metadata),
+        ("DesiredFirstTrackNumberEnqueued", 0), ("EnqueueAsNext", 0),
+    ], timeout=5.0)
+    if int(response["FirstTrackNumberEnqueued"]) != 1:
+        return None
+    count = int(response["NumTracksAdded"])
+    length = int(response["NewQueueLength"])
+    return count if count > 0 and count == length else None
+
+
+def _queue_prefix_sync(device, size, revision):
+    """One bounded browse; every item must belong to the same exact revision."""
+    if not 1 <= size <= MAX_CONTAINER_TRACKS + MAX_CONTINUATION_TRACKS:
+        return None
+    response = device.contentDirectory.Browse([
+        ("ObjectID", "Q:0"), ("BrowseFlag", "BrowseDirectChildren"),
+        ("Filter", "*"), ("StartingIndex", 0), ("RequestedCount", size),
+        ("SortCriteria", ""),
+    ], timeout=3.0)
+    xml = response.get("Result")
+    if (
+        str(response.get("UpdateID") or "") != revision
+        or int(response.get("TotalMatches") or 0) != size
+        or int(response.get("NumberReturned") or 0) != size
+        or not isinstance(xml, str) or len(xml) > 512000
+    ):
+        return None
+    root = ET.fromstring(xml)
+    if root.tag.rsplit("}", 1)[-1] != "DIDL-Lite":
+        return None
+    rows = tuple(ET.tostring(item, encoding="unicode") for item in root
+                 if item.tag.rsplit("}", 1)[-1] == "item")
+    return rows if len(rows) == size else None
+
+
+def _exact_queued_songs(rows):
+    songs = []
+    for xml in rows:
+        item = ET.fromstring(xml)
+        resources = [(node.text or "").strip() for node in item
+                     if node.tag.rsplit("}", 1)[-1] == "res"]
+        ids = set()
+        for uri in resources:
+            match = re.fullmatch(r"x-sonos-http:song:([0-9]+)", unquote(uri).split("?", 1)[0],
+                                 flags=re.IGNORECASE)
+            if not match:
+                return ()
+            ids.add(match.group(1))
+        titles = {(node.text or "").strip() for node in item
+                  if node.tag.rsplit("}", 1)[-1] == "title"}
+        artists = {(node.text or "").strip() for node in item
+                   if node.tag.rsplit("}", 1)[-1] == "artist"}
+        if not artists:
+            artists = {(node.text or "").strip() for node in item
+                       if node.tag.rsplit("}", 1)[-1] == "creator"}
+        if len(ids) != 1 or len(titles) != 1 or len(artists) != 1 or "" in titles or "" in artists:
+            return ()
+        songs.append(QueuedSong(next(iter(ids)), next(iter(titles)), next(iter(artists))))
+    return tuple(songs)
 
 
 def _prepared_queue(evidence, snapshot, *, uid, volume):
@@ -90,6 +166,7 @@ def _prepared_queue(evidence, snapshot, *, uid, volume):
 
 async def start_selected_favorite(
     sonos: Any, plan: SelectedListeningPlan, *, mutation_runner, preflight, still_current,
+    continuation_planner=None, mode: str = "general",
 ) -> MixStartResult:
     if (
         plan.status != "verified_preview" or plan.kind != "favorite"
@@ -114,9 +191,10 @@ async def start_selected_favorite(
     attempted = False
     appended = 0
     reason = "initial_admission_failed"
+    continuation_count = 0
 
     async def setup():
-        nonlocal attempted, appended, reason
+        nonlocal attempted, appended, reason, continuation_count
         initial = await preflight(expected_queue_size=0)
         if initial.get("reason") is not None or not still_current():
             return None
@@ -144,17 +222,92 @@ async def start_selected_favorite(
                 return None
             attempted = True
             reason = "favorite_append_unverified"
-            return device.add_to_queue(item)
+            return _append_container_sync(device, item, candidate.uri)
 
-        position = await sonos._safe_mutation_call(append_exact)
-        if type(position) is not int or position != 1 or sonos.device is not device:
+        size = await sonos._safe_mutation_call(append_exact)
+        if type(size) is not int or size <= 0 or sonos.device is not device:
             return None
         snapshot = await sonos._safe_call(sonos._queue_item_snapshot_sync, 0, 1.0)
         current = await sonos.get_prepare_evidence()
         if (not _prepared_queue(current, snapshot, uid=uid, volume=volume)
+                or snapshot[1] != size
                 or current["queue_update_id"] == evidence.get("queue_update_id")):
             return None
         appended = 1  # One confirmed container append, not a track count.
+        if continuation_planner is not None and size <= MAX_CONTAINER_TRACKS:
+            reason = "container_prefix_unverified"
+            prefix = await sonos._safe_call(
+                _queue_prefix_sync, device, size, snapshot[0],
+            )
+            if prefix is None:
+                return None
+            songs = _exact_queued_songs(prefix)
+            tail = await continuation_planner.preview_container(songs, mode=mode) if songs else ()
+            if tail and not await continuation_planner.revalidate(tail, mode=mode):
+                tail = ()
+            if not still_current() or sonos.device is not device:
+                return None
+            if len(tail) > MAX_CONTINUATION_TRACKS:
+                return None
+            ids = {song.provider_id for song in songs}
+            names = {(song.artist.casefold(), song.title.casefold()) for song in songs}
+            for item in tail:
+                artist = str(item.metadata.get("artist_name") or "")
+                identity = item.provider_id
+                if (
+                    not songs or item.provider != "itunes_search" or item.media_type != "track"
+                    or not item.verified or not item.catalog_verified or not item.playback_capable
+                    or item.playback_adapter != "sonos_apple_music_share_link"
+                    or item.playback_reference != item.uri
+                    or item.metadata.get("playback_verification") != "live_verified"
+                    or not identity.isascii() or not identity.isdigit()
+                    or identity in ids or not artist
+                    or (artist.casefold(), item.title.casefold()) in names
+                    or sonos._canonical_apple_music_share_link(item.uri) != f"song:{identity}"
+                ):
+                    return None
+                ids.add(identity)
+                names.add((artist.casefold(), item.title.casefold()))
+
+            for item in tail:
+                reason = "container_or_authority_changed_before_tail"
+                if not still_current() or sonos.device is not device:
+                    return None
+
+                def append_track():
+                    if (
+                        not still_current() or sonos.device is not device
+                        or sonos._prepare_evidence_sync() != current
+                        or _queue_prefix_sync(device, size, snapshot[0]) != prefix
+                        or not still_current() or sonos.device is not device
+                    ):
+                        return None
+                    return sonos._add_apple_music_share_link_sync(item.uri)
+
+                position = await sonos._safe_mutation_call(append_track)
+                reason = "continuation_append_unverified"
+                if type(position) is not int or position != size + 1:
+                    return None
+                first = await sonos._safe_call(sonos._queue_item_snapshot_sync, 0, 1.0)
+                last = await sonos._safe_call(sonos._queue_item_snapshot_sync, size, 1.0)
+                fresh = await sonos.get_prepare_evidence()
+                if (
+                    not _prepared_queue(fresh, first, uid=uid, volume=volume)
+                    or first[0] == snapshot[0] or first[1] != size + 1
+                    or first[2] != snapshot[2]
+                    or not _item_matches(last, item.provider_id, size + 1)
+                    or last[0] != first[0]
+                ):
+                    return None
+                updated = await sonos._safe_call(_queue_prefix_sync, device, size + 1, first[0])
+                if updated is None or updated[:-1] != prefix:
+                    return None
+                size += 1
+                prefix, snapshot, current = updated, first, fresh
+                continuation_count += 1
+                appended += 1
+            if await sonos._safe_call(_queue_prefix_sync, device, size, snapshot[0]) != prefix:
+                return None
         reason = "authority_or_queue_changed_before_play"
         if await sonos.get_prepare_evidence() != current:
             return None
@@ -179,6 +332,6 @@ async def start_selected_favorite(
             return MixStartResult("indeterminate", "authority_changed_at_verification", appended)
         if not verified:
             return MixStartResult("indeterminate", "playback_start_unverified", appended)
-        return MixStartResult("started", "advancing_playback_verified", appended)
+        return MixStartResult("started", "advancing_playback_verified", appended, continuation_count)
     except Exception:
         return MixStartResult("indeterminate" if attempted else "suppressed", reason, appended)
