@@ -3,7 +3,7 @@
   import { Home, Wifi, Wine, Sprout, Sparkles } from 'lucide-svelte'
 
   const TABS = [
-    { href: '/guest',        label: 'Home',   icon: Home },
+    { href: '/guest',        label: 'Guest Home', icon: Home },
     { href: '/guest/wifi',   label: 'WiFi',   icon: Wifi },
     { href: '/guest/bar',    label: 'Bar',    icon: Wine },
     { href: '/guest/plants', label: 'Plants', icon: Sprout },
@@ -80,7 +80,8 @@
   }
 
   .guest-nav-tab span {
-    line-height: 1;
+    line-height: 1.1;
+    text-align: center;
     letter-spacing: 0.02em;
   }
 </style>

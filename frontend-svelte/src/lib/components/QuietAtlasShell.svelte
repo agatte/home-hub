@@ -33,7 +33,7 @@
     personality: 'Mood and learning preferences.',
     apartment: 'Plants, bar, routines, guests and apartment tools.',
     gameday: 'Stadium experience.',
-    guest: 'Visitor Wi-Fi and tools.',
+    guest: 'Preview visitor Wi-Fi and tools.',
   }
   const MORE_GROUPS = [
     { id: 'home', label: 'Home & preferences', start: 0, end: 3 },

@@ -17,6 +17,6 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./tests/unit/setup.js'],
-    include: ['tests/unit/components/HueAppHold.test.js', 'tests/unit/quietAtlasSceneTools.test.js', 'tests/unit/quietAtlasCustomSceneEditor.test.js', 'tests/unit/quietAtlasSettingsDisclosure.test.js'],
+    include: ['tests/unit/components/HueAppHold.test.js', 'tests/unit/quietAtlasSceneTools.test.js', 'tests/unit/quietAtlasCustomSceneEditor.test.js', 'tests/unit/quietAtlasSettingsDisclosure.test.js', 'tests/unit/guestOwnerReturn.test.js'],
   },
 })

@@ -57,6 +57,13 @@ def test_invite_is_one_use_and_enables_only_guest_capabilities() -> None:
         assert client.post("/api/guest/sonos/play").status_code == 200
         assert client.post("/api/sonos/pause").status_code == 404
         assert client.get("/health").status_code == 404
+        # The owner-return affordance uses an existing status endpoint, not a
+        # guest capability. Neither a preview query nor a claimed cookie grants it.
+        client.cookies.set("homehub_owner", "untrusted-claim")
+        assert client.get("/guest?preview=owner").status_code == 200
+        assert client.get("/api/owner/session").status_code == 404
+        assert client.get("/").status_code == 404
+        assert client.get("/settings").status_code == 404
 
 
 def test_revoke_invalidates_active_session() -> None:
