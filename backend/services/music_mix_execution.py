@@ -1,13 +1,12 @@
 """Internal guarded Sonos mix start; no route or session authority of its own."""
 from __future__ import annotations
 
-import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import unquote
 
 from backend.services.music_continuation import MAX_CONTINUATION_TRACKS
+from backend.services.music_queue_identity import apple_song_id
 from backend.services.music_selected_plan import MAX_SELECTED_TRACKS, SelectedListeningPlan
 
 
@@ -40,9 +39,7 @@ def _item_matches(snapshot: tuple | None, identity: str, size: int) -> bool:
     # Match an exact Apple song resource, not the displayed title or a
     # substring in arbitrary DIDL metadata. Other resource forms abstain.
     return bool(resources) and all(
-        re.fullmatch(r"x-sonos-http:song:" + re.escape(identity),
-                     unquote(uri).split("?", 1)[0], flags=re.IGNORECASE)
-        for uri in resources
+        apple_song_id(uri) == identity for uri in resources
     )
 
 

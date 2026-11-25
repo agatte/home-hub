@@ -8,16 +8,15 @@ play mode/volume, and never retry uncertain device writes.
 from __future__ import annotations
 
 import hashlib
-import re
 import time
 import xml.etree.ElementTree as ET
 from typing import Any
-from urllib.parse import unquote
 
 from soco.data_structures import to_didl_string
 
 from backend.services.music_continuation import MAX_CONTINUATION_TRACKS, QueuedSong
 from backend.services.music_mix_execution import MixStartResult, _item_matches
+from backend.services.music_queue_identity import apple_song_id
 from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.playlist_catalog import VerifiedMusicCandidate
 
@@ -109,11 +108,10 @@ def _exact_queued_songs(rows):
                      if node.tag.rsplit("}", 1)[-1] == "res"]
         ids = set()
         for uri in resources:
-            match = re.fullmatch(r"x-sonos-http:song:([0-9]+)", unquote(uri).split("?", 1)[0],
-                                 flags=re.IGNORECASE)
-            if not match:
+            identity = apple_song_id(uri)
+            if identity is None:
                 return ()
-            ids.add(match.group(1))
+            ids.add(identity)
         titles = {(node.text or "").strip() for node in item
                   if node.tag.rsplit("}", 1)[-1] == "title"}
         artists = {(node.text or "").strip() for node in item

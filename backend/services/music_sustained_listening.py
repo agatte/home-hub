@@ -11,10 +11,10 @@ import math
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
-from urllib.parse import unquote
 
 from backend.services.music_continuation import MAX_CONTINUATION_TRACKS, QueuedSong
 from backend.services.music_favorite_execution import _exact_queued_songs
+from backend.services.music_queue_identity import apple_song_id
 from backend.services.music_selected_plan import _exact_song
 
 MAX_SESSION_SECONDS = 4 * 3600
@@ -87,7 +87,7 @@ def sample_cursor(proof: QueueProof, evidence, *, now: float) -> PlaybackCursor 
         return None
     song = proof.songs[index - 1]
     uri = evidence.get("queue_track_uri")
-    if not isinstance(uri, str) or unquote(uri).split("?", 1)[0].casefold() != f"x-sonos-http:song:{song.provider_id}":
+    if apple_song_id(uri) != song.provider_id:
         return None
     position = _seconds(evidence.get("position"))
     duration = _seconds(evidence.get("duration"))

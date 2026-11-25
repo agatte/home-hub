@@ -8,13 +8,13 @@ from __future__ import annotations
 import hashlib
 import re
 import xml.etree.ElementTree as ET
-from urllib.parse import parse_qs, unquote, urlsplit
 
 from backend.services.music_continuation import QueuedSong
 from backend.services.music_favorite_execution import (
     MAX_CONTAINER_TRACKS, _exact_queued_songs, _resolve_live_container, to_didl_string,
 )
 from backend.services.music_mix_execution import MixStartResult, _item_matches
+from backend.services.music_queue_identity import apple_song_id
 from backend.services.music_selected_plan import MAX_SELECTED_TRACKS, _exact_song
 from backend.services.music_sustained_listening import (
     MAX_SESSION_TRACKS, QueueProof, RetainedQueue, _read_prefix_sync, started_queue_proof,
@@ -41,11 +41,7 @@ def stopped_queue_matches(proof: QueueProof, evidence, *, ceiling: int) -> bool:
     ):
         return False
     uri = evidence.get("queue_track_uri")
-    return (
-        isinstance(uri, str)
-        and unquote(uri).split("?", 1)[0].casefold()
-        == f"x-sonos-http:song:{proof.songs[track - 1].provider_id}"
-    )
+    return apple_song_id(uri) == proof.songs[track - 1].provider_id
 
 
 async def probe_repeat_queue(sonos, origin: RetainedQueue, *, ceiling, still_current):
@@ -116,7 +112,7 @@ def _song_resources(rows):
         resources = tuple((node.text or "").strip() for node in root
                           if node.tag.rsplit("}", 1)[-1] == "res")
         if not resources or any(
-            parse_qs(urlsplit(uri).query).get("sid") != ["204"]
+            apple_song_id(uri) is None
             for uri in resources
         ):
             return None
