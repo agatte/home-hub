@@ -137,6 +137,6 @@
   .settings-workspace :global(.settings-btn.btn-primary:hover:not(:disabled)) {background:#f0dfbc;border-color:#f0dfbc;color:#20241f;}
   .settings-workspace :global(.rail-item:focus-visible),.settings-workspace :global(.settings-btn:focus-visible) {outline:3px solid var(--hh-focus);outline-offset:2px;}
   @media(max-width:1120px) {.settings-workspace :global(.settings-shell){grid-template-columns:minmax(0,1fr);gap:22px;}}
-  @media(max-width:600px) {.settings-workspace{padding:18px 16px 32px;}.workspace-head{margin-bottom:18px;}.settings-workspace :global(.section-head){gap:10px;}.settings-workspace :global(.section-description){font-size:13px;}.settings-workspace :global(.mode-summary){flex-basis:100%;margin-left:40px;}.settings-workspace :global(.mode-chevron){margin-left:auto;}}
+  @media(max-width:600px) {.settings-workspace{padding:18px 16px 32px;}.workspace-head{margin-bottom:18px;}.settings-workspace :global(.section-head){gap:10px;}.settings-workspace :global(.section-description){font-size:13px;}.settings-workspace :global(.mode-head){display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:7px 12px;}.settings-workspace :global(.mode-icon){grid-column:1;grid-row:1;}.settings-workspace :global(.mode-label){grid-column:2;grid-row:1;}.settings-workspace :global(.mode-summary){grid-column:2/4;grid-row:2;margin:0;}.settings-workspace :global(.mode-chevron){grid-column:3;grid-row:1;}}
   @media(prefers-reduced-motion:reduce) {.settings-workspace :global(.settings-main),.settings-workspace :global(.settings-section){animation:none;}}
 </style>
