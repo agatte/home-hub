@@ -1,4 +1,5 @@
 <script>
+  import ListeningChoices from '$lib/components/ListeningChoices.svelte'
   import QuietAtlasNowPlaying from '$lib/components/QuietAtlasNowPlaying.svelte'
   import TasteProfileCard from '$lib/components/TasteProfileCard.svelte'
   import ModePlaylistMapper from '$lib/components/ModePlaylistMapper.svelte'
@@ -9,6 +10,7 @@
 
   /** @type {{ provider_id: string } | null} */
   let selectedAppleTrack = null
+  let advancedOpen = false
 
   /** @param {string} providerId */
   function reviewAppleTrack(providerId) {
@@ -22,15 +24,15 @@
     <h1>Music</h1>
     <span>What’s playing, what fits your moment, and what you want to hear next.</span>
   </header>
+  <ListeningChoices />
   <QuietAtlasNowPlaying />
   <nav class="music-jump" aria-label="Music sections">
-    <a href="#music-discover">Discover</a>
-    <a href="#approved-apple-track">Choose a track</a>
+    <a href="#music-discover" on:click={() => advancedOpen = true}>Advanced discovery &amp; playback</a>
     <a href="#music-manage">Library &amp; preferences</a>
   </nav>
-  <section class="music-primary" id="music-discover" aria-label="Discover music">
+  <details class="music-manage music-primary" id="music-discover" bind:open={advancedOpen}>
+    <summary><span><strong>Advanced listening tools</strong><small>Track review, exact playback and discovery diagnostics</small></span><span class="manage-action">Open</span></summary>
     <ShadowDiscoveryPanel onReviewAppleTrack={reviewAppleTrack} />
-  </section>
 
   {#if selectedAppleTrack}
     <p class="music-handoff" role="status">
@@ -41,6 +43,7 @@
   {/if}
   <PrepareSonosAction />
   <ApprovedAppleMusicEntry selectedTrack={selectedAppleTrack} />
+  </details>
 
   <details class="music-manage" id="music-manage">
     <summary>
@@ -62,7 +65,10 @@
     </div>
   </details>
 
-  <MusicBanditDiagnostics />
+  <details class="music-manage">
+    <summary><span><strong>Listening insights</strong><small>Learning and recommendation diagnostics</small></span><span class="manage-action">Open</span></summary>
+    <MusicBanditDiagnostics />
+  </details>
   <details class="music-preview">
     <summary>Experimental design studies</summary>
     <a href="/quiet-atlas/music/artist-review">Preview fictional artist matching</a>
