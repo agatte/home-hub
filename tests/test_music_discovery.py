@@ -562,3 +562,19 @@ async def test_discovery_upgrades_only_exact_provider_resolved_tracks_in_one_bat
     assert tracks["Unresolved Song"].provider_id == "itunes-2"
     assert tracks["Unresolved Song"].playback_capability == "metadata_only"
     assert tracks["Unresolved Song"].playback_reason == "no_exact_playable_provider_match"
+
+
+@pytest.mark.asyncio
+async def test_collection_evidence_survives_discovery_serialization():
+    track = {**_track("Example Artist", "Example Track", "123"),
+             "album_provider_id": "456",
+             "album_external_url": "https://music.apple.com/us/album/example/456"}
+    service = MusicDiscoveryService(
+        source=FakeSource([_artist_candidate("Example Artist", tracks=[track])]),
+        taste_provider=FakeTasteProvider(_snapshot()),
+    )
+    result = await service.preview("gaming")
+    row = result.to_dict()["clusters"][0]["tracks"][0]
+    assert row["album_provider_id"] == "456"
+    assert row["album_external_url"] == track["album_external_url"]
+    assert row["playback_capability"] == "metadata_only"
