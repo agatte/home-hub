@@ -1,10 +1,15 @@
 """
 Music discovery and mode-playlist mapping endpoints.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+import hashlib
+from dataclasses import asdict
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.auth import require_api_key, require_api_key_strict
-from backend.api.auth import require_localhost
+from backend.api.auth import TUNNEL_ORIGIN_HEADER, require_localhost
+from backend.api.owner_session import COOKIE, valid_session
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
@@ -359,7 +364,7 @@ async def get_music_request_status(request: Request) -> dict:
 
 @router.post("/request/preview", dependencies=[Depends(require_api_key)])
 @limiter.limit("6/hour")
-async def preview_music_request(request: Request) -> dict:
+async def preview_music_request(request: Request, response: Response) -> dict:
     """Resolve a manual music request and return verified suggestions only."""
     service = getattr(request.app.state, "music_requests", None)
     if service is None:
@@ -390,7 +395,51 @@ async def preview_music_request(request: Request) -> dict:
         from backend.services.music_listening_choices import build_listening_choices
 
         payload["listening"] = build_listening_choices(payload, limit=count)
+        response.headers["Cache-Control"] = "no-store"
+        scope = _listening_owner_scope(request)
+        session = getattr(request.app.state, "music_listening_session", None)
+        if scope is not None and session is not None:
+            payload["listening_selection"] = session.issue(
+                result, owner_scope=scope, limit=count,
+            )
     return payload
+
+
+def _listening_owner_scope(request: Request) -> str | None:
+    """Only an authenticated direct owner browser can receive or redeem a ticket."""
+    if TUNNEL_ORIGIN_HEADER in request.headers or not valid_session(request):
+        return None
+    return hashlib.sha256(request.cookies[COOKIE].encode("utf-8")).hexdigest()
+
+
+async def _require_listening_owner(request: Request) -> str:
+    scope = _listening_owner_scope(request)
+    if scope is None:
+        raise HTTPException(status_code=401, detail="Owner session required")
+    return scope
+
+
+class ListeningStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=128, strict=True)
+    choice_id: str = Field(min_length=1, max_length=256, strict=True)
+
+
+@router.post("/listening/start")
+@limiter.limit("20/hour")
+async def start_listening(
+    body: ListeningStart, request: Request, response: Response,
+    scope: str = Depends(_require_listening_owner),
+) -> dict:
+    service = getattr(request.app.state, "music_listening_session", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Listening session unavailable")
+    response.headers["Cache-Control"] = "no-store"
+    result = await service.start(
+        body.token, body.choice_id, owner_scope=scope,
+        authorized=lambda: _listening_owner_scope(request) == scope,
+    )
+    return asdict(result)
 
 
 # ------------------------------------------------------------------

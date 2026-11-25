@@ -17,18 +17,24 @@
   let error = ''
   /** @type {any | null} */
   let result = null
+  /** @type {any | null} */
+  let selection = null
+  let starting = false
+  let playbackMessage = ''
   let alive = true
   onDestroy(() => { alive = false })
 
   /** @param {string} value */
   async function findMusic(value) {
     const text = value.trim()
-    if (busy || !text) return
+    if (busy || starting || !text) return
     query = text
     requested = text
     busy = true
     error = ''
     result = null
+    selection = null
+    playbackMessage = ''
     try {
       const response = await apiPost('/api/music/request/preview', {
         request: text, listening: true, count: 6, tracks_per_artist: 3,
@@ -40,10 +46,41 @@
         return
       }
       result = listening
+      const ticket = response?.listening_selection
+      if (ticket?.status === 'selection_available' && ticket.actuation_allowed === false
+          && typeof ticket.token === 'string' && Array.isArray(ticket.choice_ids)) {
+        selection = ticket
+      }
     } catch {
       if (alive) error = 'Could not find music right now. Try again in a moment.'
     } finally {
       if (alive) busy = false
+    }
+  }
+
+  /** @param {any} choice */
+  async function startMix(choice) {
+    if (busy || starting || !selection?.choice_ids.includes(choice.id)) return
+    const token = selection.token
+    selection = null
+    starting = true
+    playbackMessage = 'Starting your mix on Sonos...'
+    try {
+      const receipt = await apiPost('/api/music/listening/start', {
+        token, choice_id: choice.id,
+      }, { timeout: 120000 })
+      if (!alive) return
+      if (receipt?.status === 'started') {
+        playbackMessage = 'Your mix started on Sonos.'
+      } else if (receipt?.status === 'suppressed') {
+        playbackMessage = 'Mix not started. Find music again when Sonos is ready.'
+      } else {
+        playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'
+      }
+    } catch {
+      if (alive) playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'
+    } finally {
+      if (alive) starting = false
     }
   }
 
@@ -76,12 +113,12 @@
   </div>
   <form on:submit|preventDefault={() => findMusic(query)}>
     <label class="visually-hidden" for="listening-mood">Describe your mood</label>
-    <input id="listening-mood" bind:value={query} maxlength="160" placeholder="Relaxing, upbeat, something new..." disabled={busy} autocomplete="off" />
-    <button class="find" type="submit" disabled={busy || !query.trim()}>Find music <ArrowUpRight size={17}/></button>
+    <input id="listening-mood" bind:value={query} maxlength="160" placeholder="Relaxing, upbeat, something new..." disabled={busy || starting} autocomplete="off" />
+    <button class="find" type="submit" disabled={busy || starting || !query.trim()}>Find music <ArrowUpRight size={17}/></button>
   </form>
   <div class="moods" aria-label="Suggested moods">
     {#each moods as mood}
-      <button type="button" class:chosen={requested === mood.request} disabled={busy} on:click={() => findMusic(mood.request)}>{mood.label}</button>
+      <button type="button" class:chosen={requested === mood.request} disabled={busy || starting} on:click={() => findMusic(mood.request)}>{mood.label}</button>
     {/each}
   </div>
   {#if busy}
@@ -116,7 +153,11 @@
               {:else if choice.kind === 'favorite'}
                 <span class="pending">Sonos favorite · session start not connected yet</span>
               {:else if choice.kind === 'artist_mix'}
-                <span class="pending">Mix playback not connected yet</span>
+                {#if selection?.choice_ids.includes(choice.id)}
+                  <button class="open" type="button" disabled={starting || busy} on:click={() => startMix(choice)}>Play on Sonos <Headphones size={15}/></button>
+                {:else}
+                  <span class="pending">Mix playback unavailable for this selection</span>
+                {/if}
               {:else}
                 <span class="pending">Apple Music destination unavailable</span>
               {/if}
@@ -124,7 +165,8 @@
           </article>
         {/each}
       </div>
-      <p class="footnote"><Headphones size={15}/> Suggestions only. Continuous listening and Sonos session start are not connected yet.</p>
+      {#if playbackMessage}<p class="status" role="status">{playbackMessage}</p>{/if}
+      <p class="footnote"><Headphones size={15}/> Sonos mix start requires an owner session and an available queue. Continuous listening is not connected yet.</p>
     {/if}
   {/if}
 </section>

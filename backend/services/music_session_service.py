@@ -10,13 +10,13 @@ import secrets
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from backend.services.audio_ownership import INTERRUPTION, QUEUE_SOURCE, TRANSPORT
 from backend.services.music_listening_choices import build_listening_choices
 from backend.services.music_manual_policy import manual_volume_policy
 from backend.services.music_mix_execution import MixStartResult, start_selected_mix
-from backend.services.music_requests import MusicRequestResult
+from backend.services.music_requests import MusicRequestResolver, MusicRequestResult
 from backend.services.music_selected_plan import SelectedListeningPlanner
 
 TICKET_TTL = 120
@@ -30,6 +30,7 @@ class _Ticket:
     choices: frozenset[str]
     limit: int
     expires: float
+    runtime_mode: str
 
 
 def _refused(reason: str) -> MixStartResult:
@@ -63,20 +64,27 @@ class ListeningSessionService:
         choices = frozenset(row["id"] for row in projected if row["kind"] == "artist_mix")
         if not choices:
             return {"status": "unavailable"}
+        runtime_mode = str(getattr(getattr(self._state, "automation", None),
+                                   "current_mode", "") or "").strip().casefold()
+        if not runtime_mode or MusicRequestResolver._mode(runtime_mode) != request.resolved_request.mode:
+            return {"status": "unavailable"}
         now = self._clock()
         self._tickets = {key: value for key, value in self._tickets.items() if value.expires > now}
         if len(self._tickets) >= MAX_TICKETS:
             self._tickets.pop(next(iter(self._tickets)))
         token = secrets.token_urlsafe(32)
-        self._tickets[token] = _Ticket(owner_scope, deepcopy(request), choices, limit, now + TICKET_TTL)
+        self._tickets[token] = _Ticket(owner_scope, deepcopy(request), choices, limit, now + TICKET_TTL, runtime_mode)
         return {"status": "selection_available", "token": token, "expires_in": TICKET_TTL,
                 "choice_ids": sorted(choices), "actuation_allowed": False}
 
-    async def start(self, token: str, choice_id: str, *, owner_scope: str) -> MixStartResult:
+    async def start(
+        self, token: str, choice_id: str, *, owner_scope: str,
+        authorized: Callable[[], bool],
+    ) -> MixStartResult:
         if not isinstance(token, str) or not isinstance(choice_id, str):
             return _refused("invalid_selection")
         ticket = self._tickets.get(token)
-        if ticket is None or ticket.owner_scope != owner_scope:
+        if ticket is None or ticket.owner_scope != owner_scope or not authorized():
             return _refused("selection_unavailable")
         # Consume synchronously before any await. A cancelled or uncertain start
         # never regains authority, even if no hardware change was observed.
@@ -99,7 +107,7 @@ class ListeningSessionService:
 
         try:
             initial_mode = mode()
-            if initial_mode != ticket.request.resolved_request.mode:
+            if initial_mode != ticket.runtime_mode:
                 return _refused("selection_mode_changed")
             manual_revision = authority.capture_manual_intent()
             block_revision = mapper._manual_music_block_revision
@@ -121,6 +129,7 @@ class ListeningSessionService:
                 policy = manual_volume_policy(automation)
                 return (
                     self._clock() < ticket.expires
+                    and authorized()
                     and state.audio_ownership is authority and state.music_mapper is mapper
                     and state.music_assisted_playback is assisted and state.sonos is sonos
                     and state.automation is automation and mode() == initial_mode

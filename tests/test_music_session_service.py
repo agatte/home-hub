@@ -78,7 +78,7 @@ def ticket(service):
 
 
 async def start(service, token, choice="artist_mix:11,12", owner="owner"):
-    return await service.start(token, choice, owner_scope=owner)
+    return await service.start(token, choice, owner_scope=owner, authorized=lambda: True)
 
 
 @pytest.mark.asyncio
@@ -175,4 +175,31 @@ async def test_cancelled_selection_is_not_replayable(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await start(service, token)
     assert (await start(service, token)).reason == "selection_unavailable"
+    assert writes == []
+
+@pytest.mark.asyncio
+async def test_revoked_browser_session_refuses_before_first_write(monkeypatch):
+    service, _, planner, _, writes = await fixture(monkeypatch)
+    token = ticket(service)
+    active = [True]
+
+    def hook(call):
+        if call == 2:
+            active[0] = False
+
+    planner.hook = hook
+    receipt = await service.start(
+        token, "artist_mix:11,12", owner_scope="owner", authorized=lambda: active[0],
+    )
+    assert receipt.status == "suppressed"
+    assert writes == []
+    assert (await start(service, token)).reason == "selection_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_runtime_mode_change_after_issue_refuses(monkeypatch):
+    service, state, _, _, writes = await fixture(monkeypatch)
+    token = ticket(service)
+    state.automation.current_mode = "working"
+    assert (await start(service, token)).reason == "selection_mode_changed"
     assert writes == []

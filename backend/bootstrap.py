@@ -709,6 +709,13 @@ async def lifespan(app: FastAPI):
         setting_loader=load_setting,
     )
     app.state.music_assisted_playback = music_assisted_playback
+    from backend.services.music_selected_plan import SelectedListeningPlanner
+    from backend.services.music_session_service import ListeningSessionService
+    app.state.music_listening_session = ListeningSessionService(
+        app.state, SelectedListeningPlanner(
+            catalog=music_catalog, taste_provider=music_taste, approval_service=music_approval,
+        ),
+    )
     music_curator = MusicCurator(
         context_builder=music_context_builder,
         intent_provider=UnavailableMusicIntentProvider(),

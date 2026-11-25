@@ -32,7 +32,7 @@ it('requests a balanced mood preview only on deliberate selection and shows real
   expect(link).toHaveAttribute('href', album.apple_music_url)
   expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   expect(screen.getByText('Example Album')).toBeInTheDocument()
-  expect(screen.getByText(/Continuous listening and Sonos session start are not connected yet/)).toBeInTheDocument()
+  expect(screen.getByText(/Continuous listening is not connected yet/)).toBeInTheDocument()
 })
 
 it('submits a free-text mood and never offers an unverified external link or play command', async () => {
@@ -47,7 +47,7 @@ it('submits a free-text mood and never offers an unverified external link or pla
   await screen.findByText('Example mix')
   expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/music/request/preview', expect.objectContaining({ request: 'Relaxing but upbeat' }), expect.anything())
   expect(screen.queryByRole('link', { name: 'Open in Apple Music' })).not.toBeInTheDocument()
-  expect(screen.getByText('Mix playback not connected yet')).toBeInTheDocument()
+  expect(screen.getByText('Mix playback unavailable for this selection')).toBeInTheDocument()
   expect(screen.getByText('Sonos favorite · session start not connected yet')).toBeInTheDocument()
 })
 
@@ -76,4 +76,19 @@ it('blocks repeated requests while loading and fails closed on missing listening
   resolve({ listening: { choices: [album] } })
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Listening choices are unavailable'))
   expect(screen.queryByText('Example Album')).not.toBeInTheDocument()
+})
+
+it('starts only the selected ticket once and reports confirmed playback', async () => {
+  const mix = { id: 'artist_mix:21,22', kind: 'artist_mix', title: 'Example mix', tracks: [{ title: 'One' }, { title: 'Two' }] }
+  post.mockResolvedValueOnce({
+    ...response([mix]),
+    listening_selection: { status: 'selection_available', token: 'test-ticket', choice_ids: [mix.id], actuation_allowed: false },
+  }).mockResolvedValueOnce({ status: 'started' })
+  render(ListeningChoices)
+  await fireEvent.click(screen.getByRole('button', { name: 'Relaxing' }))
+  const play = await screen.findByRole('button', { name: 'Play on Sonos' })
+  await fireEvent.click(play)
+  expect(post).toHaveBeenNthCalledWith(2, '/api/music/listening/start', { token: 'test-ticket', choice_id: mix.id }, { timeout: 120000 })
+  await screen.findByText('Your mix started on Sonos.')
+  expect(screen.queryByRole('button', { name: 'Play on Sonos' })).not.toBeInTheDocument()
 })
