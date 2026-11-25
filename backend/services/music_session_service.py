@@ -17,6 +17,7 @@ from backend.services.music_favorite_execution import start_selected_favorite
 from backend.services.music_listening_choices import build_listening_choices
 from backend.services.music_manual_policy import manual_volume_policy
 from backend.services.music_mix_execution import MixStartResult, start_selected_mix
+from backend.services.music_repeat_selection import probe_repeat_queue, start_repeat_mix
 from backend.services.music_requests import MusicRequestResolver, MusicRequestResult
 from backend.services.music_selected_plan import SelectedListeningPlanner
 from backend.services.music_sustained_listening import SustainedListening, started_queue_proof
@@ -134,6 +135,8 @@ class ListeningSessionService:
             return _refused("audio_ownership_busy")
 
         volume = None
+        repeat_origin = None
+        repeat_evidence = None
 
         def session_allowed():
             try:
@@ -157,6 +160,10 @@ class ListeningSessionService:
                 self._clock() < ticket.expires
                 and authority.opportunistic_is_current(epoch)
                 and session_allowed()
+                and (repeat_origin is None or (
+                    getattr(state, "bootstrap_ready", False) is True
+                    and self._clock() < repeat_origin.expires
+                ))
             )
 
         async def preflight(**kwargs):
@@ -175,15 +182,31 @@ class ListeningSessionService:
                 return _refused(selected.reason)
             initial = await preflight(expected_queue_size=0)
             if initial.get("reason") is not None:
-                return _refused(initial["reason"])
-            volume = initial.get("volume_used")
+                if (
+                    self._sustained is None or selected.kind != "artist_mix"
+                    or initial["reason"] not in {"sonos_busy", "sonos_queue_changed"}
+                    or getattr(state, "bootstrap_ready", False) is not True
+                ):
+                    return _refused(initial["reason"])
+                repeat_origin = self._sustained.retained(owner_scope, sonos)
+                if repeat_origin is None:
+                    return _refused(initial["reason"])
+                repeat_evidence = await probe_repeat_queue(
+                    sonos, repeat_origin, ceiling=manual_volume_policy(automation)["volume_ceiling"],
+                    still_current=current,
+                )
+                if repeat_evidence is None or not current():
+                    return _refused(initial["reason"])
+                volume = repeat_evidence["volume"]
+            else:
+                volume = initial.get("volume_used")
             if type(volume) is not int or not current():
                 return _refused("volume_or_authority_unavailable")
         except Exception:
             return _refused("selection_revalidation_failed")
 
         tail = ()
-        if selected.kind == "artist_mix" and self._continuation_planner is not None:
+        if repeat_origin is None and selected.kind == "artist_mix" and self._continuation_planner is not None:
             tail = await self._continuation_planner.preview(
                 selected, mode=ticket.request.resolved_request.mode,
             )
@@ -234,10 +257,20 @@ class ListeningSessionService:
                          "mode": ticket.request.resolved_request.mode}
             if self._sustained is not None:
                 extra["on_started"] = on_started
-            result = await executor(
-                sonos, selected, mutation_runner=mutation_runner,
-                preflight=preflight, still_current=current, **extra,
-            )
+            if repeat_origin is not None:
+                if not current() or not self._sustained.consume_retained(repeat_origin):
+                    return _refused("repeat_queue_changed")
+                result = await start_repeat_mix(
+                    sonos, selected, repeat_origin, repeat_evidence,
+                    mutation_runner=mutation_runner, still_current=current, on_started=on_started,
+                )
+            else:
+                if self._sustained is not None:
+                    self._sustained.forget_retained()
+                result = await executor(
+                    sonos, selected, mutation_runner=mutation_runner,
+                    preflight=preflight, still_current=current, **extra,
+                )
             if result.status == "started" and started and current():
                 try:
                     append_token = await authority.capture_listening_append(
@@ -249,6 +282,8 @@ class ListeningSessionService:
                             authority=authority, token=append_token, sonos=sonos, device=device,
                             proof=proof, rows=rows, mode=ticket.request.resolved_request.mode,
                             allowed=lambda: state.bootstrap_ready is True and session_allowed(),
+                            owner_scope=owner_scope,
+                            initial_track=len(repeat_origin.rows) + 1 if repeat_origin is not None else 1,
                         )
                         if installed:
                             result = replace(result, sustained_listening=True)

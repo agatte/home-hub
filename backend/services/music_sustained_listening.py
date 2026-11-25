@@ -10,7 +10,7 @@ import hashlib
 import math
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import unquote
 
 from backend.services.music_continuation import MAX_CONTINUATION_TRACKS, QueuedSong
@@ -176,6 +176,17 @@ def started_queue_proof(snapshot, uid, volume, rows):
         return None
 
 
+@dataclass(frozen=True)
+class RetainedQueue:
+    """Last verified queue identity; conveys no surviving write authority."""
+    owner_scope: str
+    sonos: object
+    device: object
+    proof: QueueProof
+    rows: tuple[str, ...]
+    expires: float
+
+
 @dataclass
 class _Active:
     authority: object
@@ -188,6 +199,7 @@ class _Active:
     allowed: object
     started_at: float
     cursor: PlaybackCursor | None = None
+    initial_track: int = 1
 
 
 def _same_track(previous, current):
@@ -207,14 +219,39 @@ class SustainedListening:
         self._planner = planner
         self._clock = clock
         self._active: _Active | None = None
+        self._retained: RetainedQueue | None = None
 
-    def install(self, *, authority, token, sonos, device, proof, rows, mode, allowed):
-        if proof is None or len(rows) != len(proof.songs):
+    def install(self, *, authority, token, sonos, device, proof, rows, mode, allowed,
+                owner_scope=None, initial_track=1):
+        if proof is None or len(rows) != len(proof.songs) or not 1 <= initial_track <= len(rows):
             return False
         self._active = _Active(
             authority, token, sonos, device, proof, rows, mode, allowed, self._clock(),
+            initial_track=initial_track,
         )
+        self._retained = RetainedQueue(
+            owner_scope, sonos, device, proof, rows, self._clock() + MAX_SESSION_SECONDS,
+        ) if owner_scope else None
         return True
+
+    def retained(self, owner_scope, sonos):
+        origin = self._retained
+        if (
+            origin is not None and origin.owner_scope == owner_scope
+            and origin.sonos is sonos and origin.device is sonos.device
+            and self._clock() < origin.expires
+        ):
+            return origin
+        return None
+
+    def consume_retained(self, origin):
+        if self._retained is not origin or self._clock() >= origin.expires:
+            return False
+        self._retained = None
+        return True
+
+    def forget_retained(self):
+        self._retained = None
 
     def stop(self):
         self._active = None
@@ -326,6 +363,8 @@ class SustainedListening:
                 fresh = await self._sample(session, next_proof)
                 if not _same_track(previous, fresh):
                     return False
+                if self._retained is not None and self._retained.proof is proof:
+                    self._retained = replace(self._retained, proof=next_proof, rows=updated)
                 session.proof, session.rows, session.cursor = next_proof, updated, fresh
             return True
 
@@ -341,9 +380,9 @@ class SustainedListening:
             if cursor is None:
                 raise ValueError("playing evidence unavailable")
             if session.cursor is None:
-                # Start proof was advancing item zero. Never adopt an already
+                # Start proof was advancing the selected item. Never adopt an already
                 # changed source/track, or a session whose first sample is late.
-                if cursor.track != 1 or self._clock() - session.started_at > MAX_SAMPLE_GAP:
+                if cursor.track != session.initial_track or self._clock() - session.started_at > MAX_SAMPLE_GAP:
                     raise ValueError("initial cursor unavailable")
                 session.cursor = cursor
                 return
@@ -366,3 +405,4 @@ class SustainedListening:
                 await self.tick()
         finally:
             self.stop()
+            self.forget_retained()
