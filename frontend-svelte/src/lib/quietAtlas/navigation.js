@@ -141,3 +141,9 @@ export function activeQuietAtlasSection(pathname, _hash = '', searchParams = nul
   if (pathname.startsWith('/analytics')) return 'insights'
   return 'more'
 }
+
+// Explicit parents only. Never infer a return URL from a referrer or arbitrary query.
+/** @param {string} pathname */
+export function hasMoreParent(pathname) {
+  return ['/settings', '/journal', '/personality', '/quiet-atlas/settings', '/quiet-atlas/journal', '/quiet-atlas/personalization', '/quiet-atlas/household'].includes(pathname)
+}
