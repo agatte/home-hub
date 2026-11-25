@@ -1,5 +1,6 @@
 <script>
   import '$lib/styles/global.css'
+  import GuestOwnerReturn from '$lib/components/GuestOwnerReturn.svelte'
   import GuestBottomNav from '$lib/components/GuestBottomNav.svelte'
 
   /** @type {any} */
@@ -11,6 +12,7 @@
 </script>
 
 <div class="guest-shell">
+  <GuestOwnerReturn />
   <slot />
 </div>
 
