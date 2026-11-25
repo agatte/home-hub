@@ -5,6 +5,8 @@ import { apiPost } from '../../src/lib/api.js'
 
 vi.mock('../../src/lib/api.js', () => ({ apiPost: vi.fn() }))
 
+const post = vi.mocked(apiPost)
+
 beforeEach(() => vi.resetAllMocks())
 afterEach(cleanup)
 
@@ -19,7 +21,7 @@ const response = (choices, status = 'partial') => ({
 })
 
 it('requests a balanced mood preview only on deliberate selection and shows real destination', async () => {
-  apiPost.mockResolvedValue(response([album]))
+  post.mockResolvedValue(response([album]))
   render(ListeningChoices)
   expect(apiPost).not.toHaveBeenCalled()
   await fireEvent.click(screen.getByRole('button', { name: 'Relaxing' }))
@@ -34,7 +36,7 @@ it('requests a balanced mood preview only on deliberate selection and shows real
 })
 
 it('submits a free-text mood and never offers an unverified external link or play command', async () => {
-  apiPost.mockResolvedValue(response([
+  post.mockResolvedValue(response([
     { ...album, apple_music_url: 'https://evil.example/us/album/example/100' },
     { id: 'artist_mix:21,22', kind: 'artist_mix', title: 'Example mix', tracks: [{ title: 'Song 1' }, { title: 'Song 2' }] },
     { id: 'sonos_favorite:123', kind: 'favorite', title: 'Example favorite' },
@@ -50,7 +52,7 @@ it('submits a free-text mood and never offers an unverified external link or pla
 })
 
 it('renders honest empty results and does not reuse stale choices on error', async () => {
-  apiPost.mockResolvedValueOnce(response([album])).mockResolvedValueOnce(response([], 'unavailable')).mockRejectedValueOnce(new Error('offline'))
+  post.mockResolvedValueOnce(response([album])).mockResolvedValueOnce(response([], 'unavailable')).mockRejectedValueOnce(new Error('offline'))
   render(ListeningChoices)
   await fireEvent.click(screen.getByRole('button', { name: 'Party' }))
   await screen.findByText('Example Album')
@@ -63,8 +65,9 @@ it('renders honest empty results and does not reuse stale choices on error', asy
 })
 
 it('blocks repeated requests while loading and fails closed on missing listening contract', async () => {
-  let resolve
-  apiPost.mockImplementation(() => new Promise(r => { resolve = r }))
+  /** @type {(value: any) => void} */
+  let resolve = () => { throw new Error('request has not started') }
+  post.mockImplementation(() => new Promise(r => { resolve = r }))
   render(ListeningChoices)
   await fireEvent.click(screen.getByRole('button', { name: 'Focus' }))
   expect(screen.getByRole('button', { name: 'Party' })).toBeDisabled()
