@@ -5,6 +5,7 @@
   import { reviewSceneDraft } from '$lib/quietAtlas/controlDraft.js'
   import QuietAtlasSceneApply from './QuietAtlasSceneApply.svelte'
   import QuietAtlasSceneTools from './QuietAtlasSceneTools.svelte'
+  import QuietAtlasScenePreview from './QuietAtlasScenePreview.svelte'
   import CustomSceneEditor from './CustomSceneEditor.svelte'
 
   export let sceneList = []
@@ -170,6 +171,9 @@
       <div class="review-panel" role="status">
         <strong>{reviewedScene.name}{functional ? '' : ' · review only'}</strong>
         <p>{reviewedScene.description}</p>
+        {#if reviewedScene.previewRows}
+          <QuietAtlasScenePreview rows={reviewedScene.previewRows} title="Saved scene apartment preview" />
+        {/if}
         {#if reviewedScene.declaredTargets}
           <div class="declared-scope">
             <p><strong>Saved scene declaration · {reviewedScene.declaredTargets.length} lights</strong></p>

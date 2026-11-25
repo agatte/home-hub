@@ -1,3 +1,4 @@
+import { scenePreviewRows } from './scenePreview.js'
 import { LIGHTING_GROUPS, normalizeSceneList, brightnessPercent } from './lightingModel.js'
 
 // Drafts explain existing HomeHub command contracts; this module grants no
@@ -96,6 +97,7 @@ export function reviewSceneDraft(sceneId, sceneList, status) {
   const declaredTargets = scene.source === 'bridge' ? null : declaredSceneTargets(raw)
   return {
     id: scene.id, name: scene.name, source: scene.source, declaredTargets,
+    previewRows: declaredTargets ? scenePreviewRows(raw?.lights) : null,
     description: scene.source === 'bridge'
       ? 'A Hue bridge scene can affect multiple lights; its exact fixture manifest is not available from this list.'
       : declaredTargets

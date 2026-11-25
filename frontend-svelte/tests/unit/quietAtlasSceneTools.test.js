@@ -56,3 +56,13 @@ describe('Functional scene tools', () => {
     await waitFor(() => expect(apiPost).not.toHaveBeenCalled())
   })
 })
+
+it('does not physically try a scene whose declared color changed after review', async () => {
+  const original = [{ ...rows[0], lights: { '1': { on: true, bri: 150, ct: 350 } } }]
+  const changed = [{ ...rows[0], lights: { '1': { on: true, bri: 150, ct: 351 } } }]
+  vi.mocked(apiGet).mockResolvedValue({ scenes: changed, available: true, effects: [] })
+  render(SceneTools, { scene: reviewSceneDraft('golden_hour', original, { connected: true, loading: false, error: '' }), connected: true })
+  await fireEvent.click(screen.getByRole('button', { name: 'Try for 30 seconds' }))
+  await screen.findByText(/Scene changed/)
+  expect(apiPost).not.toHaveBeenCalled()
+})
