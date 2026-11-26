@@ -2,6 +2,7 @@
 Music discovery and mode-playlist mapping endpoints.
 """
 import hashlib
+import logging
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
@@ -18,6 +19,7 @@ from backend.services.music_requests import MusicRequest
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/lastfm-shadow/status", dependencies=[
@@ -442,6 +444,31 @@ async def start_listening(
     result = await service.start(
         body.token, body.choice_id, owner_scope=scope,
         authorized=lambda: _listening_owner_scope(request) == scope,
+    )
+    # Never log the ticket, owner scope, track identity or provider metadata.
+    safe_reasons = {
+        "advancing_playback_verified", "selection_unavailable", "selection_expired",
+        "choice_not_visible", "selection_mode_changed", "authority_unavailable",
+        "runtime_policy_refused", "audio_ownership_busy", "authority_changed",
+        "volume_or_authority_unavailable", "selection_revalidation_failed",
+        "sonos_busy", "sonos_queue_changed", "sonos_queue_owned", "sonos_muted",
+        "sonos_volume_zero", "sonos_volume_above_policy", "sonos_unavailable",
+        "sonos_status_unavailable", "sonos_source_unavailable",
+        "queue_context_unavailable", "sonos_play_mode_owned",
+        "volume_cap_source_changed", "volume_cap_evidence_changed",
+        "volume_cap_evidence_unavailable", "volume_cap_authority_changed",
+        "volume_cap_selection_changed", "volume_cap_unavailable",
+        "volume_cap_unverified", "volume_cap_outcome_unknown", "volume_cap_refused",
+        "playback_start_unverified", "execution_outcome_unknown",
+        "source_preparation_unverified", "source_prepared_start_unverified",
+        "repeat_queue_changed", "repeat_playback_start_unverified",
+        "mix_member_not_verified", "current_taste_or_approval_veto",
+        "favorite_identity_changed", "volume_policy_unavailable",
+    }
+    logger.info(
+        "Listening start: status=%s reason=%s",
+        result.status if result.status in {"started", "suppressed", "indeterminate"} else "unknown",
+        result.reason if result.reason in safe_reasons else "other",
     )
     return asdict(result)
 

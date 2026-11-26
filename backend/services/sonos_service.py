@@ -316,6 +316,39 @@ class SonosService:
         except Exception:
             return None
 
+    async def clamp_prepared_volume(self, device, expected, target, still_current):
+        """Attempt one downward write only with exact source and readback proof."""
+        attempted = False
+
+        def clamp():
+            nonlocal attempted
+            try:
+                if (self.device is not device or not isinstance(expected, dict)
+                        or type(expected.get('volume')) is not int
+                        or type(target) is not int or not 0 < target < expected['volume'] <= 100
+                        or expected.get('coordinator') is not True or expected.get('mute') is not False
+                        or expected.get('transport_state') not in {'STOPPED', 'NO_MEDIA_PRESENT'}
+                        or expected.get('play_mode') != 'NORMAL'
+                        or self._prepare_evidence_sync() != expected
+                        or self.device is not device or not still_current()):
+                    return {'status': 'refused', 'reason': 'volume_cap_evidence_changed'}
+                attempted = True
+                device.volume = target
+                if (self.device is device and still_current()
+                        and self._prepare_evidence_sync() == dict(expected, volume=target)
+                        and self.device is device and still_current()):
+                    return {'status': 'ready', 'reason': 'volume_cap_verified'}
+            except Exception:
+                pass
+            return {'status': 'indeterminate' if attempted else 'refused',
+                    'reason': 'volume_cap_unverified' if attempted else 'volume_cap_evidence_unavailable'}
+
+        try:
+            return await self._safe_mutation_call(clamp)
+        except Exception:
+            return {'status': 'indeterminate' if attempted else 'refused',
+                    'reason': 'volume_cap_unverified' if attempted else 'volume_cap_evidence_unavailable'}
+
     @staticmethod
     def prepare_unloaded(evidence):
         return bool(evidence and evidence.get('coordinator') is True

@@ -10,6 +10,7 @@ from backend.services.music_selected_plan import SelectedListeningPlan
 from backend.services.music_sustained_listening import (
     RetainedQueue, SustainedListening, started_queue_proof,
 )
+from backend.services.sonos_service import SonosService
 from tests.test_music_continuation import candidate
 from tests.test_music_favorite_execution import plan as favorite_plan
 from tests.test_music_session_service import fixture, start, ticket
@@ -24,8 +25,22 @@ class StoppedSonos(PlayingSonos):
         self.verify = True
         self.play_calls = []
         self.bad_suffix = False
+        self.device.volume = 15
+        self.volume_writes = []
+        self.cap_events = []
+
+    async def clamp_prepared_volume(self, device, expected, target, still_current):
+        self.cap_events.append("cap")
+        receipt = await SonosService.clamp_prepared_volume(self, device, expected, target, still_current)
+        if receipt["status"] == "ready":
+            self.volume_writes.append(self.device.volume)
+        return receipt
+
+    def _prepare_evidence_sync(self):
+        return {**super()._prepare_evidence_sync(), "volume": self.device.volume}
 
     def _add_apple_music_share_link_sync(self, url):
+        self.cap_events.append("append")
         position = super()._add_apple_music_share_link_sync(url)
         if self.bad_suffix:
             self.ids[-1] = "999"
@@ -35,7 +50,7 @@ class StoppedSonos(PlayingSonos):
         assert size == len(self.ids)
         assert snapshot == self._queue_item_snapshot_sync(index, 1)
         from backend.services.music_queue_identity import play_source_fingerprint
-        assert kwargs == {"queue_uid": "speaker", "max_volume": 15,
+        assert kwargs == {"queue_uid": "speaker", "max_volume": self.device.volume,
                           "expected_source": play_source_fingerprint(self._prepare_evidence_sync())}
         self.play_calls.append(index)
         self.state = "PLAYING"
@@ -174,7 +189,8 @@ async def test_retained_queue_is_identity_not_authority_and_expires():
 
 
 @pytest.mark.asyncio
-async def test_session_new_ticket_can_repeat_only_prior_verified_queue(monkeypatch):
+@pytest.mark.parametrize("initial_volume", [15, 25])
+async def test_session_new_ticket_can_repeat_only_prior_verified_queue(monkeypatch, initial_volume):
     service, state, _, now, _ = await fixture(monkeypatch)
     state.bootstrap_ready = True
     sonos = StoppedSonos(now)
@@ -196,8 +212,12 @@ async def test_session_new_ticket_can_repeat_only_prior_verified_queue(monkeypat
     assert service._sustained.install(authority=auth, token=append_token, sonos=sonos,
                                       device=sonos.device, proof=origin.proof, rows=origin.rows,
                                       mode="general", allowed=lambda: True, owner_scope="owner")
+    sonos.device.volume = initial_volume
     receipt = await start(service, ticket(service))
     assert receipt.status == "started"
+    assert sonos.device.volume == min(initial_volume, 18)
+    assert sonos.volume_writes == ([18] if initial_volume == 25 else [])
+    assert sonos.cap_events == (["cap"] if initial_volume == 25 else []) + ["append", "append"]
     assert receipt.sustained_listening is True
     assert sonos.ids == ["11", "12", "13", "11", "12"]
     assert sonos.play_calls == [3]

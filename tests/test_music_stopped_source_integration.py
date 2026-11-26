@@ -8,7 +8,7 @@ from urllib.parse import unquote
 import pytest
 from soco.data_structures import DidlPlaylistContainer, DidlResource
 
-from backend.services.audio_ownership import AudioOwnershipService, QUEUE_SOURCE
+from backend.services.audio_ownership import AudioOwnershipService, QUEUE_SOURCE, VOLUME
 from backend.services.music_assisted_playback import MusicAssistedPlaybackService
 from backend.services.music_requests import FamiliarMusicSuggestion
 from backend.services.music_selected_plan import SelectedListeningPlan
@@ -22,7 +22,6 @@ class Device:
     """UPnP simulator with exact queue revision, source and advancing position."""
     uid = "speaker"
     is_coordinator = True
-    volume = 15
     mute = False
     play_mode = "NORMAL"
 
@@ -39,6 +38,8 @@ class Device:
         self.index = 1
         self.position = 0
         self.writes = []
+        self._volume = 15
+        self.refuse_volume = False
         self.after_unload = lambda: None
         self.uncertain = False
         item = favorite_candidate()
@@ -46,6 +47,16 @@ class Device:
             item.title, "SQ:", "SQ:1",
             resources=[DidlResource(item.uri, "x-file-cifs:*:*:*")],
         )
+
+    @property
+    def volume(self):
+        return self._volume
+
+    @volume.setter
+    def volume(self, value):
+        self.writes.append(f"Volume:{value}")
+        if not self.refuse_volume:
+            self._volume = value
 
     @property
     def queue_size(self):
@@ -202,6 +213,52 @@ async def make_session(kind):
         return await service.start(token, choice, owner_scope="owner", authorized=lambda: True)
 
     return state, device, planner, start
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["artist_mix", "favorite"])
+@pytest.mark.parametrize("unloaded", [False, True])
+async def test_above_ceiling_is_capped_before_start(kind, unloaded):
+    _, device, _, start = await make_session(kind)
+    device._volume = 25
+    if unloaded:
+        device.media = device.track = device.metadata = ""
+    result = await start()
+    assert result.status == "started", result
+    assert device.writes[0] == "Volume:18"
+    assert device.volume == 18
+    assert "Play" in device.writes
+    if not unloaded:
+        assert device.writes[1] == "Unload"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["source", "manual", "volume", "readback"])
+async def test_cap_refusal_stops_all_following_writes(change):
+    state, device, planner, start = await make_session("artist_mix")
+    device._volume = 25
+    if change == "source":
+        device.media = device.track = "x-rincon-stream:external"
+    elif change == "manual":
+        planner.hook = lambda: state.audio_ownership.record_manual_intent((QUEUE_SOURCE,))
+    elif change == "volume":
+        planner.hook = lambda: setattr(device, "_volume", 24)
+    else:
+        device.refuse_volume = True
+    result = await start()
+    assert result.status == ("indeterminate" if change == "readback" else "suppressed"), result
+    assert device.writes == (["Volume:18"] if change == "readback" else [])
+
+
+@pytest.mark.asyncio
+async def test_explicit_start_fences_older_volume_authority():
+    state, device, planner, start = await make_session("artist_mix")
+    device._volume = 25
+    old = await state.audio_ownership.capture_opportunistic((VOLUME,))
+    observed = []
+    planner.hook = lambda: observed.append(state.audio_ownership.opportunistic_is_current(old))
+    assert (await start()).status == "started"
+    assert observed == [False]
 
 
 @pytest.mark.asyncio
