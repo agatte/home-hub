@@ -66,6 +66,7 @@ class AudioOwnershipService:
         self._save_setting = setting_saver
         self._lock = asyncio.Lock()
         self._manual_intent_revision = 0
+        self._selected_manual_revision = 0
         self._listening_append_generation = 0
         self._listening_authority_id = uuid.uuid4().hex
         self._lifecycle_revision = 0
@@ -94,13 +95,24 @@ class AudioOwnershipService:
 
     def record_manual_intent(self, dimensions: Iterable[str]) -> int:
         """Record explicit Q/T ingress before any learning/status/lock await."""
-        if _dimensions(dimensions).intersection((QUEUE_SOURCE, TRANSPORT)):
+        selected = _dimensions(dimensions)
+        self._selected_manual_revision += 1
+        if selected.intersection((QUEUE_SOURCE, TRANSPORT)):
             self._manual_intent_revision += 1
         return self._manual_intent_revision
 
     def capture_manual_intent(self) -> int:
         """Capture before any departure await; intent entry is event-loop local."""
         return self._manual_intent_revision
+
+    def capture_selected_manual_intent(self) -> int:
+        # A later manual volume/interruption command must also fence a selected
+        # start. Keep the existing transport-only revision contract unchanged.
+        return self._selected_manual_revision
+
+    def selected_manual_epoch(self) -> dict[str, int]:
+        # Only capture inside an admitted shared manual transaction.
+        return dict(self._opportunistic_epochs)
 
     async def set_lifecycle_away(self, away: bool) -> int:
         """Fence autonomous transport (including TTS restore), without a lease.
@@ -495,18 +507,26 @@ class AudioOwnershipService:
         """
         async with self._lock:
             await self._load_locked()
-            if (
-                frozenset(start_epoch) != MANUAL_TRANSPORT_DIMENSIONS
-                or not self.opportunistic_is_current(start_epoch)
-                or manual_revision != self._manual_intent_revision
-                or self._lifecycle_away
-                or any(MANUAL_TRANSPORT_DIMENSIONS.intersection(lease.get("dimensions") or ())
-                       for lease in self._leases.values())
-            ):
-                return None
-            return ListeningAppendToken(
-                self._listening_append_generation, manual_revision, self._listening_authority_id,
-            )
+            return self.capture_admitted_listening_append(start_epoch, manual_revision=manual_revision)
+
+    def capture_admitted_listening_append(
+        self, start_epoch: dict[str, int], *, manual_revision: int,
+    ) -> ListeningAppendToken | None:
+        # Only an already admitted transaction may exchange verified playback
+        # for append-only authority while holding the shared writer lock.
+        if (
+            not self._lock.locked()
+            or frozenset(start_epoch) != MANUAL_TRANSPORT_DIMENSIONS
+            or not self.opportunistic_is_current(start_epoch)
+            or manual_revision != self._manual_intent_revision
+            or self._lifecycle_away
+            or any(MANUAL_TRANSPORT_DIMENSIONS.intersection(lease.get("dimensions") or ())
+                   for lease in self._leases.values())
+        ):
+            return None
+        return ListeningAppendToken(
+            self._listening_append_generation, manual_revision, self._listening_authority_id,
+        )
 
     def listening_append_is_current(self, token: ListeningAppendToken) -> bool:
         return (
@@ -760,6 +780,8 @@ class AudioOwnershipService:
         operation: Callable[[], Awaitable[Any]],
         intent_revision: int | None = None,
         superseded_result: Any = False,
+        admission_guard: Callable[[], bool] | None = None,
+        protect_interruptions: bool = False,
     ) -> Any:
         """Serialize manual writes; explicit Q/T ingress may be superseded.
 
@@ -779,14 +801,20 @@ class AudioOwnershipService:
                     and intent_revision != self._manual_intent_revision
                 )
 
-            if superseded():
+            if (superseded() or (admission_guard is not None and not admission_guard())
+                    or (protect_interruptions and self._lifecycle_away)
+                    or (protect_interruptions and any(
+                        lease.get("lease_type") == LEASE_TYPE_INTERRUPTION
+                        and selected.intersection(lease.get("dimensions") or ())
+                        for lease in self._leases.values()
+                    ))):
                 return superseded_result
             await self._invalidate_manual_locked(
                 selected, source=source, reason=reason,
             )
             # Intent ingress does not need this lock; persistence may have
             # yielded to a newer command while we still held it.
-            if superseded():
+            if superseded() or (admission_guard is not None and not admission_guard()):
                 return superseded_result
             return await operation()
 

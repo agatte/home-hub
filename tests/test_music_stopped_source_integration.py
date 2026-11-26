@@ -41,6 +41,7 @@ class Device:
         self._volume = 15
         self.refuse_volume = False
         self.after_unload = lambda: None
+        self.after_append = lambda: None
         self.uncertain = False
         item = favorite_candidate()
         self.playlist = DidlPlaylistContainer(
@@ -73,6 +74,12 @@ class Device:
 
     def Browse(self, args, **kwargs):
         values = dict(args)
+        if values["ObjectID"] == "SQ:1":
+            tracks = getattr(self, "saved_tracks", ["121", "122"])
+            offset, count = int(values["StartingIndex"]), int(values["RequestedCount"])
+            rows = tracks[offset:offset + count]
+            return {"NumberReturned": str(len(rows)), "TotalMatches": str(len(tracks)), "UpdateID": "1",
+                    "Result": "<DIDL-Lite>" + "".join(self.row(i) for i in rows) + "</DIDL-Lite>"}
         offset = int(values["StartingIndex"])
         limit = int(values["RequestedCount"])
         rows = self.ids[offset:offset+limit]
@@ -118,18 +125,16 @@ class Device:
             self.after_unload()
         else:
             assert uri == "x-rincon-queue:speaker#0"
-            assert not self.media and not self.track
             self.writes.append("SetQueue")
             self.media = uri
 
     def AddURIToQueue(self, args, **kwargs):
         values = dict(args)
         uri = values["EnqueuedURI"]
-        assert self.media == self.track == ""
         first = len(self.ids) + 1
         if uri == favorite_candidate().uri:
             self.writes.append("AppendPlaylist")
-            new_ids = ["121", "122"]
+            new_ids = getattr(self, "saved_tracks", ["121", "122"])
         else:
             identity = unquote(uri).removeprefix("song:")
             assert identity in {"11", "12"}
@@ -137,8 +142,18 @@ class Device:
             new_ids = [identity]
         self.ids.extend(new_ids)
         self.revision += 1
+        self.after_append()
         return {"FirstTrackNumberEnqueued": str(first), "NumTracksAdded": str(len(new_ids)),
                 "NewQueueLength": str(len(self.ids))}
+
+    def Stop(self, args, **kwargs):
+        self.state = "STOPPED"
+        self.position = 0
+        self.writes.append("Stop")
+
+    def SetPlayMode(self, args, **kwargs):
+        self.play_mode = dict(args)["NewPlayMode"]
+        self.writes.append("Mode:" + self.play_mode)
 
     def get_sonos_playlists(self):
         return [self.playlist]
@@ -158,7 +173,7 @@ async def make_session(kind):
         return {}
 
     async def save(*_):
-        pytest.fail("Unexpected persistent ownership write")
+        pass  # Explicit manual intent persists its ownership revision.
 
     device = Device()
     sonos = SonosService()
@@ -207,6 +222,7 @@ async def make_session(kind):
 
     planner = Planner()
     service = ListeningSessionService(state, planner)
+    state.listening_session, state.listening_request, state.listening_choice = service, req, choice
     token = service.issue(req, owner_scope="owner")["token"]
 
     async def start():
@@ -227,11 +243,10 @@ async def test_above_ceiling_is_capped_before_start(kind, unloaded, scheme):
         device.media = device.track = device.metadata = ""
     result = await start()
     assert result.status == "started", result
-    assert device.writes[0] == "Volume:18"
     assert device.volume == 18
-    assert "Play" in device.writes
-    if not unloaded:
-        assert device.writes[1] == "Unload"
+    assert device.writes.count("Volume:18") == 1
+    assert device.writes.index("Volume:18") < device.writes.index("Play")
+    assert "Unload" not in device.writes
 
 
 @pytest.mark.asyncio
@@ -244,23 +259,25 @@ async def test_cap_refusal_stops_all_following_writes(change):
     elif change == "manual":
         planner.hook = lambda: state.audio_ownership.record_manual_intent((QUEUE_SOURCE,))
     elif change == "volume":
-        planner.hook = lambda: setattr(device, "_volume", 24)
+        device.after_append = lambda: setattr(device, "_volume", 24)
     else:
         device.refuse_volume = True
     result = await start()
-    assert result.status == ("indeterminate" if change == "readback" else "suppressed"), result
-    assert device.writes == (["Volume:18"] if change == "readback" else [])
+    assert result.status == ("indeterminate" if change in {"readback", "volume"} else "suppressed"), result
+    expected = {"readback": ["Append:11", "Append:12", "Volume:18"], "volume": ["Append:11"]}
+    assert device.writes == expected.get(change, [])
+    assert "Play" not in device.writes
 
 
 @pytest.mark.asyncio
 async def test_explicit_start_fences_older_volume_authority():
-    state, device, planner, start = await make_session("artist_mix")
+    state, device, _, start = await make_session("artist_mix")
     device._volume = 25
     old = await state.audio_ownership.capture_opportunistic((VOLUME,))
     observed = []
-    planner.hook = lambda: observed.append(state.audio_ownership.opportunistic_is_current(old))
+    device.after_append = lambda: observed.append(state.audio_ownership.opportunistic_is_current(old))
     assert (await start()).status == "started"
-    assert observed == [False]
+    assert observed == [False, False]
 
 
 @pytest.mark.asyncio
@@ -272,34 +289,35 @@ async def test_stopped_source_real_prepare_and_executor(kind, scheme):
     result = await start()
     assert result.status == "started", result
     appends = ["Append:11", "Append:12"] if kind == "artist_mix" else ["AppendPlaylist"]
-    assert device.writes == ["Unload", *appends, "SetQueue", "Seek", "Play"]
+    assert device.writes == [*appends, "SetQueue", "Seek", "Play"]
     assert device.volume == 15 and not device.mute
     assert (await start()).status == "suppressed"
-    assert device.writes == ["Unload", *appends, "SetQueue", "Seek", "Play"]
+    assert device.writes == [*appends, "SetQueue", "Seek", "Play"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["artist_mix", "favorite"])
 @pytest.mark.parametrize("change", ["source", "uncertain", "manual"])
-async def test_stopped_source_real_refusal_or_uncertainty_never_appends(kind, change):
+async def test_stopped_source_real_refusal_or_uncertainty_never_plays(kind, change):
     state, device, planner, start = await make_session(kind)
     if change == "source":
         def change_source():
             device.media = device.track = "x-rincon-stream:external"
         planner.hook = change_source
     elif change == "uncertain":
-        device.uncertain = True
+        device.after_append = lambda: device.ids.__setitem__(-1, "999")
     else:
-        device.after_unload = lambda: state.audio_ownership.record_manual_intent((QUEUE_SOURCE,))
+        device.after_append = lambda: state.audio_ownership.record_manual_intent((QUEUE_SOURCE,))
     result = await start()
     assert result.status == ("suppressed" if change == "source" else "indeterminate"), result
-    assert device.writes == ([] if change == "source" else ["Unload"])
+    assert device.writes == ([] if change == "source" else
+                             ["Append:11"] if kind == "artist_mix" else ["AppendPlaylist"])
+    assert "Play" not in device.writes
     assert (await start()).status == "suppressed"
-    assert not device.ids
 
 
 @pytest.mark.asyncio
-async def test_stopped_source_cancel_during_real_unload_never_appends():
+async def test_cancel_during_real_append_never_retries_or_plays():
     _, device, _, start = await make_session("artist_mix")
     entered = asyncio.Event()
     release = threading.Event()
@@ -309,7 +327,7 @@ async def test_stopped_source_cancel_during_real_unload_never_appends():
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(timeout=3)
 
-    device.after_unload = hold
+    device.after_append = hold
     task = asyncio.create_task(start())
     try:
         await asyncio.wait_for(entered.wait(), timeout=2)
@@ -319,7 +337,8 @@ async def test_stopped_source_cancel_during_real_unload_never_appends():
         release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert device.writes == ["Unload"]
+    assert device.writes == ["Append:11"]
+    assert device.ids == ["11"]
     assert (await start()).status == "suppressed"
 
 @pytest.mark.asyncio
@@ -350,7 +369,7 @@ async def test_cross_artist_mood_mix_real_planner_prepare_and_executor():
     result = await service.start(issued["token"], "artist_mix:11,12", owner_scope="owner",
                                  authorized=lambda: True)
     assert result.status == "started", result
-    assert device.writes == ["Unload", "Append:11", "Append:12", "SetQueue", "Seek", "Play"]
+    assert device.writes == ["Append:11", "Append:12", "SetQueue", "Seek", "Play"]
     assert catalog.calls == [("itunes_search", identity) for identity in ("11", "12", "11", "12")]
 
     # A current artist mismatch must veto the whole selection before device I/O.

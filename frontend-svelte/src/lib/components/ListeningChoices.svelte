@@ -104,6 +104,20 @@
             sonos_queue_changed: 'The Sonos queue changed. HomeHub left it untouched.',
             sonos_queue_owned: 'The existing Sonos queue belongs to another session.',
             sonos_muted: 'Sonos is muted. HomeHub left mute unchanged.',
+            manual_source_unavailable: 'The speaker source is unsupported or could not be verified.',
+            manual_selection_unavailable: 'This music selection could not be verified.',
+            manual_queue_changed: 'The queue or source changed before playback.',
+            manual_queue_capacity: 'The existing queue is too large for a verified new selection. HomeHub did not clear it.',
+            manual_playlist_unverified: 'The saved playlist contents could not be verified.',
+            manual_volume_unavailable: 'The permitted start volume could not be verified.',
+            volume_source_changed: 'The speaker changed before volume could be adjusted.',
+            volume_evidence_unavailable: 'The speaker state could not be verified for volume adjustment.',
+            travel_mode_active: 'HomeHub is in travel mode.',
+            returning_home_active: 'HomeHub is still returning home.',
+            apartment_away: 'HomeHub is in Away.',
+            house_authority_unavailable: 'The current occupancy state could not be verified.',
+            tts_active: 'A spoken announcement is using Sonos.',
+            ambient_playback_owned: 'An ambient audio operation is using Sonos.',
             sonos_volume_zero: 'Sonos volume is zero. HomeHub left it unchanged.',
             sonos_volume_above_policy: 'The permitted start volume changed before playback.',
             volume_cap_source_changed: 'The speaker or queue changed before volume could be adjusted.',
@@ -123,9 +137,18 @@
           playbackMessage += ' Find music again when ready.'
         }
       } else {
-        playbackMessage = ['volume_cap_unverified', 'volume_cap_outcome_unknown'].includes(receipt?.reason)
-          ? 'The volume adjustment could not be confirmed. HomeHub did not proceed to playback. Check Sonos before trying again.'
-          : 'Playback could not be confirmed. Check Sonos before trying again.'
+        playbackMessage = ({
+          volume_cap_unverified: 'The volume adjustment could not be confirmed. HomeHub did not proceed to playback.',
+          volume_cap_outcome_unknown: 'The volume adjustment could not be confirmed. HomeHub did not proceed to playback.',
+          volume_unverified: 'The volume adjustment could not be confirmed. HomeHub did not proceed to playback.',
+          manual_append_unverified: 'The new queue entries could not be verified.',
+          manual_stop_unverified: 'The previous source could not be stopped safely.',
+          manual_play_mode_unverified: 'The new playback order could not be verified.',
+          manual_queue_changed_before_play: 'The queue or source changed during playback setup.',
+          manual_play_unverified: 'Sonos did not confirm the new playback command.',
+          playback_start_unverified: 'Sonos did not confirm advancing playback.',
+        })[receipt?.reason] || 'Playback could not be confirmed.'
+        playbackMessage += ' Check Sonos before trying again.'
       }
     } catch {
       if (alive) playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'

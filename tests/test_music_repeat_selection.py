@@ -13,8 +13,7 @@ from backend.services.music_sustained_listening import (
 from backend.services.sonos_service import SonosService
 from tests.test_music_continuation import candidate
 from tests.test_music_favorite_execution import plan as favorite_plan
-from tests.test_music_session_service import fixture, start, ticket
-from tests.test_music_selected_plan import request
+from tests.test_music_session_service import start
 from tests.test_music_sustained_listening import Planner, PlayingSonos, authority
 
 
@@ -189,39 +188,27 @@ async def test_retained_queue_is_identity_not_authority_and_expires():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("initial_volume", [15, 25])
-async def test_session_new_ticket_can_repeat_only_prior_verified_queue(monkeypatch, initial_volume):
-    service, state, _, now, _ = await fixture(monkeypatch)
-    state.bootstrap_ready = True
-    sonos = StoppedSonos(now)
-    state.sonos = sonos
-    state.music_assisted_playback.reason = None
+@pytest.mark.parametrize("initial_volume", [0, 15, 25])
+async def test_session_new_ticket_can_repeat_ordinary_queue(initial_volume):
+    from tests.test_music_selected_manual_integration import session
 
-    async def busy(**kwargs):
-        return {"reason": "sonos_busy"}
-
-    state.music_assisted_playback._runtime_preflight = busy
-    service._continuation_planner = Planner()
-    service._sustained = SustainedListening(service._continuation_planner, clock=lambda: now[0])
-    assert (await start(service, ticket(service))).status == "suppressed"
-    assert not sonos.writes
-    origin = origin_for(sonos)
-    auth = state.audio_ownership
-    epoch = await auth.capture_opportunistic(MANUAL_TRANSPORT_DIMENSIONS, claim=True)
-    append_token = await auth.capture_listening_append(epoch, manual_revision=auth.capture_manual_intent())
-    assert service._sustained.install(authority=auth, token=append_token, sonos=sonos,
-                                      device=sonos.device, proof=origin.proof, rows=origin.rows,
-                                      mode="general", allowed=lambda: True, owner_scope="owner")
-    sonos.device.volume = initial_volume
-    receipt = await start(service, ticket(service))
-    assert receipt.status == "started"
-    assert sonos.device.volume == min(initial_volume, 18)
-    assert sonos.volume_writes == ([18] if initial_volume == 25 else [])
-    assert sonos.cap_events == (["cap"] if initial_volume == 25 else []) + ["append", "append"]
+    state, device, _, play = await session("artist_mix", transport="STOPPED", volume=initial_volume)
+    service = state.listening_session
+    service._sustained = SustainedListening(Planner())
+    receipt = await play()
+    assert receipt.status == "started", receipt
     assert receipt.sustained_listening is True
-    assert sonos.ids == ["11", "12", "13", "11", "12"]
-    assert sonos.play_calls == [3]
+    assert device.ids == ["foreign", "11", "12"] and device.index == 2
+    device.state = "STOPPED"
+    fresh = service.issue(state.listening_request, owner_scope="owner")
+    receipt = await start(service, fresh["token"], choice=state.listening_choice)
+    assert receipt.status == "started", receipt
+    assert receipt.sustained_listening is True
+    assert device.volume == (15 if initial_volume == 15 else 18)
+    assert device.ids == ["foreign", "11", "12", "11", "12"]
+    assert device.index == 4
     assert service._sustained._active.initial_track == 4
+    assert service._sustained._active.proof.offset == 3
     await service._sustained.tick()
     assert service._sustained._active.cursor.track == 4
 
@@ -406,47 +393,21 @@ async def test_repeat_saved_playlist_refuses_unverified_expansion_or_receipt(ser
     assert not sonos.play_calls and not started
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["playlist", "favorite"])
-async def test_repeat_favorite_session_dispatch_and_retained_refusal(monkeypatch, serialize_saved, source):
-    service, state, planner, now, _ = await fixture(monkeypatch)
-    state.bootstrap_ready = True
-    sonos = SavedPlaylistSonos(now)
-    state.sonos = sonos
+async def test_repeat_saved_favorite_session_dispatch():
+    from tests.test_music_selected_manual_integration import session
 
-    async def busy(**kwargs):
-        return {"reason": "sonos_busy"}
-
-    state.music_assisted_playback._runtime_preflight = busy
-    service._continuation_planner = Planner()
-    service._sustained = SustainedListening(service._continuation_planner, clock=lambda: now[0])
-    origin = origin_for(sonos)
-    auth = state.audio_ownership
-    epoch = await auth.capture_opportunistic(MANUAL_TRANSPORT_DIMENSIONS, claim=True)
-    append_token = await auth.capture_listening_append(epoch, manual_revision=auth.capture_manual_intent())
-    assert service._sustained.install(
-        authority=auth, token=append_token, sonos=sonos, device=sonos.device,
-        proof=origin.proof, rows=origin.rows, mode="general", allowed=lambda: True,
-        owner_scope="owner",
-    )
-    selected = favorite_plan(source)
-
-    async def preview(*args, **kwargs):
-        return selected
-
-    planner.preview = preview
-    req = request()
-    req = replace(req, familiar_suggestions=(
-        replace(req.familiar_suggestions[0], candidate=selected.candidates[0]),
-    ))
-    selection = service.issue(req, owner_scope="owner")
-    receipt = await start(service, selection["token"], choice=selected.choice_id)
-    if source == "playlist":
-        assert receipt.status == "started"
-        assert receipt.sustained_listening is True
-        assert sonos.ids == ["11", "12", "13", "31", "32", "33"]
-        assert sonos.play_calls == [3]
-        assert service._sustained._active.initial_track == 4
-    else:
-        assert receipt.status == "suppressed"
-        assert not sonos.container_calls and not sonos.play_calls
-        assert service._sustained.retained("owner", sonos) is not None
+    state, device, _, play = await session("favorite", transport="STOPPED", volume=15)
+    service = state.listening_session
+    service._sustained = SustainedListening(Planner())
+    receipt = await play()
+    assert receipt.status == "started", receipt
+    assert receipt.sustained_listening is True
+    assert device.ids == ["foreign", "121", "122"]
+    device.state = "STOPPED"
+    fresh = service.issue(state.listening_request, owner_scope="owner")
+    receipt = await start(service, fresh["token"], choice=state.listening_choice)
+    assert receipt.status == "started", receipt
+    assert receipt.sustained_listening is True
+    assert device.ids == ["foreign", "121", "122", "121", "122"]
+    assert device.index == 4
+    assert service._sustained._active.initial_track == 4

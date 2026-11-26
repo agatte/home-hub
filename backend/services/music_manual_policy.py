@@ -3,6 +3,40 @@
 EXPLICIT_VOLUME_CEILINGS = {"day": 30, "evening": 25, "night": 18, "late_night": 18}
 
 
+def selected_play_volume(volume, ceiling):
+    """Target for an explicit selected Play; invalid observations abstain."""
+    if type(volume) is not int or type(ceiling) is not int:
+        return None
+    if not 0 <= volume <= 100 or ceiling not in EXPLICIT_VOLUME_CEILINGS.values():
+        return None
+    return ceiling if volume == 0 or volume > ceiling else volume
+
+
+
+def selected_play_reason(state, lifecycle_state):
+    """Explicit owner Play: occupation and device safety, not mode preference."""
+    try:
+        lifecycle = lifecycle_state()
+        if lifecycle.get("travel"):
+            return "travel_mode_active"
+        if lifecycle.get("returning_home"):
+            return "returning_home_active"
+        if state.away_manager.away is not False:
+            return "apartment_away"
+        if state.automation.house_state not in {"home", "sleeping", "winding_down"}:
+            return "house_authority_unavailable"
+        if state.tts.is_speaking:
+            return "tts_active"
+        ambient = state.ambient_sound.get_state()
+        if any(ambient.get(key) for key in ("sonos_ambient_active", "sonos_ambient_pending")):
+            return "ambient_playback_owned"
+        if not state.sonos.connected or state.sonos.breaker_open:
+            return "sonos_unavailable"
+    except Exception:
+        return "authority_unavailable"
+    return None
+
+
 def manual_music_reason(state, lifecycle_state):
     """Synchronous fence shared by Prepare, Play and the verification boundary."""
     try:

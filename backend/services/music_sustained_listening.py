@@ -19,6 +19,8 @@ from backend.services.music_selected_plan import _exact_song
 
 MAX_SESSION_SECONDS = 4 * 3600
 MAX_SESSION_TRACKS = 96
+# Bound device evidence independently of the selected continuation budget.
+MAX_QUEUE_TRACKS = 512
 MAX_SAMPLE_GAP = 12.0
 MAX_VALIDATION_AGE = 3.0
 NEAR_END_SECONDS = 6.0
@@ -45,12 +47,19 @@ class QueueProof:
     first_hash: str
     volume: int
     songs: tuple[QueuedSong, ...]
+    offset: int = 0
+
+    @property
+    def total_tracks(self) -> int:
+        return self.offset + len(self.songs)
 
     def valid(self) -> bool:
         return (
             bool(self.uid and self.revision and self.first_hash)
             and type(self.volume) is int and self.volume > 0
+            and type(self.offset) is int and self.offset >= 0
             and 1 <= len(self.songs) <= MAX_SESSION_TRACKS
+            and self.total_tracks <= MAX_QUEUE_TRACKS
             and all(
                 song.provider_id.isascii() and song.provider_id.isdigit()
                 and bool(song.artist and song.title) for song in self.songs
@@ -75,17 +84,17 @@ def sample_cursor(proof: QueueProof, evidence, *, now: float) -> PlaybackCursor 
         evidence.get("queue_uid") != proof.uid
         or evidence.get("queue_update_id") != proof.revision
         or evidence.get("queue_first_item_hash") != proof.first_hash
-        or evidence.get("queue_size") != len(proof.songs)
+        or evidence.get("queue_size") != proof.total_tracks
         or evidence.get("current_uri") != f"x-rincon-queue:{proof.uid}#0"
         or evidence.get("coordinator") is not True
         or evidence.get("transport_state") != "PLAYING"
         or evidence.get("play_mode") != "NORMAL"
         or evidence.get("mute") is not False
         or evidence.get("volume") != proof.volume
-        or type(index) is not int or not 1 <= index <= len(proof.songs)
+        or type(index) is not int or not proof.offset < index <= proof.total_tracks
     ):
         return None
-    song = proof.songs[index - 1]
+    song = proof.songs[index - proof.offset - 1]
     uri = evidence.get("queue_track_uri")
     if apple_song_id(uri) != song.provider_id:
         return None
@@ -127,20 +136,26 @@ def should_refill(proof: QueueProof, cursor: PlaybackCursor, *, started_at: floa
         proof.valid()
         and 0 <= cursor.observed_at - started_at < MAX_SESSION_SECONDS
         and len(proof.songs) < MAX_SESSION_TRACKS
-        and 1 <= cursor.track <= len(proof.songs)
-        and len(proof.songs) - cursor.track <= REFILL_AT_REMAINING
+        and proof.total_tracks < MAX_QUEUE_TRACKS
+        and proof.offset < cursor.track <= proof.total_tracks
+        and proof.total_tracks - cursor.track <= REFILL_AT_REMAINING
         and cursor.duration - cursor.position >= NEAR_END_SECONDS
     )
 
 def _read_prefix_sync(device, size, revision):
     """Read the complete queue in bounded pages, with one exact revision."""
-    if not 1 <= size <= MAX_SESSION_TRACKS:
+    return _read_rows_sync(device, "Q:0", size, revision)
+
+
+def _read_rows_sync(device, object_id, size, revision):
+    """Bounded queue or saved-container evidence; never accept partial pages."""
+    if not 1 <= size <= MAX_QUEUE_TRACKS:
         return None
     rows = []
     for offset in range(0, size, 32):
         count = min(32, size - offset)
         result = device.contentDirectory.Browse([
-            ("ObjectID", "Q:0"), ("BrowseFlag", "BrowseDirectChildren"),
+            ("ObjectID", object_id), ("BrowseFlag", "BrowseDirectChildren"),
             ("Filter", "*"), ("StartingIndex", offset), ("RequestedCount", count),
             ("SortCriteria", ""),
         ], timeout=3.0)
@@ -163,15 +178,15 @@ def _read_prefix_sync(device, size, revision):
     return tuple(rows)
 
 
-def started_queue_proof(snapshot, uid, volume, rows):
+def started_queue_proof(snapshot, uid, volume, rows, *, offset=0):
     """Construct only from the executor's pre-Play exact ordered snapshots."""
     try:
-        if not rows or len(rows) != snapshot[1]:
+        if not rows or len(rows) != snapshot[1] or type(offset) is not int or not 0 <= offset < len(rows):
             return None
-        songs = _exact_queued_songs(rows)
+        songs = _exact_queued_songs(rows[offset:])
         proof = QueueProof(uid, snapshot[0], hashlib.sha256(snapshot[2].encode()).hexdigest(),
-                           volume, songs)
-        return proof if proof.valid() and len(songs) == len(rows) else None
+                           volume, songs, offset)
+        return proof if proof.valid() and proof.total_tracks == len(rows) else None
     except Exception:
         return None
 
@@ -223,7 +238,8 @@ class SustainedListening:
 
     def install(self, *, authority, token, sonos, device, proof, rows, mode, allowed,
                 owner_scope=None, initial_track=1):
-        if proof is None or len(rows) != len(proof.songs) or not 1 <= initial_track <= len(rows):
+        if (proof is None or not proof.valid() or len(rows) != proof.total_tracks
+                or not proof.offset < initial_track <= len(rows)):
             return False
         self._active = _Active(
             authority, token, sonos, device, proof, rows, mode, allowed, self._clock(),
@@ -231,7 +247,7 @@ class SustainedListening:
         )
         self._retained = RetainedQueue(
             owner_scope, sonos, device, proof, rows, self._clock() + MAX_SESSION_SECONDS,
-        ) if owner_scope else None
+        ) if owner_scope and proof.offset == 0 else None
         return True
 
     def retained(self, owner_scope, sonos):
@@ -288,7 +304,8 @@ class SustainedListening:
             return False
         if len(tail) > MAX_CONTINUATION_TRACKS:
             return False
-        tail = tail[:MAX_SESSION_TRACKS - len(session.rows)]
+        tail = tail[:min(MAX_SESSION_TRACKS - len(session.proof.songs),
+                         MAX_QUEUE_TRACKS - len(session.rows))]
         ids = {song.provider_id for song in session.proof.songs}
         names = {(song.artist.casefold(), song.title.casefold()) for song in session.proof.songs}
         for item in tail:
@@ -362,7 +379,7 @@ class SustainedListening:
                 )
                 if updated is None or updated[:-1] != session.rows:
                     return False
-                next_proof = started_queue_proof(first, proof.uid, proof.volume, updated)
+                next_proof = started_queue_proof(first, proof.uid, proof.volume, updated, offset=proof.offset)
                 expected = QueuedSong(item.provider_id, item.title, item.metadata["artist_name"])
                 if next_proof is None or next_proof.songs != proof.songs + (expected,):
                     return False
