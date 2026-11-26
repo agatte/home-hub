@@ -2658,6 +2658,15 @@ The dashboard has been redesigned as a living, data-reactive interface:
 
 ### Music Curator Direction
 
+- **OWNER DECISION, NOT YET IMPLEMENTED (#586):** An authenticated owner-selected
+  Music Play is manual playback in occupied modes, including Sleeping and Winding
+  Down. It does not change house mode or authorize automatic playback. Preserve an
+  existing ordinary queue and start the first newly appended selected item; refuse
+  when its identity, capacity, lifecycle, source or interruption safety cannot be
+  verified. For an unmuted speaker at zero volume, raise volume to the period
+  target (day 30, evening 25, night or late night 18); preserve positive volume
+  at or below that target and lower higher volume to it. This decision does
+  not change #272 assisted/autonomous policy or authorize queue cleanup.
 - **SHIPPED/CURRENT:** shared taste/familiarity, explainable semantic discovery,
   explicit feedback, request/context adapters, trust approval/revocation, guarded
   Sonos favorite/playlist playback, and the MusicBandit evidence path. The current

@@ -8,6 +8,19 @@ import re
 from urllib.parse import parse_qs, unquote, urlsplit
 
 
+def same_manual_source(expected, actual):
+    """Compare complete source evidence while permitting elapsed-time advance.
+
+    Track identity, queue revision, transport, mute and volume remain fenced.
+    A track boundary is a source change, even if playback is still active.
+    """
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        return False
+    if expected.keys() != actual.keys() or "position" not in expected:
+        return False
+    return all(expected[key] == actual[key] for key in expected if key != "position")
+
+
 def apple_song_id(uri: str) -> str | None:
     if not isinstance(uri, str) or not uri:
         return None

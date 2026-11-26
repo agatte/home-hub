@@ -468,6 +468,14 @@ async def start_listening(
         "repeat_queue_changed", "repeat_playback_start_unverified",
         "mix_member_not_verified", "current_taste_or_approval_veto",
         "favorite_identity_changed", "volume_policy_unavailable",
+        "manual_source_unavailable", "manual_selection_unavailable",
+        "manual_queue_changed", "manual_queue_capacity", "manual_playlist_unverified",
+        "manual_append_unverified", "manual_stop_unverified", "manual_play_mode_unverified",
+        "manual_volume_unavailable", "volume_source_changed", "volume_unverified",
+        "volume_evidence_unavailable", "manual_queue_changed_before_play",
+        "manual_play_unverified", "travel_mode_active", "returning_home_active",
+        "apartment_away", "house_authority_unavailable", "tts_active",
+        "ambient_playback_owned", "invalid_selection",
     }
     logger.info(
         "Listening start: status=%s reason=%s",

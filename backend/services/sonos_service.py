@@ -349,6 +349,49 @@ class SonosService:
             return {'status': 'indeterminate' if attempted else 'refused',
                     'reason': 'volume_cap_unverified' if attempted else 'volume_cap_evidence_unavailable'}
 
+    async def set_selected_play_volume(self, device, expected, target, still_current):
+        """One verified volume adjustment for a manually admitted selected Play.
+
+        The caller must hold manual audio authority throughout this operation.
+        This primitive neither grants authority nor unmutes the device.
+        """
+        from backend.services.music_manual_policy import selected_play_volume
+        from backend.services.music_queue_identity import same_manual_source
+
+        attempted = False
+
+        def adjust():
+            nonlocal attempted
+            try:
+                if (self.device is not device or not isinstance(expected, dict)
+                        or expected.get('coordinator') is not True
+                        or expected.get('mute') is not False
+                        or expected.get('play_mode') != 'NORMAL'
+                        or expected.get('transport_state') not in {
+                            'PLAYING', 'PAUSED_PLAYBACK', 'STOPPED', 'NO_MEDIA_PRESENT'}
+                        or selected_play_volume(expected.get('volume'), target) != target
+                        or expected.get('volume') == target
+                        or not still_current()
+                        or not same_manual_source(expected, self._prepare_evidence_sync())
+                        or self.device is not device or not still_current()):
+                    return {'status': 'refused', 'reason': 'volume_source_changed'}
+                attempted = True
+                device.volume = target
+                if (self.device is device and still_current()
+                        and same_manual_source(dict(expected, volume=target), self._prepare_evidence_sync())
+                        and self.device is device and still_current()):
+                    return {'status': 'ready', 'reason': 'volume_verified'}
+            except Exception:
+                pass
+            return {'status': 'indeterminate' if attempted else 'refused',
+                    'reason': 'volume_unverified' if attempted else 'volume_evidence_unavailable'}
+
+        try:
+            return await self._safe_mutation_call(adjust)
+        except Exception:
+            return {'status': 'indeterminate' if attempted else 'refused',
+                    'reason': 'volume_unverified' if attempted else 'volume_evidence_unavailable'}
+
     @staticmethod
     def prepare_unloaded(evidence):
         return bool(evidence and evidence.get('coordinator') is True
@@ -2343,6 +2386,7 @@ class SonosService:
     def _play_queue_item_if_unchanged_sync(
         self, index: int, expected_queue_size: int, expected_snapshot: tuple,
         *, queue_uid: str, max_volume: int | None, expected_source: tuple,
+        still_current=None, expected_resources=None,
     ) -> bool:
         """Bounded final queue/ownership proof and play with no HomeHub await.
 
@@ -2386,6 +2430,8 @@ class SonosService:
         if (expected_source is None or str(self._device.uid) != queue_uid
                 or self._play_source_fingerprint_sync(timeout()) != expected_source):
             return False
+        if still_current is not None and (not still_current() or self._device.is_coordinator is not True):
+            return False
         uri = f"x-rincon-queue:{queue_uid}#0"
         self._device.avTransport.SetAVTransportURI(
             [("InstanceID", 0), ("CurrentURI", uri), ("CurrentURIMetaData", "")],
@@ -2395,6 +2441,8 @@ class SonosService:
             [("InstanceID", 0)], timeout=timeout(),
         )
         if media.get("CurrentURI") != uri:
+            return False
+        if still_current is not None and (not still_current() or self._device.is_coordinator is not True):
             return False
         self._device.avTransport.Seek(
             [("InstanceID", 0), ("Unit", "TRACK_NR"), ("Target", index + 1)],
@@ -2413,7 +2461,9 @@ class SonosService:
         position = self._device.avTransport.GetPositionInfo(
             [("InstanceID", 0)], timeout=timeout(),
         )
-        if int(position.get("Track") or 0) != index + 1:
+        if (int(position.get("Track") or 0) != index + 1
+                or (expected_resources is not None
+                    and position.get("TrackURI") not in expected_resources)):
             return False
         settings_result = self._device.avTransport.GetTransportSettings(
             [("InstanceID", 0)], timeout=timeout(),
@@ -2440,6 +2490,8 @@ class SonosService:
             return False
         if max_volume is not None and current_volume != max_volume:
             return False
+        if still_current is not None and (not still_current() or self._device.is_coordinator is not True):
+            return False
         self._device.avTransport.Play(
             [("InstanceID", 0), ("Speed", 1)], timeout=timeout(),
         )
@@ -2447,7 +2499,7 @@ class SonosService:
 
     async def _verify_queue_playback_started(
         self, index: int, expected_queue_size: int, expected_snapshot: tuple,
-        *, queue_uid: str, max_volume: int | None,
+        *, queue_uid: str, max_volume: int | None, still_current=None, expected_resources=None,
     ) -> bool:
         """Prove that the exact queued track actually entered advancing playback.
 
@@ -2462,6 +2514,8 @@ class SonosService:
         saw_playing = False
 
         while time.monotonic() < deadline:
+            if still_current is not None and not still_current():
+                return False
             remaining = deadline - time.monotonic()
             sample_budget = min(ASSISTED_START_SAMPLE_BUDGET_SECONDS, remaining)
             if sample_budget <= 0:
@@ -2472,6 +2526,7 @@ class SonosService:
                     self._playback_start_sample_sync,
                     index, expected_queue_size, expected_snapshot,
                     queue_uid, max_volume, sample_budget,
+                      *((expected_resources,) if expected_resources is not None else ()),
                     call_timeout=sample_budget,
                 )
             except Exception as exc:
@@ -2504,7 +2559,7 @@ class SonosService:
 
     def _playback_start_sample_sync(
         self, index: int, expected_queue_size: int, expected_snapshot: tuple,
-        queue_uid: str, max_volume: int | None, budget_seconds: float,
+        queue_uid: str, max_volume: int | None, budget_seconds: float, expected_resources=None,
     ) -> dict[str, Any] | None:
         """Return one bounded exact-owner playback-start sample or fail closed."""
         deadline = time.monotonic() + max(0.05, float(budget_seconds))
@@ -2528,7 +2583,9 @@ class SonosService:
         position = self._device.avTransport.GetPositionInfo(
             [("InstanceID", 0)], timeout=timeout(),
         )
-        if int(position.get("Track") or 0) != index + 1:
+        if (int(position.get("Track") or 0) != index + 1
+                or (expected_resources is not None
+                    and position.get("TrackURI") not in expected_resources)):
             return None
 
         snapshot = self._queue_item_snapshot_sync(index, timeout=timeout())
