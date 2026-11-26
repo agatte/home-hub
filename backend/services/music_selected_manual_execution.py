@@ -84,6 +84,32 @@ def ordinary_source(sonos, evidence):
     return False
 
 
+def _verified_manual_stop(before, after):
+    """A native Stop may reset the selected track while retaining its queue/source.
+
+    Only accept the observed zero-cursor transition. The loaded source, queue
+    revision, volume, mute, mode, and coordinator must remain exactly stable.
+    The caller separately rechecks every queue row and current authority.
+    """
+    expected = dict(before, transport_state="STOPPED")
+    if same_manual_source(expected, after):
+        return True
+    if (
+        not isinstance(after, dict)
+        or type(before.get("queue_track")) is not int
+        or before["queue_track"] <= 0
+        or type(after.get("queue_track")) is not int
+        or after["queue_track"] != 0
+    ):
+        return False
+    # Track-local fields do not identify a selected item at index zero.
+    for key in ("queue_track", "queue_track_uri", "duration", "metadata", "title"):
+        if key not in after or key not in before or type(after[key]) is not type(before[key]):
+            return False
+        expected[key] = after[key]
+    return same_manual_source(expected, after)
+
+
 def _rows(device, evidence):
     size = evidence["queue_size"]
     return _read_prefix_sync(device, size, evidence["queue_update_id"]) if size else ()
@@ -385,7 +411,12 @@ async def execute_selected_manual(sonos, plan, *, still_current, ceiling, contin
             if not await sonos._safe_mutation_call(stop_old):
                 return failure()
             fresh = await sonos.get_prepare_evidence()
-            if not same_manual_source(dict(evidence, transport_state="STOPPED"), fresh) or not current():
+            if (
+                not _verified_manual_stop(evidence, fresh)
+                or not current()
+                or await sonos._safe_call(_rows, device, fresh) != rows
+                or not current()
+            ):
                 return failure()
             evidence = fresh
 
