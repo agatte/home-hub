@@ -41,7 +41,7 @@ def client_for(monkeypatch):
     return TestClient(app, base_url="https://testserver"), app.state.music_listening_session
 
 
-def test_preview_and_start_require_direct_owner_context(monkeypatch):
+def test_preview_and_start_require_direct_owner_context(monkeypatch, caplog):
     client, service = client_for(monkeypatch)
     preview = {"request": "relaxing", "listening": True}
     payload = {"token": "synthetic-ticket", "choice_id": "artist_mix:11,12"}
@@ -63,7 +63,11 @@ def test_preview_and_start_require_direct_owner_context(monkeypatch):
     assert response.json()["listening_selection"]["token"] == "synthetic-ticket"
     scope = hashlib.sha256(b"synthetic-owner").hexdigest()
     assert service.calls == [("issue", scope, 6)]
-    response = client.post("/api/music/listening/start", json=payload, headers=headers)
+    with caplog.at_level("INFO", logger="backend.api.routes.music"):
+        response = client.post("/api/music/listening/start", json=payload, headers=headers)
+    assert "Listening start: status=suppressed reason=other" in caplog.text
+    assert "synthetic-ticket" not in caplog.text
+    assert scope not in caplog.text
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     assert response.json() == {"status": "suppressed", "reason": "mock_no_device", "confirmed_appends": 0, "continuation_tracks": 0, "sustained_listening": False}

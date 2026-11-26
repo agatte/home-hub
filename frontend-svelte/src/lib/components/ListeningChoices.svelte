@@ -20,6 +20,7 @@
   /** @type {any | null} */
   let selection = null
   let starting = false
+  let selectionUsed = false
   let playbackMessage = ''
   let availabilityMessage = ''
   let alive = true
@@ -36,6 +37,7 @@
     result = null
     selection = null
     playbackMessage = ''
+    selectionUsed = false
     availabilityMessage = ''
     try {
       const response = await apiPost('/api/music/request/preview', {
@@ -74,6 +76,7 @@
     const label = choice.kind === 'favorite' ? 'playlist' : 'mix'
     const token = selection.token
     selection = null
+    selectionUsed = true
     starting = true
     playbackMessage = `Starting your ${label} on Sonos...`
     try {
@@ -96,10 +99,33 @@
         } else if (['mix_member_not_verified', 'current_taste_or_approval_veto', 'favorite_identity_changed'].includes(reason)) {
           playbackMessage = 'This selection is no longer eligible for playback. Find music again.'
         } else {
-          playbackMessage = `Your ${label} did not start because Sonos or playback is unavailable. Find music again when ready.`
+          playbackMessage = ({
+            sonos_busy: 'Sonos already has an active or retained source. HomeHub did not replace it.',
+            sonos_queue_changed: 'The Sonos queue changed. HomeHub left it untouched.',
+            sonos_queue_owned: 'The existing Sonos queue belongs to another session.',
+            sonos_muted: 'Sonos is muted. HomeHub left mute unchanged.',
+            sonos_volume_zero: 'Sonos volume is zero. HomeHub left it unchanged.',
+            sonos_volume_above_policy: 'The permitted start volume changed before playback.',
+            volume_cap_source_changed: 'The speaker or queue changed before volume could be adjusted.',
+            volume_cap_evidence_changed: 'The speaker changed before volume could be adjusted.',
+            volume_cap_evidence_unavailable: 'The speaker state could not be verified for volume adjustment.',
+            volume_cap_authority_changed: 'Another audio action took priority before volume could be adjusted.',
+            volume_cap_selection_changed: 'The music selection changed before volume could be adjusted.',
+            volume_cap_unavailable: 'Automatic start-volume adjustment is unavailable.',
+            volume_or_authority_unavailable: 'The allowed start volume or playback authority could not be verified.',
+            audio_ownership_busy: 'Another audio operation owns Sonos right now.',
+            authority_changed: 'Another audio action or house-state change took priority.',
+            runtime_policy_refused: 'The current house or audio policy does not allow music to start.',
+            sonos_unavailable: 'Sonos is not available right now.',
+            queue_context_unavailable: 'The Sonos queue could not be verified.',
+            sonos_play_mode_owned: 'The speaker is using a different playback mode.',
+          })[reason] || `Your ${label} did not start. HomeHub could not verify the playback conditions.`
+          playbackMessage += ' Find music again when ready.'
         }
       } else {
-        playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'
+        playbackMessage = ['volume_cap_unverified', 'volume_cap_outcome_unknown'].includes(receipt?.reason)
+          ? 'The volume adjustment could not be confirmed. HomeHub did not proceed to playback. Check Sonos before trying again.'
+          : 'Playback could not be confirmed. Check Sonos before trying again.'
       }
     } catch {
       if (alive) playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'
@@ -178,6 +204,8 @@
               {:else if choice.kind === 'favorite' || choice.kind === 'artist_mix'}
                 {#if selection?.choice_ids.includes(choice.id)}
                   <button class="open" type="button" disabled={starting || busy} on:click={() => startSelection(choice)}>Play on Sonos <Headphones size={15}/></button>
+                {:else if selectionUsed}
+                  <span class="pending">{starting ? 'Starting selection?' : 'Selection used. Find music for a new selection.'}</span>
                 {:else}
                   <span class="pending">{choice.kind === 'favorite' ? 'Playlist' : 'Mix'} playback unavailable for this selection</span>
                 {/if}

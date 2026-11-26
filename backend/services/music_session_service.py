@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
-from backend.services.audio_ownership import INTERRUPTION, QUEUE_SOURCE, TRANSPORT
+from backend.services.audio_ownership import AUDIO_DIMENSIONS, INTERRUPTION, QUEUE_SOURCE, TRANSPORT
 from backend.services.music_favorite_execution import start_selected_favorite
 from backend.services.music_listening_choices import build_listening_choices
 from backend.services.music_manual_policy import manual_volume_policy
@@ -128,7 +128,7 @@ class ListeningSessionService:
                 return _refused("runtime_policy_refused")
             # Shared admission: claims cannot displace existing durable owners.
             epoch = await authority.capture_opportunistic(
-                (QUEUE_SOURCE, TRANSPORT, INTERRUPTION), claim=True,
+                AUDIO_DIMENSIONS, claim=True,
             )
         except Exception:
             return _refused("authority_unavailable")
@@ -141,6 +141,9 @@ class ListeningSessionService:
         stopped_evidence = None
         stopped_device = None
         preparation = None
+        cap_evidence = None
+        cap_device = None
+        cap_checked = False
 
         def session_allowed():
             try:
@@ -196,13 +199,29 @@ class ListeningSessionService:
                 candidate = await sonos.get_prepare_evidence()
                 if device is not None and sonos.device is device and SonosService.prepare_stopped_eligible(candidate):
                     stopped_volume = candidate["volume"]
-                    if not 0 < stopped_volume <= manual_volume_policy(automation)["volume_ceiling"]:
-                        return _refused("sonos_volume_above_policy")
+                    ceiling = manual_volume_policy(automation)["volume_ceiling"]
+                    if type(stopped_volume) is not int or type(ceiling) is not int or not 0 < stopped_volume <= 100 or ceiling <= 0:
+                        return _refused("volume_or_authority_unavailable")
                     if not current():
                         return _refused("authority_changed")
                     stopped_evidence = dict(candidate)
                     stopped_device = device
-                    volume = stopped_volume
+                    volume = min(stopped_volume, ceiling)
+                    if volume < stopped_volume:
+                        cap_evidence, cap_device = dict(candidate), device
+            if stopped_evidence is None and initial.get("reason") == "sonos_volume_above_policy":
+                device = sonos.device
+                candidate = await sonos.get_prepare_evidence()
+                ceiling = manual_volume_policy(automation)["volume_ceiling"]
+                if (device is None or sonos.device is not device or not current()
+                        or not SonosService.prepare_unloaded(candidate)
+                        or type(candidate.get("volume")) is not int or type(ceiling) is not int
+                        or candidate["volume"] != initial.get("volume_before")
+                        or not 0 < ceiling < candidate["volume"] <= 100):
+                    return _refused("volume_cap_source_changed")
+                cap_evidence, cap_device = dict(candidate), device
+                volume = ceiling
+                initial = {**initial, "reason": None, "volume_used": volume}
             if stopped_evidence is None and initial.get("reason") is not None:
                 if (
                     self._sustained is None
@@ -214,13 +233,18 @@ class ListeningSessionService:
                 if repeat_origin is None:
                     return _refused(initial["reason"])
                 repeat_evidence = await probe_repeat_queue(
-                    sonos, repeat_origin, ceiling=manual_volume_policy(automation)["volume_ceiling"],
+                    sonos, repeat_origin, ceiling=100,
                     still_current=current,
                 )
                 if repeat_evidence is None or not current():
                     return _refused(initial["reason"])
-                volume = repeat_evidence["volume"]
-            elif stopped_evidence is None:
+                ceiling = manual_volume_policy(automation)["volume_ceiling"]
+                if type(ceiling) is not int or ceiling <= 0:
+                    return _refused("volume_or_authority_unavailable")
+                volume = min(repeat_evidence["volume"], ceiling)
+                if volume < repeat_evidence["volume"]:
+                    cap_evidence, cap_device = dict(repeat_evidence), repeat_origin.device
+            elif stopped_evidence is None and volume is None:
                 volume = initial.get("volume_used")
             if type(volume) is not int or not current():
                 return _refused("volume_or_authority_unavailable")
@@ -234,6 +258,49 @@ class ListeningSessionService:
             )
             if not current():
                 return _refused("authority_changed")
+
+        if cap_evidence is not None:
+            if not callable(getattr(sonos, "clamp_prepared_volume", None)):
+                return _refused("volume_cap_unavailable")
+            try:
+                fresh = await self._planner.preview(ticket.request, choice_id, limit=ticket.limit)
+                if fresh != selected or not current():
+                    return _refused("volume_cap_selection_changed")
+                if tail and not await self._continuation_planner.revalidate(
+                    tail, mode=ticket.request.resolved_request.mode,
+                ):
+                    return _refused("volume_cap_selection_changed")
+                if repeat_origin is not None and await probe_repeat_queue(
+                    sonos, repeat_origin, ceiling=100, still_current=current,
+                ) != cap_evidence:
+                    return _refused("volume_cap_source_changed")
+                validated_at = self._clock()
+
+                async def cap_admitted():
+                    if (not current() or sonos.device is not cap_device
+                            or not 0 <= self._clock() - validated_at <= MAX_START_VALIDATION_AGE
+                            or await sonos.get_prepare_evidence() != cap_evidence or not current()):
+                        return {"status": "refused", "reason": "volume_cap_source_changed"}
+                    if repeat_origin is not None and await probe_repeat_queue(
+                        sonos, repeat_origin, ceiling=100, still_current=current,
+                    ) != cap_evidence:
+                        return {"status": "refused", "reason": "volume_cap_source_changed"}
+                    if not current() or not 0 <= self._clock() - validated_at <= MAX_START_VALIDATION_AGE:
+                        return {"status": "refused", "reason": "volume_cap_authority_changed"}
+                    return await sonos.clamp_prepared_volume(cap_device, cap_evidence, volume, current)
+
+                executed, receipt = await authority.run_if_opportunistic(epoch, cap_admitted)
+                if not executed:
+                    return _refused("volume_cap_authority_changed")
+                if receipt.get("status") != "ready":
+                    return MixStartResult("indeterminate" if receipt.get("status") == "indeterminate" else "suppressed", receipt.get("reason", "volume_cap_refused"))
+                capped_evidence = dict(cap_evidence, volume=volume)
+                if stopped_evidence is not None:
+                    stopped_evidence = capped_evidence
+                if repeat_evidence is not None:
+                    repeat_evidence = capped_evidence
+            except Exception:
+                return MixStartResult("indeterminate", "volume_cap_outcome_unknown")
 
         async def mutation_runner(operation):
             # Provider and taste reads must not delay manual audio commands.
@@ -252,12 +319,21 @@ class ListeningSessionService:
                 return None
 
             async def admitted():
-                nonlocal preparation
+                nonlocal preparation, cap_checked
                 if (
                     not current()
                     or not 0 <= self._clock() - validated_at <= MAX_START_VALIDATION_AGE
                 ):
                     return None
+                if cap_evidence is not None and not cap_checked:
+                    if (not current() or sonos.device is not cap_device
+                            or await sonos.get_prepare_evidence() != capped_evidence or not current()):
+                        return None
+                    if repeat_origin is not None and await probe_repeat_queue(
+                        sonos, repeat_origin, ceiling=100, still_current=current,
+                    ) != capped_evidence:
+                        return None
+                    cap_checked = True
                 if stopped_evidence is not None and preparation is None:
                     # No new transport primitive: reuse the deployed guarded
                     # exact-source unload and verify it before any append.
@@ -320,7 +396,7 @@ class ListeningSessionService:
             if result.status == "started" and started and current():
                 try:
                     append_token = await authority.capture_listening_append(
-                        epoch, manual_revision=manual_revision,
+                        {key: epoch[key] for key in (QUEUE_SOURCE, TRANSPORT, INTERRUPTION)}, manual_revision=manual_revision,
                     )
                     if append_token is not None and current() and state.bootstrap_ready is True:
                         proof, device, rows = started[0]

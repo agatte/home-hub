@@ -820,6 +820,18 @@ the durable claim remains pending; the next retry terminalizes it as `indetermin
 and never replays or fabricates learning evidence. No contextual auto-play, new-music
 exploration, queue continuation, or session DJ behavior is enabled by this slice.
 
+**DECIDED TARGET (#461, 2026-11-25):** the separate explicit owner-selected
+listening session may lower a positive, unmuted Sonos volume to the current
+time-period ceiling before starting a verified mix or supported favorite.
+Night/late-night ceiling is 18, evening 25, day 30. Preserve lower positive
+volume; never automatically raise zero, unmute, restore upward, or retry an
+uncertain write. This supersedes the no-volume-write rule for selected
+listening starts only, not the single-track assisted ledger above or any
+autonomous playback. Require the existing shared audio writer authority
+(including volume), unchanged source/queue/device evidence, current lifecycle
+and owner intent, and exact readback before further playback writes.
+Actual audible start and continuation remain separate physical acceptance gates.
+
 ### Desk, kitchen, Winding Down, and mornings
 
 **DECIDED TARGET.** Late-night desk work remains a core success case; do not add

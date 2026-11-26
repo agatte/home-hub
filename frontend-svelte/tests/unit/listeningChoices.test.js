@@ -115,3 +115,18 @@ it('explains unavailable owner context without offering play', async () => {
   expect(screen.queryByRole('button', { name: 'Play on Sonos' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Open album in Apple Music (external)' })).toBeInTheDocument()
 })
+
+it('explains a refused volume adjustment without claiming Sonos is unavailable', async () => {
+  const mix = { id: 'artist_mix:21,22', kind: 'artist_mix', title: 'Example mix', tracks: [] }
+  post.mockResolvedValueOnce({
+    ...response([mix]),
+    listening_selection: { status: 'selection_available', token: 'test-ticket', choice_ids: [mix.id], actuation_allowed: false },
+  }).mockResolvedValueOnce({ status: 'suppressed', reason: 'volume_cap_source_changed' })
+  render(ListeningChoices)
+  await fireEvent.click(screen.getByRole('button', { name: 'Relaxing' }))
+  await fireEvent.click(await screen.findByRole('button', { name: 'Play on Sonos' }))
+  await screen.findByText('The speaker or queue changed before volume could be adjusted. Find music again when ready.')
+  expect(screen.getByText('Selection used. Find music for a new selection.')).toBeInTheDocument()
+  expect(screen.queryByText('Mix playback unavailable for this selection')).not.toBeInTheDocument()
+  expect(post).toHaveBeenCalledTimes(2)
+})
