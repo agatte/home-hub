@@ -19,7 +19,7 @@ from backend.services.music_requests import MusicRequest
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("home_hub.music_routes")
 
 
 @router.get("/lastfm-shadow/status", dependencies=[
@@ -460,6 +460,10 @@ async def start_listening(
         "volume_cap_selection_changed", "volume_cap_unavailable",
         "volume_cap_unverified", "volume_cap_outcome_unknown", "volume_cap_refused",
         "playback_start_unverified", "execution_outcome_unknown",
+        "initial_admission_failed", "append_unverified", "play_command_unverified",
+        "authority_or_queue_changed_before_append", "authority_or_queue_changed_before_play",
+        "authority_changed_at_verification", "authority_changed_during_planning",
+        "repeat_append_unverified", "repeat_selection_unavailable",
         "source_preparation_unverified", "source_prepared_start_unverified",
         "repeat_queue_changed", "repeat_playback_start_unverified",
         "mix_member_not_verified", "current_taste_or_approval_veto",

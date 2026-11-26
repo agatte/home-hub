@@ -62,14 +62,14 @@ class Device:
     def queue_size(self):
         return len(self.ids)
 
-    @staticmethod
-    def resource(identity):
-        return f"x-sonos-http:song%3a{identity}?sid=204"
+    resource_scheme = "x-sonos-http"
 
-    @classmethod
-    def row(cls, identity):
+    def resource(self, identity):
+        return f"{self.resource_scheme}:song%3a{identity}?sid=204"
+
+    def row(self, identity):
         return (f"<item><title>Track {identity}</title><artist>Artist</artist>"
-                f"<res>{cls.resource(identity)}</res></item>")
+                f"<res>{self.resource(identity)}</res></item>")
 
     def Browse(self, args, **kwargs):
         values = dict(args)
@@ -218,8 +218,10 @@ async def make_session(kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["artist_mix", "favorite"])
 @pytest.mark.parametrize("unloaded", [False, True])
-async def test_above_ceiling_is_capped_before_start(kind, unloaded):
+@pytest.mark.parametrize("scheme", ["x-sonos-http", "x-sonosapi-hls-static"])
+async def test_above_ceiling_is_capped_before_start(kind, unloaded, scheme):
     _, device, _, start = await make_session(kind)
+    device.resource_scheme = scheme
     device._volume = 25
     if unloaded:
         device.media = device.track = device.metadata = ""
@@ -263,8 +265,10 @@ async def test_explicit_start_fences_older_volume_authority():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["artist_mix", "favorite"])
-async def test_stopped_source_real_prepare_and_executor(kind):
+@pytest.mark.parametrize("scheme", ["x-sonos-http", "x-sonosapi-hls-static"])
+async def test_stopped_source_real_prepare_and_executor(kind, scheme):
     _, device, _, start = await make_session(kind)
+    device.resource_scheme = scheme
     result = await start()
     assert result.status == "started", result
     appends = ["Append:11", "Append:12"] if kind == "artist_mix" else ["AppendPlaylist"]

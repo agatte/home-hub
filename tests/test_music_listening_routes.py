@@ -63,9 +63,11 @@ def test_preview_and_start_require_direct_owner_context(monkeypatch, caplog):
     assert response.json()["listening_selection"]["token"] == "synthetic-ticket"
     scope = hashlib.sha256(b"synthetic-owner").hexdigest()
     assert service.calls == [("issue", scope, 6)]
-    with caplog.at_level("INFO", logger="backend.api.routes.music"):
+    # Enable the same parent namespace as production, not the child under test.
+    with caplog.at_level("INFO", logger="home_hub"):
         response = client.post("/api/music/listening/start", json=payload, headers=headers)
     assert "Listening start: status=suppressed reason=other" in caplog.text
+    assert any(r.name == "home_hub.music_routes" for r in caplog.records)
     assert "synthetic-ticket" not in caplog.text
     assert scope not in caplog.text
     assert response.status_code == 200

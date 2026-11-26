@@ -1,8 +1,8 @@
 """Narrow Apple queue resource identity for explicit listening.
 
-Only the tested native song resource and Apple service identifier are
-supported. A numeric ID alone is not provider identity. Other native formats
-require physical evidence before adding support.
+Only the two observed native song schemes and Apple service identifier are
+supported. A numeric ID alone is not provider identity. The HLS-static scheme
+was witnessed on the physical speaker in #585; other formats require evidence.
 """
 import re
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -15,7 +15,7 @@ def apple_song_id(uri: str) -> str | None:
         parsed = urlsplit(uri)
         if parsed.fragment or parse_qs(parsed.query, keep_blank_values=True).get("sid") != ["204"]:
             return None
-        match = re.fullmatch(r"x-sonos-http:song:([0-9]+)", unquote(uri.split("?", 1)[0]),
+        match = re.fullmatch(r"(?:x-sonos-http|x-sonosapi-hls-static):song:([0-9]+)", unquote(uri.split("?", 1)[0]),
                              flags=re.IGNORECASE)
         return match.group(1) if match else None
     except ValueError:
