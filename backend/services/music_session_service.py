@@ -72,15 +72,15 @@ class ListeningSessionService:
                 or request.discovery.actuation_allowed is not False
             ))
         ):
-            return {"status": "unavailable"}
+            return {"status": "unavailable", "reason": "preview_unavailable"}
         projected = build_listening_choices(request.to_dict(), limit=limit)["choices"]
         choices = frozenset(row["id"] for row in projected if row["kind"] in {"artist_mix", "favorite"})
         if not choices:
-            return {"status": "unavailable"}
+            return {"status": "unavailable", "reason": "no_eligible_playback"}
         runtime_mode = str(getattr(getattr(self._state, "automation", None),
                                    "current_mode", "") or "").strip().casefold()
         if not runtime_mode or MusicRequestResolver._mode(runtime_mode) != request.resolved_request.mode:
-            return {"status": "unavailable"}
+            return {"status": "unavailable", "reason": "mode_changed"}
         now = self._clock()
         self._tickets = {key: value for key, value in self._tickets.items() if value.expires > now}
         if len(self._tickets) >= MAX_TICKETS:

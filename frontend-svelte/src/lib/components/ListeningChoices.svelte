@@ -21,6 +21,7 @@
   let selection = null
   let starting = false
   let playbackMessage = ''
+  let availabilityMessage = ''
   let alive = true
   onDestroy(() => { alive = false })
 
@@ -35,6 +36,7 @@
     result = null
     selection = null
     playbackMessage = ''
+    availabilityMessage = ''
     try {
       const response = await apiPost('/api/music/request/preview', {
         request: text, listening: true, count: 6, tracks_per_artist: 3,
@@ -50,6 +52,14 @@
       if (ticket?.status === 'selection_available' && ticket.actuation_allowed === false
           && typeof ticket.token === 'string' && Array.isArray(ticket.choice_ids)) {
         selection = ticket
+      } else {
+        availabilityMessage = ({
+          owner_context_required: 'Play on Sonos requires a direct owner session.',
+          no_eligible_playback: 'No verified playable choices are available for this mood.',
+          mode_changed: 'The house mode changed. Find music again.',
+          service_unavailable: 'The listening service is unavailable right now.',
+          preview_unavailable: 'The music preview is unavailable right now.',
+        })[ticket?.reason] || 'Sonos playback is unavailable right now.'
       }
     } catch {
       if (alive) error = 'Could not find music right now. Try again in a moment.'
@@ -80,7 +90,14 @@
           playbackMessage += ' Continuous listening was enabled for this session.'
         }
       } else if (receipt?.status === 'suppressed') {
-        playbackMessage = `Your ${label} did not start. Find music again when Sonos is ready.`
+        const reason = receipt.reason
+        if (['selection_expired', 'selection_mode_changed', 'selection_unavailable', 'choice_not_visible'].includes(reason)) {
+          playbackMessage = 'Your selection expired or changed. Find music again.'
+        } else if (['mix_member_not_verified', 'current_taste_or_approval_veto', 'favorite_identity_changed'].includes(reason)) {
+          playbackMessage = 'This selection is no longer eligible for playback. Find music again.'
+        } else {
+          playbackMessage = `Your ${label} did not start because Sonos or playback is unavailable. Find music again when ready.`
+        }
       } else {
         playbackMessage = 'Playback could not be confirmed. Check Sonos before trying again.'
       }
@@ -133,6 +150,7 @@
   {:else if error}
     <p class="status" role="alert">{error}</p>
   {:else if result}
+    {#if availabilityMessage}<p class="status" role="status">{availabilityMessage}</p>{/if}
     <div class="results-heading">
       <h3>For your mood</h3>
       <span>{result.choices.length} choices</span>
@@ -153,10 +171,10 @@
               {#if choice.familiarity === 'familiar' || choice.familiarity === 'proven'}<span class="taste">{choice.kind === 'favorite' ? 'Familiar to you' : 'Familiar artist'}</span>{:else if choice.familiarity === 'exploratory'}<span class="taste">Explore this artist</span>{/if}
               {#if choice.kind === 'album' && choice.matched_track}<p>Suggested from {choice.matched_track}</p>{/if}
               {#if choice.kind === 'artist_mix'}
-                <details><summary>View mix</summary><ul>{#each choice.tracks || [] as track}<li>{track.title}</li>{/each}</ul></details>
+                <details><summary>View mix</summary><ul>{#each choice.tracks || [] as track}<li>{track.title}{#if track.artist} ? {track.artist}{/if}</li>{/each}</ul></details>
               {/if}
               {#if albumLink(choice)}
-                <a class="open" href={albumLink(choice) || undefined} target="_blank" rel="noopener noreferrer">Open in Apple Music <ArrowUpRight size={15}/></a>
+                <a class="open" href={albumLink(choice) || undefined} target="_blank" rel="noopener noreferrer">Open album in Apple Music (external) <ArrowUpRight size={15}/></a>
               {:else if choice.kind === 'favorite' || choice.kind === 'artist_mix'}
                 {#if selection?.choice_ids.includes(choice.id)}
                   <button class="open" type="button" disabled={starting || busy} on:click={() => startSelection(choice)}>Play on Sonos <Headphones size={15}/></button>

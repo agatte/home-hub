@@ -28,7 +28,7 @@ it('requests a balanced mood preview only on deliberate selection and shows real
   expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/music/request/preview', {
     request: 'relaxing', listening: true, count: 6, tracks_per_artist: 3,
   }, { timeout: 30000 })
-  const link = await screen.findByRole('link', { name: 'Open in Apple Music' })
+  const link = await screen.findByRole('link', { name: 'Open album in Apple Music (external)' })
   expect(link).toHaveAttribute('href', album.apple_music_url)
   expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   expect(screen.getByText('Example Album')).toBeInTheDocument()
@@ -46,7 +46,7 @@ it('submits a free-text mood and never offers an unverified external link or pla
   await fireEvent.click(screen.getByRole('button', { name: 'Find music' }))
   await screen.findByText('Example mix')
   expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/music/request/preview', expect.objectContaining({ request: 'Relaxing but upbeat' }), expect.anything())
-  expect(screen.queryByRole('link', { name: 'Open in Apple Music' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Open album in Apple Music (external)' })).not.toBeInTheDocument()
   expect(screen.getByText('Mix playback unavailable for this selection')).toBeInTheDocument()
   expect(screen.getByText('Playlist playback unavailable for this selection')).toBeInTheDocument()
 })
@@ -104,4 +104,14 @@ it('starts a familiar playlist only through its selected ticket', async () => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Play on Sonos' }))
   expect(post).toHaveBeenNthCalledWith(2, '/api/music/listening/start', { token: 'test-ticket', choice_id: favorite.id }, { timeout: 120000 })
   await screen.findByText('Your playlist started on Sonos.')
+})
+
+
+it('explains unavailable owner context without offering play', async () => {
+  post.mockResolvedValue({ ...response([album]), listening_selection: { status: 'unavailable', reason: 'owner_context_required' } })
+  render(ListeningChoices)
+  await fireEvent.click(screen.getByRole('button', { name: 'Relaxing' }))
+  await screen.findByText('Play on Sonos requires a direct owner session.')
+  expect(screen.queryByRole('button', { name: 'Play on Sonos' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Open album in Apple Music (external)' })).toBeInTheDocument()
 })

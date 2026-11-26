@@ -260,3 +260,44 @@ async def test_stopped_source_cancel_during_real_unload_never_appends():
         await task
     assert device.writes == ["Unload"]
     assert (await start()).status == "suppressed"
+
+@pytest.mark.asyncio
+async def test_cross_artist_mood_mix_real_planner_prepare_and_executor():
+    from tests.test_music_selected_plan import Approvals, Catalog, Taste
+    from backend.services.music_selected_plan import SelectedListeningPlanner
+
+    state, device, _, _ = await make_session("artist_mix")
+    original = request(album=True)
+    cluster = original.discovery.clusters[0]
+    first = replace(cluster, tracks=(cluster.tracks[0],))
+    second_track = replace(cluster.tracks[1], artist_name="Other", album_provider_id="456",
+                           album_external_url="https://music.apple.com/us/album/other/456")
+    second = replace(cluster, artist_name="Other", tracks=(second_track,))
+    req = replace(original, familiar_suggestions=(),
+                  discovery=replace(original.discovery, clusters=(first, second)))
+    items = {}
+    for identity, artist in (("11", "Artist"), ("12", "Other")):
+        url = f"https://music.apple.com/us/album/example/1?i={identity}"
+        candidate = song(identity)
+        items[identity] = replace(candidate, uri=url, playback_reference=url,
+                                  metadata={**candidate.metadata, "artist_name": artist})
+    catalog = Catalog(items)
+    planner = SelectedListeningPlanner(catalog=catalog, taste_provider=Taste(), approval_service=Approvals())
+    service = ListeningSessionService(state, planner)
+    issued = service.issue(req, owner_scope="owner")
+    assert issued["choice_ids"] == ["artist_mix:11,12"]
+    result = await service.start(issued["token"], "artist_mix:11,12", owner_scope="owner",
+                                 authorized=lambda: True)
+    assert result.status == "started", result
+    assert device.writes == ["Unload", "Append:11", "Append:12", "SetQueue", "Seek", "Play"]
+    assert catalog.calls == [("itunes_search", identity) for identity in ("11", "12", "11", "12")]
+
+    # A current artist mismatch must veto the whole selection before device I/O.
+    state, device, _, _ = await make_session("artist_mix")
+    items["12"] = replace(items["12"], metadata={**items["12"].metadata, "artist_name": "Wrong"})
+    service = ListeningSessionService(state, planner)
+    issued = service.issue(req, owner_scope="owner")
+    result = await service.start(issued["token"], "artist_mix:11,12", owner_scope="owner",
+                                 authorized=lambda: True)
+    assert result.reason == "mix_member_not_verified"
+    assert not device.writes
