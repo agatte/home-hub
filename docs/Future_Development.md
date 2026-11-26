@@ -194,6 +194,10 @@ AI/audio embeddings may help label or cluster these narrow events, but the outpu
 shadow evidence, not room truth. Prefer a small confusion matrix over a grand generic
 "understand the apartment" audio model.
 
+### PARKED — Sound-reactive Apartment Canvas storytelling
+
+Historical owner idea (2026-08-19), recovered under #365 and [#157](https://github.com/agatte/home-hub/issues/157#issuecomment-7179527236): translate qualified environmental sound-event classes into brief illustrative miniature-world motifs (for example birds or passing vehicles). Reuse the Sound Atlas candidate; no second sensing engine. This is a presentation experiment, not physical presence, emergency detection, location inference or device authority. A future separate privacy/consent decision and bounded non-recording shadow evaluation must establish confidence and abstention; motifs never claim an actual source or event. Park behind #461 and #192 physical/visual acceptance.
+
 ## CANDIDATE — Routine mining, not another generic mode predictor
 
 Mine recurring sequences already present in HomeHub history: arrival → kitchen →
@@ -420,6 +424,10 @@ Do not rely on unsolicited long TTS.
 Create an abstract post-game artifact from score, opponent, scoring/momentum
 timeline, turning point, and HomeHub celebration events. Build a season history
 without retaining copyrighted broadcast screenshots/video.
+
+## CANDIDATE — Individual-player season storytelling
+
+Historical owner idea (2026-08-14), recovered in [#253](https://github.com/agatte/home-hub/issues/253#issuecomment-7180122583): extend truthful single-play commentary and season-scoped team form with verified individual milestones, recent four-game performance and game-to-game comparisons. Prefer bounded existing-provider/stat aggregation over a large sports database. First gate: read-only feasibility and deterministic fact/phrase checks for player/season identity, freshness and completeness; omit unsupported narratives. Preserve viewer-clock alignment and speech/celebration authority. A parked Game Day enhancement, not an added #253 closure requirement or reason to reopen #45.
 
 ## CANDIDATE — Crowd Energy
 
