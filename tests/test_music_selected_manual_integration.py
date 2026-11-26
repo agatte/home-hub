@@ -320,3 +320,88 @@ async def test_suffix_refill_preserves_foreign_prefix_and_manual_precedence():
     await service._sustained.tick()
     assert service._sustained._active is None
     assert device.writes == [*before, "Append:21"]
+
+
+def _native_stop_reset(device, after_stop=lambda: None):
+    """Replay the physical Stop field delta witnessed November 26."""
+    old_stop = device.Stop
+    old_position = device.GetPositionInfo
+
+    def position(args, **kwargs):
+        result = old_position(args, **kwargs)
+        if device.state == "STOPPED" and device.index == 0:
+            result.update(TrackURI="", TrackMetaData="", TrackDuration="0:00:00")
+        elif device.state == "PLAYING":
+            result["TrackMetaData"] = (
+                '<DIDL-Lite><item xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                '<dc:title>Old track</dc:title></item></DIDL-Lite>'
+            )
+        return result
+
+    def stop(args, **kwargs):
+        old_stop(args, **kwargs)
+        device.index = 0
+        device.track = ""
+        after_stop()
+
+    device.GetPositionInfo = position
+    device.Stop = stop
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["artist_mix", "favorite"])
+@pytest.mark.parametrize("volume", [0, 18])
+async def test_native_stop_reset_starts_selected_music(kind, volume):
+    _, device, _, play = await session(kind, transport="PLAYING", volume=volume)
+    device.ids = ["foreign"] * 4
+    _native_stop_reset(device)
+    result = await play()
+    assert result.status == "started", (result, device.writes)
+    assert device.ids == ["foreign"] * 4 + (
+        ["11", "12"] if kind == "artist_mix" else ["121", "122"]
+    )
+    assert device.index == 5 and device.volume == 18
+    assert device.writes.count("Stop") == 1
+    assert device.writes[-3:] == ["SetQueue", "Seek", "Play"]
+    if volume == 0:
+        assert device.writes.index("Stop") < device.writes.index("Volume:18")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    "source", "media_metadata", "queue_rows", "revision", "volume",
+    "mute", "mode", "coordinator", "intent", "nonzero_cursor",
+])
+async def test_native_stop_reset_preserves_other_fences(change):
+    state, device, _, play = await session("artist_mix", transport="PLAYING", volume=0)
+    device.ids = ["foreign"] * 4
+
+    def mutate():
+        if change == "source":
+            device.media = "x-sonos-htastream:tv"
+        elif change == "media_metadata":
+            device.metadata = "<DIDL-Lite/>"
+        elif change == "queue_rows":
+            device.ids[1] = "different"
+        elif change == "revision":
+            device.revision += 1
+        elif change == "volume":
+            device._volume = 10
+        elif change == "mute":
+            device.mute = True
+        elif change == "mode":
+            device.play_mode = "SHUFFLE"
+        elif change == "coordinator":
+            device.is_coordinator = False
+        elif change == "intent":
+            state.audio_ownership.record_manual_intent((TRANSPORT,))
+        elif change == "nonzero_cursor":
+            device.index = 2
+
+    _native_stop_reset(device, mutate)
+    result = await play()
+    assert result.status == "indeterminate"
+    assert result.reason == "manual_stop_unverified"
+    assert device.writes[-1] == "Stop"
+    assert "Play" not in device.writes
+    assert not any(w.startswith("Volume:") for w in device.writes)
