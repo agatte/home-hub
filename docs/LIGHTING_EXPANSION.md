@@ -678,6 +678,15 @@ The broader scene families remain design targets. Plant Wash guidance below is
 the completed real-room calibration boundary and supersedes the original paper
 brightness assumptions.
 
+## Historical owner preferences — August–September 2026
+
+Recovered 2026-11-25 under #365; these are context-specific observations and future calibration hypotheses, **not current numeric commands, blanket palette bans or permission to actuate**.
+
+- For daylight/late-afternoon living-room compositions, muted green was disliked on the kitchen pendants but could work on Plant Wash. The living-room anchor should remain sufficiently visible for the remaining daylight. An August 30 General/day comparison favored CT 350 over 330 at that session's brightness balance; do not restore the historical targets without current fixture/desk/daylight calibration. [#130 provenance](https://github.com/agatte/home-hub/issues/130#issuecomment-7179920458).
+- During Bed/projector Watching, consider Plant Wash as the primary living-room accent with a complementary rather than identical color to bedroom ScreenSync. This remains an unvalidated aesthetic hypothesis. [#154 provenance](https://github.com/agatte/home-hub/issues/154#issuecomment-7179921119). #202 remains cap-only; scene selection belongs to its authorized composition owner and must respect current physical context, manual, external-off, Away, Sleeping, ScreenSync, transit and other protected ownership. No relighting or numeric target implied.
+
+Retain #129 → #130 lived validation sequencing and the separate #154/#202 gates. Newer real-room evidence supersedes historical calibration.
+
 ## `connor_color`
 
 | Layer | Starting role |
