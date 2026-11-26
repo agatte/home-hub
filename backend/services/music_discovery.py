@@ -475,9 +475,8 @@ class MusicDiscoveryService:
                 ).strip()
                 playback_adapter = raw_track.get("playback_adapter")
                 playback_reference = raw_track.get("playback_reference")
-                playback_reason = str(
-                    raw_track.get("playback_reason") or "no_exact_playable_provider_match"
-                )
+                # Only the catalog resolver may attest an exact playable match.
+                playback_reason = "no_exact_playable_provider_match"
             if track_match.classification == "exploratory":
                 exploratory_count += 1
             track_preferences.append(track_match.preference)

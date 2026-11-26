@@ -67,6 +67,9 @@ def build_listening_choices(payload: dict[str, Any], *, limit: int = 6) -> dict[
         })
 
     artists = set()
+    mood_tracks = []
+    mood_ids = set()
+    mood_artists = set()
     for cluster in (payload.get("discovery") or {}).get("clusters") or ():
         artist = str(cluster.get("artist_name") or "").strip()
         artist_key = artist.casefold()
@@ -93,6 +96,24 @@ def build_listening_choices(payload: dict[str, Any], *, limit: int = 6) -> dict[
             tracks.append(track)
         if not tracks:
             continue
+        # Each cluster already contains individually mood/taste-qualified tracks.
+        # Only exact supported ShareLink evidence may become an actionable mix.
+        from backend.services.sonos_service import SonosService
+        playable = []
+        for track in tracks:
+            try:
+                exact = SonosService._canonical_apple_music_share_link(track.get("playback_reference") or "")
+            except Exception:
+                exact = None
+            if (track.get("playback_capability") == "supported"
+                    and track.get("playback_adapter") == "sonos_apple_music_share_link"
+                    and track.get("playback_reason") == "provider_exact_match"
+                    and exact == "song:" + track["provider_id"]):
+                playable.append(track)
+        if playable and artist_key not in mood_artists and playable[0]["provider_id"] not in mood_ids:
+            mood_artists.add(artist_key)
+            mood_ids.add(playable[0]["provider_id"])
+            mood_tracks.append(playable[0])
         album = None
         for track in tracks:
             link = _album_link(track)
@@ -106,8 +127,9 @@ def build_listening_choices(payload: dict[str, Any], *, limit: int = 6) -> dict[
         }
         # Offer a mix as well as albums across different artists. A sampler
         # represents exact track identities, not a provider-created playlist.
-        if len(tracks) >= 2 and (album is None or len(discovery) % 2 == 1):
-            identities = [track["provider_id"] for track in tracks]
+        if len(playable) >= 2:
+            playable = playable[:5]
+            identities = [track["provider_id"] for track in playable]
             choice = {
                 **base,
                 "id": "artist_mix:" + ",".join(identities),
@@ -115,13 +137,14 @@ def build_listening_choices(payload: dict[str, Any], *, limit: int = 6) -> dict[
                 "title": artist + " mix",
                 "tracks": [
                     {"provider": "itunes_search", "provider_id": track["provider_id"],
-                     "title": track["track_name"]}
-                    for track in tracks
+                     "title": track["track_name"], "artist": artist}
+                    for track in playable
                 ],
                 "sonos": "session_required",
                 "apple_music_url": None,
             }
-        elif album is not None:
+            discovery.append(choice)
+        if album is not None:
             track, album_id, link = album
             seen.add(("itunes_album", album_id))
             choice = {
@@ -133,10 +156,22 @@ def build_listening_choices(payload: dict[str, Any], *, limit: int = 6) -> dict[
                 "sonos": "not_verified",
                 "apple_music_url": link,
             }
-        else:
-            continue
-        artists.add(artist_key)
-        discovery.append(choice)
+            discovery.append(choice)
+        if len(playable) >= 2 or album is not None:
+            artists.add(artist_key)
+
+    # artist_mix is the existing exact ordered track contract, also used for
+    # cross-artist mixes. Per-track artists are mandatory for revalidation.
+    if len(mood_tracks) >= 2:
+        mood_tracks = mood_tracks[:5]
+        discovery.insert(0, {
+            "id": "artist_mix:" + ",".join(t["provider_id"] for t in mood_tracks),
+            "kind": "artist_mix", "title": "Mood mix", "artist": None,
+            "tracks": [{"provider": "itunes_search", "provider_id": t["provider_id"],
+                        "title": t["track_name"], "artist": t["artist_name"]}
+                       for t in mood_tracks],
+            "sonos": "session_required", "apple_music_url": None,
+        })
 
     choices = []
     for index in range(max(len(familiar), len(discovery))):
@@ -147,6 +182,11 @@ def build_listening_choices(payload: dict[str, Any], *, limit: int = 6) -> dict[
         if len(choices) >= limit:
             break
     choices = choices[:limit]
+    # Preserve a catalog album destination when the bounded list has room
+    # for it alongside at least one playable choice.
+    albums = [row for row in discovery if row["kind"] == "album"]
+    if limit >= 2 and albums and not any(row["kind"] == "album" for row in choices):
+        choices[-1] = albums[0]
     return {
         "status": "ready" if len(choices) == limit else "partial" if choices else "unavailable",
         "choices": choices,

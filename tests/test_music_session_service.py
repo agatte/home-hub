@@ -108,8 +108,8 @@ async def test_expired_hidden_album_and_untrusted_preview_abstain(monkeypatch):
     now[0] = 120
     assert (await start(service, token)).reason == "selection_expired"
     assert (await start(service, ticket(service), "artist_mix:11,99")).reason == "choice_not_visible"
-    assert service.issue(request(album=True), owner_scope="owner")["choice_ids"] == ["sonos_favorite:fav1"]
-    assert service.issue(replace(request(), actuation_allowed=True), owner_scope="owner") == {"status": "unavailable"}
+    assert service.issue(request(album=True), owner_scope="owner")["choice_ids"] == ["artist_mix:11,12", "sonos_favorite:fav1"]
+    assert service.issue(replace(request(), actuation_allowed=True), owner_scope="owner") == {"status": "unavailable", "reason": "preview_unavailable"}
     with pytest.raises(TypeError):
         service.issue({}, owner_scope="owner")
     assert planner.calls == 0 and writes == []

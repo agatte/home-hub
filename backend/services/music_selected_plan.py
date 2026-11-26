@@ -134,7 +134,7 @@ class SelectedListeningPlanner:
                     identity = track["provider_id"]
                     current = await self._catalog.get_by_identity("itunes_search", identity)
                     if current is None or not _exact_song(
-                        current, identity, track["title"], choice["artist"],
+                        current, identity, track["title"], track["artist"],
                     ):
                         return unavailable("mix_member_not_verified", kind)
                     candidates.append(current)

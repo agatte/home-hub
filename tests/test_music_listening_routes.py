@@ -45,7 +45,9 @@ def test_preview_and_start_require_direct_owner_context(monkeypatch):
     client, service = client_for(monkeypatch)
     preview = {"request": "relaxing", "listening": True}
     payload = {"token": "synthetic-ticket", "choice_id": "artist_mix:11,12"}
-    assert "listening_selection" not in client.post("/api/music/request/preview", json=preview).json()
+    assert client.post("/api/music/request/preview", json=preview).json()["listening_selection"] == {
+        "status": "unavailable", "reason": "owner_context_required",
+    }
     assert client.post("/api/music/listening/start", json=payload).status_code == 401
     client.cookies.set(owner_session.COOKIE, "synthetic-owner")
     assert client.post("/api/music/listening/start", json=payload).status_code == 401

@@ -398,7 +398,11 @@ async def preview_music_request(request: Request, response: Response) -> dict:
         response.headers["Cache-Control"] = "no-store"
         scope = _listening_owner_scope(request)
         session = getattr(request.app.state, "music_listening_session", None)
-        if scope is not None and session is not None:
+        if scope is None:
+            payload["listening_selection"] = {"status": "unavailable", "reason": "owner_context_required"}
+        elif session is None:
+            payload["listening_selection"] = {"status": "unavailable", "reason": "service_unavailable"}
+        else:
             payload["listening_selection"] = session.issue(
                 result, owner_scope=scope, limit=count,
             )

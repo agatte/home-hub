@@ -34,7 +34,8 @@ def favorite():
 
 def track(identity, album=False):
     return DiscoveryTrack(
-        "itunes_search", identity, True, "metadata_only", None, None, None,
+        "itunes_search", identity, True, "supported", "sonos_apple_music_share_link",
+        f"https://music.apple.com/us/album/example/1?i={identity}", "provider_exact_match",
         "Artist", f"Track {identity}", "Album" if album else None, None, None, None,
         "exploratory", 0, (), "123" if album else None,
         "https://music.apple.com/us/album/example/123" if album else None,
