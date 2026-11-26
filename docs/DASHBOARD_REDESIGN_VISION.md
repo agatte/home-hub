@@ -13,6 +13,22 @@ This document preserves the product and visual direction for the HomeHub Dashboa
 
 The August audit remains historical evidence in `DASHBOARD_UX_AUDIT_2026_08_18.md`. This document describes the **target design direction** established after that audit and after visual review of the first redesign experiment.
 
+## Redesign scope reassessment — 2026-11-24
+
+The owner requested a reassessment after the redesign expanded into broader Music Intelligence, listening-history integration, and provider research. **The product remains one beautiful, fully functional HomeHub owner interface, replacing Classic.** Dashboard UI / [#461](https://github.com/agatte/home-hub/issues/461) is the primary execution tracker; [#157](https://github.com/agatte/home-hub/issues/157) remains the umbrella. This section supersedes earlier suggested execution orders, not accepted design direction, functional requirements, or safety gates.
+
+The detailed current checkpoint, outstanding acceptance and proposed consolidated sequence are at the top of #461. Do not maintain a competing backlog here. Summary:
+
+- Last verified deployment `db95bdae` delivered the new Home, Control, Music, Household, Settings, Insights, Journal and Personalization surfaces. HTTP/build verification is not complete owner acceptance.
+- The owner prefers direct mode buttons and current navigation direction. The unframed colorful mode refinement [#568](https://github.com/agatte/home-hub/pull/568) is merged and technically verified, not yet deployed or accepted on real devices. Earlier overlapping #567 is parked; do not merge both.
+- The remaining product issues are lighting and scene parity, Settings visual polish, the ordinary Music listening flow, unified validation and Classic retirement.
+- Music must eventually support real mood/discovery listening without individual track approval. Design a listening-first interface and scope the smallest safe functional dependency necessary for that result. Existing Sonos favorites can support an initial path but do not by themselves fulfill genuine new-track discovery. [#570](https://github.com/agatte/home-hub/pull/570) is an offline planner candidate, preserved and parked, not merged or connected to playback.
+- Scrobblie/Last.fm history activation, Soulbeet research, advanced taste modeling, broader music providers and autonomous DJ behavior remain deferred under #254/#431. They are not blanket prerequisites to the redesign. Do not enable private data reads or bypass playback safety.
+
+**Proposed sequence for owner review:** finish actual Home mode acceptance at an authorized release; complete lighting and scene functionality; refine Settings; complete the bounded Music experience; perform unified real-device validation; then retire Classic after parity and owner acceptance.
+
+**Scope rule:** one active user-facing milestone at a time. A question about a possible integration does not automatically reprioritize the project. Document specific blockers and obtain a bounded decision before expanding into another workstream. Preserve accepted surfaces and only change them for evidence-backed problems. No new implementation, integration, deployment, account access, device actions, or infrastructure changes are authorized by this reassessment alone.
+
 ## Post-deployment owner feedback — 2026-11-24
 
 **Current deployed checkpoint:** `db95bdae` on Latitude; successful owner-run deployment and independent health/build/read-route smoke ([#461 evidence](https://github.com/agatte/home-hub/issues/461#issuecomment-7140487471)). The owner has reviewed the new interface and identified the following remaining design and functional requirements. The latest [#461 completion checklist](https://github.com/agatte/home-hub/issues/461) owns execution status and acceptance. This supersedes earlier *next-work sequencing*, not the visual foundation or safety rules.
@@ -27,7 +43,7 @@ The August audit remains historical evidence in `DASHBOARD_UX_AUDIT_2026_08_18.m
 | Unified validation | Finish the coherent single HomeHub experience rather than merely shipping pages. | Phone Safari/PWA, kiosk and desktop real-use checks, accessibility, responsive layout, honest status/error/empty states, functional workflows and owner acceptance. |
 | Classic retirement | Retain the temporary fallback until parity and accepted replacements are proven. | Audit every remaining dependency, preserve shared features and rollback, safe old-bookmark handling, separate release authorization and real-device acceptance. |
 
-**Suggested order (assistant proposal, not an owner-imposed ranking):** refine the bounded Home mode presentation; establish the Music interaction and authority contract before page redesign; address Settings and lighting/scene gaps in coherent slices; validate the unified experience; retire Classic. Coordinate Music Intelligence under #254 and dashboard delivery under #461/#157. Keep guest, Game Day, networking, account/credential and broader security work distinct unless a demonstrated dependency blocks this scope.
+**Historical suggested order (superseded by the scope reassessment above):** refine the bounded Home mode presentation; establish the Music interaction and authority contract before page redesign; address Settings and lighting/scene gaps in coherent slices; validate the unified experience; retire Classic. Coordinate Music Intelligence under #254 and dashboard delivery under #461/#157. Keep guest, Game Day, networking, account/credential and broader security work distinct unless a demonstrated dependency blocks this scope.
 
 The design direction is accepted only to the extent of the owner's stated feedback; proposed compositions, music playback policy, additional fixture inventory, and which specific Settings pages need modification remain to be verified. No blanket integration, deployment, account access, or live device authorization is implied.
 
