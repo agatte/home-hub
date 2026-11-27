@@ -762,9 +762,13 @@ class TestAutomationEngine:
             {"key": "trusted_input_idle", "value": 1},
             {"key": "trusted_input_valid", "value": True},
         ]
-        result = await engine.report_activity(
-            "working", "process", factors, now.isoformat(),
-        )
+        # DND has its own clock; freeze it with the engine clock so this
+        # regression does not depend on the wall-clock time of the CI run.
+        with patch("backend.services.dnd_manager.datetime", mock_dt):
+            assert engine.is_dnd_active()
+            result = await engine.report_activity(
+                "working", "process", factors, now.isoformat(),
+            )
         assert result["reason"] == "dnd_active"
         assert engine._overnight_awake_at is None
         engine._apply_state.assert_not_awaited()
