@@ -32,7 +32,7 @@
   }
 
   export async function openModal() {
-    if (!summary) await fetchStatus()
+    // The app URL is independent of the summary request.
     modalOpen = true
     // Focus the close button so ESC works before the iframe steals focus.
     // After the user clicks into the iframe, ESC keystrokes go to the iframe
@@ -100,16 +100,16 @@
 
     {#if cardClickable}
       <span class="plant-link">View Plants &rarr;</span>
-    {:else}
-      <button type="button" class="plant-link" on:click={openModal}>
-        View Plants &rarr;
-      </button>
     {/if}
   </div>
 {:else if error}
   <div class="plant-empty">Plant app unavailable</div>
 {:else}
   <div class="plant-empty">Loading...</div>
+{/if}
+
+{#if !cardClickable}
+  <button type="button" class="plant-link app-entry" on:click={openModal}>Open Plants &rarr;</button>
 {/if}
 
 <svelte:window on:keydown={handleKeydown} />
@@ -130,6 +130,7 @@
     >
       ✕
     </button>
+    <a class="app-external" href={PLANT_APP_URL} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
     <iframe
       class="plant-modal-iframe"
       src={PLANT_APP_URL}
@@ -140,6 +141,9 @@
 {/if}
 
 <style>
+  .app-entry {display:inline-flex;align-items:center;min-height:44px;font-weight:650;text-decoration:underline;}
+  .app-external {position:fixed;top:16px;left:16px;z-index:1001;padding:10px 14px;border-radius:10px;background:#202a26;color:#f1eee7;font-size:13px;}
+  .app-entry:focus-visible,.app-external:focus-visible {outline:2px solid var(--accent,#e4c99e);outline-offset:3px;}
   .plant-content {
     display: flex;
     flex-direction: column;

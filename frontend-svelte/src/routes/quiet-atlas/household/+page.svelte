@@ -66,7 +66,7 @@
       <section class="house-card" aria-labelledby="wifi-heading">
         <h3 id="wifi-heading">Guest Wi-Fi</h3>
         <p class="description">Use the existing guest QR tools when needed.</p>
-        <GuestWifiWidget />
+        <GuestWifiWidget quietAtlas />
       </section>
       <section class="house-card" aria-labelledby="network-heading">
         <h3 id="network-heading">Network</h3>

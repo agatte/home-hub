@@ -5,6 +5,7 @@
   import { apiGet } from '$lib/api.js'
 
   export let cardClickable = false
+  export let quietAtlas = false
   /** @type {{ configured: boolean, ssid?: string, password?: string, security?: string, qr_payload?: string, guest_app_configured?: boolean } | null} */
   let info = null
   let error = false
@@ -127,6 +128,8 @@
 {#if modalOpen && info?.configured}
   <div
     class="wifi-modal-backdrop"
+    class:hh-portal-surface={quietAtlas}
+    class:qa-wifi={quietAtlas}
     use:portal
     on:click|self={() => (modalOpen = false)}
     role="presentation"
@@ -140,7 +143,7 @@
     >
       ✕
     </button>
-    <div class="wifi-modal-content">
+    <div class="wifi-modal-content" role="dialog" aria-label="Guest WiFi">
       <div class="wifi-modal-title">Guest WiFi</div>
       <div class="wifi-modal-subtitle">Point your camera at the code</div>
       {#if qrDataUrl}
@@ -375,6 +378,17 @@
     transform: scale(1.05);
   }
 
+  /* Portaled owner dialog shares shell tokens without inheriting owner chrome. */
+  .qa-wifi {background:rgba(12,18,16,.82);backdrop-filter:blur(12px);overflow:auto;}
+  .qa-wifi .wifi-modal-content {background:var(--hh-card-background);color:var(--hh-ink);border:1px solid var(--hh-line);border-radius:var(--hh-radius-panel);font-family:var(--hh-font);max-height:calc(100dvh - 48px);overflow:auto;box-sizing:border-box;}
+  .qa-wifi .wifi-modal-title {font-family:var(--hh-display);color:var(--hh-ink);}
+  .qa-wifi .wifi-modal-subtitle,.qa-wifi .wifi-modal-cred dt,.qa-wifi .wifi-modal-step2-label {color:var(--hh-muted);font-family:var(--hh-font);}
+  .qa-wifi .wifi-modal-cred dd {color:var(--hh-ink);font-family:var(--hh-font);}
+  .qa-wifi .wifi-modal-cred,.qa-wifi .wifi-modal-step2 {border-color:var(--hh-line);}
+  .qa-wifi .wifi-modal-image,.qa-wifi .wifi-modal-image-small {background:#fff;padding:8px;border-radius:8px;max-width:100%;height:auto;aspect-ratio:1;box-sizing:border-box;}
+  .qa-wifi .wifi-modal-close {background:var(--hh-control);color:var(--hh-ink);border:1px solid var(--hh-line);}
+  .qa-wifi .wifi-modal-close:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
+  .qa-wifi .wifi-modal-fallback {color:#ffb5a5;}
   @media (max-width: 480px) {
     .wifi-modal-backdrop {
       padding: 12px;
@@ -386,5 +400,6 @@
     .wifi-modal-content {
       padding: 24px 20px;
     }
+    .qa-wifi .wifi-modal-content {max-height:calc(100dvh - 24px);}
   }
 </style>
