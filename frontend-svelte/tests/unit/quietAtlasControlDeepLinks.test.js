@@ -73,6 +73,14 @@ describe('Quiet Atlas non-modal Home and Control lighting links (#461)', () => {
     expect(detail).toContain("{snapshot.pending ? 'Checking report…' : 'Refresh report'}")
   })
 
+  it('reports unconfigured fixtures without promising unavailable Classic controls', () => {
+    expect(detail).not.toContain('/classic')
+    expect(detail).toContain('These lights are not configured for HomeHub control')
+    expect(detail).toContain('Additional fixtures are read-only in HomeHub.')
+    expect(detail).toContain("functionalRoom = knownRoom && roomId !== 'other'")
+    expect(detail).toContain('<QuietAtlasGroupSheet inline={true} group={room}')
+  })
+
   it('never opens a group dialog from Home or Control, and Back is not an X-to-Control', () => {
     expect(home).not.toContain('lightingDetailHref')
     expect(home).toContain('on:click={() => toggleRoom(group.id)}')

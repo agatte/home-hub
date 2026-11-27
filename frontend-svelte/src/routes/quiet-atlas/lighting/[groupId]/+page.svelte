@@ -180,10 +180,7 @@
         <button type="button" class="refresh-button" on:click={refresh}>Refresh report</button>
 
         {#if !functionalRoom}<div class="navigation-options">
-          {#if !functionalRoom}<a class="legacy-action" href="/classic#apartment-controls">
-            <span><strong>Classic light controls</strong><small>Additional unmapped fixtures</small></span>
-            <span aria-hidden="true">↗</span>
-          </a>{/if}
+          <p class="unmapped-note" role="status">These lights are not configured for HomeHub control. They can be viewed here, but individual adjustments require a supported fixture configuration.</p>
           {#if origin === 'home'}
             <a class="secondary-action" href="/quiet-atlas/control">
               Explore precision controls and scenes <span aria-hidden="true">→</span>
@@ -199,7 +196,7 @@
       <div class="detail-inspector">
         <div class="detail-note">
           <p class="eyebrow">CONTROL / INDIVIDUAL LIGHTS</p>
-          {#if !functionalRoom}<p>Additional fixture adjustments are read-only here.</p>{/if}
+          {#if !functionalRoom}<p>Additional fixtures are read-only in HomeHub.</p>{/if}
         </div>
         {#key room.id}
           {#if functionalRoom}
@@ -240,10 +237,7 @@
   .freshness { font-size:13px; line-height:1.6; color:#b8c5b5; margin:14px 0 0; max-width:44ch; }
   .refresh-button { margin-top:10px; min-height:44px; padding:9px 14px; border-radius:12px; background:transparent; border:1px solid #65876e; color:#d9ecce; font:600 13px system-ui,sans-serif; cursor:pointer; }
   .navigation-options { display:grid; gap:13px; margin-top:25px; }
-  .legacy-action { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; background:#e5ebdd; color:#1b3323; padding:13px 16px; border-radius:16px; }
-  .legacy-action span:first-child { display:flex; flex-direction:column; gap:3px; }
-  .legacy-action strong { font-size:15px; line-height:1.45; }
-  .legacy-action small { color:#45644d; font-size:12px; line-height:1.45; }
+  .unmapped-note { padding:13px 16px; border:1px solid rgba(213,225,209,.22); border-radius:16px; color:inherit; font-size:13px; line-height:1.55; }
   .secondary-action { display:inline-flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 3px; min-height:44px; font-size:13px; font-weight:600; color:#c7dfbe; line-height:1.5; }
   .detail-inspector { min-width:0; }
   .live-controls {--line:#425449;--gold:#e9ca94;--muted:#b8c5b5;--ink:#edf0e8; padding:16px;border:1px solid var(--line);border-radius:18px;background:#14231c;}
