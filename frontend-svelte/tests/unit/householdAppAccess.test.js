@@ -61,6 +61,7 @@ it.each([true, false])('preserves QR generation and selects owner portal theme o
   await fireEvent.click(await screen.findByRole('button', { name: /Show QR/ }))
   const dialog = await screen.findByRole('dialog', { name: 'Guest WiFi' })
   const portal = dialog.parentElement
+  if (!portal) throw new Error('Expected the QR dialog to have a portal container')
   expect(portal.parentElement).toBe(document.body)
   expect(portal.classList.contains('hh-portal-surface')).toBe(quietAtlas)
   expect(QRCode.toDataURL).toHaveBeenCalledWith('WIFI:fixture', expect.objectContaining({ color: { dark: '#000000', light: '#ffffff' } }))
