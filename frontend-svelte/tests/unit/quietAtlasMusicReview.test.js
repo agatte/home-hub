@@ -29,6 +29,15 @@ describe('Functional redesigned Music (#461)', () => {
     expect(workspace).not.toContain('apiPost(')
     expect(workspace).not.toContain('sonosCommand(')
   })
+  it('prioritizes one player and discovery before secondary tools on both aliases', () => {
+    expect(workspace.match(/<QuietAtlasNowPlaying \/>/g)).toHaveLength(1)
+    expect(workspace.match(/<ListeningChoices \/>/g)).toHaveLength(1)
+    expect(workspace.indexOf('<QuietAtlasNowPlaying />')).toBeLessThan(workspace.indexOf('<ListeningChoices />'))
+    expect(workspace.indexOf('<ListeningChoices />')).toBeLessThan(workspace.indexOf('id="music-tools"'))
+    expect(workspace).toContain('let toolsOpen = false')
+    expect(workspace).toContain('bind:open={toolsOpen}')
+    expect(player).not.toContain('role="progressbar"')
+  })
   it('validates speaker reports and neutralizes disconnected, stale or invalid status', () => {
     const value = {state:'PLAYING',track:'Reported track',artist:'Artist',album:'Album',art_url:'/art.jpg',volume:24}
     const report = musicPlaybackReport(value)

@@ -130,3 +130,20 @@ it('explains a refused volume adjustment without claiming Sonos is unavailable',
   expect(screen.queryByText('Mix playback unavailable for this selection')).not.toBeInTheDocument()
   expect(post).toHaveBeenCalledTimes(2)
 })
+
+it('keeps the expressive mood tiles accessible and selection-driven', async () => {
+  post.mockResolvedValue(response([]))
+  render(ListeningChoices)
+  const group = screen.getByRole('group', { name: 'Suggested moods' })
+  const moods = ['Relaxing', 'Upbeat', 'Party', 'Focus', 'Something new', 'Familiar']
+  const buttons = [...group.querySelectorAll('button')]
+  expect(buttons.map(button => button.getAttribute('aria-label'))).toEqual(moods)
+  expect(new Set(buttons.map(button => button.getAttribute('data-palette'))).size).toBe(6)
+  expect(buttons.every(button => button.getAttribute('aria-pressed') === 'false')).toBe(true)
+  expect(post).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'Focus' }))
+  await screen.findByText('No suitable choices yet. Try a different mood.')
+  expect(screen.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'Party' })).toHaveAttribute('aria-pressed', 'false')
+  expect(post).toHaveBeenCalledTimes(1)
+})

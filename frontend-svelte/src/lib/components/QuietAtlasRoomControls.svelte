@@ -74,7 +74,7 @@
   {#if !$connected}
     <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
   {:else if $deviceStatus.light_command_results !== true}
-    <p role="status" class="warning">This HomeHub server does not yet support guarded lighting command results. These redesigned controls will stay unavailable until the matching server update. The original Apartment controls remain accessible below.</p>
+    <p role="status" class="warning">This HomeHub server does not yet support guarded lighting command results. These redesigned controls will stay unavailable until the matching server update.</p>
   {:else if fixtureIds.length === 0}
     <p role="status" class="warning">No configured fixtures for this room.</p>
   {:else}
@@ -123,7 +123,6 @@
     <summary>About these controls</summary>
     <p class="provenance">Individual controls request one light. Kitchen Together sends one request to each of L3 and L4; either may be refused independently. HomeHub can refuse a change when another mode or effect is in control. Opening a room does not change any lights.</p>
     <p class="footnote">A successful request does not guarantee the physical light changed. Check the light itself when needed.</p>
-    <a href="/classic#apartment-controls">Classic light controls</a>
   </details>
 </section>
 
@@ -155,8 +154,6 @@
   .compact .control-details {margin-top:3px;}
   .compact :global(.light-chip) {border-radius:13px;}
   .control-details summary {display:flex;align-items:center;min-height:44px;cursor:pointer;}
-  a {display:inline-flex;align-items:center;min-height:44px;font-size:14px;color:var(--gold);text-decoration:underline;text-underline-offset:4px; }
-  a:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
   :global(.room-control .light-card-owner) {min-width:0;max-width:100%;}
   /* Keep LightCard's guarded behavior; make its surface read as a Home control rather than a Classic card. */
   :global(.room-control .light-chip) {min-height:82px;border-radius:17px;border:1px solid var(--line);padding:17px;background:linear-gradient(120deg,rgba(235,218,177,.06),rgba(255,255,255,.015));}
