@@ -64,7 +64,9 @@ it('keeps diagnostic actions behind a disclosure and never sends merely by openi
 })
 
 function connectionRow(label) {
-  return within(screen.getByText(label, { exact: true }).closest('.settings-row'))
+  const row = screen.getByText(label, { exact: true }).closest('.settings-row')
+  if (!(row instanceof HTMLElement)) throw new Error(`Missing connection row: ${label}`)
+  return within(row)
 }
 
 it('separates reachable backend and healthy devices from a disconnected browser socket', async () => {
@@ -80,9 +82,9 @@ it('separates reachable backend and healthy devices from a disconnected browser 
 it('uses explicit negative health evidence and never stale positive socket flags', async () => {
   connected.set(true)
   deviceStatus.set({ hue: true, sonos: true })
-  vi.mocked(fetch).mockResolvedValue({
-    ok: true, json: async () => ({ status: 'degraded', devices: { hue_bridge: false } }),
-  })
+  vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+    status: 'degraded', devices: { hue_bridge: false },
+  })))
   render(OverviewSection)
   await waitFor(() => expect(connectionRow('Server').getByText('Degraded')).toBeInTheDocument())
   expect(connectionRow('Live updates').getByText('Connected')).toBeInTheDocument()
@@ -108,7 +110,8 @@ it('aborts a pending health read when the section is unmounted', async () => {
   vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
   const { unmount } = render(OverviewSection)
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
-  const signal = vi.mocked(fetch).mock.calls[0][1].signal
+  const signal = vi.mocked(fetch).mock.calls[0]?.[1]?.signal
+  if (!signal) throw new Error('Missing health request abort signal')
   expect(signal.aborted).toBe(false)
   unmount()
   expect(signal.aborted).toBe(true)
