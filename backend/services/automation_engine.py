@@ -694,6 +694,9 @@ class AutomationEngine:
         # idle renders an awake General baseline instead of the legacy overnight
         # off rule, and weak process ``sleeping`` cannot reclaim house authority.
         self._home_awake_confirmed: bool = False
+        # Evidence freshness is not an Activity-owner change. Actual mode,
+        # suppression and explicit Auto boundaries already revoke leases.
+        self._overnight_awake_at: Optional[datetime] = None
 
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
@@ -1260,6 +1263,8 @@ class AutomationEngine:
     @enabled.setter
     def enabled(self, value: bool) -> None:
         self._enabled = value
+        if not value:
+            self._overnight_awake_at = None
 
     @property
     def override_timeout_hours(self) -> int:
@@ -2151,6 +2156,7 @@ class AutomationEngine:
         self._external_off_detected = True
         self._away_hold = True
         self._home_awake_confirmed = False
+        self._overnight_awake_at = None
         self._invalidate_dedup_cache()
         self._invalidate_external_light_owners("host_return")
         self._schedule_camera_owner_refresh()
@@ -2176,6 +2182,7 @@ class AutomationEngine:
         must fail closed instead of publishing Home with an old awake latch.
         """
         self._home_awake_confirmed = False
+        self._overnight_awake_at = None
         await self._refresh_camera_owner_if_current(self.current_mode, self._mode_transition_revision)
         await self._persist_override_state(raise_on_error=True)
         logger.info("Prepared Home occupancy lifecycle by %s", source)
@@ -2203,6 +2210,7 @@ class AutomationEngine:
         self._external_off_detected = True
         self._away_hold = True
         self._home_awake_confirmed = False
+        self._overnight_awake_at = None
         self._invalidate_dedup_cache()
         self._invalidate_external_light_owners("away")
         self._schedule_camera_owner_refresh()
@@ -4305,6 +4313,24 @@ class AutomationEngine:
                 "included_in_fusion": False,
             }
 
+        # Only accepted, unsuppressed Desktop input can establish transient
+        # overnight lighting evidence. A process heartbeat alone is not input.
+        if mode == "sleeping":
+            self._overnight_awake_at = None
+        elif (
+            observation is not None and observation.device == "desktop"
+            and mode in SLEEPING_WAKE_INTERACTIVE_MODES
+            and observation.trusted_input_valid is True
+            and observation.trusted_input_idle_seconds is not None
+            and 0 <= observation.trusted_input_idle_seconds < SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS
+            and observation.detected_at is not None
+            and 0 <= (report_now - observation.detected_at).total_seconds()
+            <= SLEEPING_WAKE_DETECTED_AT_MAX_AGE_SECONDS
+            and not (self._away_hold or self._host_return_hold or self._external_off_detected)
+            and self.house_state == "home"
+        ):
+            self._overnight_awake_at = observation.detected_at
+
         # Clear external off detection on any activity — UNLESS the
         # suppression is hard-held by a geofence LEAVE. The PC's
         # foreground process lingers up to ~10 min after walking out
@@ -4471,6 +4497,7 @@ class AutomationEngine:
         # above pass so a blocked autonomous sleep push cannot clear wake state.
         if mode == "sleeping":
             self._home_awake_confirmed = False
+            self._overnight_awake_at = None
 
         # Capture the effective mode (override if active, else detected) so that
         # event logging and callback gating see the real "previous" mode, not
@@ -4582,6 +4609,14 @@ class AutomationEngine:
             )
 
         was_overridden = self._manual_override
+        if (
+            user_requested_auto and was_overridden
+            and old_source is not None and old_source.startswith("api:")
+            and old_effective in {"working", "gaming", "watching", "social", "relax", "cooking"}
+            and self.house_state == "home" and self._enabled
+            and not (self._away_hold or self._host_return_hold or self._external_off_detected)
+        ):
+            self._overnight_awake_at = datetime.now(tz=TZ)
         self._manual_override = False
         self._override_mode = None
         self._override_source = None
@@ -6958,7 +6993,14 @@ class AutomationEngine:
         # Once explicit Sleeping → Auto has confirmed a human wake, that same
         # idle evidence means Home + General instead. Reuse the established
         # pre-ramp dim-warm state until the normal schedule becomes active.
-        if self._home_awake_confirmed and 0 <= hour < schedule.wake_hour:
+        if (not self._home_awake_confirmed and 0 <= hour < schedule.wake_hour
+                and self._overnight_awake_at is not None):
+            age = (now - self._overnight_awake_at).total_seconds()
+            if not 0 <= age <= RECENT_DESK_ATTENDANCE_SECONDS:
+                # An expired session is neither authority to relight nor to
+                # black out. Wait for new authority or the normal schedule.
+                return
+        if (self._home_awake_confirmed or self._overnight_awake_at is not None) and 0 <= hour < schedule.wake_hour:
             state: dict[str, Any] = {
                 "on": True,
                 "bri": schedule.wake_brightness,
@@ -8001,6 +8043,7 @@ class AutomationEngine:
         all_off = all(not light.get("on", False) for light in lights)
 
         if all_off and not self._external_off_detected:
+            self._overnight_awake_at = None
             self._external_off_detected = True
             self._invalidate_external_light_owners("external_off")
             await self._refresh_camera_owner_if_current(self.current_mode, self._mode_transition_revision)

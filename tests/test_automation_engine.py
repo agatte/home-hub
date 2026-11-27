@@ -666,6 +666,151 @@ class TestAutomationEngine:
         }
         assert target["6"] == {"on": False}
 
+    @pytest.mark.parametrize("awake_mode", ["working", "cooking"])
+    @patch("backend.services.automation_engine.datetime")
+    async def test_awake_manual_to_auto_at_midnight_keeps_general_lit(
+        self, mock_dt, awake_mode, engine, mock_hue,
+    ):
+        now = datetime(2026, 11, 27, 0, 40, 50, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._current_mode = "idle"
+        engine._persist_override_state = AsyncMock()
+        await engine.set_manual_override(awake_mode, source="api:test")
+        assert any(mock_hue._lights[light_id]["on"] for light_id in "12345")
+
+        await engine.clear_override(source="api:test", user_requested_auto=True)
+
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert any(mock_hue._lights[light_id]["on"] for light_id in "12345")
+        assert engine._home_awake_confirmed is False
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_accepted_desktop_then_idle_and_expiry(self, mock_dt, engine, mock_hue):
+        now = datetime(2026, 11, 27, 0, 40, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        factors = [
+            {"key": "device", "value": "desktop"},
+            {"key": "trusted_input_idle", "value": 1},
+            {"key": "trusted_input_valid", "value": True},
+        ]
+        result = await engine.report_activity("working", "process", factors, now.isoformat())
+        assert result["semantic_disposition"] == "accepted"
+        assert engine._overnight_awake_at == now
+        owner_revision = engine._mode_transition_revision
+        mock_dt.now.return_value = now + timedelta(seconds=5)
+        await engine.report_activity(
+            "working", "process", factors, mock_dt.now.return_value.isoformat()
+        )
+        assert engine._overnight_awake_at == now + timedelta(seconds=5)
+        assert engine._mode_transition_revision == owner_revision
+        await engine.report_activity("idle", "process", factors, mock_dt.now.return_value.isoformat())
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert any(mock_hue._lights[light_id]["on"] for light_id in "12345")
+        mock_dt.now.return_value = now + timedelta(hours=2)
+        engine._apply_state = AsyncMock()
+        await engine._apply_time_based()
+        engine._apply_state.assert_not_awaited()
+
+    @pytest.mark.parametrize("case", ["missing", "future", "stale", "invalid"])
+    @patch("backend.services.automation_engine.datetime")
+    async def test_unqualified_desktop_does_not_establish_overnight_evidence(
+        self, mock_dt, case, engine,
+    ):
+        now = datetime(2026, 11, 27, 0, 40, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        factors = [
+            {"key": "device", "value": "desktop"},
+            {"key": "trusted_input_idle", "value": 1},
+            {"key": "trusted_input_valid", "value": case != "invalid"},
+        ]
+        timestamp = {"missing": None, "future": (now + timedelta(seconds=1)).isoformat(),
+                     "stale": (now - timedelta(hours=1)).isoformat(),
+                     "invalid": now.isoformat()}[case]
+        await engine.report_activity("working", "process", factors, timestamp)
+        assert engine._overnight_awake_at is None
+
+    @pytest.mark.parametrize("boundary", ["sleep", "away", "return", "disable"])
+    async def test_overnight_evidence_cleared_at_authority_boundary(self, engine, boundary):
+        engine._overnight_awake_at = datetime.now(tz=TZ)
+        if boundary == "sleep":
+            await engine.set_manual_override("sleeping", source="api:test")
+        elif boundary == "away":
+            engine.arm_away_suppression("test")
+        elif boundary == "return":
+            engine.arm_host_return_suppression("test")
+        else:
+            engine.enabled = False
+        assert engine._overnight_awake_at is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_overnight_dnd_rejects_new_desktop_evidence(self, mock_dt, engine):
+        now = datetime(2026, 11, 27, 0, 40, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        engine._dnd._enabled = True
+        engine._dnd._expiry = now + timedelta(hours=1)
+        engine._apply_state = AsyncMock()
+        factors = [
+            {"key": "device", "value": "desktop"},
+            {"key": "trusted_input_idle", "value": 1},
+            {"key": "trusted_input_valid", "value": True},
+        ]
+        result = await engine.report_activity(
+            "working", "process", factors, now.isoformat(),
+        )
+        assert result["reason"] == "dnd_active"
+        assert engine._overnight_awake_at is None
+        engine._apply_state.assert_not_awaited()
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_overnight_external_off_revokes_evidence(self, mock_dt, engine, mock_hue):
+        now = datetime(2026, 11, 27, 0, 40, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        engine._overnight_awake_at = now
+        await mock_hue.set_all_lights({"on": False})
+        assert await engine._check_external_off()
+        assert engine._overnight_awake_at is None
+        await engine.report_activity("idle", "process")
+        assert engine._external_off_detected
+        assert not any(light["on"] for light in mock_hue._lights.values())
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_overnight_general_respects_manual_fixture(self, mock_dt, engine, mock_hue):
+        now = datetime(2026, 11, 27, 0, 40, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        engine._overnight_awake_at = now
+        engine._state.manual_light_overrides["2"] = now
+        await mock_hue.set_light("2", {"on": False})
+        await engine._apply_time_based()
+        assert not mock_hue._lights["2"]["on"]
+        assert mock_hue._lights["1"]["on"]
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_overnight_auto_superseded_by_away_does_not_actuate(self, mock_dt, engine):
+        now = datetime(2026, 11, 27, 0, 40, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        engine._manual_override = True
+        engine._override_mode = "working"
+        engine._override_source = "api:test"
+        engine._current_mode = "idle"
+        engine._apply_mode = AsyncMock()
+
+        async def persist_then_away():
+            engine.arm_away_suppression("test")
+
+        engine._persist_override_state = AsyncMock(side_effect=persist_then_away)
+        await engine.clear_override(source="api:test", user_requested_auto=True)
+        assert engine.house_state == "away"
+        assert engine._overnight_awake_at is None
+        engine._apply_mode.assert_not_awaited()
+
     @patch("backend.services.automation_engine.datetime")
     async def test_unconfirmed_idle_overnight_stays_dark(self, mock_dt, engine):
         now = datetime(2026, 8, 18, 3, 0, tzinfo=TZ)
