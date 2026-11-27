@@ -102,8 +102,13 @@
     <img class="art-wash" src={artSource} alt="" on:error={() => artFailed = true} />
   {/if}
   <div class="now-content">
+    <div class="art-tile">
+      {#if current && artSource && !artFailed}
+        <img src={artSource} alt="" on:error={() => artFailed = true} />
+      {:else}<Music size={42} strokeWidth={1.3} aria-hidden="true" />{/if}
+    </div>
     <div class="now-copy">
-      <p class="eyebrow" id="now-playing-title">NOW PLAYING · SONOS</p>
+      <p class="eyebrow" id="now-playing-title">NOW PLAYING &middot; SONOS</p>
       {#if current}
         <p class="state">{current.state === 'PLAYING' ? 'Playing' : current.state === 'PAUSED_PLAYBACK' ? 'Paused' : current.state === 'TRANSITIONING' ? 'Transitioning' : 'Stopped'}</p>
         <h2>{current.track || 'No track reported'}</h2>
@@ -113,11 +118,6 @@
         <h2>Playback unavailable</h2>
         <p>Waiting for a recent speaker report. Controls remain unavailable.</p>
       {/if}
-    </div>
-    <div class="art-tile">
-      {#if current && artSource && !artFailed}
-        <img src={artSource} alt="" on:error={() => artFailed = true} />
-      {:else}<Music size={42} strokeWidth={1.3} aria-hidden="true" />{/if}
     </div>
     <div class="transport" aria-label="Sonos playback controls">
       <button type="button" aria-label="Previous track" disabled={!current} on:click={() => command('previous')}><SkipBack size={21} aria-hidden="true" /></button>
@@ -132,22 +132,36 @@
 </section>
 
 <style>
-  .now-playing {position:relative;overflow:hidden;isolation:isolate;border:1px solid var(--hh-line);border-radius:var(--hh-radius-panel);background:var(--hh-card-background);}
-  .art-wash {position:absolute;width:100%;height:100%;inset:0;object-fit:cover;filter:blur(42px) brightness(.45);transform:scale(1.14);z-index:-1;}
-  .now-content {display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,180px);gap:14px 22px;padding:clamp(18px,3vw,32px);background:linear-gradient(95deg,rgba(16,23,20,.86),rgba(16,23,20,.44));color:var(--hh-ink);}
-  .now-copy {min-width:0;align-self:center;display:grid;gap:7px;overflow-wrap:anywhere;}
-  .eyebrow {font-size:11px;font-weight:750;letter-spacing:.13em;color:var(--hh-accent);}
-  .state,.now-copy small,.receipt {font-size:12px;color:var(--hh-muted);}
-  h2 {font:500 clamp(24px,3.5vw,42px)/1.12 var(--hh-display);letter-spacing:-.03em;}
-  .art-tile {aspect-ratio:1;display:grid;place-items:center;background:var(--hh-control);border-radius:var(--hh-radius-card);overflow:hidden;min-width:0;color:var(--hh-muted);}
+  .now-playing {position:relative;overflow:hidden;isolation:isolate;border:1px solid var(--hh-line);border-radius:24px;background:var(--hh-card-background);min-width:0;}
+  .art-wash {position:absolute;width:100%;height:100%;inset:0;object-fit:cover;filter:blur(48px) brightness(.48);transform:scale(1.16);z-index:-1;}
+  .now-content {display:grid;grid-template-columns:minmax(0,1fr);gap:20px;padding:clamp(18px,2.8vw,30px);background:linear-gradient(150deg,rgba(16,23,20,.28),rgba(16,23,20,.92) 72%);color:var(--hh-ink);}
+  .now-copy {min-width:0;display:grid;gap:7px;overflow-wrap:anywhere;}
+  .eyebrow {font-size:10px;font-weight:750;letter-spacing:.14em;color:var(--hh-accent);}
+  .state {font-size:12px;color:var(--hh-accent);}
+  .now-copy small,.receipt {font-size:12px;color:var(--hh-muted);}
+  h2 {font:500 clamp(25px,3vw,39px)/1.12 var(--hh-display);letter-spacing:-.035em;margin:0;}
+  .art-tile {aspect-ratio:1;display:grid;place-items:center;width:min(100%,276px);justify-self:center;background:linear-gradient(145deg,#43534b,#26322d);border:1px solid var(--hh-line);border-radius:16px;overflow:hidden;min-width:0;color:var(--hh-muted);box-shadow:0 18px 30px rgba(0,0,0,.24);}
   .art-tile img {width:100%;height:100%;object-fit:cover;}
-  .transport {grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
-  button {width:48px;height:48px;display:grid;place-items:center;border:1px solid var(--hh-line);border-radius:50%;background:var(--hh-control);color:var(--hh-ink);cursor:pointer;}
-  button.play {width:56px;height:56px;background:var(--hh-accent);color:#20241f;}
+  .transport {display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;}
+  button {width:48px;height:48px;display:grid;place-items:center;border:0;border-radius:50%;background:transparent;color:var(--hh-ink);cursor:pointer;}
+  button:not(:disabled):hover {background:var(--hh-control-hover);}
+  button.play {width:64px;height:64px;background:var(--hh-accent);color:#20241f;}
+  button.play:not(:disabled):hover {background:#f0dbb7;}
   button:disabled {opacity:.42;cursor:not-allowed;}
   button:focus-visible,input:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
-  .volume {display:flex;align-items:center;gap:8px;flex:1 1 200px;min-width:0;font-size:12px;}
+  .volume {display:flex;align-items:center;gap:8px;flex:1 1 100%;min-width:0;font-size:12px;color:var(--hh-muted);}
   .volume input {flex:1;min-width:55px;accent-color:var(--hh-accent);min-height:44px;}
-  .receipt {grid-column:1/-1;min-height:18px;line-height:1.45;}
-  @media(max-width:600px) {.now-content{grid-template-columns:minmax(0,1fr) 88px;gap:12px;padding:17px;}.transport{justify-content:center;}.volume{flex:1 1 100%;}}
+  .receipt {min-height:18px;line-height:1.45;border-top:1px solid var(--hh-line);padding-top:12px;margin:0;}
+  @media(max-width:1050px) {
+    .now-content{grid-template-columns:minmax(88px,190px) minmax(0,1fr);align-items:center;}
+    .transport,.receipt{grid-column:1/-1;}
+    .art-tile{width:100%;}
+  }
+  @media(max-width:600px) {
+    .now-content{grid-template-columns:84px minmax(0,1fr);gap:13px;padding:16px;}
+    .art-tile{border-radius:11px;}
+    h2{font-size:24px;}
+    .transport{gap:8px;}
+    button.play{width:56px;height:56px;}
+  }
 </style>

@@ -4,6 +4,7 @@ import control from '../../src/routes/quiet-atlas/control/+page.svelte?raw'
 import home from '../../src/routes/+page.svelte?raw'
 import classic from '../../src/routes/classic/+page.svelte?raw'
 import apartment from '../../src/lib/components/ApartmentWidget.svelte?raw'
+import roomControls from '../../src/lib/components/QuietAtlasRoomControls.svelte?raw'
 
 describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
   it('uses the existing guarded controls in the redesigned Control route', () => {
@@ -14,6 +15,12 @@ describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
     expect(control).not.toMatch(/(?:apiPut|apiPost|light_command|activateScene|setLight)\s*\(/)
   })
 
+  it('does not route supported room controls back to Classic', () => {
+    expect(roomControls).not.toContain('/classic')
+    expect(roomControls).toContain('light_command_results !== true')
+    expect(roomControls).toContain('Opening a room does not change any lights.')
+    expect(compile(roomControls,{generate:'dom',css:'external'}).warnings).toEqual([])
+  })
   it('lands at the existing functional Apartment controls, not an invented actuator', () => {
     expect(home).toContain("import RedesignedHome from './quiet-atlas/home/+page.svelte'")
     expect(classic).toContain('id="apartment-controls"')

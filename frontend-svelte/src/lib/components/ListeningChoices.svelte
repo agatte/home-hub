@@ -1,15 +1,15 @@
 <script>
   import { onDestroy } from 'svelte'
-  import { ArrowUpRight, Headphones, Music2, Sparkles, Disc3 } from 'lucide-svelte'
+  import { ArrowUpRight, Headphones, Music2, Sparkles, Disc3, Moon, Zap, Heart, Users } from 'lucide-svelte'
   import { apiPost } from '$lib/api.js'
 
   const moods = [
-    { label: 'Relaxing', request: 'relaxing' },
-    { label: 'Upbeat', request: 'upbeat' },
-    { label: 'Party', request: 'party' },
-    { label: 'Focus', request: 'focus' },
-    { label: 'Something new', request: 'new' },
-    { label: 'Familiar', request: 'something familiar' },
+    { label: 'Relaxing', request: 'relaxing', palette: 'calm', icon: Moon, note: 'Slow down' },
+    { label: 'Upbeat', request: 'upbeat', palette: 'warm', icon: Zap, note: 'Lift the energy' },
+    { label: 'Party', request: 'party', palette: 'social', icon: Users, note: 'Set the mood' },
+    { label: 'Focus', request: 'focus', palette: 'focus', icon: Headphones, note: 'Find your flow' },
+    { label: 'Something new', request: 'new', palette: 'play', icon: Sparkles, note: 'Explore a little' },
+    { label: 'Familiar', request: 'something familiar', palette: 'home', icon: Heart, note: 'Come back to it' },
   ]
   let query = ''
   let requested = ''
@@ -180,18 +180,21 @@
 
 <section class="listen" aria-labelledby="listen-title">
   <div class="listen-intro">
-    <span class="eyebrow"><Sparkles size={15} /> YOUR MUSIC, YOUR MOMENT</span>
-    <h2 id="listen-title">What are you in the mood for?</h2>
-    <p>Find something you know, or discover something you might love.</p>
+    <span class="eyebrow"><Sparkles size={15} aria-hidden="true" /> DISCOVER</span>
+    <h2 id="listen-title">What feels right?</h2>
+    <p>Choose a mood or describe what you want to hear.</p>
   </div>
   <form on:submit|preventDefault={() => findMusic(query)}>
     <label class="visually-hidden" for="listening-mood">Describe your mood</label>
     <input id="listening-mood" bind:value={query} maxlength="160" placeholder="Relaxing, upbeat, something new..." disabled={busy || starting} autocomplete="off" />
     <button class="find" type="submit" disabled={busy || starting || !query.trim()}>Find music <ArrowUpRight size={17}/></button>
   </form>
-  <div class="moods" aria-label="Suggested moods">
+  <div class="moods" role="group" aria-label="Suggested moods">
     {#each moods as mood}
-      <button type="button" class:chosen={requested === mood.request} disabled={busy || starting} on:click={() => findMusic(mood.request)}>{mood.label}</button>
+      <button type="button" data-palette={mood.palette} aria-label={mood.label} aria-pressed={requested === mood.request} class:chosen={requested === mood.request} disabled={busy || starting} on:click={() => findMusic(mood.request)}>
+        <svelte:component this={mood.icon} size={23} strokeWidth={1.65} aria-hidden="true" />
+        <span><strong>{mood.label}</strong><small>{mood.note}</small></span>
+      </button>
     {/each}
   </div>
   {#if busy}
@@ -210,7 +213,7 @@
       {#if result.status === 'partial'}<p class="status" role="status">Showing the choices HomeHub could identify.</p>{/if}
       <div class="choices">
         {#each result.choices as choice (choice.id)}
-          <article class="choice">
+          <article class="choice" data-kind={choice.kind}>
             <div class="cover" class:album={choice.kind === 'album'} class:mix={choice.kind === 'artist_mix'} aria-hidden="true">
               {#if choice.kind === 'album'}<Disc3 size={36} strokeWidth={1.2}/>{:else if choice.kind === 'artist_mix'}<Sparkles size={36} strokeWidth={1.2}/>{:else}<Music2 size={36} strokeWidth={1.2}/>{/if}
             </div>
@@ -223,7 +226,7 @@
                 <details><summary>View mix</summary><ul>{#each choice.tracks || [] as track}<li>{track.title}{#if track.artist} ? {track.artist}{/if}</li>{/each}</ul></details>
               {/if}
               {#if albumLink(choice)}
-                <a class="open" href={albumLink(choice) || undefined} target="_blank" rel="noopener noreferrer">Open album in Apple Music (external) <ArrowUpRight size={15}/></a>
+                <a class="open external" href={albumLink(choice) || undefined} target="_blank" rel="noopener noreferrer">Open album in Apple Music (external) <ArrowUpRight size={15}/></a>
               {:else if choice.kind === 'favorite' || choice.kind === 'artist_mix'}
                 {#if selection?.choice_ids.includes(choice.id)}
                   <button class="open" type="button" disabled={starting || busy} on:click={() => startSelection(choice)}>Play on Sonos <Headphones size={15}/></button>
@@ -246,38 +249,54 @@
 </section>
 
 <style>
-  .listen {display:grid;gap:18px;padding:clamp(18px,3vw,32px);border:1px solid var(--hh-line);border-radius:var(--hh-radius-panel);background:linear-gradient(140deg,var(--hh-card-background),var(--hh-panel-deep));min-width:0;}
+  .listen {display:grid;gap:20px;min-width:0;padding:clamp(4px,1vw,12px) 0;}
   .listen-intro {display:grid;gap:8px;}
-  .eyebrow {display:flex;align-items:center;gap:7px;color:var(--hh-accent);font-size:10px;font-weight:700;letter-spacing:.12em;}
-  h2 {font:500 clamp(26px,4vw,42px)/1.12 var(--hh-display);letter-spacing:-.035em;margin:0;color:var(--hh-ink);}
+  .eyebrow {display:flex;align-items:center;gap:7px;color:var(--hh-accent);font-size:10px;font-weight:750;letter-spacing:.14em;}
+  h2 {font:500 clamp(30px,4vw,44px)/1.12 var(--hh-display);letter-spacing:-.035em;margin:0;color:var(--hh-ink);}
   p {margin:0;color:var(--hh-muted);font-size:13px;line-height:1.55;}
-  form {display:flex;gap:8px;flex-wrap:wrap;}
-  input {flex:1 1 180px;min-width:0;min-height:48px;padding:10px 14px;border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);background:var(--hh-control);color:var(--hh-ink);font:inherit;}
-  button,.open {min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:var(--hh-radius-control);font:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;}
-  .find,.open {background:var(--hh-accent);color:var(--hh-panel-deep);border:1px solid transparent;padding:8px 14px;}
-  .moods {display:flex;gap:8px;flex-wrap:wrap;}
-  .moods button {background:var(--hh-control);color:var(--hh-ink);border:1px solid var(--hh-line);border-radius:999px;padding:8px 14px;}
-  .moods button.chosen {border-color:var(--hh-accent);color:var(--hh-accent);}
+  form {display:flex;gap:8px;flex-wrap:wrap;background:var(--hh-panel-deep);border:1px solid var(--hh-line);border-radius:16px;padding:7px;}
+  input {flex:1 1 150px;min-width:0;min-height:48px;padding:10px 12px;border:0;background:transparent;color:var(--hh-ink);font:inherit;border-radius:10px;}
+  button,.open {min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:var(--hh-radius-control);font:inherit;font-size:13px;font-weight:650;cursor:pointer;text-decoration:none;}
+  .find,.open {background:var(--hh-accent);color:var(--hh-panel-deep);border:1px solid transparent;padding:9px 13px;}
+  .moods {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;}
+  .moods button {min-height:108px;min-width:0;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;text-align:left;gap:16px;padding:14px;border:1px solid rgba(255,255,255,.16);border-radius:15px;background:var(--hh-expressive,var(--hh-control));color:#fff8ef;transition:filter .16s ease,border-color .16s ease;}
+  .moods button span {display:grid;gap:4px;min-width:0;}
+  .moods strong {font-size:14px;line-height:1.2;overflow-wrap:anywhere;}
+  .moods small {font-size:11px;line-height:1.25;color:#f5ede4;font-weight:450;overflow-wrap:anywhere;}
+  .moods button:not(:disabled):hover {filter:brightness(1.13);}
+  .moods button.chosen {border:2px solid var(--hh-accent);padding:13px;box-shadow:0 0 0 1px var(--hh-accent);}
   button:disabled {opacity:.55;cursor:default;}
   button:focus-visible,input:focus-visible,a:focus-visible,summary:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
-  .results-heading {display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
-  .results-heading h3 {margin:0;font-size:19px;font-weight:600;}
+  .results-heading {display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding-top:4px;border-top:1px solid var(--hh-line);}
+  .results-heading h3 {margin:0;font:500 26px/1.2 var(--hh-display);}
   .results-heading span,.status,.footnote {color:var(--hh-muted);font-size:12px;}
-  .choices {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px;}
-  .choice {min-width:0;display:grid;grid-template-columns:72px minmax(0,1fr);align-items:start;gap:12px;border:1px solid var(--hh-line);background:var(--hh-control);border-radius:var(--hh-radius-control);padding:12px;}
-  .cover {display:grid;place-items:center;aspect-ratio:1;border-radius:12px;background:#425950;color:#e8f1eb;}
-  .cover.album {background:#645b83;color:#f2e7ff;}
-  .cover.mix {background:#8c6045;color:#fff0d4;}
-  .choice-copy {display:grid;gap:6px;min-width:0;overflow-wrap:anywhere;}
+  .status {padding:11px 13px;border-left:2px solid var(--hh-accent);background:var(--hh-panel-deep);border-radius:0 8px 8px 0;}
+  .choices {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,218px),1fr));gap:12px;}
+  .choice {min-width:0;display:grid;grid-template-rows:auto 1fr;gap:12px;border:1px solid var(--hh-line);background:var(--hh-card-background);border-radius:16px;padding:12px;}
+  .cover {display:grid;place-items:center;min-height:88px;aspect-ratio:2/1;border-radius:10px;background:radial-gradient(ellipse at 15% 0%,#527e71,#263e37);color:#e8f1eb;}
+  .cover.album {background:radial-gradient(ellipse at 20% 0%,#76698f,#403751);color:#f2e7ff;}
+  .cover.mix {background:radial-gradient(ellipse at 15% 0%,#996d4d,#4c352b);color:#fff0d4;}
+  .choice-copy {display:grid;align-content:start;gap:7px;min-width:0;overflow-wrap:anywhere;}
   .type,.taste,.pending {font-size:11px;color:var(--hh-muted);}
+  .type {font-weight:650;letter-spacing:.025em;}
   .taste {color:var(--hh-accent);}
-  h4 {margin:0;font-size:16px;line-height:1.2;font-weight:600;}
+  h4 {margin:0;font-size:17px;line-height:1.2;font-weight:650;}
   .choice p {font-size:12px;}
   .choice details {font-size:12px;color:var(--hh-muted);}
   .choice summary {cursor:pointer;min-height:44px;display:list-item;padding:10px 0;}
   .choice ul {padding-left:16px;}
-  .open {justify-self:start;}
-  .footnote {display:flex;align-items:center;gap:7px;}
+  .open {width:100%;justify-self:start;text-align:center;box-sizing:border-box;}
+  .open.external {color:var(--hh-ink);background:var(--hh-control);border-color:var(--hh-line);}
+  .footnote {display:flex;align-items:flex-start;gap:8px;}
   .visually-hidden {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
-  @media(max-width:600px) {.listen{padding:16px;} .find{flex:1 1 auto;}}
+  @media(max-width:600px) {
+    .listen{gap:15px;padding:0;}
+    .find{flex:1 1 auto;}
+    .moods{grid-template-columns:repeat(2,minmax(0,1fr));}
+    .moods button{min-height:96px;}
+    .choices{grid-template-columns:minmax(0,1fr);}
+    .choice{grid-template-columns:76px minmax(0,1fr);grid-template-rows:auto;align-items:start;}
+    .cover{min-height:0;aspect-ratio:1;}
+  }
+  @media(prefers-reduced-motion:reduce){.moods button{transition:none;}}
 </style>

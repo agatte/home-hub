@@ -11,6 +11,7 @@
   /** @type {{ provider_id: string } | null} */
   let selectedAppleTrack = null
   let advancedOpen = false
+  let toolsOpen = false
 
   /** @param {string} providerId */
   function reviewAppleTrack(providerId) {
@@ -20,16 +21,20 @@
 
 <main class="music-page" aria-label="HomeHub Music">
   <header class="music-heading">
+    <div class="heading-copy">
     <p>HOMEHUB / LISTEN</p>
     <h1>Music</h1>
-    <span>What’s playing, what fits your moment, and what you want to hear next.</span>
+    <span>Make the moment yours.</span>
+    </div>
+    <a class="tools-link" href="#music-tools" on:click={() => toolsOpen = true}>Library &amp; preferences <span aria-hidden="true">&rarr;</span></a>
   </header>
-  <ListeningChoices />
-  <QuietAtlasNowPlaying />
-  <nav class="music-jump" aria-label="Music sections">
-    <a href="#music-discover" on:click={() => advancedOpen = true}>Advanced discovery &amp; playback</a>
-    <a href="#music-manage">Library &amp; preferences</a>
-  </nav>
+  <div class="listening-room">
+    <QuietAtlasNowPlaying />
+    <ListeningChoices />
+  </div>
+  <details class="tools-drawer" id="music-tools" bind:open={toolsOpen}>
+    <summary><span><strong>Your music, behind the scenes</strong><small>Library, preferences and advanced listening tools</small></span><span class="manage-action">Open</span></summary>
+    <div class="tools-body">
   <details class="music-manage music-primary" id="music-discover" bind:open={advancedOpen}>
     <summary><span><strong>Advanced listening tools</strong><small>Track review, exact playback and discovery diagnostics</small></span><span class="manage-action">Open</span></summary>
     <ShadowDiscoveryPanel onReviewAppleTrack={reviewAppleTrack} />
@@ -74,98 +79,54 @@
     <a href="/quiet-atlas/music/artist-review">Preview fictional artist matching</a>
     <p>Session-only fictional review; no Apple history or catalog requests.</p>
   </details>
+    </div>
+  </details>
 </main>
 
 <style>
   .music-page {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    padding: clamp(18px, 3vw, 42px) var(--hh-gutter, 16px) 44px;
-    max-width: 1400px;
-    margin: 0 auto;
-    min-width: 0;
-    color: var(--hh-ink);
-    --bg-primary: var(--hh-panel-deep);
-    --bg-secondary: var(--hh-panel);
-    --bg-card: var(--hh-card-background);
-    --bg-card-hover: var(--hh-control-hover);
-    --text-primary: var(--hh-ink);
-    --text-secondary: var(--hh-muted);
-    --text-muted: var(--hh-muted);
-    --accent: var(--hh-accent);
-    --border: var(--hh-line);
-    --radius: var(--hh-radius-panel);
-    --radius-sm: var(--hh-radius-control);
-    --font-body: var(--hh-font);
+    display:grid;gap:clamp(22px,3vw,38px);padding:clamp(18px,3vw,42px) var(--hh-gutter,16px) 44px;
+    max-width:1480px;margin:0 auto;min-width:0;color:var(--hh-ink);
+    --bg-primary:var(--hh-panel-deep);--bg-secondary:var(--hh-panel);--bg-card:var(--hh-card-background);
+    --bg-card-hover:var(--hh-control-hover);--text-primary:var(--hh-ink);--text-secondary:var(--hh-muted);
+    --text-muted:var(--hh-muted);--accent:var(--hh-accent);--border:var(--hh-line);
+    --radius:var(--hh-radius-panel);--radius-sm:var(--hh-radius-control);--font-body:var(--hh-font);
   }
-
-  .music-heading {display:grid;gap:7px;}
-  .music-heading p {color:var(--hh-accent);font-size:11px;font-weight:700;letter-spacing:.14em;}
-  .music-heading h1 {font:500 clamp(36px,5vw,60px)/1.1 var(--hh-display);letter-spacing:-.04em;}
-  .music-heading span {color:var(--hh-muted);font-size:14px;line-height:1.5;}
-  .music-jump {display:flex;flex-wrap:wrap;gap:8px;}
-  .music-jump a,.music-preview a {display:inline-flex;align-items:center;min-height:44px;padding:8px 14px;border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);color:var(--hh-ink);text-decoration:none;background:var(--hh-control);font-size:13px;}
-  .music-jump a:hover,.music-preview a:hover {background:var(--hh-control-hover);}
-  .music-jump a:focus-visible,.music-preview a:focus-visible,.music-manage summary:focus-visible,.music-preview summary:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
-  .music-preview {padding:14px 16px;border:1px solid var(--hh-line);border-radius:var(--hh-radius-panel);color:var(--hh-muted);}
-  .music-preview summary {min-height:44px;cursor:pointer;display:list-item;padding:10px 0;}
-  .music-preview p {font-size:12px;margin-top:8px;}
-  .music-primary {
-    min-width: 0;
-  }
-  .music-handoff {
-    max-width: 1240px;
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 12px;
-  }
-  .music-handoff a { color: var(--accent); }
-
-  .music-manage {
-    max-width: 1240px;
-    width: calc(100% - 8px);
-    margin: 0 auto;
-    border: 1px solid var(--hh-line);
-    border-radius: var(--hh-radius-panel);
-    padding: 0 16px;
-    background: var(--hh-card-background);
-  }
-
-  .music-manage > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 18px 4px;
-    min-height: 56px;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .music-manage > summary::-webkit-details-marker { display: none; }
-  .music-manage > summary > span:first-child { display: flex; flex-direction: column; gap: 4px; }
-  .music-manage strong { color: var(--text-primary); font-size: 13px; }
-  .music-manage small { color: var(--text-muted); font-size: 10px; }
-  .manage-action { color: var(--accent); font-size: 11px; }
-  .music-manage[open] .manage-action { font-size: 0; }
-  .music-manage[open] .manage-action::after { content: 'Close'; font-size: 11px; }
-
-  .management-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
-    padding: 0 0 8px;
-  }
-
-  @media (max-width: 600px) {
-    .music-page {gap:16px;padding:18px 16px 32px;}
-    .music-jump a {flex:1 1 auto;justify-content:center;}
-    .music-page :global(button:not(.icon-button)),.music-page :global(select) {min-height:44px;}
-    .music-page :global(.widget) {min-width:0;}
-  }
-  @media (max-width: 900px) {
-    .management-grid { grid-template-columns: minmax(0, 1fr); }
-    .music-manage > summary { align-items: flex-start; }
+  .music-heading {display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;}
+  .heading-copy {display:grid;gap:7px;}
+  .heading-copy p {color:var(--hh-accent);font-size:11px;font-weight:700;letter-spacing:.14em;}
+  .heading-copy h1 {font:500 clamp(38px,5vw,66px)/1.05 var(--hh-display);letter-spacing:-.045em;}
+  .heading-copy span {color:var(--hh-muted);font-size:14px;line-height:1.5;}
+  .tools-link,.music-preview a {display:inline-flex;align-items:center;gap:12px;min-height:44px;color:var(--hh-accent);text-decoration:none;font-size:13px;font-weight:650;}
+  .tools-link:hover,.music-preview a:hover {text-decoration:underline;}
+  .listening-room {display:grid;grid-template-columns:minmax(0,.88fr) minmax(0,1.3fr);align-items:start;gap:clamp(16px,2.6vw,32px);min-width:0;}
+  .tools-drawer {min-width:0;scroll-margin-top:20px;border-top:1px solid var(--hh-line);border-bottom:1px solid var(--hh-line);}
+  .tools-drawer > summary,.music-manage > summary {display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px 4px;min-height:56px;cursor:pointer;list-style:none;}
+  .tools-drawer > summary::-webkit-details-marker,.music-manage > summary::-webkit-details-marker {display:none;}
+  .tools-drawer > summary > span:first-child,.music-manage > summary > span:first-child {display:grid;gap:5px;min-width:0;}
+  .tools-drawer strong {color:var(--hh-ink);font-size:15px;font-weight:650;}
+  .tools-drawer small {color:var(--hh-muted);font-size:12px;line-height:1.45;}
+  .tools-body {display:grid;gap:10px;padding:0 0 16px;min-width:0;}
+  .music-manage,.music-preview {border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);padding:0 16px;background:var(--hh-card-background);min-width:0;}
+  .music-manage strong {font-size:13px;}
+  .music-manage small {font-size:11px;}
+  .manage-action {color:var(--hh-accent);font-size:12px;flex-shrink:0;}
+  .tools-drawer[open] > summary .manage-action,.music-manage[open] > summary .manage-action {font-size:0;}
+  .tools-drawer[open] > summary .manage-action::after,.music-manage[open] > summary .manage-action::after {content:'Close';font-size:12px;}
+  .music-preview {color:var(--hh-muted);}
+  .music-preview summary {min-height:44px;cursor:pointer;padding:10px 0;}
+  .music-preview p {font-size:12px;margin:0 0 14px;}
+  .music-handoff {color:var(--text-primary);font-size:12px;line-height:1.5;}
+  .music-handoff a {color:var(--accent);}
+  .management-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding:0 0 8px;}
+  .tools-link:focus-visible,.music-preview a:focus-visible,.tools-drawer summary:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
+  @media(max-width:1050px) {.listening-room{grid-template-columns:minmax(0,1fr);}}
+  @media(max-width:900px) {.management-grid{grid-template-columns:minmax(0,1fr);}}
+  @media(max-width:600px) {
+    .music-page{gap:22px;padding:18px 16px 32px;}
+    .music-heading{align-items:flex-start;gap:4px;}
+    .tools-link{font-size:12px;}
+    .music-page :global(button:not(.icon-button)),.music-page :global(select){min-height:44px;}
+    .music-page :global(.widget){min-width:0;}
   }
 </style>
