@@ -21,6 +21,8 @@
   let error = false
   let refreshInterval
   let modalOpen = false
+  let opening = false
+  let openError = false
   /** @type {HTMLButtonElement | undefined} */
   let closeBtn
 
@@ -30,18 +32,31 @@
   }
 
   export async function openModal() {
-    if (!barAppUrl) await fetchStatus()
-    if (!barAppUrl) return
-    modalOpen = true
-    await tick()
-    closeBtn?.focus()
+    if (opening || modalOpen) return
+    opening = true
+    openError = false
+    try {
+      if (!barAppUrl) await fetchStatus()
+      if (!barAppUrl) { openError = true; return }
+      modalOpen = true
+      await tick()
+      closeBtn?.focus()
+    } finally {
+      opening = false
+    }
   }
 
   async function fetchStatus() {
     try {
       const resp = await apiGet('/api/bar/status')
-      summary = resp.bar_summary
-      if (resp.bar_app_url) barAppUrl = resp.bar_app_url
+      summary = resp?.bar_summary ?? null
+      // Only the configured HTTP(S) app destination can be opened.
+      if (typeof resp?.bar_app_url === 'string') {
+        try {
+          const url = new URL(resp.bar_app_url)
+          if (['https:', 'http:'].includes(url.protocol)) barAppUrl = url.href
+        } catch { /* no usable app destination */ }
+      }
       error = false
     } catch {
       error = true
@@ -99,16 +114,19 @@
 
     {#if cardClickable}
       <span class="bar-link">View Bar &rarr;</span>
-    {:else}
-      <button type="button" class="bar-link" on:click={openModal}>
-        View Bar &rarr;
-      </button>
     {/if}
   </div>
 {:else if error}
   <div class="bar-empty">Bar app unavailable</div>
 {:else}
   <div class="bar-empty">Loading...</div>
+{/if}
+
+{#if !cardClickable}
+  <button type="button" class="bar-link app-entry" disabled={opening} on:click={openModal}>{opening ? 'Opening…' : 'Open Home Bar →'}</button>
+{/if}
+{#if openError}
+  <p class="bar-empty" role="status">Home Bar address unavailable. Try opening again when the service responds.</p>
 {/if}
 
 <svelte:window on:keydown={handleKeydown} />
@@ -129,6 +147,7 @@
     >
       ✕
     </button>
+    <a class="app-external" href={barAppUrl} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
     <iframe
       class="bar-modal-iframe"
       src={barAppUrl}
@@ -139,6 +158,10 @@
 {/if}
 
 <style>
+  .app-entry {display:inline-flex;align-items:center;min-height:44px;font-weight:650;text-decoration:underline;}
+  .app-entry:disabled {opacity:.6;cursor:wait;}
+  .app-external {position:fixed;top:16px;left:16px;z-index:1001;padding:10px 14px;border-radius:10px;background:#202a26;color:#f1eee7;font-size:13px;}
+  .app-entry:focus-visible,.app-external:focus-visible {outline:2px solid var(--accent,#e4c99e);outline-offset:3px;}
   .bar-content {
     display: flex;
     flex-direction: column;
