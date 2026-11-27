@@ -3,7 +3,8 @@ import { compile } from 'svelte/compiler'
 import control from '../../src/routes/quiet-atlas/control/+page.svelte?raw'
 import home from '../../src/routes/+page.svelte?raw'
 import classic from '../../src/routes/classic/+page.svelte?raw'
-import apartment from '../../src/lib/components/ApartmentWidget.svelte?raw'
+import lighting from '../../src/lib/components/QuietAtlasLightingExperience.svelte?raw'
+import sceneTools from '../../src/lib/components/QuietAtlasSceneTools.svelte?raw'
 import roomControls from '../../src/lib/components/QuietAtlasRoomControls.svelte?raw'
 
 describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
@@ -21,13 +22,12 @@ describe('Quiet Atlas handoff to working lighting controls (#461)', () => {
     expect(roomControls).toContain('Opening a room does not change any lights.')
     expect(compile(roomControls,{generate:'dom',css:'external'}).warnings).toEqual([])
   })
-  it('lands at the existing functional Apartment controls, not an invented actuator', () => {
+  it('maps the retired Apartment bookmark to the existing guarded Control surface', () => {
     expect(home).toContain("import RedesignedHome from './quiet-atlas/home/+page.svelte'")
-    expect(classic).toContain('id="apartment-controls"')
-    expect(classic).toContain('<ApartmentWidget />')
-    expect(apartment).toContain('<LightGrid />')
-    expect(apartment).toContain('<SceneBrowser')
-    expect(classic.match(/id="apartment-controls"/g)).toHaveLength(1)
+    expect(classic).toContain('classicBookmarkHref(window.location.hash)')
+    expect(classic).not.toContain('<ApartmentWidget />')
+    expect(lighting).toContain('<QuietAtlasSceneBrowser {functional}')
+    expect(sceneTools).toContain("await apiPost('/api/scenes/try/cancel', {})")
   })
 
   it('preserves accessible phone action and compiles both pages without new warnings', () => {

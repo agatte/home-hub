@@ -97,9 +97,16 @@ export function isQuietAtlasReadOnlyPreview(pathname) {
   return READ_ONLY_PREVIEW_PATHS.has(pathname) || (match !== null && match[1] === 'other')
 }
 
+/** Known Classic bookmarks map to fixed internal destinations only. Never
+ * forward arbitrary fragments, query strings or external redirect targets.
+ * @param {string} hash
+ */
+export function classicBookmarkHref(hash) {
+  return hash === '#apartment-controls' ? '/quiet-atlas/control' : '/'
+}
+
 export function shouldUseQuietAtlasShell(pathname, searchParams) {
-  if (['/', '/music', '/settings', '/analytics', '/journal', '/personality'].includes(pathname)) return true // Migrated workspaces, including old bookmarks.
-  if (pathname === '/classic') return false // Always preserve original chrome.
+  if (['/', '/classic', '/music', '/settings', '/analytics', '/journal', '/personality'].includes(pathname)) return true // Migrated workspaces, including old bookmarks.
   if (pathname === '/quiet-atlas' || pathname.startsWith('/quiet-atlas/')) return true
   if (pathname === '/gameday' || pathname.startsWith('/gameday/') ||
       pathname === '/guest' || pathname.startsWith('/guest/')) return false
@@ -131,6 +138,7 @@ export function withQuietAtlasShell(href) {
 /** @param {URLSearchParams | null} [searchParams] */
 export function activeQuietAtlasSection(pathname, _hash = '', searchParams = null) {
   if (pathname === '/') return 'home'
+  if (pathname === '/classic') return classicBookmarkHref(_hash) === '/' ? 'home' : 'control'
   if (pathname.startsWith('/quiet-atlas/lighting/')) return lightingDetailOrigin(searchParams)
   if (pathname === '/quiet-atlas' || pathname === '/quiet-atlas/control') return 'control'
   if (pathname === '/quiet-atlas/insights') return 'insights'

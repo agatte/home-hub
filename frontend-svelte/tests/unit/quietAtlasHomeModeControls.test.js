@@ -20,7 +20,7 @@ afterEach(() => { cleanup(); connected.set(false); automation.set(initialAutomat
 describe('#461 direct Home mode tiles', () => {
   it('preserves the established authenticated writer and all modes', () => {
     expect(home).toContain('<QuietAtlasHomeModeControls />')
-    expect(classic).toContain('<ModeCardDeck />')
+    expect(classic).not.toContain('<ModeCardDeck />')
     expect(panel).toContain('setManualMode(mode)')
     expect(storeActions).toContain("apiPost('/api/automation/override', { mode })")
     expect(panel).not.toContain('setLight(')

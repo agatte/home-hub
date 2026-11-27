@@ -11,13 +11,14 @@ import shell from '../../src/lib/components/QuietAtlasShell.svelte?raw'
 import { MORE_DESTINATIONS, activeQuietAtlasSection, shouldUseQuietAtlasShell, shouldShowGlobalErrorToast } from '../../src/lib/quietAtlas/navigation.js'
 
 describe('default redesigned Home and existing working lighting cutover (#461)', () => {
-  it('makes the designed Home the root while preserving an exact classic fallback', () => {
+  it('makes the designed Home the root and keeps only the Classic bookmark alias', () => {
     expect(root).toContain("import RedesignedHome from './quiet-atlas/home/+page.svelte'")
     expect(root).toContain('<RedesignedHome />')
-    expect(classic).toContain('<ApartmentWidget />')
-    expect(classic).toContain('id="apartment-controls"')
+    expect(classic).toContain('goto(destination, { replaceState: true })')
+    expect(classic).not.toContain('<ApartmentWidget />')
+    expect(classic).not.toContain('<ModeCardDeck />')
     expect(shouldUseQuietAtlasShell('/', new URLSearchParams())).toBe(true)
-    expect(shouldUseQuietAtlasShell('/classic', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
+    expect(shouldUseQuietAtlasShell('/classic', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(activeQuietAtlasSection('/')).toBe('home')
     expect(MORE_DESTINATIONS.find(x => x.id === 'apartment')?.href).toBe('/quiet-atlas/household')
     expect(shell).toContain("{ id: 'home', label: 'Home', href: '/'")
