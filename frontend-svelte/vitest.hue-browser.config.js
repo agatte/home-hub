@@ -11,12 +11,14 @@ export default defineConfig({
     conditions: ['browser'],
     alias: {
       $lib: path.resolve('./src/lib'),
+      // SvelteKit is not installed as a Vite plugin in this mounted-test config.
+      '$app/navigation': path.resolve('./tests/unit/mocks/kitNavigation.js'),
     },
   },
   test: {
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./tests/unit/setup.js'],
-    include: ['tests/unit/components/HueAppHold.test.js', 'tests/unit/quietAtlasSceneTools.test.js', 'tests/unit/quietAtlasCustomSceneEditor.test.js', 'tests/unit/quietAtlasSettingsDisclosure.test.js', 'tests/unit/guestOwnerReturn.test.js', 'tests/unit/listeningChoices.test.js'],
+    include: ['tests/unit/components/HueAppHold.test.js', 'tests/unit/quietAtlasSceneTools.test.js', 'tests/unit/quietAtlasCustomSceneEditor.test.js', 'tests/unit/quietAtlasSettingsDisclosure.test.js', 'tests/unit/guestOwnerReturn.test.js', 'tests/unit/listeningChoices.test.js', 'tests/unit/classicBookmark.test.js'],
   },
 })

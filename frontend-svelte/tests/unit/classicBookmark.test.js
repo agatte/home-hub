@@ -34,7 +34,8 @@ it('leaves an ordinary safe link when client navigation fails', async () => {
   window.history.replaceState(null, '', '/classic#apartment-controls')
   vi.mocked(goto).mockRejectedValueOnce(new Error('navigation failed'))
   render(ClassicBookmark)
-  await waitFor(() => expect(screen.getByRole('link', { name: 'Continue to HomeHub' })).toHaveAttribute('href', '/quiet-atlas/control'))
+  await waitFor(() => expect(goto).toHaveBeenCalledExactlyOnceWith('/quiet-atlas/control', { replaceState: true }))
+  expect(screen.getByRole('link', { name: 'Continue to HomeHub' })).toHaveAttribute('href', '/quiet-atlas/control')
 })
 
 it('maps only the known legacy fragment and never arbitrary redirect targets', () => {
