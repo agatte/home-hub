@@ -1,8 +1,8 @@
 <script>
   import { onMount } from 'svelte'
-  import { Activity, Wifi, Speaker, Shield, Plug } from 'lucide-svelte'
-  import { connected, deviceStatus } from '$lib/stores/connection.js'
-  import { apiGet, apiPost } from '$lib/api.js'
+  import { Activity } from 'lucide-svelte'
+  import { connected } from '$lib/stores/connection.js'
+  import { apiPost } from '$lib/api.js'
   import SettingsSection from '$lib/components/settings/SettingsSection.svelte'
   import SettingGroup from '$lib/components/settings/SettingGroup.svelte'
   import SettingRow from '$lib/components/settings/SettingRow.svelte'
@@ -10,14 +10,92 @@
 
   /** @type {any} */
   let health = null
+  let healthPhase = 'checking'
   /** @type {string | null} */
   let saving = null
   /** @type {string | null} */
   let actionFeedback = null
 
-  onMount(async () => {
-    try { health = await apiGet('/health') } catch {}
+  // HTTP health and this browser's authenticated live socket are separate
+  // evidence. Never turn missing or stale socket frames into device outages.
+  onMount(() => {
+    /** @type {AbortController | null} */
+    let active = null
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let activeTimeout = null
+    let disposed = false
+
+    function invalidate() {
+      const previous = active
+      active = null
+      if (activeTimeout !== null) clearTimeout(activeTimeout)
+      activeTimeout = null
+      previous?.abort()
+      health = null
+      healthPhase = 'checking'
+    }
+
+    async function refresh() {
+      if (disposed || active || document.visibilityState === 'hidden') return
+      const request = new AbortController()
+      active = request
+      const timer = setTimeout(() => {
+        if (active !== request) return
+        active = null
+        activeTimeout = null
+        health = null
+        healthPhase = 'unavailable'
+        request.abort()
+      }, 8000)
+      activeTimeout = timer
+      try {
+        // Use a quiet, bounded same-origin diagnostic read. Expected
+        // unavailability is rendered here, not as a recurring global toast.
+        const response = await fetch('/health', {
+          credentials: 'same-origin', cache: 'no-store', signal: request.signal,
+        })
+        if (!response.ok) throw new Error('Health unavailable')
+        const snapshot = await response.json()
+        if (!['healthy', 'degraded'].includes(snapshot?.status)) throw new Error('Invalid health snapshot')
+        if (!disposed && active === request) {
+          health = snapshot
+          healthPhase = 'ready'
+        }
+      } catch {
+        if (!disposed && active === request) {
+          health = null
+          healthPhase = 'unavailable'
+        }
+      } finally {
+        clearTimeout(timer)
+        if (active === request) {
+          active = null
+          activeTimeout = null
+        }
+      }
+    }
+
+    function onVisibilityChange() {
+      // Do not display a previously observed device state after tab sleep.
+      invalidate()
+      if (document.visibilityState !== 'hidden') void refresh()
+    }
+
+    const interval = setInterval(refresh, 30000)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    void refresh()
+    return () => {
+      disposed = true
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      invalidate()
+    }
   })
+
+  /** @param {unknown} value */
+  function deviceLabel(value) {
+    return value === true ? 'Connected' : value === false ? 'Offline' : 'Unknown'
+  }
 
   async function testTTS() {
     saving = 'tts'
@@ -55,23 +133,26 @@
   icon={Activity}
 >
   <SettingGroup title="Connections">
-    <SettingRow label="Server" hint={$connected ? 'WebSocket connected' : 'No WebSocket — page may be stale'}>
-      <span class="status-pill" class:ok={$connected}>{$connected ? 'Online' : 'Offline'}</span>
+    <SettingRow label="Server" hint="Backend health (HTTP)">
+      <span class="status-pill" class:ok={health?.status === 'healthy'} class:warn={health?.status === 'degraded'}>
+        {healthPhase === 'checking' ? 'Checking' : healthPhase === 'unavailable' ? 'Unverified' : health?.status === 'degraded' ? 'Degraded' : 'Reachable'}
+      </span>
+    </SettingRow>
+    <SettingRow label="Live updates" hint={$connected ? 'WebSocket connected' : 'No WebSocket ? page may be stale'}>
+      <span class="status-pill" class:ok={$connected}>{$connected ? 'Connected' : 'Disconnected'}</span>
     </SettingRow>
     <SettingRow label="Hue Bridge" hint="Lighting + scenes">
-      <span class="status-pill" class:ok={$deviceStatus.hue}>{$deviceStatus.hue ? 'Connected' : 'Offline'}</span>
+      <span class="status-pill" class:ok={health?.devices?.hue_bridge === true} class:offline={health?.devices?.hue_bridge === false}>{deviceLabel(health?.devices?.hue_bridge)}</span>
     </SettingRow>
     <SettingRow label="Sonos Era 100" hint="Living room speaker">
-      <span class="status-pill" class:ok={$deviceStatus.sonos}>{$deviceStatus.sonos ? 'Connected' : 'Offline'}</span>
+      <span class="status-pill" class:ok={health?.devices?.sonos === true} class:offline={health?.devices?.sonos === false}>{deviceLabel(health?.devices?.sonos)}</span>
+    </SettingRow>
+    <SettingRow label="Pi-hole" hint="DNS + blocklists">
+      <span class="status-pill" class:ok={health?.devices?.pihole === true} class:offline={health?.devices?.pihole === false}>{deviceLabel(health?.devices?.pihole)}</span>
     </SettingRow>
     {#if health}
-      <SettingRow label="Pi-hole" hint="DNS + blocklists">
-        <span class="status-pill" class:ok={health.devices?.pihole}>
-          {health.devices?.pihole ? 'Connected' : 'Offline'}
-        </span>
-      </SettingRow>
       <SettingRow label="WebSocket clients" hint="Active dashboard sessions">
-        <span class="value-pill">{health.websocket_clients ?? 0}</span>
+        <span class="value-pill">{Number.isInteger(health.websocket_clients) ? health.websocket_clients : 'Unknown'}</span>
       </SettingRow>
       {#if health.build_id}
         <SettingRow label="Build" hint="Active backend commit on this host">
@@ -121,13 +202,25 @@
     gap: 6px;
     padding: 4px 10px;
     border-radius: 999px;
-    background: rgba(248, 113, 113, 0.12);
-    border: 1px solid rgba(248, 113, 113, 0.32);
-    color: var(--danger);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
     font-family: var(--font-body);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
+  }
+
+  .status-pill.offline {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.32);
+    color: var(--danger);
+  }
+
+  .status-pill.warn {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.32);
+    color: var(--warning, #fbbf24);
   }
 
   .status-pill.ok {

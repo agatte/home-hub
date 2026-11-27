@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import SettingsRail from '../../src/lib/components/settings/SettingsRail.svelte'
 import OverviewSection from '../../src/routes/settings/sections/OverviewSection.svelte'
-import { apiGet, apiPost } from '../../src/lib/api.js'
+import { connected, deviceStatus } from '../../src/lib/stores/connection.js'
+import { apiPost } from '../../src/lib/api.js'
 
 vi.mock('../../src/lib/api.js', () => ({ apiGet: vi.fn(), apiPost: vi.fn() }))
 const sections = [
@@ -12,10 +13,18 @@ const sections = [
 ]
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(apiGet).mockResolvedValue({ build_id: 'test' })
+  connected.set(false)
+  deviceStatus.set({ hue: false, sonos: false })
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: true, json: async () => ({ status: 'healthy', build_id: 'test', devices: { hue_bridge: true, sonos: true, pihole: true } }),
+  }))
   vi.mocked(apiPost).mockResolvedValue({ status: 'ok' })
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 it('opens sections from the index, exposes the direct parent and follows restored URL state', async () => {
   const onSelect = vi.fn()
@@ -52,4 +61,55 @@ it('keeps diagnostic actions behind a disclosure and never sends merely by openi
   expect(apiPost).not.toHaveBeenCalled()
   await fireEvent.click(screen.getByRole('button', { name: 'Test TTS' }))
   expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/sonos/tts', { text: 'Home Hub is connected and working.', volume: 10 })
+})
+
+function connectionRow(label) {
+  return within(screen.getByText(label, { exact: true }).closest('.settings-row'))
+}
+
+it('separates reachable backend and healthy devices from a disconnected browser socket', async () => {
+  render(OverviewSection)
+  await waitFor(() => expect(connectionRow('Server').getByText('Reachable')).toBeInTheDocument())
+  expect(connectionRow('Live updates').getByText('Disconnected')).toBeInTheDocument()
+  expect(connectionRow('Hue Bridge').getByText('Connected')).toBeInTheDocument()
+  expect(connectionRow('Sonos Era 100').getByText('Connected')).toBeInTheDocument()
+  expect(connectionRow('Pi-hole').getByText('Connected')).toBeInTheDocument()
+  expect(apiPost).not.toHaveBeenCalled()
+})
+
+it('uses explicit negative health evidence and never stale positive socket flags', async () => {
+  connected.set(true)
+  deviceStatus.set({ hue: true, sonos: true })
+  vi.mocked(fetch).mockResolvedValue({
+    ok: true, json: async () => ({ status: 'degraded', devices: { hue_bridge: false } }),
+  })
+  render(OverviewSection)
+  await waitFor(() => expect(connectionRow('Server').getByText('Degraded')).toBeInTheDocument())
+  expect(connectionRow('Live updates').getByText('Connected')).toBeInTheDocument()
+  expect(connectionRow('Hue Bridge').getByText('Offline')).toHaveClass('offline')
+  expect(connectionRow('Sonos Era 100').getByText('Unknown')).not.toHaveClass('offline')
+  expect(connectionRow('Pi-hole').getByText('Unknown')).not.toHaveClass('offline')
+})
+
+it('invalidates a previous health snapshot on resume and recovers with fresh evidence', async () => {
+  render(OverviewSection)
+  await waitFor(() => expect(connectionRow('Hue Bridge').getByText('Connected')).toBeInTheDocument())
+  vi.mocked(fetch).mockRejectedValueOnce(new Error('network'))
+  await fireEvent(document, new Event('visibilitychange'))
+  await waitFor(() => expect(connectionRow('Server').getByText('Unverified')).toBeInTheDocument())
+  expect(connectionRow('Hue Bridge').getByText('Unknown')).toBeInTheDocument()
+  expect(connectionRow('Sonos Era 100').getByText('Unknown')).toBeInTheDocument()
+  await fireEvent(document, new Event('visibilitychange'))
+  await waitFor(() => expect(connectionRow('Server').getByText('Reachable')).toBeInTheDocument())
+  expect(connectionRow('Hue Bridge').getByText('Connected')).toBeInTheDocument()
+})
+
+it('aborts a pending health read when the section is unmounted', async () => {
+  vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+  const { unmount } = render(OverviewSection)
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+  const signal = vi.mocked(fetch).mock.calls[0][1].signal
+  expect(signal.aborted).toBe(false)
+  unmount()
+  expect(signal.aborted).toBe(true)
 })
