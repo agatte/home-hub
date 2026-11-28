@@ -3,8 +3,8 @@
   import { Home, Wifi, Wine, Sprout, Sparkles } from 'lucide-svelte'
 
   const TABS = [
-    { href: '/guest',        label: 'Guest Home', icon: Home },
-    { href: '/guest/wifi',   label: 'WiFi',   icon: Wifi },
+    { href: '/guest',        label: 'Welcome', icon: Home },
+    { href: '/guest/wifi',   label: 'Wi-Fi',   icon: Wifi },
     { href: '/guest/bar',    label: 'Bar',    icon: Wine },
     { href: '/guest/plants', label: 'Plants', icon: Sprout },
     { href: '/guest/vibe',   label: 'Vibe',   icon: Sparkles },
@@ -38,50 +38,20 @@
 
 <style>
   .guest-nav {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 50;
-    display: flex;
-    justify-content: space-around;
-    align-items: stretch;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-    background: rgba(13, 13, 18, 0.85);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    position:fixed;z-index:50;bottom:0;left:50%;transform:translateX(-50%);
+    width:min(100%,620px);display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;
+    padding:8px max(9px,env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(9px,env(safe-area-inset-left));
+    background:rgba(24,33,28,.97);border:1px solid rgba(229,220,197,.19);border-bottom:0;
+    border-radius:20px 20px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.2);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   }
-
   .guest-nav-tab {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    min-height: 56px;
-    padding: 6px 4px;
-    color: rgba(245, 243, 238, 0.55);
-    font-family: var(--font-body);
-    font-size: 11px;
-    text-decoration: none;
-    border-radius: 12px;
-    transition: color 0.15s, background 0.15s;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0;
+    gap:5px;min-height:54px;padding:5px 2px;color:var(--guest-muted,#c3c9bd);
+    font-family:var(--font-body);font-size:11px;font-weight:550;text-decoration:none;border-radius:12px;
   }
-
-  .guest-nav-tab:hover {
-    color: rgba(245, 243, 238, 0.85);
-  }
-
-  .guest-nav-tab.active {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .guest-nav-tab span {
-    line-height: 1.1;
-    text-align: center;
-    letter-spacing: 0.02em;
-  }
+  .guest-nav-tab:hover {color:var(--guest-ink,#f5f0e6);}
+  .guest-nav-tab.active {color:var(--guest-gold,#e4c99e);background:#374137;font-weight:700;}
+  .guest-nav-tab span {line-height:1.1;text-align:center;overflow-wrap:anywhere;}
+  @media(min-width:760px) {.guest-nav {bottom:16px;border-radius:20px;border-bottom:1px solid rgba(229,220,197,.19);}}
 </style>
