@@ -29,6 +29,8 @@
   /** @type {string | null} */
   let pendingMode = null
   let feedback = ''
+  /** @type {string | null} */
+  let awaitingMode = null
 
   $: canChange = $connected && KNOWN_HOUSE_STATES.includes($automation.house_state ?? '')
   $: reportedMode = !canChange ? 'Unverified' : $automation.house_state === 'sleeping'
@@ -42,6 +44,12 @@
   $: activeId = canChange ? ($automation.override_user_owned
     ? ($automation.house_state === 'sleeping' ? 'sleeping' : $automation.mode)
     : 'auto') : null
+  // A server acknowledgement is not an effective mode. Once the reported
+  // selection matches, the active tile and current mode are the confirmation.
+  $: if (canChange && awaitingMode !== null && activeId === awaitingMode) {
+    awaitingMode = null
+    feedback = ''
+  }
 
   function cancelConfirmation() {
     armedMode = null
@@ -62,6 +70,7 @@
     if (sensitiveAction && !confirmed) {
       armedMode = mode
       armedHouseState = $automation.house_state
+      awaitingMode = null
       feedback = ''
       return
     }
@@ -69,13 +78,13 @@
     cancelConfirmation()
     pending = true
     pendingMode = mode
-    feedback = 'Sending mode request to HomeHub…'
+    awaitingMode = null
+    feedback = mode === 'auto' ? 'Returning to Auto…' : `Switching to ${MODE_NAMES[mode]}…`
     try {
       const outcome = await setManualMode(mode)
       if (outcome === 'acknowledged') {
-        feedback = mode === 'auto'
-          ? 'Auto requested. Check the reported mode and lights.'
-          : 'Mode requested. Check the reported mode and lights.'
+        awaitingMode = mode
+        feedback = 'Mode change not confirmed yet.'
       } else if (outcome === 'denied') {
         feedback = 'Couldn’t change the mode. Unlock owner controls and try again.'
       } else if (outcome === 'busy') {
@@ -144,7 +153,6 @@
   {:else if feedback}
     <p class="mode-feedback" role="status" aria-live="polite">{feedback}</p>
   {/if}
-  <p class="mode-note">Auto requests that HomeHub clear manual holds and choose the mode again.</p>
 </section>
 
 <style>
@@ -180,8 +188,7 @@
   .confirm {background:var(--gold);color:var(--deep);border:1px solid var(--gold);}
   button:disabled {opacity:.55;cursor:not-allowed;}
   button:focus-visible {outline:3px solid var(--gold);outline-offset:3px;}
-  .mode-note,.mode-feedback {font-size:12px;line-height:1.5;margin:10px 0 0;color:var(--muted);}
-  .mode-feedback {color:var(--ink);}
+  .mode-feedback {font-size:12px;line-height:1.5;margin:10px 0 0;color:var(--ink);}
   @container (min-width: 680px) {.mode-grid {grid-template-columns:repeat(8,minmax(0,1fr));}.mode-tile{min-height:80px;}}
   @container (max-width: 250px) {.mode-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
   @media(max-width:700px) {.mode-controls{margin:18px 0 16px;}.mode-heading{margin-bottom:12px;}.reported-mode strong{font-size:20px;}.mode-grid{gap:12px 6px;}.mode-tile{min-height:76px;}}

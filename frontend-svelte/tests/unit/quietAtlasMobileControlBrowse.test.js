@@ -19,7 +19,9 @@ describe('Quiet Atlas phone-first read-only Control browse (#461)', () => {
     expect(overview).toContain('min-height:64px;')
     expect(overview).toContain('onOpenScene(scene.id)')
     expect(overview).toContain('snapshotStatus === \'recent-read\'')
-    expect(overview).toContain('Individual fixture freshness is unverified')
+    expect(overview).toContain('Light status may be out of date. Refresh to check.')
+    expect(overview).toContain('Preview only. Lighting controls are unavailable.')
+    expect(overview).not.toContain('Individual fixture freshness is unverified')
   })
 
   it('replaces horizontally scrolling scene filters with a native phone select', () => {
