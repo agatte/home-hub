@@ -53,13 +53,14 @@ def _valid_request(light_id: str, state: dict[str, Any]) -> bool:
 async def dispatch_manual_light(
     engine, hue, light_id: str, state: dict[str, Any], *,
     context_valid: Callable[[], bool] | None = None,
+    owner_takeover: bool = False,
 ) -> ManualLightDispatch:
     """Issue a scoped authority lease before queuing, then revalidate at Hue dispatch.
 
     No trust or takeover authority comes from the WebSocket client, REST
     readings, or the lease itself. Stronger owners always win. Existing manual
-    ownership may be adjusted again, but not when ScreenSync/transit/scene or
-    a protected owner also owns the fixture.
+    ownership may be adjusted again. Only trusted owner single-fixture routes
+    request ordinary ScreenSync takeover; all stronger protections still apply.
 
     A shielded transaction keeps the boundary held through the bridge ACK and
     persistence even if the browser disconnects. Rejected/preflight requests
@@ -78,8 +79,11 @@ async def dispatch_manual_light(
     ):
         return ManualLightDispatch("unavailable")
 
-    # Mint before the wait; a queued command cannot renew away a newer owner.
-    lease = boundary.authority.issue("websocket_manual", [light_id])
+    # Ordinary callers retain their original raw lease. An explicit owner may
+    # wait across same-owner ScreenSync frame continuation, but only with a
+    # dedicated, non-write checkpoint that competing intent still revokes.
+    queue = boundary.authority.capture_manual_queue(light_id) if owner_takeover else None
+    lease = None if owner_takeover else boundary.authority.issue("websocket_manual", [light_id])
 
     def permitted(candidate_lease) -> bool:
         try:
@@ -92,7 +96,10 @@ async def dispatch_manual_light(
             # Optional caller context can only restrict the existing authority.
             if context_valid is not None and context_valid() is not True:
                 return False
-            return bool(engine.validate_lighting_lease(candidate_lease, allow_manual=True))
+            return bool(engine.validate_lighting_lease(
+                candidate_lease, allow_manual=True,
+                manual_screen_sync_takeover=owner_takeover,
+            ))
         except Exception as exc:
             # Missing/uncertain owner or lifecycle evidence must fail closed.
             logger.info("Manual light guard denied: fixture=%s reason=validator_error_%s", light_id, type(exc).__name__)
@@ -104,6 +111,26 @@ async def dispatch_manual_light(
     # For the HueService loop/worker rendezvous, bind the original immutable
     # lease to the final raw-generation snapshot as well as the policy check.
     allowed.dispatch_lease = lease
+    accepted = False
+
+    def accept_command():
+        nonlocal accepted
+        if accepted:
+            return None
+        # This callback runs on the event loop after the worker's preflight.
+        # Session revocation also runs on that loop, so this synchronous check
+        # is the acceptance point; a committed bridge call may finish later.
+        # Do not call owner getters under the publication gate.
+        if context_valid is not None and context_valid() is not True:
+            return None
+        with boundary.authority.publication_gate():
+            if not boundary.authority._valid_raw(lease):
+                return None
+            accepted = True
+            return object()
+
+    if context_valid is not None:
+        allowed.accept_command = accept_command
 
     def forget_uncertain() -> None:
         # An unacknowledged bridge command may still have changed the bulb.
@@ -118,7 +145,14 @@ async def dispatch_manual_light(
             logger.exception("Unable to invalidate uncertain light cache")
 
     async def transaction() -> ManualLightDispatch:
+        nonlocal lease
         async with boundary.serialized():
+            if queue is not None:
+                lease = boundary.authority.promote_manual_queue(queue)
+                if lease is None:
+                    logger.info("Manual light guard denied: fixture=%s reason=queued_intent_superseded", light_id)
+                    return ManualLightDispatch("denied")
+                allowed.dispatch_lease = lease
             if not allowed():
                 return ManualLightDispatch("denied")
             try:
@@ -160,7 +194,7 @@ async def dispatch_manual_light(
                 # canonical leased-write record evicts stale automation dedup
                 # so a mode reconciliation after manual expiry cannot skip.
                 engine.record_leased_light_write(
-                    light_id, state, supersede_screen_sync=False,
+                    light_id, state, supersede_screen_sync=owner_takeover,
                 )
                 stamped_lease = boundary.authority.issue(
                     "websocket_manual_ack", [light_id],

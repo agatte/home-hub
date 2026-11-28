@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -30,7 +31,7 @@ def real_validator():
         ],
         type_ignores=[],
     )
-    namespace = {"ALL_LIGHT_IDS": tuple(str(i) for i in range(1, 7))}
+    namespace = {"ALL_LIGHT_IDS": tuple(str(i) for i in range(1, 7)), "logger": logging.getLogger(__name__)}
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
     return namespace["validate_lighting_lease"]
 
@@ -75,13 +76,13 @@ class Engine:
     def _active_external_light_owners(self):
         return self._legacy_owners
 
-    def _protected_light_ids(self):
+    def _protected_light_ids(self, *, include_manual=True, include_screen_sync=True):
         return (
             self._custom_protected
-            | self.manual_light_overrides
+            | (self.manual_light_overrides if include_manual else set())
             | self._transit_light_overrides
             | self._external
-            | (self._screen_sync.fresh_owned_light_ids() if self._screen_sync is not None else set())
+            | (self._screen_sync.fresh_owned_light_ids() if include_screen_sync and self._screen_sync is not None else set())
         )
 
     def mark_light_manual(self, lid, state):
@@ -92,7 +93,8 @@ class Engine:
 
     def record_leased_light_write(self, light_id, state, *, supersede_screen_sync=True):
         assert self._transition_boundary.held_by_current_task
-        assert supersede_screen_sync is False
+        if supersede_screen_sync and self._screen_sync is not None:
+            self._screen_sync.supersede_light(light_id)
         self.leased_records.append((light_id, dict(state)))
         self._last_applied_per_light.pop(light_id, None)
         self._transition_boundary.authority.invalidate([light_id])
@@ -148,6 +150,169 @@ class Hue:
         if self.after_write_hook is not None:
             await self.after_write_hook()
         return self.ack
+
+
+class Sync:
+    def __init__(self):
+        self.owned = {"2", "5"}
+        self.rust = set()
+        self.superseded = []
+
+    def fresh_owned_light_ids(self):
+        return set(self.owned)
+
+    def rust_owned_light_ids(self):
+        return set(self.rust)
+
+    def supersede_light(self, light_id):
+        self.superseded.append(light_id)
+        self.owned.discard(light_id)
+
+
+class OwnerTakeoverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fresh_sync_per_fixture_and_overlap(self):
+        for light_id in ("2", "5"):
+            engine = Engine()
+            engine._screen_sync = Sync()
+            hue = Hue(engine)
+            hue.fixture["light_id"] = light_id
+            result = await dispatch_manual_light(engine, hue, light_id, {"bri": 100}, owner_takeover=True)
+            self.assertEqual(result.status, "acknowledged")
+            self.assertEqual(engine._screen_sync.superseded, [light_id])
+            self.assertEqual(engine._screen_sync.owned, {"2", "5"} - {light_id})
+            boundary = engine.lighting_transition_boundary
+            lease = boundary.authority.issue("sync", [light_id])
+            async with boundary.serialized():
+                self.assertFalse(engine.validate_lighting_lease(lease, allow_screen_sync=True))
+                engine.manual_light_overrides.clear()
+                self.assertTrue(engine.validate_lighting_lease(lease, allow_screen_sync=True))
+
+        for attribute in ("_custom_protected", "_external", "_transit_light_overrides"):
+            engine = Engine()
+            engine._screen_sync = Sync()
+            setattr(engine, attribute, {"2"})
+            hue = Hue(engine)
+            result = await dispatch_manual_light(engine, hue, "2", {"bri": 100}, owner_takeover=True)
+            self.assertEqual(result.status, "denied")
+            self.assertEqual(hue.calls, [])
+
+    async def test_failure_and_superseded_inflight_do_not_transfer_sync(self):
+        for failure in ("ack", "race"):
+            engine = Engine()
+            engine._screen_sync = Sync()
+            hue = Hue(engine)
+            if failure == "ack":
+                hue.ack = False
+            else:
+                async def supersede():
+                    engine.lighting_transition_boundary.authority.invalidate(["2"])
+                hue.after_write_hook = supersede
+            result = await dispatch_manual_light(engine, hue, "2", {"bri": 100}, owner_takeover=True)
+            self.assertEqual(result.status, "uncertain")
+            self.assertEqual(engine._screen_sync.superseded, [])
+            self.assertEqual(engine.stamps, [])
+
+    async def test_rust_and_non_owner_are_denied(self):
+        engine = Engine()
+        engine._screen_sync = Sync()
+        hue = Hue(engine)
+        self.assertEqual((await dispatch_manual_light(engine, hue, "2", {"bri": 100})).status, "denied")
+        engine._screen_sync.rust.add("2")
+        self.assertEqual((await dispatch_manual_light(engine, hue, "2", {"bri": 100}, owner_takeover=True)).status, "denied")
+
+    async def test_queued_intent_and_persistence_failure(self):
+        engine = Engine()
+        engine._screen_sync = Sync()
+        hue = Hue(engine)
+        boundary = engine.lighting_transition_boundary
+        async with boundary.serialized():
+            task = asyncio.create_task(dispatch_manual_light(engine, hue, "2", {"bri": 100}, owner_takeover=True))
+            await asyncio.sleep(0)
+            boundary.authority.invalidate(["2"])
+        self.assertEqual((await task).status, "denied")
+        self.assertEqual(hue.calls, [])
+        self.assertEqual(engine._screen_sync.superseded, [])
+
+        engine.persist_error = True
+        result = await dispatch_manual_light(engine, hue, "2", {"bri": 100}, owner_takeover=True)
+        self.assertEqual(result.status, "uncertain")
+        self.assertEqual(engine._screen_sync.superseded, ["2"])
+        self.assertEqual(engine.manual_light_overrides, {"2"})
+        self.assertEqual(len(hue.calls), 1)
+
+
+class RealHueWorkerSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_revocation_between_worker_preflight_and_acceptance(self):
+        from unittest.mock import AsyncMock
+        from backend.services.hue_service import HueService
+        engine = Engine()
+        engine._screen_sync = Sync()
+        boundary = engine.lighting_transition_boundary
+        hue = HueService("offline.invalid", "offline")
+        hue._connected = True
+        hue.set_transition_boundary(boundary)
+        hue.get_light = AsyncMock(return_value={"light_id": "2", "reachable": True})
+        calls = []
+        hue._bridge = SimpleNamespace(set_light=lambda *args: calls.append(args))
+        valid = True
+        validations = 0
+        original = boundary.validate_dispatch
+        def validate(validator):
+            nonlocal valid, validations
+            result = original(validator)
+            validations += 1
+            if validations == 2:
+                # The real worker has passed raw preflight. Revoke on-loop
+                # after the second policy evaluation, before accept_command.
+                valid = False
+            return result
+        boundary.validate_dispatch = validate
+        result = await dispatch_manual_light(engine, hue, "2", {"bri": 100},
+            owner_takeover=True, context_valid=lambda: valid)
+        self.assertEqual(validations, 2)
+        self.assertEqual(result.status, "uncertain")
+        self.assertEqual(calls, [])
+        self.assertEqual(engine.stamps, [])
+        self.assertEqual(engine._screen_sync.owned, {"2", "5"})
+
+    async def test_committed_before_revocation_can_finish_but_not_claim_hold(self):
+        from threading import Event
+        from unittest.mock import AsyncMock
+        from backend.services.hue_service import HueService
+        engine = Engine()
+        engine._screen_sync = Sync()
+        boundary = engine.lighting_transition_boundary
+        hue = HueService("offline.invalid", "offline")
+        hue._connected = True
+        hue.set_transition_boundary(boundary)
+        hue.get_light = AsyncMock(return_value={"light_id": "2", "reachable": True})
+        loop = asyncio.get_running_loop()
+        entered, release = asyncio.Event(), Event()
+        calls = []
+        def bridge(lid, command):
+            calls.append((lid, command))
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(3):
+                raise RuntimeError("fixture release timeout")
+            return [[{"success": {f"/lights/{lid}/state/{key}": value}} for key, value in command.items()]]
+        hue._bridge = SimpleNamespace(set_light=bridge)
+        valid = True
+        task = asyncio.create_task(dispatch_manual_light(engine, hue, "2", {"bri": 100},
+            owner_takeover=True, context_valid=lambda: valid))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            valid = False
+        finally:
+            release.set()
+            result = await task
+        self.assertEqual(result.status, "uncertain")
+        self.assertEqual(calls, [(2, {"bri": 100})])
+        self.assertEqual(engine.stamps, [])
+        self.assertEqual(engine._screen_sync.owned, {"2", "5"})
+        again = await dispatch_manual_light(engine, hue, "2", {"bri": 101},
+            owner_takeover=True, context_valid=lambda: valid)
+        self.assertEqual(again.status, "denied")
+        self.assertEqual(len(calls), 1)
 
 
 class GuardTests(unittest.IsolatedAsyncioTestCase):

@@ -6512,12 +6512,14 @@ class AutomationEngine:
         """
         return await self._applicator.apply_state(state, transitiontime)
 
-    def _protected_light_ids(self) -> set[str]:
+    def _protected_light_ids(self, *, include_manual: bool = True, include_screen_sync: bool = True) -> set[str]:
         """Light ids the mode-apply pipeline must NOT write this tick — GH#87
         step-5 delegate to :class:`LightApplicator`. (manual + transit
         overrides, plus fresh screen-sync-owned lights while sync is fresh.)
         """
-        return self._applicator.protected_light_ids()
+        if include_manual and include_screen_sync:
+            return self._applicator.protected_light_ids()
+        return self._applicator.protected_light_ids(include_manual=include_manual, include_screen_sync=include_screen_sync)
 
     def transient_light_write_block_reason(self, light_id: str) -> Optional[str]:
         """Return why a direct transient writer must not touch ``light_id``.
@@ -6543,6 +6545,7 @@ class AutomationEngine:
         expected_mode: str | None = None,
         screen_sync_kind: str | None = None,
         scene_ack: bool = False,
+        manual_screen_sync_takeover: bool = False,
     ) -> bool:
         """Shared final-boundary currency and stronger-owner validator.
 
@@ -6598,14 +6601,25 @@ class AutomationEngine:
             blocked |= set(self.manual_light_overrides)
         external = self._applicator.external_owned_light_ids()
         blocked |= external
-        protected = self._protected_light_ids()
-        if allow_manual:
-            protected -= set(self.manual_light_overrides)
-        if allow_screen_sync and self._screen_sync is not None:
-            protected -= self._screen_sync.fresh_owned_light_ids()
+        if manual_screen_sync_takeover:
+            # Reconstruct the other protections independently: subtracting a
+            # sync set from a union would erase overlapping stronger owners.
+            if not allow_manual or allow_screen_sync:
+                return denied("invalid_manual_takeover_policy")
+            if self._screen_sync is not None:
+                rust_owned = getattr(self._screen_sync, "rust_owned_light_ids", None)
+                if not callable(rust_owned) or targets & set(rust_owned()):
+                    return denied("screen_sync_kind_unknown_or_rust")
+            protected = self._protected_light_ids(include_manual=False, include_screen_sync=False)
+        else:
+            protected = self._protected_light_ids()
+            if allow_manual:
+                protected -= set(self.manual_light_overrides)
+            if allow_screen_sync and self._screen_sync is not None:
+                protected -= self._screen_sync.fresh_owned_light_ids()
         blocked |= protected
         screen_sync_owned: set[str] = set()
-        if not allow_screen_sync and self._screen_sync is not None:
+        if not allow_screen_sync and not manual_screen_sync_takeover and self._screen_sync is not None:
             screen_sync_owned = self._screen_sync.fresh_owned_light_ids()
             blocked |= screen_sync_owned
         if screen_sync_kind == "rust" and self._screen_sync is not None:
