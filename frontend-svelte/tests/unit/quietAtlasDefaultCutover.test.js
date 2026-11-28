@@ -44,7 +44,7 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(controls).toContain('Light unavailable')
     expect(controls).toContain('Waiting for light status')
     expect(controls).toContain('$deviceStatus.light_command_results !== true')
-    expect(controls).toContain('does not yet support guarded lighting command results')
+    expect(controls).toContain('Lighting controls are unavailable until HomeHub is updated.')
     // No global optimistic patch in the new Home: a WS send is not an ACK.
     expect(cardSource).toContain('export let optimisticStore = false')
     expect(cardSource).toContain('void optimisticStore')
