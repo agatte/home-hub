@@ -31,6 +31,8 @@ export function createLightCommandReceiptTracker({
   /** @type {Record<string, { status: string, commandId: string | null }>} */
   let statuses = {}
   let capable = false
+  /** @type {string | null} */
+  let reportedContext = null
 
   /** @param {string} lightId @param {string} status @param {string | null} [commandId] */
   function publish(lightId, status, commandId = null) {
@@ -92,6 +94,25 @@ export function createLightCommandReceiptTracker({
         return settle(lightId, entry.commandId, /** @type {string} */ (data.status))
       }
       return false
+    },
+
+    /**
+     * A newly reported mode/owner/lifecycle context makes old settled
+     * receipts historical. Keep in-flight commands and their correlation,
+     * including any result that arrives after the context changes.
+     * @param {{house_state?: string | null, mode?: string, override_user_owned?: boolean}} state
+     */
+    observeModeContext(state) {
+      if (!['home', 'winding_down', 'away', 'sleeping'].includes(state.house_state ?? '')) return
+      const context = JSON.stringify([state.house_state, state.mode, state.override_user_owned === true])
+      if (reportedContext !== null && context !== reportedContext) {
+        const next = Object.fromEntries(Object.entries(statuses).filter(([id]) => pending.has(id)))
+        if (Object.keys(next).length !== Object.keys(statuses).length) {
+          statuses = next
+          onUpdate({ ...statuses })
+        }
+      }
+      reportedContext = context
     },
 
     disconnect() {
