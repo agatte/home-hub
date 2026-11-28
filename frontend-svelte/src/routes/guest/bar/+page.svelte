@@ -32,41 +32,41 @@
 </script>
 
 <svelte:head>
-  <title>Bar â€” Home Hub</title>
+  <title>Bar — Home Hub</title>
 </svelte:head>
 
 <main class="guest-page">
   <header class="guest-header">
-    <h1>Bar</h1>
-    <p class="guest-subtitle">What's pourable tonight</p>
+    <h1>The bar.</h1>
+    <p class="guest-subtitle">Find something to enjoy.</p>
   </header>
 
   {#if !loaded}
     <section class="guest-card">
-      <p class="muted">Loadingâ€¦</p>
+      <p class="muted">Loading…</p>
     </section>
   {:else if unavailable || !summary}
     <section class="guest-card">
       <div class="card-head"><Wine size={20} strokeWidth={1.5} /><h2>Bar</h2></div>
-      <p class="muted">Bar app isn't set up here yet.</p>
+      <p class="muted">The bar menu is unavailable right now.</p>
     </section>
   {:else}
     <section class="guest-card">
       <div class="card-head">
         <Wine size={20} strokeWidth={1.5} />
-        <h2>Inventory</h2>
+        <h2>Behind the bar</h2>
         {#if summary.party_mode}
           <span class="chip chip-party">Party mode</span>
         {/if}
       </div>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">{summary.total_bottles ?? 'â€”'}</div>
+          <div class="stat-value">{summary.total_bottles ?? '—'}</div>
           <div class="stat-label">Bottles</div>
         </div>
         <div class="stat">
-          <div class="stat-value">{summary.makeable_count ?? 'â€”'}</div>
-          <div class="stat-label">Drinks pourable</div>
+          <div class="stat-value">{summary.makeable_count ?? '—'}</div>
+          <div class="stat-label">Drinks you can make</div>
         </div>
       </div>
     </section>
@@ -99,33 +99,33 @@
 
 <style>
   .guest-page {
-    max-width: 540px;
+    max-width: 680px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 18px;
   }
 
-  .guest-header { text-align: center; margin-bottom: 4px; }
+  .guest-header { text-align: left; margin-bottom: 4px; padding: 4px 2px 8px; }
   .guest-header h1 {
     font-family: var(--font-display);
-    font-size: 56px;
+    font-size: clamp(38px, 7vw, 60px);
     line-height: 1;
     margin: 0 0 8px;
-    letter-spacing: 0.04em;
-    color: #fff;
+    letter-spacing: -0.035em;
+    color: var(--guest-ink);
   }
   .guest-subtitle {
     font-size: 14px;
-    color: rgba(245, 243, 238, 0.65);
+    color: var(--guest-muted);
     margin: 0;
   }
 
   .guest-card {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 18px;
-    padding: 22px 24px;
+    background: linear-gradient(145deg,#3e3028,#262923);
+    border: 1px solid var(--guest-line);
+    border-radius: 20px;
+    padding: clamp(17px, 4vw, 26px);
     backdrop-filter: blur(12px);
   }
 
@@ -134,14 +134,14 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 14px;
-    color: rgba(245, 243, 238, 0.85);
+    color: var(--guest-ink);
   }
   .card-head h2 {
     font-family: var(--font-display);
     font-size: 22px;
     margin: 0;
     letter-spacing: 0.04em;
-    color: rgba(245, 243, 238, 0.95);
+    color: var(--guest-ink);
     flex: 1;
   }
 
@@ -169,7 +169,7 @@
     font-family: var(--font-display);
     font-size: 40px;
     line-height: 1;
-    color: #fff;
+    color: var(--guest-ink);
   }
   .stat-label {
     font-size: 12px;
@@ -182,7 +182,7 @@
   .suggestion-name {
     font-size: 22px;
     font-weight: 500;
-    color: #fff;
+    color: var(--guest-ink);
   }
   .ingredients {
     margin: 12px 0 0;
@@ -199,7 +199,7 @@
     position: relative;
   }
   .ingredients li::before {
-    content: 'Â·';
+    content: '·';
     position: absolute;
     left: 4px;
     color: rgba(245, 243, 238, 0.45);
@@ -211,24 +211,25 @@
     justify-content: center;
     gap: 8px;
     padding: 14px 20px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--guest-gold);
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 14px;
-    color: #fff;
+    color: #263027;
     font-size: 15px;
+    font-weight: 650;
     text-decoration: none;
     transition: background 0.15s;
   }
-  .cta:hover { background: rgba(255, 255, 255, 0.16); }
+  .cta:hover { background: #f4dcb2; }
 
   .muted {
     font-size: 14px;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
     margin: 0;
   }
 
   @media (max-width: 480px) {
-    .guest-header h1 { font-size: 44px; }
+    .guest-header h1 { font-size: clamp(36px, 9vw, 44px); }
     .stat-value { font-size: 34px; }
   }
 </style>

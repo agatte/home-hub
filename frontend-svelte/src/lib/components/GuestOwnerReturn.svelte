@@ -46,8 +46,8 @@
 {/if}
 
 <style>
-  .owner-return {position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;margin:0 0 22px;border:1px solid rgba(245,243,238,.15);border-radius:14px;background:#201b29;}
+  .owner-return {position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;margin:0 0 22px;border:1px solid rgba(245,243,238,.15);border-radius:14px;background:#26312b;}
   a {display:inline-flex;align-items:center;gap:4px;min-height:44px;color:#f5f3ee;text-decoration:none;font-size:14px;font-weight:650;}
   a:focus-visible {outline:3px solid #e4d2a7;outline-offset:3px;border-radius:6px;}
-  span {color:#b9adcc;font-size:11px;line-height:1.4;text-align:right;}
+  span {color:#c3c9bd;font-size:11px;line-height:1.4;text-align:right;}
 </style>

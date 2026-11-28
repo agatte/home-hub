@@ -28,7 +28,7 @@
     if (!nextWatering) return null
     if (typeof nextWatering === 'string') return nextWatering
     if (nextWatering.name && nextWatering.due_in) {
-      return `${nextWatering.name} â€” ${nextWatering.due_in}`
+      return `${nextWatering.name} — ${nextWatering.due_in}`
     }
     if (nextWatering.name) return nextWatering.name
     return null
@@ -36,29 +36,29 @@
 </script>
 
 <svelte:head>
-  <title>Plants â€” Home Hub</title>
+  <title>Plants — Home Hub</title>
 </svelte:head>
 
 <main class="guest-page">
   <header class="guest-header">
-    <h1>Plants</h1>
-    <p class="guest-subtitle">What's growing here</p>
+    <h1>Meet the plants.</h1>
+    <p class="guest-subtitle">A little greenery around the apartment.</p>
   </header>
 
   {#if !loaded}
     <section class="guest-card">
-      <p class="muted">Loadingâ€¦</p>
+      <p class="muted">Loading…</p>
     </section>
   {:else if unavailable || !summary}
     <section class="guest-card">
       <div class="card-head"><Sprout size={20} strokeWidth={1.5} /><h2>Plants</h2></div>
-      <p class="muted">Plant app isn't set up here yet.</p>
+      <p class="muted">Plant information is unavailable right now.</p>
     </section>
   {:else}
     <section class="guest-card">
       <div class="card-head">
         <Sprout size={20} strokeWidth={1.5} />
-        <h2>Status</h2>
+        <h2>What's growing</h2>
         {#if summary.overdue && summary.overdue > 0}
           <span class="chip chip-thirsty">{summary.overdue} overdue</span>
         {:else if summary.needs_water && summary.needs_water > 0}
@@ -67,7 +67,7 @@
       </div>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">{summary.total ?? 'â€”'}</div>
+          <div class="stat-value">{summary.total ?? '—'}</div>
           <div class="stat-label">Total</div>
         </div>
         <div class="stat">
@@ -91,33 +91,33 @@
 
 <style>
   .guest-page {
-    max-width: 540px;
+    max-width: 680px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 18px;
   }
 
-  .guest-header { text-align: center; margin-bottom: 4px; }
+  .guest-header { text-align: left; margin-bottom: 4px; padding: 4px 2px 8px; }
   .guest-header h1 {
     font-family: var(--font-display);
-    font-size: 56px;
+    font-size: clamp(38px, 7vw, 60px);
     line-height: 1;
     margin: 0 0 8px;
-    letter-spacing: 0.04em;
-    color: #fff;
+    letter-spacing: -0.035em;
+    color: var(--guest-ink);
   }
   .guest-subtitle {
     font-size: 14px;
-    color: rgba(245, 243, 238, 0.65);
+    color: var(--guest-muted);
     margin: 0;
   }
 
   .guest-card {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 18px;
-    padding: 22px 24px;
+    background: linear-gradient(145deg,#304638,#23322b);
+    border: 1px solid var(--guest-line);
+    border-radius: 20px;
+    padding: clamp(17px, 4vw, 26px);
     backdrop-filter: blur(12px);
   }
 
@@ -126,14 +126,14 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 14px;
-    color: rgba(245, 243, 238, 0.85);
+    color: var(--guest-ink);
   }
   .card-head h2 {
     font-family: var(--font-display);
     font-size: 22px;
     margin: 0;
     letter-spacing: 0.04em;
-    color: rgba(245, 243, 238, 0.95);
+    color: var(--guest-ink);
     flex: 1;
   }
 
@@ -166,7 +166,7 @@
     font-family: var(--font-display);
     font-size: 40px;
     line-height: 1;
-    color: #fff;
+    color: var(--guest-ink);
   }
   .stat-label {
     font-size: 12px;
@@ -178,19 +178,19 @@
 
   .next-water {
     font-size: 16px;
-    color: #fff;
+    color: var(--guest-ink);
     margin: 0;
     line-height: 1.4;
   }
 
   .muted {
     font-size: 14px;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
     margin: 0;
   }
 
   @media (max-width: 480px) {
-    .guest-header h1 { font-size: 44px; }
+    .guest-header h1 { font-size: clamp(36px, 9vw, 44px); }
     .stat-value { font-size: 34px; }
   }
 </style>

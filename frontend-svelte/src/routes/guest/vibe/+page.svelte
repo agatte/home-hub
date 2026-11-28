@@ -555,8 +555,8 @@
   {/if}
 
   <header class="guest-header">
-    <h1>Vibe</h1>
-    <p class="guest-subtitle">What the room is doing</p>
+    <h1>Set the vibe.</h1>
+    <p class="guest-subtitle">Make the lights and music your own.</p>
   </header>
 
   <section class="guest-card">
@@ -575,7 +575,7 @@
         {#if $guestState.source === 'guest'}
           <span class="src-chip src-chip-guest">🏠 Set by a guest</span>
         {:else}
-          <span class="src-chip src-chip-manual">Manual override</span>
+          <span class="src-chip src-chip-manual">Manually set</span>
         {/if}
       {/if}
     </div>
@@ -855,33 +855,33 @@
 
 <style>
   .guest-page {
-    max-width: 540px;
+    max-width: 760px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 18px;
   }
 
-  .guest-header { text-align: center; margin-bottom: 4px; }
+  .guest-header { text-align: left; margin-bottom: 4px; padding: 4px 2px 8px; }
   .guest-header h1 {
     font-family: var(--font-display);
-    font-size: 56px;
+    font-size: clamp(38px, 7vw, 60px);
     line-height: 1;
     margin: 0 0 8px;
-    letter-spacing: 0.04em;
-    color: #fff;
+    letter-spacing: -0.035em;
+    color: var(--guest-ink);
   }
   .guest-subtitle {
     font-size: 14px;
-    color: rgba(245, 243, 238, 0.65);
+    color: var(--guest-muted);
     margin: 0;
   }
 
   .guest-card {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 18px;
-    padding: 22px 24px;
+    background: var(--guest-surface);
+    border: 1px solid var(--guest-line);
+    border-radius: 20px;
+    padding: clamp(17px, 4vw, 26px);
     backdrop-filter: blur(12px);
   }
 
@@ -890,14 +890,14 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 14px;
-    color: rgba(245, 243, 238, 0.85);
+    color: var(--guest-ink);
   }
   .card-head h2 {
     font-family: var(--font-display);
     font-size: 22px;
     margin: 0;
     letter-spacing: 0.04em;
-    color: rgba(245, 243, 238, 0.95);
+    color: var(--guest-ink);
     flex: 1;
   }
 
@@ -907,7 +907,7 @@
   .mode-name {
     font-family: var(--font-display);
     font-size: 32px;
-    color: #fff;
+    color: var(--guest-ink);
     letter-spacing: 0.04em;
     text-transform: uppercase;
   }
@@ -936,7 +936,7 @@
 
   .scene-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
   }
   .scene-btn {
@@ -949,7 +949,7 @@
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
-    color: #fff;
+    color: var(--guest-ink);
     font-family: var(--font-body);
     font-size: 14px;
     cursor: pointer;
@@ -996,7 +996,7 @@
 
   .vibe-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
   }
   .vibe-btn {
@@ -1011,7 +1011,7 @@
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
-    color: #fff;
+    color: var(--guest-ink);
     font-family: var(--font-body);
     cursor: pointer;
     transition: background 0.15s, transform 0.05s, border-color 0.15s;
@@ -1033,7 +1033,7 @@
   }
   .vibe-playlist {
     font-size: 11px;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
     line-height: 1.2;
     /* Long playlist titles ("Lo-fi-working") would push the column past
        its 1fr width without min-width:0 from the parent — same trick as
@@ -1047,13 +1047,13 @@
   .cooldown {
     margin: 12px 0 0;
     font-size: 12px;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
     text-align: center;
   }
 
   .toast-hint {
     font-size: 13px;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
     margin: 0 0 14px;
   }
   .toast-form {
@@ -1069,7 +1069,7 @@
     background: rgba(0, 0, 0, 0.28);
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 12px;
-    color: #fff;
+    color: var(--guest-ink);
     font-family: var(--font-body);
     font-size: 15px;
     transition: border-color 0.15s, background 0.15s;
@@ -1092,7 +1092,7 @@
     background: linear-gradient(135deg, rgba(245, 178, 60, 0.85), rgba(220, 110, 60, 0.85));
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 12px;
-    color: #fff;
+    color: var(--guest-ink);
     font-family: var(--font-display);
     font-size: 18px;
     letter-spacing: 0.04em;
@@ -1112,7 +1112,7 @@
 
   .muted {
     font-size: 14px;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
     margin: 0;
   }
 
@@ -1123,7 +1123,7 @@
     transform: translateX(-50%);
     z-index: 60;
     background: rgba(0, 0, 0, 0.85);
-    color: #fff;
+    color: var(--guest-ink);
     padding: 12px 20px;
     border-radius: 999px;
     font-size: 13px;
@@ -1134,7 +1134,7 @@
   }
 
   @media (max-width: 480px) {
-    .guest-header h1 { font-size: 44px; }
+    .guest-header h1 { font-size: clamp(36px, 9vw, 44px); }
     .mode-name { font-size: 28px; }
   }
 
@@ -1160,7 +1160,7 @@
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 12px;
-    color: rgba(245, 243, 238, 0.85);
+    color: var(--guest-ink);
     font-family: var(--font-body);
     font-size: 13px;
     cursor: pointer;
@@ -1214,7 +1214,7 @@
   }
   .np-title {
     font-size: 14px;
-    color: #fff;
+    color: var(--guest-ink);
     font-weight: 500;
     line-height: 1.2;
     overflow: hidden;
@@ -1251,7 +1251,7 @@
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
-    color: #fff;
+    color: var(--guest-ink);
     cursor: pointer;
     transition: background 0.15s, transform 0.05s, border-color 0.15s;
   }
@@ -1281,7 +1281,7 @@
     justify-content: center;
     background: transparent;
     border: 0;
-    color: #fff;
+    color: var(--guest-ink);
     cursor: pointer;
     border-radius: 8px;
     transition: background 0.15s;
@@ -1291,7 +1291,7 @@
   .vol-readout {
     font-family: var(--font-display);
     font-size: 18px;
-    color: rgba(245, 243, 238, 0.85);
+    color: var(--guest-ink);
     min-width: 28px;
     text-align: center;
     letter-spacing: 0.04em;
@@ -1316,7 +1316,7 @@
   }
   .reset-btn:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.08);
-    color: #fff;
+    color: var(--guest-ink);
     border-color: rgba(255, 255, 255, 0.3);
   }
   .reset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -1390,13 +1390,13 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(245, 243, 238, 0.55);
+    color: var(--guest-muted);
   }
   .brightness-card-label-right { text-align: right; }
   .brightness-card-readout {
     font-family: var(--font-display);
     font-size: 22px;
-    color: rgba(245, 243, 238, 0.95);
+    color: var(--guest-ink);
     letter-spacing: 0.04em;
     min-width: 40px;
     text-align: center;
