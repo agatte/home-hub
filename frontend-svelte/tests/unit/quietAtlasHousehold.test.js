@@ -23,8 +23,8 @@ describe('Functional household migration (#461)', () => {
     expect(household).toContain('href="/quiet-atlas/control"')
     expect(household).toContain('href={CONTROL_SCENES_HREF}')
     expect(household).toContain('$connected && $deviceStatus.hue')
-    expect(household).toContain('Temporary compatibility tools')
-    expect(household.split('href="/classic"').length - 1).toBe(1)
+    expect(household).not.toContain('Temporary compatibility tools')
+    expect(household).not.toContain('href="/classic"')
     for (const forbidden of ['apiPost(','apiPut(','fetch(','setLight(','<ApartmentWidget','<LightGrid','<SceneBrowser']) expect(household).not.toContain(forbidden)
   })
   it('compiles the real route with no Svelte warnings', () => {

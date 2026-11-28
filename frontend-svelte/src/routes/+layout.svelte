@@ -7,7 +7,6 @@
   import { connectionLost } from '$lib/stores/connection.js'
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
   import { initAmbientAudio } from '$lib/ambientAudio.js'
-  import OwnerUnlock from '$lib/components/OwnerUnlock.svelte'
   import ModeBackground from '$lib/components/ModeBackground.svelte'
   import ModeOverlay from '$lib/components/ModeOverlay.svelte'
   import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
@@ -42,8 +41,7 @@
   // /gameday keeps its edge-to-edge stadium layout and ignores the preview flag.
   $: isGamedayRoute = $page.url.pathname === '/gameday'
 
-  // Quiet Atlas is opt-in: its own route always uses the new shell; existing
-  // routes can preview it with ?shell=quiet-atlas without replacing their page.
+  // The redesigned shell owns normal owner routes and compatibility bookmarks.
   // Guest and Game Day keep their purpose-built layouts.
   $: isQuietAtlasShell = shouldUseQuietAtlasShell($page.url.pathname, $page.url.searchParams)
   $: isIsolatedRoute = isGuestRoute || isGamedayPrototypeRoute || isQuietAtlasShell
@@ -151,10 +149,6 @@
   {/if}
 </div>
 
-{#if !isQuietAtlasShell && $page.url.pathname === "/classic"}
-  <div class="classic-owner-access"><OwnerUnlock /></div>
-{/if}
-
 {#if ambientVisible}
   <QuietAtlasAmbient />
 {/if}
@@ -164,8 +158,7 @@
   <NowPlayingChip />
   <MusicPlayerOverlay />
   <VitalStrip />
-  <!-- Rule-engine mode suggestion toast: cross-route coverage. Self-suppresses
-       on / where ModeSuggestionCard owns the banner spot. -->
+  <!-- Existing separate experiences retain their mode suggestion toast. -->
   <ModeSuggestionToast />
 {/if}
 {#if shouldShowGlobalErrorToast($page.url.pathname, $page.url.searchParams)}
@@ -173,5 +166,4 @@
 {/if}
 
 <style>
-  .classic-owner-access {position:fixed;right:12px;top:12px;z-index:100;width:min(280px,calc(100vw - 24px));}
 </style>

@@ -95,11 +95,6 @@
     </div>
   </section>
 
-  <details class="fallback">
-    <summary>Temporary compatibility tools</summary>
-    <p>Classic is retained while remaining capabilities are migrated and verified. It is not the permanent household interface.</p>
-    <a href="/classic">Open temporary Classic fallback</a>
-  </details>
 </main>
 
 <style>
@@ -114,7 +109,7 @@
   h1 {font:500 clamp(36px,5vw,60px)/1.1 var(--hh-display);letter-spacing:-.04em;}
   h2 {font:500 clamp(24px,3vw,34px)/1.15 var(--hh-display);}
   h3 {font-size:17px;font-weight:650;line-height:1.3;}
-  .heading p:not(.eyebrow),.description,.fallback p {font-size:13px;line-height:1.55;color:var(--hh-muted);}
+  .heading p:not(.eyebrow),.description {font-size:13px;line-height:1.55;color:var(--hh-muted);}
   .household-section {display:grid;gap:12px;min-width:0;scroll-margin-top:84px;}
   .cards {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
   .house-card {min-width:0;display:flex;flex-direction:column;gap:10px;padding:clamp(16px,2vw,24px);background:var(--hh-card-background);border:1px solid var(--hh-line);border-radius:var(--hh-radius-panel);}
@@ -123,12 +118,9 @@
   .apartment {gap:14px;}
   .apartment :global(.apartment-viz) {max-width:560px;width:100%;margin:0 auto;}
   .jump {display:flex;flex-wrap:wrap;gap:8px;min-width:0;}
-  .jump a,.fallback a {display:inline-flex;align-items:center;min-height:44px;padding:8px 14px;border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);color:var(--hh-ink);background:var(--hh-control);font-size:13px;text-decoration:none;}
-  .jump a:hover,.fallback a:hover {background:var(--hh-control-hover);}
-  .jump a:focus-visible,.fallback a:focus-visible,.fallback summary:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
-  .fallback {border:1px solid var(--hh-line);border-radius:var(--hh-radius-panel);padding:12px 16px;color:var(--hh-muted);}
-  .fallback summary {min-height:44px;padding:10px 0;cursor:pointer;}
-  .fallback a {margin-top:12px;}
+  .jump a {display:inline-flex;align-items:center;min-height:44px;padding:8px 14px;border:1px solid var(--hh-line);border-radius:var(--hh-radius-control);color:var(--hh-ink);background:var(--hh-control);font-size:13px;text-decoration:none;}
+  .jump a:hover {background:var(--hh-control-hover);}
+  .jump a:focus-visible {outline:3px solid var(--hh-focus);outline-offset:3px;}
   .house-card :global(button) {min-height:44px;}
   @media(max-width:800px) {.cards{grid-template-columns:minmax(0,1fr);}}
   @media(max-width:600px) {.household{gap:20px;padding:18px 16px 32px;}.jump a{flex:1 1 auto;justify-content:center;}.house-card{padding:16px;}}

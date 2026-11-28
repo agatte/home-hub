@@ -12,12 +12,12 @@ import {
 } from '../../src/lib/quietAtlas/navigation.js'
 
 describe('Quiet Atlas shared shell navigation', () => {
-  it('keeps the new Home preview opt-in and preserves special route layouts', () => {
+  it('uses the redesigned shell for owner routes and preserves special route layouts', () => {
     expect(shouldUseQuietAtlasShell('/quiet-atlas', new URLSearchParams())).toBe(true)
     expect(shouldUseQuietAtlasShell('/music', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(shouldUseQuietAtlasShell('/settings', new URLSearchParams('shell=quiet-atlas'))).toBe(true)
     expect(shouldUseQuietAtlasShell('/', new URLSearchParams())).toBe(true)
-    expect(shouldUseQuietAtlasShell('/classic', new URLSearchParams())).toBe(false)
+    expect(shouldUseQuietAtlasShell('/classic', new URLSearchParams())).toBe(true)
     expect(shouldUseQuietAtlasShell('/gameday', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
     expect(shouldUseQuietAtlasShell('/gameday/prototype', new URLSearchParams('shell=quiet-atlas'))).toBe(false)
     expect(shouldUseQuietAtlasShell('/guest/wifi', new URLSearchParams('shell=quiet-atlas'))).toBe(false)

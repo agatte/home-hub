@@ -48,6 +48,6 @@ test('redesigned owner actions are in More, not a fixed page overlay', () => {
   const shell = fs.readFileSync(new URL('../../src/lib/components/QuietAtlasShell.svelte', import.meta.url), 'utf8')
   const layout = fs.readFileSync(new URL('../../src/routes/+layout.svelte', import.meta.url), 'utf8')
   assert.match(shell, /\{#if moreOpen\}[\s\S]*<OwnerUnlock \/>/)
-  assert.match(layout, /\{#if !isQuietAtlasShell && \$page.url.pathname === "\/classic"\}/)
+  assert.doesNotMatch(layout, /classic-owner-access|<OwnerUnlock\s*\/>/)
   assert.doesNotMatch(source, /position:\s*fixed/)
 })

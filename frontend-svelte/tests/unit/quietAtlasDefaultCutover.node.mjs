@@ -3,20 +3,22 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
   shouldUseQuietAtlasShell, activeQuietAtlasSection,
-  shouldShowGlobalErrorToast, MORE_DESTINATIONS,
+  shouldShowGlobalErrorToast, MORE_DESTINATIONS, classicBookmarkHref,
 } from '../../src/lib/quietAtlas/navigation.js'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 
-test('root uses redesigned Home with fully preserved classic dashboard', () => {
+test('root uses redesigned Home with a redirect-only Classic bookmark', () => {
   const root = read('../../src/routes/+page.svelte')
   const classic = read('../../src/routes/classic/+page.svelte')
   assert.match(root, /import RedesignedHome/)
   assert.match(root, /<RedesignedHome \/>/)
-  assert.match(classic, /id="apartment-controls"/)
-  assert.match(classic, /<ApartmentWidget \/>/)
+  assert.match(classic, /goto\(destination, \{ replaceState: true \}\)/)
+  assert.doesNotMatch(classic, /<ApartmentWidget|<ModeCardDeck|<SonosCard/)
+  assert.equal(classicBookmarkHref('#apartment-controls'), '/quiet-atlas/control')
+  assert.equal(classicBookmarkHref('#https://example.com'), '/')
   assert.equal(shouldUseQuietAtlasShell('/', new URLSearchParams()), true)
-  assert.equal(shouldUseQuietAtlasShell('/classic', new URLSearchParams('shell=quiet-atlas')), false)
+  assert.equal(shouldUseQuietAtlasShell('/classic', new URLSearchParams('shell=quiet-atlas')), true)
   assert.equal(activeQuietAtlasSection('/'), 'home')
   assert.equal(shouldShowGlobalErrorToast('/', new URLSearchParams()), true)
   assert.equal(MORE_DESTINATIONS.find(x => x.id === 'apartment').href, '/quiet-atlas/household')
@@ -45,7 +47,7 @@ test('in-flow reveal controls L1–L6 individually, not fake preview values', ()
   assert.ok(!home.includes('href="/classic"'))
 })
 
-test('kiosk default URL needs no startup change and fallback is alive', () => {
+test('kiosk default URL needs no startup change and Control remains functional', () => {
   const kiosk = read('../../../scripts/recycle-kiosk.sh')
   const shell = read('../../src/lib/components/QuietAtlasShell.svelte')
   const detail = read('../../src/routes/quiet-atlas/lighting/[groupId]/+page.svelte')
