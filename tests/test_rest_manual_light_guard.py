@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.auth import require_owner_or_explicit_key, settings
 from backend.api.routes.lights import router
-from tests.test_ws_manual_light_guard import Engine, Hue
+from tests.test_ws_manual_light_guard import Engine, Hue, Sync
 
 
 @pytest.fixture
@@ -39,6 +39,40 @@ def test_rest_brightness_uses_one_guarded_bulb_write_and_persists(simulated):
     assert simulated.engine.persists == 1
 
 
+def test_rest_key_cannot_take_over_fresh_sync(simulated):
+    simulated.engine._screen_sync = Sync()
+    reply = simulated.client.put("/api/lights/2", json={"bri": 101})
+    assert reply.status_code == 409
+    assert simulated.hue.calls == []
+    assert simulated.engine._screen_sync.superseded == []
+
+
+def test_rest_session_can_take_over_fresh_sync(simulated, monkeypatch):
+    from backend.api import owner_session as owner
+    monkeypatch.setattr(owner.settings, "HOME_HUB_OWNER_ALLOWED_ORIGINS", "https://hub.example")
+    owner._sessions["fake-token"] = owner.time.monotonic() + 60
+    simulated.engine._screen_sync = Sync()
+    with TestClient(simulated.app, base_url="https://hub.example", headers={"Origin": "https://hub.example"}, cookies={owner.COOKIE: "fake-token"}) as client:
+        reply = client.put("/api/lights/2", json={"bri": 101})
+    assert reply.status_code == 200, reply.text
+    assert simulated.engine._screen_sync.superseded == ["2"]
+    assert simulated.engine._screen_sync.owned == {"5"}
+    owner._sessions.pop("fake-token", None)
+
+
+def test_rest_tunnel_key_with_session_cannot_take_over(simulated, monkeypatch):
+    from backend.api import owner_session as owner
+    monkeypatch.setattr(owner.settings, "HOME_HUB_OWNER_ALLOWED_ORIGINS", "https://hub.example")
+    monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "fake-skill")
+    owner._sessions["fake-token"] = owner.time.monotonic() + 60
+    simulated.engine._screen_sync = Sync()
+    with TestClient(simulated.app, base_url="https://hub.example", headers={"Origin": "https://hub.example", "X-Tunnel-Origin": "cloudflare", "X-API-Key": "fake-key", "X-Skill-Token": "fake-skill"}, cookies={owner.COOKIE: "fake-token"}) as client:
+        reply = client.put("/api/lights/2", json={"bri": 101})
+    assert reply.status_code == 409
+    assert simulated.hue.calls == []
+    owner._sessions.pop("fake-token", None)
+
+
 def test_rest_repeated_owner_action_is_scoped_and_guarded(simulated):
     for payload in ({"on": False}, {"bri": 140}):
         result = simulated.client.put("/api/lights/2", json=payload)
@@ -61,7 +95,6 @@ def test_rest_repeated_owner_action_is_scoped_and_guarded(simulated):
     ("_gaming_scene_transition_pending", True),
     ("_active_effect_name", "effect"),
     ("_transit_light_overrides", {"2"}),
-    ("_screen_sync", SimpleNamespace(fresh_owned_light_ids=lambda: {"2"})),
     ("_external", {"2"}),
     ("_custom_protected", {"2"}),
 ])
