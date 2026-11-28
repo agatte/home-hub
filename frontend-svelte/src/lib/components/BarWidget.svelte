@@ -6,6 +6,10 @@
   // Bar app URL for iframe modal — read from the status response
   export let cardClickable = false
   let barAppUrl = ''
+  let securePage = false
+  // A secure owner page cannot frame the local HTTP Bar app. This is
+  // presentation only; the browser and server still enforce their policies.
+  $: externalOnly = securePage && barAppUrl.startsWith('http:')
 
   function portal(node) {
     document.body.appendChild(node)
@@ -64,6 +68,7 @@
   }
 
   onMount(() => {
+    securePage = new URL(document.URL).protocol === 'https:'
     fetchStatus()
     refreshInterval = setInterval(fetchStatus, 600000) // 10 min
   })
@@ -147,13 +152,22 @@
     >
       ✕
     </button>
-    <a class="app-external" href={barAppUrl} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
-    <iframe
-      class="bar-modal-iframe"
-      src={barAppUrl}
-      title="Home Bar"
-      allow="fullscreen"
-    ></iframe>
+    {#if externalOnly}
+      <div class="bar-external-panel">
+        <Wine size={32} strokeWidth={1.5} />
+        <h2>Home Bar</h2>
+        <p>Home Bar opens in its own tab from the secure dashboard.</p>
+        <a href={barAppUrl} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
+      </div>
+    {:else}
+      <a class="app-external" href={barAppUrl} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
+      <iframe
+        class="bar-modal-iframe"
+        src={barAppUrl}
+        title="Home Bar"
+        allow="fullscreen"
+      ></iframe>
+    {/if}
   </div>
 {/if}
 
@@ -273,6 +287,34 @@
     justify-content: center;
     padding: 24px;
   }
+
+  .bar-external-panel {
+    width: min(440px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 28px;
+    text-align: center;
+    color: #f1eee7;
+    background: #202a26;
+    border: 1px solid #49564f;
+    border-radius: 20px;
+  }
+  .bar-external-panel p { color: #c8cec6; line-height: 1.5; }
+  .bar-external-panel a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px 16px;
+    color: #202a26;
+    background: #e4c99e;
+    border-radius: 12px;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .bar-external-panel a:focus-visible { outline: 3px solid #f1eee7; outline-offset: 3px; }
 
   .bar-modal-iframe {
     width: 100%;

@@ -53,8 +53,7 @@
   /** @param {string | undefined} status */
   function receiptLabel(status) {
     if (status === 'pending') return 'Changing light…'
-    if (status === 'acknowledged') return 'Bridge acknowledged; check actual light.'
-    if (status === 'denied') return 'Blocked by lighting ownership or house state.'
+    if (status === 'denied') return 'Light change blocked. Try again when available.'
     if (status === 'unavailable') return 'Control unavailable; no command sent.'
     if (status === 'invalid') return 'Request rejected.'
     return 'Result uncertain; check actual light.'
@@ -72,11 +71,11 @@
 <section class="room-control" class:compact aria-labelledby={`${id}-heading`}>
   <h4 id={`${id}-heading`} class="sr-only">{roomLabel} lights</h4>
   {#if !$connected}
-    <p role="status" class="warning">Lighting commands are unavailable while HomeHub is disconnected. Reconnect before adjusting.</p>
+    <p role="status" class="warning">HomeHub is disconnected. Reconnect to adjust your lights.</p>
   {:else if $deviceStatus.light_command_results !== true}
-    <p role="status" class="warning">This HomeHub server does not yet support guarded lighting command results. These redesigned controls will stay unavailable until the matching server update.</p>
+    <p role="status" class="warning">Lighting controls are unavailable until HomeHub is updated.</p>
   {:else if fixtureIds.length === 0}
-    <p role="status" class="warning">No configured fixtures for this room.</p>
+    <p role="status" class="warning">No lights configured for this room.</p>
   {:else}
     {#if room === 'kitchen'}
       <div class="kitchen-switch" role="group" aria-label="Kitchen control scope">
@@ -98,7 +97,7 @@
       {:else}
         <p class="light-hint">{kitchenReady ? 'Power differs. Turn both on or off before linked brightness and color adjustments.' : 'Both fixtures must be reachable for linked adjustments. Use Individually to control an available light.'}</p>
         {#each KITCHEN_IDS as lid}
-          {#if $lightCommandResults[lid]?.status}
+          {#if $lightCommandResults[lid]?.status && $lightCommandResults[lid].status !== 'acknowledged'}
             <p class="light-hint" role="status">L{lid}: {receiptLabel($lightCommandResults[lid].status)}</p>
           {/if}
         {/each}
@@ -112,7 +111,7 @@
           {#if $lights[lightId] && $lights[lightId].reachable === true}
             <LightCard light={$lights[lightId]} optimisticStore={false} />
           {:else}
-            <p role="status" class="warning">{ $lights[lightId] ? 'Fixture unreachable — controls unavailable' : 'Waiting for fixture state — controls unavailable' }</p>
+            <p role="status" class="warning">{ $lights[lightId] ? 'Light unavailable' : 'Waiting for light status' }</p>
           {/if}
         </div>
       {/each}
@@ -121,8 +120,8 @@
   {/if}
   <details class="control-details">
     <summary>About these controls</summary>
-    <p class="provenance">Individual controls request one light. Kitchen Together sends one request to each of L3 and L4; either may be refused independently. HomeHub can refuse a change when another mode or effect is in control. Opening a room does not change any lights.</p>
-    <p class="footnote">A successful request does not guarantee the physical light changed. Check the light itself when needed.</p>
+    <p class="provenance">Adjust lights individually or control both kitchen lights together. Some adjustments may be blocked while another lighting effect is active. Opening a room does not change any lights.</p>
+    <p class="footnote">If a light doesn’t respond, check its connection and current lighting mode.</p>
   </details>
 </section>
 

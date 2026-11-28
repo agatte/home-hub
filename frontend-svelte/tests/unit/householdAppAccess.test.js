@@ -17,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 it('opens Plants despite unavailable summary and offers external recovery', async () => {
@@ -40,6 +41,30 @@ it('opens configured Home Bar without summary and offers external recovery', asy
   expect(screen.getByRole('link', { name: /Open in browser/ })).toHaveAttribute('href', 'https://bar.example.test/')
   await fireEvent.click(screen.getByRole('button', { name: 'Close bar app' }))
   expect(screen.queryByTitle('Home Bar')).toBeNull()
+})
+
+it.each([
+  { pageUrl: 'https://homehub.example.test/household', barUrl: 'http://bar.example.test:8001/', embedded: false },
+  { pageUrl: 'http://homehub.example.test/household', barUrl: 'http://bar.example.test:8001/', embedded: true },
+  { pageUrl: 'https://homehub.example.test/household', barUrl: 'https://bar.example.test/', embedded: true },
+])('offers the appropriate Bar view for $pageUrl and $barUrl', async ({ pageUrl, barUrl, embedded }) => {
+  vi.spyOn(document, 'URL', 'get').mockReturnValue(pageUrl)
+  vi.mocked(apiGet).mockResolvedValue({ bar_summary: null, bar_app_url: barUrl })
+  render(BarWidget)
+  await fireEvent.click(screen.getByRole('button', { name: /Open Home Bar/ }))
+  const link = await screen.findByRole('link', { name: /Open in browser/ })
+  expect(link).toHaveAttribute('href', barUrl)
+  expect(link).toHaveAttribute('target', '_blank')
+  expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  if (embedded) {
+    expect(screen.getByTitle('Home Bar')).toHaveAttribute('src', barUrl)
+    expect(screen.queryByText(/opens in its own tab/)).toBeNull()
+  } else {
+    expect(screen.queryByTitle('Home Bar')).toBeNull()
+    expect(screen.getByText(/opens in its own tab/)).toBeInTheDocument()
+  }
+  await fireEvent.click(screen.getByRole('button', { name: 'Close bar app' }))
+  expect(screen.queryByRole('link', { name: /Open in browser/ })).toBeNull()
 })
 
 it.each([null, 'javascript:alert(1)'])('reports unavailable Home Bar address and permits retry (%s)', async (url) => {

@@ -376,15 +376,13 @@
   {/if}
   {#each commandIds as commandId}
   {@const commandStatus = $lightCommandResults[commandId]?.status}
-  {#if commandStatus}
+  {#if commandStatus && commandStatus !== 'acknowledged'}
     <p class="chip-command-status" class:command-denied={commandStatus === 'denied'} role="status" aria-live="polite">
       {#if linkedIds.length}Light {commandId}: {/if}
       {#if commandStatus === 'pending'}
         Changing light…
-      {:else if commandStatus === 'acknowledged'}
-        Bridge acknowledged. Actual light state awaits a fresh report.
       {:else if commandStatus === 'denied'}
-        Change blocked by lighting ownership or house state.
+        Light change blocked. Try again when available.
       {:else if commandStatus === 'unavailable'}
         Control unavailable; no command was sent.
       {:else if commandStatus === 'invalid'}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createLightCommandReceiptTracker } from '../../src/lib/quietAtlas/lightCommandReceiptTracker.js'
 import card from '../../src/lib/components/LightCard.svelte?raw'
+import room from '../../src/lib/components/QuietAtlasRoomControls.svelte?raw'
 import init from '../../src/lib/stores/init.js?raw'
 import ws from '../../src/lib/ws.js?raw'
 import { compile } from 'svelte/compiler'
@@ -55,6 +56,30 @@ describe('correlated guarded light WebSocket receipts (#461)', () => {
     expect(sent).toHaveLength(2)
   })
 
+  it('clears only historical settled receipts on reported mode or owner changes', () => {
+    const { tracker, sent, timers } = harness()
+    tracker.setCapability(true)
+    const gaming = { house_state: 'home', mode: 'gaming', override_user_owned: true }
+    tracker.observeModeContext(gaming)
+    tracker.submit('2', { bri: 100 }, d => { sent.push(d); return true })
+    tracker.receive({ command_id: sent[0].command_id, light_id: '2', status: 'denied' })
+    tracker.submit('5', { bri: 80 }, d => { sent.push(d); return true })
+    const eveningReport = { ...gaming, time_period: 'evening' }
+    tracker.observeModeContext(eveningReport)
+    tracker.observeModeContext({ house_state: null })
+    expect(tracker.snapshot()['2'].status).toBe('denied')
+    tracker.observeModeContext({ ...gaming, override_user_owned: false })
+    expect(tracker.snapshot()['2']).toBeUndefined()
+    expect(tracker.snapshot()['5'].status).toBe('pending')
+    expect(timers.size).toBe(1)
+    expect(tracker.receive({ command_id: sent[1].command_id, light_id: '5', status: 'denied' })).toBe(true)
+    expect(tracker.snapshot()['5'].status).toBe('denied')
+    expect(tracker.receive({ command_id: sent[0].command_id, light_id: '2', status: 'acknowledged' })).toBe(false)
+    tracker.observeModeContext({ ...gaming, mode: 'working', override_user_owned: false })
+    expect(tracker.snapshot()).toEqual({})
+    expect(sent).toHaveLength(2)
+  })
+
   it('keeps redesigned light values source-qualified with explicit status text', () => {
     expect(card).toContain('export let optimisticStore = false')
     expect(card).toContain('void optimisticStore')
@@ -62,7 +87,12 @@ describe('correlated guarded light WebSocket receipts (#461)', () => {
     expect(card).toContain("lightCommandResults")
     expect(card).toContain("commandPending")
     expect(card).toContain('role="status" aria-live="polite"')
-    expect(card).toContain('Actual light state awaits a fresh report.')
+    expect(card).toContain("commandStatus && commandStatus !== 'acknowledged'")
+    expect(card).not.toContain('Bridge acknowledged.')
+    expect(room).toContain("$lightCommandResults[lid].status !== 'acknowledged'")
+    expect(room).not.toContain('Bridge acknowledged;')
+    expect(card).toContain('Light change blocked.')
+    expect(room).toContain('Light change blocked.')
     expect(init).toContain("lightCommandTracker.setCapability(data?.light_command_results === true)")
     expect(init).toContain("case 'light_command_result':")
     expect(init).toContain("lightCommandTracker.submit(lightId, state")
