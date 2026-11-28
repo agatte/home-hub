@@ -120,7 +120,7 @@
   {/if}
   <details class="control-details">
     <summary>About these controls</summary>
-    <p class="provenance">Adjust lights individually or control both kitchen lights together. Some adjustments may be blocked while another lighting effect is active.</p>
+    <p class="provenance">Adjust lights individually or control both kitchen lights together. Some adjustments may be blocked while another lighting effect is active. Opening a room does not change any lights.</p>
     <p class="footnote">If a light doesn’t respond, check its connection and current lighting mode.</p>
   </details>
 </section>

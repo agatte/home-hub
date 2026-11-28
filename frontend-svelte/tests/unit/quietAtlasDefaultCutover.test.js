@@ -41,7 +41,8 @@ describe('default redesigned Home and existing working lighting cutover (#461)',
     expect(controls).not.toContain('apiPut(')
     expect(controls).toContain('!$connected')
     expect(controls).toContain('$lights[lightId].reachable === true')
-    expect(controls).toContain('controls unavailable')
+    expect(controls).toContain('Light unavailable')
+    expect(controls).toContain('Waiting for light status')
     expect(controls).toContain('$deviceStatus.light_command_results !== true')
     expect(controls).toContain('does not yet support guarded lighting command results')
     // No global optimistic patch in the new Home: a WS send is not an ACK.
