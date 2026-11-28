@@ -216,7 +216,7 @@ _CSP = (
     "font-src 'self' data:; "
     "media-src 'self'; "
     "worker-src 'self' blob:; "
-    "frame-src 'self'; "
+    "frame-src 'self' https://plant-care-app-gamma.vercel.app; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -269,14 +269,14 @@ def _host_header_hostname(host_header: str) -> Optional[str]:
 
 
 def _home_csp_for_request(request) -> str:
-    """Allow the Home Bar iframe only from this HomeHub host on port 8001."""
+    """Allow the fixed Plants origin and Home Bar on this HomeHub host:8001."""
     hostname = _host_header_hostname(request.headers.get("host", ""))
     host = _bar_csp_host(hostname or "")
     if not host:
         return _CSP
     return _CSP.replace(
-        "frame-src 'self';",
-        f"frame-src 'self' http://{host}:8001;",
+        "frame-src 'self' https://plant-care-app-gamma.vercel.app;",
+        f"frame-src 'self' http://{host}:8001 https://plant-care-app-gamma.vercel.app;",
     )
 
 
