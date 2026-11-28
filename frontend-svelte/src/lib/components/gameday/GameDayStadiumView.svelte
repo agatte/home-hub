@@ -173,4 +173,42 @@
     .clock small { font-size: 6px; }
     .drive-overlay strong { font-size: 8px; }
   }
+
+  /* Preserve the accepted wide-screen fascia exactly. On portrait displays
+     there is not enough horizontal space for the physical scoreboard, so the
+     same authoritative DOM becomes a legible companion scoreboard below
+     the uncropped stadium. No extra feed or score calculation. */
+  @media (max-aspect-ratio: 5/4) {
+    .prototype-page {
+      width: 100%; height: auto; min-height: 100dvh; overflow: visible;
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-content: start; gap: 12px; padding: 16px 16px calc(184px + env(safe-area-inset-bottom, 0px));
+      background: radial-gradient(ellipse at 50% 0%, #132b4a, transparent 60%), #020711;
+    }
+    :global(body:has(.stadium-navigation)) .prototype-page {
+      padding-top: calc(84px + env(safe-area-inset-top, 0px));
+    }
+    .hero-render {
+      position: relative; inset: auto; grid-column: 1 / -1; width: 100%; height: auto;
+      object-fit: contain; border-radius: 18px; border: 1px solid rgba(151, 188, 233, .22);
+    }
+    .team, .clock, .drive-overlay {
+      position: relative; top: auto; left: auto; width: auto; transform: none;
+      min-width: 0; text-shadow: none; padding: 18px 12px; border-radius: 15px;
+      border: 1px solid rgba(151, 188, 233, .2);
+      background: linear-gradient(145deg, #132b48, #0b192b);
+    }
+    .team.home { left: auto; grid-column: 1; grid-row: 2; }
+    .team.away { left: auto; grid-column: 2; grid-row: 2; }
+    .team { justify-items: center; gap: 8px; text-align: center; }
+    .team span, .clock span, .drive-overlay span {
+      font-size: 12px; line-height: 1.35; letter-spacing: .08em; overflow-wrap: anywhere;
+    }
+    .team strong { font-size: clamp(38px, 10vw, 60px); }
+    .clock { grid-column: 1 / -1; grid-row: 3; gap: 8px; text-align: center; }
+    .clock strong { font-size: clamp(30px, 8vw, 48px); }
+    .clock small { font-size: 11px; white-space: normal; line-height: 1.4; text-align: center; }
+    .drive-overlay { grid-column: 1 / -1; grid-row: 4; gap: 7px; }
+    .drive-overlay strong { font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+  }
 </style>

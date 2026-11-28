@@ -11,6 +11,7 @@
   import ModeOverlay from '$lib/components/ModeOverlay.svelte'
   import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
   import FloatingNav from '$lib/components/FloatingNav.svelte'
+  import GameDayNavigation from '$lib/components/gameday/GameDayNavigation.svelte'
   import NowPlayingChip from '$lib/components/NowPlayingChip.svelte'
   import MusicPlayerOverlay from '$lib/components/MusicPlayerOverlay.svelte'
   import ErrorToast from '$lib/components/ErrorToast.svelte'
@@ -124,7 +125,7 @@
   <ModeBackground />
 {/if}
 {#if !isIsolatedRoute}
-  <ModeOverlay />
+  {#if !isGamedayRoute}<ModeOverlay />{/if}
   <NowPlayingIdle />
 {/if}
 
@@ -154,7 +155,11 @@
 {/if}
 
 {#if !isIsolatedRoute}
-  <FloatingNav />
+  {#if isGamedayRoute}
+    <GameDayNavigation />
+  {:else}
+    <FloatingNav />
+  {/if}
   <NowPlayingChip />
   <MusicPlayerOverlay />
   <VitalStrip />
