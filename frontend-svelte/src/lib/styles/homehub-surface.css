@@ -1,7 +1,7 @@
 /* Shared HomeHub visual language, scoped to the redesigned shell.
    Semantic device colors, artwork, saved-scene palettes and legacy routes
    remain independent. Use these tokens for chrome and ordinary surfaces. */
-.qa-shell {
+.qa-shell, .hh-portal-surface {
   --hh-canvas: #121917;
   --hh-panel: #1c2522;
   --hh-panel-deep: #141c19;

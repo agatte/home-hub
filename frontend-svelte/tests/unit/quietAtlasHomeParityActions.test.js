@@ -25,6 +25,14 @@ describe('Home parity actions',()=>{
     expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/lights/all',{on:false},{timeout:20000})
     expect(v.getByText(/1 protected, 1 unavailable, 1 uncertain/)).toBeTruthy()
   })
+  it('keeps a complete All Off acknowledgement quiet without asserting a physical result',async()=>{
+    vi.mocked(apiPost).mockResolvedValueOnce({status:'ok',updated:['1'],blocked:[],unavailable:[],uncertain:[]})
+    const v=render(Off)
+    await fireEvent.click(v.getByRole('button',{name:'All Off'}))
+    await fireEvent.click(v.getByRole('button',{name:'Confirm All Off'}))
+    expect(apiPost).toHaveBeenCalledExactlyOnceWith('/api/lights/all',{on:false},{timeout:20000})
+    expect(v.queryByRole('status')).toBeNull()
+  })
   it('revokes All Off confirmation on disconnect',async()=>{
     const v=render(Off);await fireEvent.click(v.getByRole('button',{name:'All Off'}))
     connected.set(false);await tick()

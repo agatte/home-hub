@@ -829,8 +829,26 @@ class ScreenSyncService:
             accept = getattr(frame[0], "accept_publication", None)
             if accept is not None and accept() is None:
                 return False
-        self._transition_boundary.authority.invalidate([light_id])
         observed_at = datetime.now(timezone.utc)
+        previous_at = self._last_color_at_by_light.get(light_id)
+        kind = frame[2] if frame is not None else None
+        # Only an uninterrupted, fresh ordinary frame of the same source and
+        # kind may preserve a pending owner queue. A new owner, Rust, page-only
+        # authority change, missing evidence or clock discontinuity revokes it.
+        continuing = (
+            frame is not None
+            and source in {"desktop", "laptop"}
+            and kind in {"apply_color", "apply_watching_daylight"}
+            and self._last_frame_kind_by_light.get(light_id) == (source, kind)
+            and previous_at is not None
+            and 0 <= (observed_at - previous_at).total_seconds() < SCREEN_SYNC_FRESH_SECONDS
+            and (self._desk_page_source_by_light.get(light_id) == source) == bool(frame[3])
+        )
+        authority = self._transition_boundary.authority
+        if continuing:
+            authority.record_screen_sync_continuation(light_id)
+        else:
+            authority.invalidate([light_id])
         self._last_color_at = observed_at
         self._last_source = source
         self._last_color_at_by_source[source] = observed_at
@@ -884,7 +902,21 @@ class ScreenSyncService:
         now = datetime.now(timezone.utc)
         for light_id in light_ids:
             if light_id in self._targets and light_id in self._last_sent_state:
-                self._transition_boundary.authority.invalidate([light_id])
+                previous_at = self._hold_refreshed_at.get((source, light_id))
+                kind = self._last_frame_kind_by_light.get(light_id)
+                continuing = (
+                    source in {"desktop", "laptop"}
+                    and kind in {(source, "apply_color"), (source, "apply_watching_daylight")}
+                    and previous_at is not None
+                    and 0 <= (now - previous_at).total_seconds() < SCREEN_SYNC_FRESH_SECONDS
+                    and not any(lid == light_id and held_source != source
+                                for held_source, lid in self._hold_refreshed_at)
+                )
+                authority = self._transition_boundary.authority
+                if continuing:
+                    authority.record_screen_sync_continuation(light_id)
+                else:
+                    authority.invalidate([light_id])
                 self._hold_refreshed_at[(source, light_id)] = now
 
     def invalidate_pending_frames(self, light_ids: list[str]) -> None:

@@ -6,6 +6,10 @@
   // Bar app URL for iframe modal — read from the status response
   export let cardClickable = false
   let barAppUrl = ''
+  let securePage = false
+  // A secure owner page cannot frame the local HTTP Bar app. This is
+  // presentation only; the browser and server still enforce their policies.
+  $: externalOnly = securePage && barAppUrl.startsWith('http:')
 
   function portal(node) {
     document.body.appendChild(node)
@@ -21,6 +25,8 @@
   let error = false
   let refreshInterval
   let modalOpen = false
+  let opening = false
+  let openError = false
   /** @type {HTMLButtonElement | undefined} */
   let closeBtn
 
@@ -30,18 +36,31 @@
   }
 
   export async function openModal() {
-    if (!barAppUrl) await fetchStatus()
-    if (!barAppUrl) return
-    modalOpen = true
-    await tick()
-    closeBtn?.focus()
+    if (opening || modalOpen) return
+    opening = true
+    openError = false
+    try {
+      if (!barAppUrl) await fetchStatus()
+      if (!barAppUrl) { openError = true; return }
+      modalOpen = true
+      await tick()
+      closeBtn?.focus()
+    } finally {
+      opening = false
+    }
   }
 
   async function fetchStatus() {
     try {
       const resp = await apiGet('/api/bar/status')
-      summary = resp.bar_summary
-      if (resp.bar_app_url) barAppUrl = resp.bar_app_url
+      summary = resp?.bar_summary ?? null
+      // Only the configured HTTP(S) app destination can be opened.
+      if (typeof resp?.bar_app_url === 'string') {
+        try {
+          const url = new URL(resp.bar_app_url)
+          if (['https:', 'http:'].includes(url.protocol)) barAppUrl = url.href
+        } catch { /* no usable app destination */ }
+      }
       error = false
     } catch {
       error = true
@@ -49,6 +68,7 @@
   }
 
   onMount(() => {
+    securePage = new URL(document.URL).protocol === 'https:'
     fetchStatus()
     refreshInterval = setInterval(fetchStatus, 600000) // 10 min
   })
@@ -99,16 +119,19 @@
 
     {#if cardClickable}
       <span class="bar-link">View Bar &rarr;</span>
-    {:else}
-      <button type="button" class="bar-link" on:click={openModal}>
-        View Bar &rarr;
-      </button>
     {/if}
   </div>
 {:else if error}
   <div class="bar-empty">Bar app unavailable</div>
 {:else}
   <div class="bar-empty">Loading...</div>
+{/if}
+
+{#if !cardClickable}
+  <button type="button" class="bar-link app-entry" disabled={opening} on:click={openModal}>{opening ? 'Opening…' : 'Open Home Bar →'}</button>
+{/if}
+{#if openError}
+  <p class="bar-empty" role="status">Home Bar address unavailable. Try opening again when the service responds.</p>
 {/if}
 
 <svelte:window on:keydown={handleKeydown} />
@@ -129,16 +152,30 @@
     >
       ✕
     </button>
-    <iframe
-      class="bar-modal-iframe"
-      src={barAppUrl}
-      title="Home Bar"
-      allow="fullscreen"
-    ></iframe>
+    {#if externalOnly}
+      <div class="bar-external-panel">
+        <Wine size={32} strokeWidth={1.5} />
+        <h2>Home Bar</h2>
+        <p>Home Bar opens in its own tab from the secure dashboard.</p>
+        <a href={barAppUrl} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
+      </div>
+    {:else}
+      <a class="app-external" href={barAppUrl} target="_blank" rel="noopener noreferrer">Open in browser ↗</a>
+      <iframe
+        class="bar-modal-iframe"
+        src={barAppUrl}
+        title="Home Bar"
+        allow="fullscreen"
+      ></iframe>
+    {/if}
   </div>
 {/if}
 
 <style>
+  .app-entry {display:inline-flex;align-items:center;min-height:44px;font-weight:650;text-decoration:underline;}
+  .app-entry:disabled {opacity:.6;cursor:wait;}
+  .app-external {position:fixed;top:16px;left:16px;z-index:1001;padding:10px 14px;border-radius:10px;background:#202a26;color:#f1eee7;font-size:13px;}
+  .app-entry:focus-visible,.app-external:focus-visible {outline:2px solid var(--accent,#e4c99e);outline-offset:3px;}
   .bar-content {
     display: flex;
     flex-direction: column;
@@ -250,6 +287,34 @@
     justify-content: center;
     padding: 24px;
   }
+
+  .bar-external-panel {
+    width: min(440px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 28px;
+    text-align: center;
+    color: #f1eee7;
+    background: #202a26;
+    border: 1px solid #49564f;
+    border-radius: 20px;
+  }
+  .bar-external-panel p { color: #c8cec6; line-height: 1.5; }
+  .bar-external-panel a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px 16px;
+    color: #202a26;
+    background: #e4c99e;
+    border-radius: 12px;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .bar-external-panel a:focus-visible { outline: 3px solid #f1eee7; outline-offset: 3px; }
 
   .bar-modal-iframe {
     width: 100%;

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import json
@@ -108,9 +109,10 @@ def test_loopback_exemption_and_rate_limit(client, monkeypatch):
 
 def test_real_login_socket_hue_and_revocation(client):
     from backend.main import websocket_endpoint
-    from tests.test_ws_manual_light_guard import Engine, Hue
+    from tests.test_ws_manual_light_guard import Engine, Hue, Sync
 
     engine = Engine()
+    engine._screen_sync = Sync()
     engine.mode_source = 'test'
     engine.manual_override = None
     engine.activity = 'general'
@@ -134,6 +136,8 @@ def test_real_login_socket_hue_and_revocation(client):
         ws.send_json(frame)
         assert ws.receive_json()['data']['status'] == 'acknowledged'
         assert hue.calls == [('2', {'bri': 100})]
+        assert engine._screen_sync.superseded == ['2']
+        assert engine._screen_sync.owned == {'5'}
         assert client.delete('/api/owner/session', headers=headers).status_code == 200
         ws.send_json(frame)
         assert ws.receive_json()['data']['status'] == 'denied'
@@ -184,3 +188,39 @@ async def test_anonymous_and_expired_sonos_denied(monkeypatch, expiry):
     await websocket_endpoint(socket)
     assert json.loads(socket.send_text.await_args_list[-1].args[0])['data']['reason'] == 'unauthorized'
     sonos.pause.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revocation_point", ["queued", "worker"])
+async def test_light_session_revoked_before_final_write(monkeypatch, revocation_point):
+    from backend.main import _handle_light_command
+    from backend.schemas.ws import LightCommandData
+    from tests.test_ws_manual_light_guard import Engine, Hue, Sync
+
+    monkeypatch.setattr(owner.settings, "HOME_HUB_OWNER_ALLOWED_ORIGINS", "https://hub.example")
+    owner._sessions["fake-token"] = owner.time.monotonic() + 60
+    socket = SimpleNamespace(headers={"origin": "https://hub.example", "host": "hub.example"},
+        scope={"scheme": "wss"}, cookies={owner.COOKIE: "fake-token"},
+        client=SimpleNamespace(host="192.0.2.1"))
+    engine = Engine()
+    engine._screen_sync = Sync()
+    hue = Hue(engine)
+    app = SimpleNamespace(state=SimpleNamespace(hue=hue, automation=engine))
+    data = LightCommandData(light_id="2", bri=100)
+    async def revoke():
+        owner._sessions["fake-token"] = 0
+    if revocation_point == "queued":
+        async with engine.lighting_transition_boundary.serialized():
+            task = asyncio.create_task(_handle_light_command(
+                app, data, None, context_valid=lambda: owner.valid_session(socket)))
+            await asyncio.sleep(0)
+            await revoke()
+        status = await task
+    else:
+        hue.send_hook = revoke
+        status = await _handle_light_command(
+            app, data, None, context_valid=lambda: owner.valid_session(socket))
+    assert status in ("denied", "uncertain")
+    assert hue.calls == []
+    assert engine.stamps == []
+    assert engine._screen_sync.superseded == []

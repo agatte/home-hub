@@ -63,7 +63,7 @@ def test_bar_frame_source_accepts_bracketed_ipv6_host(client):
 def test_bar_frame_source_rejects_malformed_host(client):
     resp = client.get("/health", headers={"Host": "bad;frame-src:8000"})
     csp = resp.headers["Content-Security-Policy"]
-    assert "frame-src 'self';" in csp
+    assert "frame-src 'self' https://plant-care-app-gamma.vercel.app;" in csp
     assert "bad;frame-src" not in csp
 
 
@@ -73,8 +73,24 @@ def test_bar_frame_source_rejects_scoped_ipv6_host(client):
         headers={"Host": "[fe80::1%x;frame-src *]:8000"},
     )
     csp = resp.headers["Content-Security-Policy"]
-    assert "frame-src 'self';" in csp
+    assert "frame-src 'self' https://plant-care-app-gamma.vercel.app;" in csp
     assert "frame-src *" not in csp
+
+
+def test_plant_frame_source_is_exact_and_other_security_directives_unchanged(client):
+    resp = client.get("/health", headers={"Host": "192.168.86.210:8000"})
+    csp = resp.headers["Content-Security-Policy"]
+    directives = {parts[0]: parts[1:] for directive in csp.split(";")
+                  if (parts := directive.strip().split())}
+    assert set(directives["frame-src"]) == {
+        "'self'", "http://192.168.86.210:8001",
+        "https://plant-care-app-gamma.vercel.app",
+    }
+    assert directives["frame-ancestors"] == ["'none'"]
+    assert directives["default-src"] == ["'self'"]
+    assert directives["connect-src"] == ["'self'", "ws:", "wss:"]
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert "camera=()" in resp.headers["Permissions-Policy"]
 
 
 def test_security_headers_present_on_api_route(client):

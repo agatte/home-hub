@@ -6,7 +6,9 @@ import logging
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from backend.api._guards import _check_hue_available
-from backend.api.auth import require_owner_or_explicit_key, source_from_request
+from backend.api.auth import (require_owner_or_explicit_key, source_from_request,
+                              TUNNEL_ORIGIN_HEADER, TUNNEL_ORIGIN_VALUE)
+from backend.api.owner_session import valid_session
 from backend.api.schemas.lights import LightResponse, LightState
 from backend.services.light_state_calculator import ALL_LIGHT_IDS
 from backend.services.ws_manual_light_guard import dispatch_manual_light
@@ -113,7 +115,20 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     # This guard checks the shared serial boundary and final Hue worker fence,
     # then stamps/persists manual ownership only after a bridge transport ACK.
     automation = getattr(request.app.state, "automation", None)
-    result = await dispatch_manual_light(automation, hue, light_id, state_dict)
+    # Match the authentication dependency: tunnel requests use the key path,
+    # even when they also carry an otherwise valid owner cookie.
+    owner_context = (
+        request.headers.get(TUNNEL_ORIGIN_HEADER, "").strip().lower() != TUNNEL_ORIGIN_VALUE
+        and valid_session(request)
+    )
+    def owner_still_valid():
+        return (request.headers.get(TUNNEL_ORIGIN_HEADER, "").strip().lower()
+                != TUNNEL_ORIGIN_VALUE and valid_session(request))
+
+    result = await dispatch_manual_light(
+        automation, hue, light_id, state_dict, owner_takeover=owner_context,
+        context_valid=owner_still_valid if owner_context else None,
+    )
     if result.status == "denied":
         raise HTTPException(status_code=409, detail="Lighting owner or lifecycle conflict")
     if result.status == "unavailable":

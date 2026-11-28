@@ -47,8 +47,38 @@ describe('#461 direct Home mode tiles', () => {
     expect(setManualMode).toHaveBeenCalledOnce()
     expect(setManualMode).toHaveBeenCalledWith('gaming')
     expect(view.getByRole('button',{name:'Gaming'}).getAttribute('aria-pressed')).toBe('false')
+    expect(view.getByRole('status').textContent).toContain('Mode change not confirmed yet.')
     report('home','gaming',true); await tick()
     expect(view.getByRole('button',{name:'Gaming'}).getAttribute('aria-pressed')).toBe('true')
+    expect(view.queryByRole('status')).toBeNull()
+    expect(view.queryByText(/Auto requests that HomeHub/)).toBeNull()
+  })
+  it('clears acknowledged feedback when the server report arrives before the request resolves', async () => {
+    vi.mocked(setManualMode).mockImplementationOnce(async () => {
+      report('home','gaming',true)
+      await tick()
+      return 'acknowledged'
+    })
+    const view = render(ModeControls)
+    await fireEvent.click(view.getByRole('button',{name:'Gaming'}))
+    expect(view.getByRole('button',{name:'Gaming'}).getAttribute('aria-pressed')).toBe('true')
+    expect(view.queryByRole('status')).toBeNull()
+  })
+  it('confirms Auto only on a reported owner release, even when the activity stays the same', async () => {
+    report('home','gaming',true)
+    const view = render(ModeControls)
+    await fireEvent.click(view.getByRole('button',{name:'Return to Auto'}))
+    expect(view.getByRole('status').textContent).toContain('Mode change not confirmed yet.')
+    report('home','gaming',false); await tick()
+    expect(view.getByRole('button',{name:'Return to Auto'}).getAttribute('aria-pressed')).toBe('true')
+    expect(view.queryByRole('status')).toBeNull()
+  })
+  it('keeps genuine denial visible without changing the reported selection', async () => {
+    vi.mocked(setManualMode).mockResolvedValueOnce('denied')
+    const view = render(ModeControls)
+    await fireEvent.click(view.getByRole('button',{name:'Gaming'}))
+    expect(view.getByRole('status').textContent).toContain('Couldn’t change the mode.')
+    expect(view.getByRole('button',{name:'Gaming'}).getAttribute('aria-pressed')).toBe('false')
   })
   it.each(['away','sleeping'])('requires a separate explicit confirmation from %s; double tap is not enough', async state => {
     report(state)

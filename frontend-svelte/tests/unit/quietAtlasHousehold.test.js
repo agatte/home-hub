@@ -18,7 +18,8 @@ describe('Functional household migration (#461)', () => {
     expect(rootRuntimeTargets('/quiet-atlas/household')).toEqual({general:true,gameday:false})
   })
   it('preserves existing household widgets and uses the current guarded Control destination', () => {
-    for (const component of ['PlantWidget','BarWidget','GuestWifiWidget','RoutineCard','AmbientSoundWidget','PiholeCard','ApartmentViz']) expect(household).toContain('<'+component+' />')
+    for (const component of ['PlantWidget','BarWidget','RoutineCard','AmbientSoundWidget','PiholeCard','ApartmentViz']) expect(household).toContain('<'+component+' />')
+    expect(household).toContain('<GuestWifiWidget quietAtlas />')
     expect(household).toContain('href="/quiet-atlas/control"')
     expect(household).toContain('href={CONTROL_SCENES_HREF}')
     expect(household).toContain('$connected && $deviceStatus.hue')

@@ -18,6 +18,7 @@ from backend.api.schemas.lights import LightState
 from backend.services.automation_engine import AutomationEngine
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.screen_sync import ScreenSyncService, SCREEN_SYNC_FRESH_SECONDS
+from backend.services.ws_manual_light_guard import dispatch_manual_light
 
 
 @pytest.fixture
@@ -43,6 +44,122 @@ def rig(mock_hue, mock_hue_v2, mock_ws, monkeypatch):
 
     monkeypatch.setattr("backend.services.screen_sync.datetime", Clock)
     return engine, sync, mock_hue, write, now
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("light_id", ["2", "5"])
+async def test_owner_takeover_with_real_engine_and_screen_sync(rig, light_id):
+    engine, sync, hue, write, _ = rig
+    engine._current_mode = "gaming"
+    for lid in ("2", "5"):
+        assert sync._record_source_write("desktop", lid)
+    hue._transition_boundary = engine.lighting_transition_boundary
+    hue.get_light = AsyncMock(return_value={"light_id": light_id, "reachable": True})
+    old_frame = engine.lighting_transition_boundary.authority.issue("screen_sync", [light_id])
+    result = await dispatch_manual_light(engine, hue, light_id, {"bri": 100}, owner_takeover=True)
+    assert result.status == "acknowledged"
+    assert sync.fresh_owned_light_ids() == ({"2", "5"} - {light_id})
+    assert light_id in engine.manual_light_overrides
+    boundary = engine.lighting_transition_boundary
+    async with boundary.serialized():
+        assert not engine.validate_screen_sync_lease(old_frame, light_id, "gaming", "desktop")
+        fresh = boundary.authority.issue("screen_sync", [light_id])
+        assert not engine.validate_screen_sync_lease(fresh, light_id, "gaming", "desktop")
+        engine._clear_per_light_overrides()
+        fresh = boundary.authority.issue("screen_sync", [light_id])
+        assert engine.validate_screen_sync_lease(fresh, light_id, "gaming", "desktop")
+    write.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intervention", ["same_frame", "new_intent", "mode_aba", "expiry", "hold_acquire"])
+async def test_owner_queue_across_real_gaming_frames(rig, monkeypatch, intervention):
+    engine, sync, hue, write, now = rig
+    engine._current_mode = "gaming"
+    boundary = engine.lighting_transition_boundary
+    sync.set_lighting_authority_validator(boundary, engine.validate_screen_sync_lease)
+    sync.publish_accepted_gaming_state({
+        "2": {"on": True, "bri": 157, "hue": 30000, "sat": 130},
+        "5": {"on": True, "bri": 75, "hue": 30000, "sat": 130},
+    })
+    hue._transition_boundary = boundary
+    hue.get_light = AsyncMock(return_value={"light_id": "2", "reachable": True})
+    for lid in ("2", "5"):
+        assert await sync.apply_color(lid, 255, 0, 0, "gaming", period="evening")
+    write.reset_mock()
+    # Queue the real deduplicated Gaming frame first, then the owner behind it.
+    queued = asyncio.Event()
+    capture = boundary.authority.capture_manual_queue
+    def observe_capture(light_id):
+        result = capture(light_id)
+        queued.set()
+        return result
+    monkeypatch.setattr(boundary.authority, "capture_manual_queue", observe_capture)
+    async with boundary.serialized():
+        raw = boundary.authority.issue("probe", ["2"])
+        intent = boundary.authority.issue("probe", ["2"], intent_only=True)
+        frame = asyncio.create_task(sync.apply_color("2", 255, 0, 0, "gaming", period="evening"))
+        await asyncio.sleep(0)
+        manual = asyncio.create_task(dispatch_manual_light(
+            engine, hue, "2", {"bri": 210}, owner_takeover=True,
+        ))
+        await asyncio.wait_for(queued.wait(), 2)
+        if intervention == "new_intent":
+            boundary.authority.invalidate(["2"])
+        elif intervention == "mode_aba":
+            engine._current_mode = "working"
+            engine._current_mode = "gaming"
+        elif intervention == "expiry":
+            sync._last_color_at_by_light["2"] = now - timedelta(seconds=SCREEN_SYNC_FRESH_SECONDS)
+            assert "2" not in sync.fresh_owned_light_ids()
+        elif intervention == "hold_acquire":
+            sync.refresh_watching_hold("desktop", ["2"])
+    frame_result = await frame
+    result = await manual
+    if intervention == "same_frame":
+        assert frame_result is True
+        assert result.status == "acknowledged"
+        assert sync.fresh_owned_light_ids() == {"5"}
+        assert "2" in engine.manual_light_overrides
+        write.assert_awaited_once_with("2", {"bri": 210})
+        assert not await sync.apply_color("2", 255, 0, 0, "gaming", period="evening")
+        write.assert_awaited_once()
+    else:
+        assert result.status == "denied"
+        assert "2" not in engine.manual_light_overrides
+        assert not any(c.args == ("2", {"bri": 210}) for c in write.await_args_list)
+    async with boundary.serialized():
+        assert not boundary.authority.valid(raw)
+        assert not boundary.authority.valid(intent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intervention", ["same_hold", "release", "new_source", "expiry"])
+async def test_owner_queue_hold_refresh_requires_same_fresh_source(rig, intervention):
+    engine, sync, _, _, now = rig
+    engine._current_mode = "watching"
+    boundary = engine.lighting_transition_boundary
+    sync.set_lighting_authority_validator(boundary, engine.validate_screen_sync_lease)
+    assert await sync.apply_color("2", 255, 255, 255, "watching", period="evening")
+    sync.refresh_watching_hold("desktop", ["2"])
+    checkpoint = boundary.authority.capture_manual_queue("2")
+    async with boundary.serialized():
+        assert not boundary.authority.valid(checkpoint)
+        raw = boundary.authority.issue("probe", ["2"])
+        intent = boundary.authority.issue("probe", ["2"], intent_only=True)
+        if intervention == "release":
+            sync.clear_watching_hold("desktop", ["2"])
+        elif intervention == "new_source":
+            sync.refresh_watching_hold("laptop", ["2"])
+        elif intervention == "expiry":
+            sync._hold_refreshed_at[("desktop", "2")] = now - timedelta(seconds=SCREEN_SYNC_FRESH_SECONDS)
+            sync.refresh_watching_hold("desktop", ["2"])
+        else:
+            sync.refresh_watching_hold("desktop", ["2"])
+        promoted = boundary.authority.promote_manual_queue(checkpoint)
+        assert (promoted is not None) == (intervention == "same_hold")
+        assert not boundary.authority.valid(raw)
+        assert not boundary.authority.valid(intent)
 
 
 @pytest.mark.asyncio

@@ -30,8 +30,8 @@
       const response = await apiPost(`/api/scenes/${encodeURIComponent(intended.id)}/activate`, {})
       if (!active) return
       feedback = response?.status === 'ok'
-        ? 'Scene acknowledged. Check your lights for the actual result.'
-        : 'Scene result unconfirmed. Check your lights before retrying.'
+        ? ''
+        : 'Couldn’t confirm the scene change. Check your lights before trying again.'
       if (response?.status === 'ok') onApplied()
     } catch {
       if (active) feedback = 'Scene could not be confirmed. Check your lights before trying again.'

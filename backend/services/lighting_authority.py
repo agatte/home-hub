@@ -123,6 +123,15 @@ class LightingLease:
     intent_only: bool = False
 
 
+@dataclass(frozen=True)
+class ManualQueueCheckpoint:
+    """Single-fixture setup evidence, never a Hue write lease."""
+    instance: object
+    global_generation: int
+    light_id: str
+    light_generation: int
+
+
 class LightingAuthority:
     """Monotonic process-local global + per-light Hue authority generations."""
 
@@ -137,6 +146,11 @@ class LightingAuthority:
         self._intent_whole = 0
         self._intent_lights: dict[str, int] = {}
         self._closed = False
+        # Separate setup epoch: an owner's queued adjustment may survive
+        # routine continuation of the same ordinary sync owner, not a new
+        # semantic owner. Existing raw and intent-only leases are unchanged.
+        self._manual_queue_global = 0
+        self._manual_queue_lights: dict[str, int] = {}
 
     def bind_source_gate(self, gate) -> None:
         """Bind this authority only; called before engine publication begins.
@@ -172,7 +186,48 @@ class LightingAuthority:
         with self.publication_gate():
             self._invalidate_normalized(normalized, intent=intent)
 
-    def _invalidate_normalized(self, normalized, *, intent):
+    def record_screen_sync_continuation(self, light_id: str) -> None:
+        """Publish an already-qualified same-source ordinary frame/hold refresh.
+
+        Raw and intent-only consumers still observe the full invalidation.
+        Only pending explicit manual setup evidence ignores this publication.
+        ScreenSync must distinguish freshness, acquisition, release and kind.
+        """
+        with self.publication_gate():
+            self._invalidate_normalized({str(light_id)}, intent=True,
+                                        revoke_manual_queue=False)
+
+    def capture_manual_queue(self, light_id: str) -> ManualQueueCheckpoint:
+        light_id = str(light_id)
+        with self.publication_gate():
+            return ManualQueueCheckpoint(
+                self._instance, self._manual_queue_global, light_id,
+                self._manual_queue_lights.get(light_id, 0),
+            )
+
+    def promote_manual_queue(self, checkpoint: ManualQueueCheckpoint) -> LightingLease | None:
+        """After entering the serial boundary, exchange current setup for a raw lease.
+
+        No permission or lease renewal follows a competing semantic publication.
+        The resulting lease is ordinary, immutable and subject to every existing
+        worker and policy guard. This is not itself a write authorization.
+        """
+        if not self._boundary.held_by_current_task:
+            raise RuntimeError("Manual queue promotion requires the final boundary")
+        with self.publication_gate():
+            if (
+                self._closed or not isinstance(checkpoint, ManualQueueCheckpoint)
+                or checkpoint.instance is not self._instance
+                or checkpoint.global_generation != self._manual_queue_global
+                or checkpoint.light_generation != self._manual_queue_lights.get(checkpoint.light_id, 0)
+            ):
+                return None
+            return LightingLease(
+                self._instance, "websocket_manual", self._global,
+                ((checkpoint.light_id, self._lights.get(checkpoint.light_id, 0)),),
+            )
+
+    def _invalidate_normalized(self, normalized, *, intent, revoke_manual_queue=True):
         """Primitive generation mutation; caller holds publication gate."""
         if normalized is None:
             self._global += 1
@@ -190,6 +245,14 @@ class LightingAuthority:
         self._whole += 1
         if intent:
             self._intent_whole += 1
+            if revoke_manual_queue:
+                if normalized is None:
+                    self._manual_queue_global += 1
+                else:
+                    for light_id in normalized:
+                        self._manual_queue_lights[light_id] = (
+                            self._manual_queue_lights.get(light_id, 0) + 1
+                        )
 
     def issue(
         self,
@@ -237,7 +300,7 @@ class LightingAuthority:
 
     def _valid_raw(self, lease):
         """Primitive lease check; caller holds publication/source gate."""
-        if self._closed or lease is None or lease.instance is not self._instance:
+        if self._closed or not isinstance(lease, LightingLease) or lease.instance is not self._instance:
             return False
         if lease.intent_only:
             global_generation = self._intent_global

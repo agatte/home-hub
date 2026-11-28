@@ -47,13 +47,13 @@
     {#if activity}<p class="activity">{activity}</p>{/if}
     <p class="provenance">{owner}{dnd ? ' · Do Not Disturb' : ''}</p>
     {#if snapshotStatus === 'disconnected'}
-      <p class="connection-warning" role="status">Connection unavailable. Last lighting values are historical, not confirmed live. All lighting controls remain disabled.</p>
+      <p class="connection-warning" role="status">Disconnected. Showing the last known light status; controls are unavailable.</p>
     {:else if snapshotStatus === 'unverified'}
-      <p class="connection-warning" role="status">Lighting unverified. Waiting for a successful new light snapshot. Previously shown values may be historical.</p>
+      <p class="connection-warning" role="status">Waiting for updated light status.</p>
     {:else if snapshotStatus === 'stale-read'}
-      <p class="connection-warning" role="status">Lighting read is stale. Previously received values may have changed. Individual fixture freshness is unknown.</p>
-    {:else}
-      <p class="snapshot-note" role="status">Light snapshot received recently. Individual fixture freshness is unverified.{#if !functional} Controls remain disabled.{/if}</p>
+      <p class="connection-warning" role="status">Light status may be out of date. Refresh to check.</p>
+    {:else if !functional}
+      <p class="snapshot-note" role="status">Preview only. Lighting controls are unavailable.</p>
     {/if}
   </div>
 
@@ -67,7 +67,7 @@
       <div class="eyebrow">YOUR APARTMENT</div>
       <h2>Lighting</h2>
     </div>
-    <button type="button" class="refresh-lights" on:click={onRefreshLights} aria-label="Refresh lighting snapshot">Refresh status</button>
+    <button type="button" class="refresh-lights" on:click={onRefreshLights} aria-label="Refresh light status">Refresh status</button>
   </div>
 
   <div class="groups">

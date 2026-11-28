@@ -79,33 +79,33 @@
       const resultTry = await apiPost(`/api/scenes/${encodeURIComponent(intended.id)}/try`, {})
       if (!active) return
       if (resultTry?.status !== 'ok' || resultTry.revert_after !== 30 || typeof resultTry.snapshot_id !== 'string') {
-        feedback = 'Trial outcome unconfirmed. Check your lights before retrying.'
+        feedback = 'Couldn’t confirm the preview. Check your lights before trying again.'
         return
       }
       now = Date.now()
       trialUntil = now + 30000
       trialName = intended.name
-      feedback = 'Preview acknowledged. HomeHub will attempt to restore the previous lighting after 30 seconds.'
+      feedback = 'HomeHub will try to restore your previous lighting after 30 seconds.'
       onChanged()
     } catch {
-      if (active) feedback = 'Trial outcome unconfirmed. Check your lights; use End active trial if needed.'
+      if (active) feedback = 'Couldn’t confirm the preview. Check your lights or end the preview if needed.'
     } finally { pending = false }
   }
 
   async function endTrial() {
     if (!canSend()) return
     pending = true
-    feedback = 'Ending trial…'
+    feedback = 'Ending preview…'
     try {
       const result = await apiPost('/api/scenes/try/cancel', {})
       if (!active) return
       if (result?.status === 'reverted' || result?.status === 'discarded' || (result?.status === 'ok' && result.detail === 'No active trial')) {
         trialUntil = 0
-        feedback = result.status === 'reverted' ? 'Restore acknowledged. Check your lights.' : result.status === 'discarded' ? 'Trial ended without restoring a superseded state.' : 'No active trial.'
+        feedback = result.status === 'reverted' ? '' : result.status === 'discarded' ? 'Preview ended. Newer lighting changes were kept.' : 'No active trial.'
         onChanged()
-      } else feedback = 'Trial end unconfirmed. Check your lights.'
+      } else feedback = 'Couldn’t confirm the preview ended. Check your lights.'
     } catch {
-      if (active) feedback = 'Trial end unconfirmed. Check your lights.'
+      if (active) feedback = 'Couldn’t confirm the preview ended. Check your lights.'
     } finally { pending = false }
   }
 
@@ -113,15 +113,15 @@
   async function changeEffect(effect) {
     if (!canSend() || !effectsReady || remaining > 0 || (effect !== 'stop' && !effects.some(e => e.name === effect))) return
     pending = true
-    feedback = 'Requesting effect…'
+    feedback = 'Changing effect…'
     try {
       const result = await apiPost(`/api/scenes/effects/${encodeURIComponent(effect)}`, {})
       if (!active) return
       const accepted = result?.status === 'ok' && result.effect === (effect === 'stop' ? 'stopped' : effect)
-      feedback = accepted ? 'Effect request acknowledged. Check your lights.' : 'Effect result incomplete or unconfirmed. Check your lights.'
+      feedback = accepted ? '' : 'Effect result incomplete or unconfirmed. Check your lights.'
       if (accepted) onChanged()
     } catch {
-      if (active) feedback = 'Effect request unconfirmed. Check your lights before retrying.'
+      if (active) feedback = 'Couldn’t confirm the effect. Check your lights before trying again.'
     } finally { pending = false }
   }
 </script>
@@ -130,12 +130,12 @@
   <div class="trial">
     <div class="heading"><strong>Try a scene</strong><span>30-second preview</span></div>
     {#if remaining > 0}<p>{trialName} · about {remaining}s remaining</p>
-    {:else if trialUntil}<p>Preview time elapsed. Check your lights for the restored state.</p>{/if}
+    {:else if trialUntil}<p>Preview time is up. Check that your previous lighting returned.</p>{/if}
     <div class="actions">
       <button type="button" disabled={!connected || blocked || pending || !scene || remaining > 0} on:click={startTrial}>Try for 30 seconds</button>
-      <button type="button" disabled={!connected || blocked || pending} on:click={endTrial}>End active trial</button>
+      <button type="button" disabled={!connected || blocked || pending} on:click={endTrial}>End preview</button>
     </div>
-    <p>Ending a trial requests restoration of the previous lighting only if the trial still owns it. The timer continues if you leave this screen.</p>
+    <p>Ending the preview tries to restore your previous lighting without undoing newer changes. The timer continues even if you leave.</p>
   </div>
   <div class="effects">
     <div class="heading"><strong>Hue effects</strong><span>All lights</span></div>
@@ -148,7 +148,6 @@
         {/each}
         <button type="button" disabled={!connected || blocked || pending || remaining > 0} on:click={() => changeEffect('stop')}>Stop effects</button>
       </div>
-      <p>These requests use HomeHub's lighting ownership rules. No active effect is inferred from the button state.</p>
     {/if}
   </div>
   {#if feedback}<p class="feedback" role="status">{feedback}</p>{/if}

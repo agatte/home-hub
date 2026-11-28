@@ -159,7 +159,7 @@ class LightApplicator:
 
     # ── Protected-light filter ──────────────────────────────────────────
 
-    def protected_light_ids(self) -> set[str]:
+    def protected_light_ids(self, *, include_manual: bool = True, include_screen_sync: bool = True) -> set[str]:
         """Light ids the mode-apply pipeline must NOT write this tick.
 
         Always includes manual + transit per-light overrides. Additionally
@@ -174,9 +174,11 @@ class LightApplicator:
         hold refreshes both go quiet, the freshness gate lapses and the engine
         reclaims the lamps on the next tick.
         """
-        protected = set(self._st.manual_light_overrides) | set(self._st.transit_light_overrides)
+        protected = set(self._st.transit_light_overrides)
+        if include_manual:
+            protected |= set(self._st.manual_light_overrides)
         sync = self._screen_sync_getter()
-        if sync is not None and self._current_mode_getter() in SCREEN_SYNC_MODES:
+        if include_screen_sync and sync is not None and self._current_mode_getter() in SCREEN_SYNC_MODES:
             fresh_owned = getattr(sync, "fresh_owned_light_ids", None)
             if callable(fresh_owned):
                 protected |= set(fresh_owned())

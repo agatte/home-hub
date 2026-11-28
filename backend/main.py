@@ -216,7 +216,7 @@ _CSP = (
     "font-src 'self' data:; "
     "media-src 'self'; "
     "worker-src 'self' blob:; "
-    "frame-src 'self'; "
+    "frame-src 'self' https://plant-care-app-gamma.vercel.app; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -269,14 +269,14 @@ def _host_header_hostname(host_header: str) -> Optional[str]:
 
 
 def _home_csp_for_request(request) -> str:
-    """Allow the Home Bar iframe only from this HomeHub host on port 8001."""
+    """Allow the fixed Plants origin and Home Bar on this HomeHub host:8001."""
     hostname = _host_header_hostname(request.headers.get("host", ""))
     host = _bar_csp_host(hostname or "")
     if not host:
         return _CSP
     return _CSP.replace(
-        "frame-src 'self';",
-        f"frame-src 'self' http://{host}:8001;",
+        "frame-src 'self' https://plant-care-app-gamma.vercel.app;",
+        f"frame-src 'self' http://{host}:8001 https://plant-care-app-gamma.vercel.app;",
     )
 
 
@@ -609,7 +609,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 continue
 
             if isinstance(command, LightCommand):
-                status = await _handle_light_command(websocket.app, command.data, ws_manager)
+                status = await _handle_light_command(
+                    websocket.app, command.data, ws_manager,
+                    context_valid=lambda: valid_session(websocket),
+                )
                 # Only the originating client receives its correlated receipt.
                 # A bridge acknowledgement is not proof of physical completion.
                 if command.data.command_id is not None:
@@ -634,7 +637,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 
 async def _handle_light_command(
-    app, data: LightCommandData, ws_manager: WebSocketManager,
+    app, data: LightCommandData, ws_manager: WebSocketManager, *,
+    context_valid=None,
 ) -> str:
     """Process a validated light control command from a WebSocket client."""
     # The WebSocket client provides a target, never an authority claim.
@@ -643,7 +647,10 @@ async def _handle_light_command(
     automation = getattr(app.state, "automation", None)
     light_id = data.light_id
     state = data.model_dump(exclude={"light_id", "command_id"}, exclude_none=True)
-    result = await dispatch_manual_light(automation, hue, light_id, state)
+    result = await dispatch_manual_light(
+        automation, hue, light_id, state, owner_takeover=True,
+        context_valid=context_valid,
+    )
     if result.status != "acknowledged":
         app_logger.info("WebSocket manual light write not acknowledged: %s", result.status)
         return result.status

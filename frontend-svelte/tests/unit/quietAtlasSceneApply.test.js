@@ -26,7 +26,7 @@ describe('Functional scene application in Control', () => {
     expect(apiGet).not.toHaveBeenCalled()
     expect(apiPost).not.toHaveBeenCalled()
   })
-  it('explicitly applies a revalidated scene exactly once and reports acknowledgement', async () => {
+  it('explicitly applies a revalidated scene exactly once without persistent success text', async () => {
     const onApplied = vi.fn()
     render(SceneApply, { scene: reviewed(), connected: true, onApplied })
     expect(apiPost).not.toHaveBeenCalled()
@@ -35,7 +35,7 @@ describe('Functional scene application in Control', () => {
     expect(apiPost).toHaveBeenCalledWith('/api/scenes/golden_hour/activate', {})
     expect(apiGet).toHaveBeenCalledWith('/api/scenes')
     await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1))
-    expect(screen.getByText(/Scene acknowledged/)).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
   it('does not activate a changed or missing scene', async () => {
     vi.mocked(apiGet).mockResolvedValue({ scenes: [] })
