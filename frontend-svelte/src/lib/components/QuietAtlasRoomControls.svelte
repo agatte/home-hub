@@ -53,8 +53,7 @@
   /** @param {string | undefined} status */
   function receiptLabel(status) {
     if (status === 'pending') return 'Changing light…'
-    if (status === 'acknowledged') return 'Bridge acknowledged; check actual light.'
-    if (status === 'denied') return 'Blocked by lighting ownership or house state.'
+    if (status === 'denied') return 'Light change blocked. Try again when available.'
     if (status === 'unavailable') return 'Control unavailable; no command sent.'
     if (status === 'invalid') return 'Request rejected.'
     return 'Result uncertain; check actual light.'
@@ -98,7 +97,7 @@
       {:else}
         <p class="light-hint">{kitchenReady ? 'Power differs. Turn both on or off before linked brightness and color adjustments.' : 'Both fixtures must be reachable for linked adjustments. Use Individually to control an available light.'}</p>
         {#each KITCHEN_IDS as lid}
-          {#if $lightCommandResults[lid]?.status}
+          {#if $lightCommandResults[lid]?.status && $lightCommandResults[lid].status !== 'acknowledged'}
             <p class="light-hint" role="status">L{lid}: {receiptLabel($lightCommandResults[lid].status)}</p>
           {/if}
         {/each}

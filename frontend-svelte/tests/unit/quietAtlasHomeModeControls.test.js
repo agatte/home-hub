@@ -54,7 +54,7 @@ describe('#461 direct Home mode tiles', () => {
     expect(view.queryByText(/Auto requests that HomeHub/)).toBeNull()
   })
   it('clears acknowledged feedback when the server report arrives before the request resolves', async () => {
-    setManualMode.mockImplementationOnce(async () => {
+    vi.mocked(setManualMode).mockImplementationOnce(async () => {
       report('home','gaming',true)
       await tick()
       return 'acknowledged'
@@ -74,7 +74,7 @@ describe('#461 direct Home mode tiles', () => {
     expect(view.queryByRole('status')).toBeNull()
   })
   it('keeps genuine denial visible without changing the reported selection', async () => {
-    setManualMode.mockResolvedValueOnce('denied')
+    vi.mocked(setManualMode).mockResolvedValueOnce('denied')
     const view = render(ModeControls)
     await fireEvent.click(view.getByRole('button',{name:'Gaming'}))
     expect(view.getByRole('status').textContent).toContain('Couldn’t change the mode.')
