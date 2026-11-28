@@ -23,20 +23,20 @@
     if (!available || pending || !armed || armedState !== $ambientContext?.house_state) { cancel(); return }
     cancel()
     pending = true
-    feedback = 'Requesting All Off…'
+    feedback = 'Turning lights off…'
     try {
       // Existing guarded endpoint; server owns per-fixture authorization.
       const result = await apiPost('/api/lights/all', { on: false }, { timeout: 20000 })
       const valid = result && ['updated','blocked','unavailable','uncertain'].every(key => Array.isArray(result[key]))
       if (valid && result.status === 'ok' && result.updated.length > 0 && !result.blocked.length && !result.unavailable.length && !result.uncertain.length) {
-        feedback = 'HomeHub acknowledged All Off. Verify the reported light states.'
+        feedback = ''
       } else if (valid && result.status === 'partial_failure') {
-        feedback = 'All Off partly applied or blocked: ' + result.blocked.length + ' protected, ' + result.unavailable.length + ' unavailable, ' + result.uncertain.length + ' uncertain. Check your lights before another action.'
+        feedback = 'Not all lights could be turned off: ' + result.blocked.length + ' protected, ' + result.unavailable.length + ' unavailable, ' + result.uncertain.length + ' uncertain. Check your lights before another action.'
       } else {
-        feedback = 'All Off result unconfirmed. Check your lights before another action.'
+        feedback = 'Couldn’t confirm All Off. Check your lights before trying again.'
       }
     } catch {
-      feedback = 'All Off result unconfirmed. Check your lights before another action.'
+      feedback = 'Couldn’t confirm All Off. Check your lights before trying again.'
     } finally { pending = false }
   }
 </script>
@@ -46,16 +46,16 @@
 
 <section class="off-card" aria-label="All lights off" aria-busy={pending}>
   <div class="off-row">
-    <div><strong>All lights</strong><p>Separate from activity modes. Existing ownership protections apply.</p></div>
+    <div><strong>All lights</strong><p>Turn off your apartment lights.</p></div>
     <button class="off" type="button" disabled={!available || pending} on:click={arm}><Power size={19} strokeWidth={1.8} /> All Off</button>
   </div>
   {#if armed}
     <div class="confirmation" role="group" aria-label="Confirm All Off">
-      <p>Request off for every configured light? Protected lights may remain on.</p>
+      <p>Turn off all lights? Some lights may need to stay on.</p>
       <div class="actions"><button type="button" on:click={cancel}>Cancel</button><button type="button" class="off" disabled={!available || pending} on:click={confirmOff}>Confirm All Off</button></div>
     </div>
   {/if}
-  {#if !available}<p class="feedback" role="status">All Off requires connected guarded lighting and an awake Home or Winding Down state.</p>{/if}
+  {#if !available}<p class="feedback" role="status">All Off is available when HomeHub is connected and you’re Home or Winding Down.</p>{/if}
   {#if feedback}<p class="feedback" role="status">{feedback}</p>{/if}
 </section>
 

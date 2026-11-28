@@ -50,6 +50,8 @@ describe('Functional redesigned Music (#461)', () => {
     expect(musicPlaybackReport({...value,art_url:'javascript:bad'})?.art_url).toBe('')
     expect(player).toContain("sonosCommand(action, params)")
     expect(player).toContain('sonosLiveReport.subscribe')
+    expect(player).toContain("if (report && message === 'Waiting for Sonos…') message = ''")
+    expect(player).not.toContain('Speaker report refreshed; command acceptance')
     expect(player).not.toContain('sonos.subscribe')
     expect(player).toContain('input.value = String(current.volume)')
     expect(player).toContain("fetch('/api/sonos/status'")

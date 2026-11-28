@@ -33,7 +33,7 @@
     report = musicPlaybackReport(data)
     receivedAt = report ? Date.now() : null
     now = Date.now()
-    if (report && message.startsWith('Request sent.')) message = 'Speaker report refreshed; command acceptance is not confirmed by this report.'
+    if (report && message === 'Waiting for Sonos…') message = ''
   }
 
   async function refresh() {
@@ -85,7 +85,7 @@
   /** @param {string} action @param {Record<string, unknown>} [params] */
   function command(action, params = {}) {
     if (!recentPlaybackReport(report, receivedAt, Date.now(), $connected && $deviceStatus.sonos && visible)) return
-    message = sonosCommand(action, params) ? 'Request sent. Waiting for the speaker report.' : 'Request not sent. Check the connection.'
+    message = sonosCommand(action, params) ? 'Waiting for Sonos…' : 'Couldn’t send the command. Check the connection.'
   }
   /** @param {Event} event */
   function volumeChanged(event) {
@@ -111,12 +111,12 @@
       <p class="eyebrow" id="now-playing-title">NOW PLAYING &middot; SONOS</p>
       {#if current}
         <p class="state">{current.state === 'PLAYING' ? 'Playing' : current.state === 'PAUSED_PLAYBACK' ? 'Paused' : current.state === 'TRANSITIONING' ? 'Transitioning' : 'Stopped'}</p>
-        <h2>{current.track || 'No track reported'}</h2>
+        <h2>{current.track || 'No track information'}</h2>
         {#if current.artist}<p>{current.artist}</p>{/if}
         {#if current.album}<small>{current.album}</small>{/if}
       {:else}
         <h2>Playback unavailable</h2>
-        <p>Waiting for a recent speaker report. Controls remain unavailable.</p>
+        <p>Waiting for Sonos to reconnect.</p>
       {/if}
     </div>
     <div class="transport" aria-label="Sonos playback controls">
@@ -127,7 +127,7 @@
       <button type="button" aria-label="Next track" disabled={!current} on:click={() => command('next')}><SkipForward size={21} aria-hidden="true" /></button>
       {#if current}<label class="volume"><Volume2 size={17} aria-hidden="true" /><span>Volume {current.volume}%</span><input aria-label="Sonos volume" type="range" min="0" max="100" value={current.volume} on:change={volumeChanged} /></label>{/if}
     </div>
-    <p class="receipt" role="status">{message || (current ? 'Reported by HomeHub; playback changes require a speaker report.' : 'No recent report.')}</p>
+    {#if message}<p class="receipt" role="status">{message}</p>{/if}
   </div>
 </section>
 
